@@ -156,9 +156,9 @@ import {
   ARENA_CONFLICT_RESOLUTION_PROMPT,
   arenaConflictResolutionTurnID,
   arenaSteeringQueuedMessage,
+  arenaReplyComposerLabels,
   canDrainArenaFollowUp,
   deriveArenaReplyState,
-  type ArenaReplyAction,
 } from "@/arena/reply-state";
 import { useArenaReplyComposerControls } from "@/arena/reply-target-control";
 import {
@@ -200,27 +200,15 @@ interface ChatAgentStateShape {
   lastError?: Agent["lastError"] | null;
 }
 
-/** The placeholder names who the message goes to and what sending does. */
-function arenaReplyPlaceholder(action: ArenaReplyAction | undefined, awaitingVote: boolean) {
-  if (!action) return "Choose who to message";
-  const who =
-    action.target === "both" ? "both contestants" : `Agent ${action.target.toUpperCase()}`;
-  if (action.label.startsWith("Steer")) return `Steer ${who}`;
-  if (awaitingVote) {
-    return action.target === "both"
-      ? "Ask both a follow-up before choosing"
-      : `Ask ${who} a follow-up before choosing`;
-  }
-  return `Message ${who}`;
-}
-
 function arenaReplyComposerPresentation({
+  t,
   enabled,
   awaitingVote,
   reviewOpen,
   replyComposer,
   fallbackSubmit,
 }: {
+  t: ReturnType<typeof useTranslation>["t"];
   enabled: boolean;
   /** A review waits on the callout's answers; the input is for anything else the user wants. */
   reviewOpen: boolean;
@@ -234,19 +222,13 @@ function arenaReplyComposerPresentation({
       submitButtonAccessibilityLabel: undefined,
       submitButtonTestID: undefined,
       submitLabel: undefined,
-      placeholder: reviewOpen ? "Type your own instructions for the agent" : undefined,
+      placeholder: reviewOpen ? t("arena.ownInstructions") : undefined,
     };
   }
-  let submitLabel = "Send";
-  if (replyComposer.selectedAction?.label.startsWith("Steer")) submitLabel = "Steer";
-  else if (awaitingVote) submitLabel = "Send follow-up";
   return {
     onSubmitMessage: replyComposer.submit,
-    submitButtonAccessibilityLabel:
-      replyComposer.selectedAction?.label ?? "Choose a contestant before sending",
     submitButtonTestID: "arena-reply-send",
-    submitLabel,
-    placeholder: arenaReplyPlaceholder(replyComposer.selectedAction, awaitingVote),
+    ...arenaReplyComposerLabels(replyComposer.selectedAction, awaitingVote, t),
   };
 }
 
@@ -2559,6 +2541,7 @@ function ActiveAgentComposer({
     useLegacyBattleLoading,
   });
   const composerPresentation = arenaReplyComposerPresentation({
+    t,
     enabled: battleReplyEnabled,
     awaitingVote: replyableBattleTurn?.state === "awaiting_vote",
     reviewOpen: composerParkedPromotion?.kind === "review",

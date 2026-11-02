@@ -16,6 +16,20 @@ export const ko: TranslationResources = {
     lessSecond: "1초 미만",
   },
   arena: {
+    chooseMessageTarget: "메시지를 보낼 대상을 선택하세요",
+    steerContestants: "두 참가자 모두에게 지시",
+    steerAgent: "에이전트 {{side}}에게 지시",
+    followUpBoth: "선택하기 전에 둘 모두에게 후속 질문하기",
+    followUpAgent: "선택하기 전에 에이전트 {{side}}에게 후속 질문하기",
+    messageContestants: "두 참가자 모두에게 메시지",
+    messageAgent: "에이전트 {{side}}에게 메시지",
+    steer: "지시",
+    sendFollowUp: "후속 질문 보내기",
+    chooseBeforeSending: "보내기 전에 참가자를 선택하세요",
+    ownInstructions: "에이전트에게 보낼 지시를 입력하세요",
+    winnerNote: "(승자)",
+    readyToChoose: "선택할 준비가 되었습니다",
+    battleComplete: "대결 완료",
     cancelledTasks: "{{total}}개 취소됨",
     stoppedCommand: "중지됨",
     failedCommand: "실패",
@@ -906,6 +920,7 @@ export const ko: TranslationResources = {
       },
     },
     turnFooter: {
+      endedAt: "{{duration}}, {{time}}에 종료",
       workedFor: "작업 시간 {{duration}}",
     },
     compaction: {

@@ -13,6 +13,20 @@ export const en = {
     lessSecond: "<1s",
   },
   arena: {
+    chooseMessageTarget: "Choose who to message",
+    steerContestants: "Steer both contestants",
+    steerAgent: "Steer Agent {{side}}",
+    followUpBoth: "Ask both a follow-up before choosing",
+    followUpAgent: "Ask Agent {{side}} a follow-up before choosing",
+    messageContestants: "Message both contestants",
+    messageAgent: "Message Agent {{side}}",
+    steer: "Steer",
+    sendFollowUp: "Send follow-up",
+    chooseBeforeSending: "Choose a contestant before sending",
+    ownInstructions: "Type your own instructions for the agent",
+    winnerNote: "(winner)",
+    readyToChoose: "Ready to choose",
+    battleComplete: "Battle complete",
     cancelledTasks: "{{total}} cancelled",
     stoppedCommand: "stopped",
     failedCommand: "failed",
@@ -903,6 +917,7 @@ export const en = {
       },
     },
     turnFooter: {
+      endedAt: "{{duration}}, ended {{time}}",
       workedFor: "Worked for {{duration}}",
     },
     compaction: {

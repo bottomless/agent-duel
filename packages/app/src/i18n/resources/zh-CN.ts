@@ -16,6 +16,20 @@ export const zhCN: TranslationResources = {
     lessSecond: "<1秒",
   },
   arena: {
+    chooseMessageTarget: "选择消息接收方",
+    steerContestants: "引导两位参赛者",
+    steerAgent: "引导代理 {{side}}",
+    followUpBoth: "选择前向双方追问",
+    followUpAgent: "选择前向代理 {{side}} 追问",
+    messageContestants: "向两位参赛者发消息",
+    messageAgent: "向代理 {{side}} 发消息",
+    steer: "引导",
+    sendFollowUp: "发送追问",
+    chooseBeforeSending: "发送前请选择参赛者",
+    ownInstructions: "输入你给代理的指令",
+    winnerNote: "（获胜者）",
+    readyToChoose: "可以选择了",
+    battleComplete: "对战已完成",
     cancelledTasks: "{{total}} 项已取消",
     stoppedCommand: "已停止",
     failedCommand: "失败",
@@ -879,6 +893,7 @@ export const zhCN: TranslationResources = {
       },
     },
     turnFooter: {
+      endedAt: "{{duration}}，结束于 {{time}}",
       workedFor: "工作了 {{duration}}",
     },
     compaction: {

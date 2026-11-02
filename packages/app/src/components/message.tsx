@@ -694,7 +694,11 @@ export const AssistantTurnFooter = memo(function AssistantTurnFooter({
           onHoverIn={handleHoverIn}
           onHoverOut={handleHoverOut}
           accessibilityRole={canSwap ? "button" : undefined}
-          accessibilityLabel={canSwap ? `${durationLabel}, ended ${timestampLabel}` : primaryLabel}
+          accessibilityLabel={
+            canSwap
+              ? t("message.turnFooter.endedAt", { duration: durationLabel, time: timestampLabel })
+              : primaryLabel
+          }
         >
           <View style={assistantTurnFooterStylesheet.labelWrapper}>
             {/* Sizer reserves space for whichever label is longer so the

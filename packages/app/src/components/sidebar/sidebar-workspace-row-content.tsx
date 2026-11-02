@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { workspaceBattleStatus } from "@/components/sidebar/arena-status";
 import { useArenaActivityStore } from "@/arena/activity-store";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -203,7 +204,8 @@ function SidebarWorkspaceLeadingVisual({
   loading: boolean;
   reserveIdleSpace: boolean;
 }) {
-  const status = workspaceBattleStatus(workspace);
+  const { t } = useTranslation();
+  const status = workspaceBattleStatus(workspace, t);
   if (leadingProjectName) {
     const statusIcon =
       status?.icon === "ready" || status?.icon === "unknown" ? status.icon : undefined;
@@ -248,7 +250,8 @@ export function ArenaStatusIndicator({
   loading: boolean;
   children?: ReactNode;
 }) {
-  const status = workspaceBattleStatus(workspace);
+  const { t } = useTranslation();
+  const status = workspaceBattleStatus(workspace, t);
   if (!status) return null;
   let icon = <View style={styles.idleStatusDot} />;
   if (loading || status.icon === "running") icon = <StatusRing />;

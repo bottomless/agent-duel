@@ -17,9 +17,14 @@ const WORKSPACE_STATUS_ICONS = {
 
 export function workspaceBattleStatus(
   workspace: Pick<SidebarWorkspaceEntry, "arenaActivity" | "statusBucket">,
+  t = i18n.t,
 ) {
   if (!workspace.arenaActivity?.state) return null;
-  const status = arenaActivityStatus(workspace.arenaActivity);
+  const activityStatus = arenaActivityStatus(workspace.arenaActivity);
+  let label: string = activityStatus.label;
+  if (label === "Ready to choose") label = t("arena.readyToChoose");
+  else if (label === "Battle complete") label = t("arena.battleComplete");
+  const status = { ...activityStatus, label };
   if (workspace.arenaActivity.stale) return status;
   if (
     getWorkspaceStateBucketPriority(workspace.statusBucket) >=
@@ -28,5 +33,5 @@ export function workspaceBattleStatus(
     return status;
   const bucket = workspace.statusBucket;
   const icon = WORKSPACE_STATUS_ICONS[bucket];
-  return { bucket, label: getStatusBucketLabel(bucket, i18n.t), icon } as const;
+  return { bucket, label: getStatusBucketLabel(bucket, t), icon } as const;
 }

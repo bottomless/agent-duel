@@ -154,7 +154,7 @@ function ChangesRow({
         </Text>
         {waitingFor ? null : (
           <Text style={[styles.status, statusStyle(row.status)]}>
-            {divergenceStatusLabel(row.status)}
+            {divergenceStatusLabel(row.status, t)}
           </Text>
         )}
         <View style={styles.stats}>

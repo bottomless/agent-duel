@@ -227,13 +227,15 @@ function RevealedIdentity({
   /** False when a side failed: the chosen side applied, but nobody won the vote. */
   counted: boolean;
 }) {
-  useTranslation();
+  const { t } = useTranslation();
   return (
     <View style={styles.identity}>
       <Text style={styles.identities}>{side.toUpperCase()}:</Text>
       <ArenaModelVendorIcon model={model} size={ICON_SIZE.xs} tone="muted" />
       <Text style={styles.identities}>{arenaModelDisplayName(model)}</Text>
-      {winner ? <Text style={styles.identities}>{counted ? "(winner)" : "(applied)"}</Text> : null}
+      {winner ? (
+        <Text style={styles.identities}>{counted ? t("arena.winnerNote") : "(applied)"}</Text>
+      ) : null}
     </View>
   );
 }

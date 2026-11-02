@@ -11,6 +11,37 @@ export interface ArenaReplyAction {
   steering?: boolean;
 }
 
+/** Client copy receives the subscribed translator so compiled callers track language changes. */
+export function arenaReplyComposerLabels(
+  action: ArenaReplyAction | undefined,
+  awaitingVote: boolean,
+  t: typeof i18n.t,
+) {
+  const side = action?.target.toUpperCase();
+  let placeholder = t("arena.chooseMessageTarget");
+  if (action?.steering) {
+    placeholder = t(action.target === "both" ? "arena.steerContestants" : "arena.steerAgent", {
+      side,
+    });
+  } else if (action && awaitingVote) {
+    placeholder = t(action.target === "both" ? "arena.followUpBoth" : "arena.followUpAgent", {
+      side,
+    });
+  } else if (action) {
+    placeholder = t(action.target === "both" ? "arena.messageContestants" : "arena.messageAgent", {
+      side,
+    });
+  }
+  let submitLabel = t("composer.input.send");
+  if (action?.steering) submitLabel = t("arena.steer");
+  else if (awaitingVote) submitLabel = t("arena.sendFollowUp");
+  return {
+    placeholder,
+    submitLabel,
+    submitButtonAccessibilityLabel: action?.label ?? t("arena.chooseBeforeSending"),
+  };
+}
+
 export interface ArenaReplySelection {
   turnId: string;
   target: ArenaReplyTarget | null;

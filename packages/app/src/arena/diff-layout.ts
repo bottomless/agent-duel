@@ -1,4 +1,4 @@
-import { i18n } from "@/i18n/i18next";
+import type { TFunction } from "i18next";
 import { create } from "zustand";
 
 /**
@@ -15,23 +15,15 @@ export function defaultDiffLayout(width: number | null): ArenaDiffLayout {
   return width !== null && width >= SPLIT_MIN_WIDTH ? "split" : "single";
 }
 
-export const DIFF_LAYOUT_OPTIONS: Array<{ value: ArenaDiffLayout; label: string; testID: string }> =
-  [
-    {
-      value: "split",
-      get label() {
-        return i18n.t("arena.sideBySide");
-      },
-      testID: "arena-diff-layout-split",
-    },
-    {
-      value: "single",
-      get label() {
-        return i18n.t("arena.oneColumn");
-      },
-      testID: "arena-diff-layout-single",
-    },
+// Plain values give memoized controls a new options identity when their translation changes.
+export function diffLayoutOptions(
+  t: TFunction,
+): Array<{ value: ArenaDiffLayout; label: string; testID: string }> {
+  return [
+    { value: "split", label: t("arena.sideBySide"), testID: "arena-diff-layout-split" },
+    { value: "single", label: t("arena.oneColumn"), testID: "arena-diff-layout-single" },
   ];
+}
 
 interface ArenaDiffLayoutStore {
   /** The reader's choice per chat; absent means the width decides. */

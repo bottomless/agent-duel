@@ -16,6 +16,20 @@ export const ja: TranslationResources = {
     lessSecond: "1秒未満",
   },
   arena: {
+    chooseMessageTarget: "メッセージの送信先を選択",
+    steerContestants: "両方の参加者に指示",
+    steerAgent: "エージェント {{side}} に指示",
+    followUpBoth: "選択する前に両方に追加の質問をする",
+    followUpAgent: "選択する前にエージェント {{side}} に追加の質問をする",
+    messageContestants: "両方の参加者にメッセージ",
+    messageAgent: "エージェント {{side}} にメッセージ",
+    steer: "指示",
+    sendFollowUp: "追加の質問を送信",
+    chooseBeforeSending: "送信前に参加者を選択",
+    ownInstructions: "エージェントへの指示を入力",
+    winnerNote: "(勝者)",
+    readyToChoose: "選択できます",
+    battleComplete: "バトル完了",
     cancelledTasks: "{{total}}件キャンセル済み",
     stoppedCommand: "停止済み",
     failedCommand: "失敗",
@@ -913,6 +927,7 @@ export const ja: TranslationResources = {
       },
     },
     turnFooter: {
+      endedAt: "{{duration}}、終了 {{time}}",
       workedFor: "作業時間 {{duration}}",
     },
     compaction: {

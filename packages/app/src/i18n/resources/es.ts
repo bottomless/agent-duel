@@ -16,6 +16,20 @@ export const es: TranslationResources = {
     lessSecond: "<1s",
   },
   arena: {
+    chooseMessageTarget: "Elige a quién enviar un mensaje",
+    steerContestants: "Orientar a ambos participantes",
+    steerAgent: "Orientar al agente {{side}}",
+    followUpBoth: "Haz una pregunta de seguimiento a ambos antes de elegir",
+    followUpAgent: "Haz una pregunta de seguimiento al agente {{side}} antes de elegir",
+    messageContestants: "Enviar un mensaje a ambos participantes",
+    messageAgent: "Enviar un mensaje al agente {{side}}",
+    steer: "Orientar",
+    sendFollowUp: "Enviar seguimiento",
+    chooseBeforeSending: "Elige un participante antes de enviar",
+    ownInstructions: "Escribe tus propias instrucciones para el agente",
+    winnerNote: "(ganador)",
+    readyToChoose: "Listo para elegir",
+    battleComplete: "Batalla completada",
     cancelledTasks: "{{total}} canceladas",
     stoppedCommand: "detenido",
     failedCommand: "falló",
@@ -923,6 +937,7 @@ export const es: TranslationResources = {
       },
     },
     turnFooter: {
+      endedAt: "{{duration}}, finalizó a las {{time}}",
       workedFor: "Trabajó durante {{duration}}",
     },
     compaction: {

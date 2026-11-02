@@ -37,19 +37,19 @@ export function mergedContent(
   }
 }
 
-export function divergenceStatusLabel(status: ArenaDivergenceStatus): string {
+export function divergenceStatusLabel(status: ArenaDivergenceStatus, t = i18n.t): string {
   switch (status) {
     case "identical":
-      return i18n.t("arena.sameResult");
+      return t("arena.sameResult");
     case "diverging":
-      return i18n.t("arena.diverging");
+      return t("arena.diverging");
     case "compatible":
-      return i18n.t("arena.compatible");
+      return t("arena.compatible");
     case "only_a":
-      return i18n.t("arena.aOnly");
+      return t("arena.aOnly");
     case "only_b":
-      return i18n.t("arena.bOnly");
+      return t("arena.bOnly");
     case "binary":
-      return i18n.t("arena.binary");
+      return t("arena.binary");
   }
 }
