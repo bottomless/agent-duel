@@ -194,6 +194,39 @@ describe("Arena store observation", () => {
       off()
     }))
 
+  test("a rewind drops removed battle turns from the history and keeps their records", async () =>
+    fixture(async (store) => {
+      await store.createChat({ ...chat("chat"), activeTurnID: "chat-4" })
+      const off = store.onChange(() => {}, "chat")
+      const voted = {
+        state: "complete" as const,
+        resolution: { kind: "vote" as const, vote: "a" as const, appliedSide: "a" as const },
+      }
+      await store.createTurn({ ...turn("chat", 0), ...voted, canonicalUserMessageID: "msg_1" })
+      await store.createTurn({ ...turn("chat", 1), ...voted, canonicalUserMessageID: "msg_2" })
+      // Discarded after the removed turn: its prompt never reached the canonical session.
+      await store.createTurn({
+        ...turn("chat", 2),
+        state: "discarded",
+        resolution: { kind: "aborted", reason: "failed" },
+      })
+      await store.createTurn({ ...turn("chat", 3), ...voted, canonicalUserMessageID: "msg_3" })
+      await store.createTurn(turn("chat", 4))
+      expect((await store.snapshot("chat")).history?.map((item) => item._id)).toHaveLength(5)
+
+      expect(await store.markRewoundTurns("chat", new Set(["msg_1"]))).toEqual(["chat-1", "chat-2", "chat-3"])
+      expect((await store.snapshot("chat")).history?.map((item) => item._id)).toEqual(["chat-0", "chat-4"])
+      expect((await store.turn("chat-1"))?.rewoundAt).toBeInstanceOf(Date)
+      expect((await store.turn("chat-1"))?.resolution).toEqual(voted.resolution)
+      expect(await store.markRewoundTurns("chat", new Set(["msg_1"]))).toEqual([])
+
+      await store.updateChat({ _id: "chat" }, { $unset: { activeTurnID: "" } })
+      expect((await store.snapshot("chat")).turn?._id).toBe("chat-4")
+      await store.turns.deleteOne({ _id: "chat-4" })
+      expect((await store.snapshot("chat")).turn?._id).toBe("chat-0")
+      off()
+    }))
+
   test("a mutation during a read cannot populate a stale cache", async () =>
     fixture(async (store) => {
       await store.createChat(chat("chat"))

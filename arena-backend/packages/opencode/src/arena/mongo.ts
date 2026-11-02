@@ -135,7 +135,10 @@ export class Store {
       if (observed.rows) return observed.rows
       if (observed.pending) return observed.pending
     }
-    const pending = this.turns.find({ chatID }, { projection: historyProjection }).sort({ turnIndex: 1 }).toArray()
+    const pending = this.turns
+      .find({ chatID, rewoundAt: { $exists: false } }, { projection: historyProjection })
+      .sort({ turnIndex: 1 })
+      .toArray()
     if (!observed || version === undefined) return pending
     observed.version = version
     observed.rows = undefined
@@ -398,7 +401,13 @@ export class Store {
     const candidateTurns = (
       await Promise.all([
         this.turns.find({ _id: { $in: activeTurnIDs } }).toArray(),
-        ...idleChatIDs.map((chatID) => this.turns.find({ chatID }).sort({ turnIndex: -1 }).limit(1).toArray()),
+        ...idleChatIDs.map((chatID) =>
+          this.turns
+            .find({ chatID, rewoundAt: { $exists: false } })
+            .sort({ turnIndex: -1 })
+            .limit(1)
+            .toArray(),
+        ),
       ])
     ).flat()
     const turns = [...candidateTurns]
@@ -485,7 +494,7 @@ export class Store {
         chatIDs.map((chatID) =>
           this.turns
             .find(
-              { chatID, "gitApplication.state": "applied" },
+              { chatID, "gitApplication.state": "applied", rewoundAt: { $exists: false } },
               { projection: { chatID: 1, turnIndex: 1, appliedSide: 1, runIDs: 1 } },
             )
             .sort({ turnIndex: -1 })
@@ -543,6 +552,43 @@ export class Store {
     const result = await insertIdempotent(this.turns, turn)
     this.changed({ chatID: turn.chatID })
     return result
+  }
+
+  /**
+   * A rewind deletes the canonical messages from a prompt on, and the battle turns whose prompt
+   * went with them leave the chat. A battle after a removed one is gone too, also one whose prompt
+   * never reached the canonical session (it failed, or was discarded). The active turn is left to
+   * its own lifecycle. Nothing is deleted: votes and metrics stay for research.
+   */
+  async markRewoundTurns(chatID: string, survivingMessageIDs: ReadonlySet<string>) {
+    const chat = await this.chats.findOne({ _id: chatID }, { projection: { activeTurnID: 1 } })
+    const turns = await this.turns
+      .find(
+        { chatID, rewoundAt: { $exists: false } },
+        { projection: { _id: 1, turnIndex: 1, canonicalUserMessageID: 1 } },
+      )
+      .sort({ turnIndex: 1 })
+      .toArray()
+    const first = turns.find(
+      (turn) => turn.canonicalUserMessageID !== undefined && !survivingMessageIDs.has(turn.canonicalUserMessageID),
+    )
+    if (!first) return []
+    const removed = turns
+      .filter((turn) =>
+        turn._id === chat?.activeTurnID
+          ? false
+          : turn.canonicalUserMessageID !== undefined
+            ? !survivingMessageIDs.has(turn.canonicalUserMessageID)
+            : turn.turnIndex > first.turnIndex,
+      )
+      .map((turn) => turn._id)
+    if (removed.length === 0) return []
+    await this.turns.updateMany(
+      { _id: { $in: removed }, rewoundAt: { $exists: false } },
+      { $set: { rewoundAt: new Date() } },
+    )
+    this.changed({ chatID })
+    return removed
   }
 
   async claimSingleAgentRating(rating: SingleAgentRatingDocument) {

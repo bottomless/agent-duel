@@ -411,6 +411,12 @@ export type TurnDocument = {
    * the next user message is not where the battle ends.
    */
   canonicalLastMessageID?: string
+  /**
+   * When a rewind of the chat removed this turn's prompt from the canonical session. The turn is
+   * gone from the chat, so its history row and summary are too; the record, its vote and its
+   * metrics stay for research.
+   */
+  rewoundAt?: Date
   gitApplication?: {
     readonly state: "pending" | "applied" | "blocked" | "failed" | "conflicted" | "manual" | "review" | "discarded"
     readonly reason?: string

@@ -1150,6 +1150,8 @@ export interface Interface {
     model?: { readonly providerID: ProviderV2.ID; readonly modelID: ModelV2.ID }
   }) => Effect.Effect<NormalTurnStart | undefined, Error>
   readonly recordNormalTurn: (input: { sessionID: SessionID; messageID: MessageID }) => Effect.Effect<void>
+  /** A rewind of a chat's canonical session committed; its removed battle turns leave the chat. */
+  readonly recordRevert: (sessionID: SessionID) => Effect.Effect<void>
   readonly singleAgentVote: (
     sessionID: string,
     ratingID: string,
@@ -3944,6 +3946,20 @@ export const layer: Layer.Layer<
           ),
         ),
       )
+
+    const recordRevert = (sessionID: SessionID) =>
+      Effect.gen(function* () {
+        if (!enabled()) return
+        const store = yield* getStore
+        const chat = yield* promise(() => store.chatForSession(sessionID))
+        if (!chat || chat.canonicalSessionID !== sessionID) return
+        const messages = yield* sessions.canonicalMessages(sessionID).pipe(Effect.mapError(error))
+        const removed = yield* promise(() =>
+          store.markRewoundTurns(chat._id, new Set(messages.map((message) => String(message.id)))),
+        )
+        if (removed.length > 0)
+          yield* Effect.logInfo("Arena rewind removed battle turns", { chatID: chat._id, removed })
+      }).pipe(Effect.catchCause((cause) => Effect.logError("Arena rewind reconciliation failed", { cause })))
 
     const singleAgentVote = Effect.fn("Arena.singleAgentVote")(function* (
       rawSessionID: string,
@@ -10710,6 +10726,7 @@ export const layer: Layer.Layer<
       rejectQuestion,
       beginNormalTurn,
       recordNormalTurn,
+      recordRevert,
       singleAgentVote,
       startTurn,
       reply,
