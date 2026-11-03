@@ -36,7 +36,8 @@ export function ReviewFeedbackAction({
   enabled: boolean | undefined;
   hasDiff: boolean;
 }) {
-  if (enabled === false || !hasDiff) return null;
+  if (enabled === false || !hasDiff || props.state.disabledReason === "unresolved-battle")
+    return null;
   return <OpenReviewFeedbackAction {...props} workspaceId={props.workspaceId ?? ""} />;
 }
 
@@ -74,7 +75,9 @@ function OpenReviewFeedbackAction({
     count: state.phase.kind === "sending" ? state.phase.commentCount : state.sendableCommentCount,
   });
   const unavailableNotice =
-    state.disabledReason && state.commentCount > 0 ? (
+    state.disabledReason &&
+    state.disabledReason !== "unresolved-battle" &&
+    state.commentCount > 0 ? (
       <Text style={styles.text}>{t(`review.feedback.${state.disabledReason}`)}</Text>
     ) : null;
   let notice: ReactNode = unavailableNotice;

@@ -75,7 +75,10 @@ function githubPrAttachment(
   };
 }
 
-function workspaceReviewAttachment(): Extract<ComposerAttachment, { kind: "review" }> {
+function workspaceReviewAttachment(): Omit<
+  Extract<ComposerAttachment, { kind: "review" }>,
+  "draftComments"
+> {
   return {
     kind: "review",
     reviewDraftKey: "review:key",

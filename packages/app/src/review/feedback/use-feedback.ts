@@ -23,6 +23,7 @@ import {
 } from "./index";
 import { useToast } from "@/contexts/toast-context";
 import { FeedbackSentMessage } from "./surface";
+import { useArenaActivityStore } from "@/arena/activity-store";
 
 const feedbackScope = createReviewFeedbackScope();
 
@@ -41,6 +42,7 @@ export function useReviewFeedback(input: {
   const client = useHostRuntimeClient(serverId);
   const connected = useHostRuntimeIsConnected(serverId);
   const comments = useReviewDraftComments(reviewDraftKey);
+  const activities = useArenaActivityStore((store) => store.hosts[serverId]);
   const layout = useWorkspaceLayoutStore((store) =>
     workspaceKey ? store.layoutByWorkspace[workspaceKey] : undefined,
   );
@@ -65,6 +67,7 @@ export function useReviewFeedback(input: {
           attachment: live.current.attachment,
           connected: live.current.connected,
           recipients: readRecipients(workspaceKey),
+          hasUnresolvedBattle: readHasUnresolvedBattle(serverId, workspaceKey),
         }),
         send: async (recipient, attachment) => {
           const { client: targetClient } = live.current;
@@ -104,16 +107,24 @@ export function useReviewFeedback(input: {
   );
   useEffect(() => {
     model.refresh();
-  }, [model, comments, layout, connected, input.attachment]);
+  }, [model, comments, layout, connected, input.attachment, activities]);
   const state = useSyncExternalStore(model.subscribe, model.getState, model.getState);
   return {
     model,
     state,
     clearance:
-      state.commentCount > 0
+      state.commentCount > 0 && state.disabledReason !== "unresolved-battle"
         ? (isCompact ? FLOATING_ACTION_BUTTON_CLEARANCE : buttonControlHeight.sm + SPACING[4]) + 44
         : 0,
   };
+}
+
+function readHasUnresolvedBattle(serverId: string, workspaceKey: string | null): boolean {
+  const activities = useArenaActivityStore.getState().hosts[serverId];
+  return readRecipients(workspaceKey).some((recipient) => {
+    const activity = activities?.get(recipient.agentId);
+    return activity !== undefined && activity.state !== null && !activity.resolved;
+  });
 }
 
 function readRecipients(workspaceKey: string | null): FeedbackRecipient[] {

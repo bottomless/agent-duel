@@ -205,6 +205,7 @@ export function buildReviewAttachmentSnapshot(
   input: BuildReviewAttachmentSnapshotInput,
 ): ReviewComposerAttachment | null {
   const comments: ReviewAttachment["comments"] = [];
+  const draftComments: ReviewDraftComment[] = [];
 
   for (const draftComment of input.comments) {
     const target = findTarget({
@@ -227,6 +228,7 @@ export function buildReviewAttachmentSnapshot(
       .map(toContextLine)
       .filter((line): line is ReviewAttachmentContextLine => line !== null);
 
+    draftComments.push(draftComment);
     comments.push({
       filePath: draftComment.filePath,
       side: draftComment.side,
@@ -256,6 +258,7 @@ export function buildReviewAttachmentSnapshot(
   return {
     kind: "review",
     reviewDraftKey: input.reviewDraftKey,
+    draftComments,
     commentCount: comments.length,
     attachment,
   };

@@ -42,6 +42,7 @@ function makeAttachment(comments: readonly ReviewDraftComment[]): FeedbackAttach
   return {
     kind: "review",
     reviewDraftKey: "draft",
+    draftComments: comments,
     commentCount: comments.length,
     attachment: {
       type: "review",
@@ -63,6 +64,7 @@ function setup(agentIds: string[], unavailableIds: string[] = [], create = creat
   let comments = [makeComment("first")];
   let recipients = agentIds.map(makeRecipient);
   let connected = true;
+  let hasUnresolvedBattle = false;
   let rejectSend: ((error: Error) => void) | null = null;
   let resolveSend: (() => void) | null = null;
   const sends: Array<{ recipient: FeedbackRecipient; attachment: FeedbackAttachment }> = [];
@@ -70,6 +72,7 @@ function setup(agentIds: string[], unavailableIds: string[] = [], create = creat
     comments,
     recipients,
     connected,
+    hasUnresolvedBattle,
     attachment: makeAttachment(comments.filter((comment) => !unavailableIds.includes(comment.id))),
   });
   const ports: ReviewFeedbackPorts = {
@@ -112,12 +115,44 @@ function setup(agentIds: string[], unavailableIds: string[] = [], create = creat
       connected = false;
       model.refresh();
     },
+    setUnresolvedBattle: (unresolved: boolean) => {
+      hasUnresolvedBattle = unresolved;
+      model.refresh();
+    },
     succeed: () => resolveSend!(),
     fail: () => rejectSend!(new Error("Host rejected feedback")),
   };
 }
 
 describe("review feedback", () => {
+  it("keeps drafts and refuses direct feedback during an unresolved battle", async () => {
+    const feedback = setup(["one"]);
+    feedback.setUnresolvedBattle(true);
+    await feedback.model.press();
+    await feedback.model.send("one");
+    expect(feedback.model.getState()).toMatchObject({
+      canSend: false,
+      disabledReason: "unresolved-battle",
+      phase: { kind: "idle" },
+    });
+    expect(feedback.sends).toEqual([]);
+    expect(feedback.comments()).toEqual([makeComment("first")]);
+    feedback.setUnresolvedBattle(false);
+    const pending = feedback.model.press();
+    feedback.succeed();
+    await pending;
+    expect(feedback.comments()).toEqual([]);
+  });
+
+  it("refuses a stale recipient selection after a battle starts", async () => {
+    const feedback = setup(["one", "two"]);
+    await feedback.model.press();
+    expect(feedback.model.getState().phase).toEqual({ kind: "choosing" });
+    feedback.setUnresolvedBattle(true);
+    await feedback.model.send("one");
+    expect(feedback.sends).toEqual([]);
+    expect(feedback.comments()).toEqual([makeComment("first")]);
+  });
   it("counts only attached comments, freezes the sending count, and retains orphans", async () => {
     const feedback = setup(["one"], ["orphan"]);
     feedback.setComments([makeComment("first"), makeComment("orphan")]);
