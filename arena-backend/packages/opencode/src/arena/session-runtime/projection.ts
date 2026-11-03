@@ -11,6 +11,7 @@ import * as SessionV1 from "@opencode/schema/v1/session"
 import { DateTime } from "effect"
 import { BATTLE_RESUME_MESSAGE_PREFIX } from "../resume-note"
 import type { ArenaPart, ArenaToolState, ArenaTranscriptEntry, ArenaTranscript } from "./schema"
+import { ArenaResponseRecovery } from "../response-recovery"
 
 type CanonicalMessage = SessionMessage.Info
 
@@ -55,6 +56,9 @@ const projectError = (
 ): NonNullable<SessionV1.Assistant["error"]> => {
   if (!value) return { name: "UnknownError", data: { message: "Unknown assistant error" } }
   if (value.type === "aborted") return { name: "MessageAbortedError", data: { message: value.message } }
+  // This is a manual side retry, not an automatic retry of the failed summary request.
+  if (value.type === "compaction.empty-summary")
+    return { name: "APIError", data: { message: ArenaResponseRecovery.COMPACTION_EMPTY, isRetryable: true } }
   const isRetryable = retryable || retryableError(value)
   if (isRetryable || value.status !== undefined || value.response !== undefined)
     return {

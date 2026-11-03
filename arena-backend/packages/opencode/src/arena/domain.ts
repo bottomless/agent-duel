@@ -222,7 +222,9 @@ export function isParkedPromotion(turn: {
 }): boolean {
   if (turn.state !== "application_failed") return false
   const application = turn.gitApplication?.state
-  return application === "conflicted" || application === "review" || application === "manual" || application === "blocked"
+  return (
+    application === "conflicted" || application === "review" || application === "manual" || application === "blocked"
+  )
 }
 
 /**
@@ -272,8 +274,8 @@ export const INTERRUPTED_RUN_MESSAGE = "Interrupted when Agent Duel closed"
 /**
  * May the voter retry this failed run?
  *
- * Only while the battle is undecided, only for a model request that failed the way the engine
- * retries on its own (`errorRetryable`), and only once the failure is committed and the run still
+ * Only while the battle is undecided, only for a retryable model failure or an empty compaction
+ * summary (`errorRetryable`), and only once the failure is committed and the run still
  * has its worktree. The service refuses what this refuses, and the app shows Retry from it. A run
  * the engine's restart cut off is not retried on its own; the battle resumes (`canResumeBattle`).
  */

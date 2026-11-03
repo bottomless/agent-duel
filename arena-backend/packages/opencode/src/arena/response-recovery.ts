@@ -6,6 +6,7 @@ export function reason(finish?: string): Reason | undefined {
   return finish === "length" || finish === "arena-idle" ? finish : undefined
 }
 export const IDLE_RECOVERING = "Continuing after model timeout"
+export const COMPACTION_EMPTY = "The agent could not summarize its context. Retry to continue."
 export const IDLE_EXHAUSTED =
   "The model stopped responding after three recovery attempts. Completed work has been preserved. Continue with a smaller request."
 export const IDLE_TOOL_INTERRUPTED =

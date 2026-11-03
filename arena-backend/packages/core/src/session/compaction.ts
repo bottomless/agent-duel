@@ -314,12 +314,13 @@ export const layer = Layer.effect(
           )
           const retry = yield* stream(context, nudged, prepared.options)
           if (filled(retry.text)) return { ...retry, recent: split.recent }
+          const empty = retry.text.trim().length === 0
           return yield* Effect.fail<Failure>({
             error: {
-              type: "compaction.failed",
-              message: retry.text.trim()
-                ? "Compaction summary did not match the required template"
-                : "Compaction produced no summary",
+              type: empty ? "compaction.empty-summary" : "compaction.failed",
+              message: empty
+                ? "Compaction produced no summary"
+                : "Compaction summary did not match the required template",
             },
           })
         })

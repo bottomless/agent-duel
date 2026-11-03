@@ -127,6 +127,42 @@ function containsUndefined(value: unknown): boolean {
 describe("ArenaPublic", () => {
   afterEach(() => setArenaCredentials(undefined))
 
+  test.each([1, 2])("offers Retry with neutral copy when %s side(s) have an empty summary", (failedSides) => {
+    const input = snapshot(false)
+    input.turn!.state = failedSides === 2 ? "awaiting_vote" : "running"
+    const original = input.runs[0]!
+    const runs = (["a", "b"] as const).map((side, index) => ({
+      ...original,
+      _id: `run-${side}`,
+      side,
+      rootSessionID: `session-${side}`,
+      runState: index < failedSides ? ("error" as const) : ("pending" as const),
+      ...(index < failedSides
+        ? {
+            error: `Contestant assistant error: ${JSON.stringify({
+              name: "APIError",
+              data: { message: ArenaResponseRecovery.COMPACTION_EMPTY, isRetryable: true },
+            })}`,
+            errorRetryable: true,
+            finalizedAt: now(),
+          }
+        : {}),
+    }))
+    const output = project({ ...input, runs })
+    expect(output.runs[0]).toMatchObject({
+      error: "The agent could not summarize its context. Retry to continue.",
+      canRetry: true,
+      selectable: false,
+    })
+    expect(output.runs[1].canRetry).toBe(failedSides === 2)
+    expect(output.runs[1].error).toBe(failedSides === 2 ? ArenaResponseRecovery.COMPACTION_EMPTY : undefined)
+    expect(output.runs.every((run) => run.identity === undefined)).toBe(true)
+    expect(output.turn).toMatchObject({ canVote: false, canTie: false, canDiscardBattle: failedSides === 2 })
+    expect(JSON.stringify(output)).not.toMatch(/GLM|Qwen|private-assignment/)
+    const exhausted = project({ ...input, runs: runs.map((run) => ({ ...run, manualRetries: 2 })) })
+    expect(exhausted.runs.map((run) => run.canRetry)).toEqual([false, false])
+  })
+
   test.each([false, true])("explains a rejected BYOK key on both sides, revealed=%s", (revealed) => {
     setArenaCredentials({ mode: "byok", openRouterApiKey: "test-key", controlTokenHash: "test-hash" })
     const input = snapshot(revealed)
