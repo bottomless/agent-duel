@@ -1436,6 +1436,24 @@ it.instance("Arena loop compacts a history over the limit although stored counts
   }),
 )
 
+it.instance("Arena loop leaves a history above the savings level to the control plane", () =>
+  Effect.gen(function* () {
+    process.env.OPENCODE_ARENA = "1"
+    yield* Effect.addFinalizer(() => Effect.sync(() => delete process.env.OPENCODE_ARENA))
+    yield* useServerConfig(providerCfg)
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({ title: "Pinned" })
+    // About 300K estimated tokens: past the control plane's 272K level, inside the contestant window.
+    yield* arenaFinishedReply(chat.id, "x".repeat(300_000 * 4))
+    yield* user(chat.id, "next")
+
+    const messages = yield* arenaFirstModelCall(chat.id)
+
+    expect(hasCompaction(messages)).toBe(false)
+    expect(calling(messages)?.summary).toBeUndefined()
+  }),
+)
+
 it.instance("loop calls LLM and returns assistant message", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(providerCfg)
