@@ -14,6 +14,7 @@ import {
   withStreamImageRefs,
 } from "./arena/history-images.js";
 import { ArenaPayloadTooLargeError } from "./arena/payload-limit.js";
+import { ArenaSignInRequiredError } from "./arena/sign-in-required.js";
 import equal from "fast-deep-equal";
 import { v4 as uuidv4 } from "uuid";
 import { lstat, mkdir, mkdtemp, rename, rm, stat } from "node:fs/promises";
@@ -277,6 +278,7 @@ import {
   ProjectDirectoryRequestError,
 } from "./project-directory-service.js";
 import { initializeProjectGit, inspectProjectGit } from "./project-git-service.js";
+import { discoverRecentProjects } from "./recent-projects.js";
 import { runGitCommand } from "../utils/run-git-command.js";
 import { CreateAgentLifecycleDispatch } from "./agent/create-agent-lifecycle-dispatch.js";
 import { resolveWorktreeSourceCwd } from "./workspace-source.js";
@@ -1863,11 +1865,15 @@ export class Session {
       } catch (error) {
         const err = error instanceof Error ? error : new Error(String(error));
         this.sessionLogger.error({ err }, "Error handling message");
-        // An Arena answer too large to send says so in its own words, without the generic prefix.
-        const tooLarge = err instanceof ArenaPayloadTooLargeError;
+        // An Arena answer too large to send, or a send that needs an account, says so in its own
+        // words and with its own code, without the generic prefix.
+        const coded =
+          err instanceof ArenaPayloadTooLargeError || err instanceof ArenaSignInRequiredError
+            ? err
+            : null;
         const failure = {
-          error: tooLarge ? err.message : `Request failed: ${err.message}`,
-          code: tooLarge ? err.code : "handler_error",
+          error: coded ? coded.message : `Request failed: ${err.message}`,
+          code: coded ? coded.code : "handler_error",
         };
         if (
           msg.type.startsWith("arena.stream.") &&
@@ -2458,6 +2464,8 @@ export class Session {
     switch (msg.type) {
       case "project.git.inspect.request":
         return this.handleProjectGitInspectRequest(msg);
+      case "project.recent.list.request":
+        return this.handleProjectRecentListRequest(msg);
       case "project.git.initialize.request":
         return this.handleProjectGitInitializeRequest(msg);
       default:
@@ -6631,6 +6639,28 @@ export class Session {
           cwd: request.cwd,
           state: null,
           error: error instanceof Error ? error.message : "Failed to inspect project Git",
+        },
+      });
+    }
+  }
+
+  private async handleProjectRecentListRequest(
+    request: Extract<SessionInboundMessage, { type: "project.recent.list.request" }>,
+  ): Promise<void> {
+    try {
+      const projects = await discoverRecentProjects();
+      this.emit({
+        type: "project.recent.list.response",
+        payload: { requestId: request.requestId, projects, error: null },
+      });
+    } catch (error) {
+      this.sessionLogger.error({ err: error }, "Failed to discover recent projects");
+      this.emit({
+        type: "project.recent.list.response",
+        payload: {
+          requestId: request.requestId,
+          projects: [],
+          error: error instanceof Error ? error.message : "Failed to discover recent projects",
         },
       });
     }

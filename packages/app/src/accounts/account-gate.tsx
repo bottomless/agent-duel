@@ -1,4 +1,4 @@
-import { useCallback, useEffect, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, type ReactNode } from "react";
 import { ActivityIndicator, View, type ViewStyle } from "react-native";
 import {
   hasAcceptedLegalDocuments,
@@ -8,7 +8,12 @@ import {
 } from "@getpaseo/protocol/accounts/schemas";
 import { useFetchQuery } from "@/data/query";
 import { getHostRuntimeStore } from "@/runtime/host-runtime";
-import { fetchAuthMethods, fetchCurrentSession, type AccountsEndpoint } from "./client";
+import {
+  currentSessionQueryKey,
+  fetchAuthMethods,
+  fetchCurrentSession,
+  type AccountsEndpoint,
+} from "./client";
 import { useAccountsEndpoint } from "./endpoint";
 import { resolveAccountGate, type QueryPhase, type AccountGate as AccountGateState } from "./gate";
 import { AccountGateKindContext } from "./gate-context";
@@ -18,6 +23,7 @@ import {
   type AccountSession,
 } from "./session-store";
 import { SignInScreen } from "./sign-in-screen";
+import { useSignInPromptStore } from "./sign-in-prompt";
 import { DaemonUnreachable } from "./daemon-unreachable";
 import { TermsAcceptanceModal } from "./terms-acceptance-modal";
 import { UpdateRequired } from "./update-required";
@@ -33,6 +39,7 @@ function methodsGateInput(methods: AuthMethodsResponse | undefined) {
     updateRequired: methods?.updateRequired ?? false,
     accountsEnabled: methods?.enabled ?? false,
     methods: methods?.methods ?? [],
+    anonymousAllowed: methods?.anonymous ?? false,
   };
 }
 
@@ -55,6 +62,8 @@ export function AccountGate({ children }: { children: ReactNode }): ReactNode {
   const session = useAccountSessionStore((store) => store.session);
   const clearSession = useAccountSessionStore((store) => store.clearSession);
   const updateUser = useAccountSessionStore((store) => store.updateUser);
+  const prompt = useSignInPromptStore((store) => store.prompt);
+  const dismissPrompt = useSignInPromptStore((store) => store.dismiss);
 
   const methodsQuery = useFetchQuery({
     queryKey: ["accounts", "methods", endpoint?.baseUrl ?? null],
@@ -66,7 +75,7 @@ export function AccountGate({ children }: { children: ReactNode }): ReactNode {
 
   const sessionToken = session?.token ?? null;
   const sessionQuery = useFetchQuery({
-    queryKey: ["accounts", "session", endpoint?.baseUrl ?? null, sessionToken],
+    queryKey: currentSessionQueryKey(endpoint?.baseUrl ?? null, sessionToken),
     dataShape: "value",
     enabled: endpoint !== null && sessionToken !== null,
     staleTimeMs: STALE_TIME_MS,
@@ -89,6 +98,20 @@ export function AccountGate({ children }: { children: ReactNode }): ReactNode {
     }
     updateUser(resolvedSession.user);
   }, [clearSession, resolvedSession, updateUser]);
+
+  // An anonymous session that has used its messages may still finish what it sent, so a check
+  // after a send only marks the next send for sign-in. The first check of a launch asks at once.
+  const launchChecked = useRef(false);
+  useEffect(() => {
+    if (!resolvedSession) return;
+    const used = resolvedSession.method === "anonymous" && resolvedSession.signInRequired === true;
+    const prompts = useSignInPromptStore.getState();
+    prompts.setMessagesUsed(used);
+    if (!launchChecked.current) {
+      launchChecked.current = true;
+      if (used) prompts.request("required");
+    }
+  }, [resolvedSession]);
 
   // Every connection made while signed out is refused, so the host never comes online and there
   // is no client to reconnect — the probe closes the one it opened. All three of these are
@@ -116,6 +139,7 @@ export function AccountGate({ children }: { children: ReactNode }): ReactNode {
     methodsPhase: phaseOf(methodsQuery.status),
     ...methodsGateInput(methodsQuery.data),
     hasStoredSession: sessionToken !== null,
+    signInPrompt: session?.method === "anonymous" ? prompt : null,
     sessionPhase: phaseOf(sessionQuery.status),
     sessionIsValid: resolvedSession != null,
     legalDocumentsAvailable: documents != null,
@@ -129,6 +153,7 @@ export function AccountGate({ children }: { children: ReactNode }): ReactNode {
       session={session}
       documents={documents}
       onRetry={retryMethods}
+      onDismissPrompt={dismissPrompt}
     >
       {children}
     </AccountGateContent>
@@ -141,10 +166,19 @@ interface AccountGateContentProps {
   session: AccountSession | null;
   documents: LegalDocuments | null | undefined;
   onRetry: () => void;
+  onDismissPrompt: () => void;
   children: ReactNode;
 }
 
 const checkingStyle: ViewStyle = { flex: 1, alignItems: "center", justifyContent: "center" };
+const overlayStyle: ViewStyle = {
+  position: "absolute",
+  top: 0,
+  right: 0,
+  bottom: 0,
+  left: 0,
+  zIndex: 1000,
+};
 
 function AccountGateContent({
   gate,
@@ -152,6 +186,7 @@ function AccountGateContent({
   session,
   documents,
   onRetry,
+  onDismissPrompt,
   children,
 }: AccountGateContentProps) {
   const app = (
@@ -167,6 +202,7 @@ function AccountGateContent({
         endpoint={endpoint}
         methods={gate.methods}
         documents={documents}
+        allowAnonymous={gate.allowAnonymous}
       />
     );
   }
@@ -194,5 +230,24 @@ function AccountGateContent({
     );
   }
 
-  return app;
+  // An anonymous session signs in over the app rather than in place of it, so the chat, its route
+  // and the draft that asked for an account are still there once it has. The app's position in the
+  // tree is the same either way, so showing the screen does not remount it.
+  return (
+    <>
+      {app}
+      {gate.kind === "upgrade" && documents ? (
+        <View style={overlayStyle}>
+          <SignInScreen
+            key={`upgrade:${documents.termsVersion}:${documents.privacyPolicyVersion}`}
+            endpoint={endpoint}
+            methods={gate.methods}
+            documents={documents}
+            variant={gate.prompt}
+            onBack={gate.prompt === "requested" ? onDismissPrompt : undefined}
+          />
+        </View>
+      ) : null}
+    </>
+  );
 }

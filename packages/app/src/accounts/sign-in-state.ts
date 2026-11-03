@@ -2,6 +2,9 @@ import type { SignInMethod } from "@getpaseo/protocol/accounts/schemas";
 
 export type OAuthSignInMethod = Exclude<SignInMethod, "email">;
 
+/** A sign-in method, or "Continue without an account". */
+export type SignInAttempt = SignInMethod | "anonymous";
+
 export interface SignInFlowHandle {
   flowId: string;
   secret: string;
@@ -14,13 +17,13 @@ export interface SignInFlowHandle {
  */
 export type SignInState =
   | { kind: "idle"; flow: SignInFlowHandle | null }
-  | { kind: "opening"; method: SignInMethod }
+  | { kind: "opening"; method: SignInAttempt }
   | { kind: "awaiting-email"; email: string; flow: SignInFlowHandle }
   | { kind: "awaiting-browser"; provider: OAuthSignInMethod; flow: SignInFlowHandle }
   | { kind: "failed"; message: string };
 
 export type SignInAction =
-  | { type: "start"; method: SignInMethod }
+  | { type: "start"; method: SignInAttempt }
   | { type: "email-sent"; email: string; flow: SignInFlowHandle }
   | { type: "browser-opened"; provider: OAuthSignInMethod; flow: SignInFlowHandle }
   | { type: "failed"; message: string }

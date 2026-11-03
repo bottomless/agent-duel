@@ -9,6 +9,7 @@ import { settingsStyles } from "@/styles/settings";
 import { signOut } from "./client";
 import { useAccountsEndpoint } from "./endpoint";
 import { useAccountSessionStore } from "./session-store";
+import { useSignInPromptStore } from "./sign-in-prompt";
 
 const METHOD_LABEL_KEYS: Record<SignInMethod, string> = {
   email: "settings.account.methods.email",
@@ -53,8 +54,30 @@ export function AccountSection() {
     })();
   }, [clearSession, endpoint, session, t]);
 
+  const requestSignIn = useCallback(() => {
+    useSignInPromptStore.getState().request("requested");
+  }, []);
+
   if (!session) {
     return null;
+  }
+
+  if (session.method === "anonymous") {
+    return (
+      <SettingsSection title={t("settings.account.title")}>
+        <View style={settingsStyles.card}>
+          <View style={settingsStyles.row}>
+            <View style={settingsStyles.rowContent}>
+              <Text style={settingsStyles.rowTitle}>{t("settings.account.notSignedIn")}</Text>
+              <Text style={settingsStyles.rowHint}>{t("settings.account.notSignedInHint")}</Text>
+            </View>
+            <Button size="sm" variant="outline" onPress={requestSignIn} testID="settings-sign-in">
+              {t("settings.account.signIn")}
+            </Button>
+          </View>
+        </View>
+      </SettingsSection>
+    );
   }
 
   return (

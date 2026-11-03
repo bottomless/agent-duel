@@ -3,6 +3,7 @@ import {
   claimSignInFlowResponseSchema,
   currentSessionResponseSchema,
   openSignInFlowResponseSchema,
+  startAnonymousSessionResponseSchema,
   SESSION_HEADER,
   type AuthMethodsResponse,
   type ClaimSignInFlowResponse,
@@ -11,6 +12,7 @@ import {
   type OpenSignInFlowRequest,
   type SignInMethod,
   type AcceptTermsRequest,
+  type StartAnonymousSessionResponse,
 } from "@getpaseo/protocol/accounts/schemas";
 
 export interface AccountsEndpoint {
@@ -23,23 +25,25 @@ export class AccountsRequestError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /** The control plane's reason, such as `sign_in_required`. */
+    readonly code?: string,
   ) {
     super(message);
     this.name = "AccountsRequestError";
   }
 }
 
-const errorBodySchema = { error: "" };
-
-async function readErrorMessage(response: Response, fallback: string): Promise<string> {
+async function readError(
+  response: Response,
+  fallback: string,
+): Promise<{ message: string; code?: string }> {
   const body: unknown = await response.json().catch(() => null);
-  if (body && typeof body === "object" && "error" in body) {
-    const message = (body as typeof errorBodySchema).error;
-    if (typeof message === "string" && message.trim()) {
-      return message;
-    }
-  }
-  return fallback;
+  if (!body || typeof body !== "object") return { message: fallback };
+  const { error, code } = body as { error?: unknown; code?: unknown };
+  return {
+    message: typeof error === "string" && error.trim() ? error : fallback,
+    ...(typeof code === "string" ? { code } : {}),
+  };
 }
 
 function headersFor(endpoint: AccountsEndpoint, sessionToken: string | null): HeadersInit {
@@ -65,10 +69,8 @@ async function request(
     ...(input.body === undefined ? {} : { body: JSON.stringify(input.body) }),
   });
   if (!response.ok) {
-    throw new AccountsRequestError(
-      response.status,
-      await readErrorMessage(response, `Request failed with ${response.status}`),
-    );
+    const { message, code } = await readError(response, `Request failed with ${response.status}`);
+    throw new AccountsRequestError(response.status, message, code);
   }
   return response.json();
 }
@@ -76,6 +78,11 @@ async function request(
 export async function fetchAuthMethods(endpoint: AccountsEndpoint): Promise<AuthMethodsResponse> {
   const body = await request(endpoint, { path: "/api/auth/methods", method: "GET" });
   return authMethodsResponseSchema.parse(body);
+}
+
+/** The account gate's query for one session; a sign-in seeds it with the session it just claimed. */
+export function currentSessionQueryKey(baseUrl: string | null, sessionToken: string | null) {
+  return ["accounts", "session", baseUrl, sessionToken] as const;
 }
 
 export async function fetchCurrentSession(
@@ -97,12 +104,31 @@ export async function fetchCurrentSession(
   }
 }
 
+/** `sessionToken` is the anonymous session the sign-in upgrades, when there is one. */
 export async function openSignInFlow(
   endpoint: AccountsEndpoint,
   input: OpenSignInFlowRequest,
+  sessionToken: string | null = null,
 ): Promise<OpenSignInFlowResponse> {
-  const body = await request(endpoint, { path: "/api/auth/flow", method: "POST", body: input });
+  const body = await request(endpoint, {
+    path: "/api/auth/flow",
+    method: "POST",
+    body: input,
+    sessionToken,
+  });
   return openSignInFlowResponseSchema.parse(body);
+}
+
+export async function startAnonymousSession(
+  endpoint: AccountsEndpoint,
+  acceptance: AcceptTermsRequest,
+): Promise<StartAnonymousSessionResponse> {
+  const body = await request(endpoint, {
+    path: "/api/auth/anonymous",
+    method: "POST",
+    body: { acceptance },
+  });
+  return startAnonymousSessionResponseSchema.parse(body);
 }
 
 export async function claimSignInFlow(

@@ -11,7 +11,17 @@ export interface HostedArenaCredentials {
   readonly controlPlaneUrl: string
   readonly researchPartition: string
   readonly researchAccountID: string
+  /**
+   * Anonymous accounts the control plane merged into this one when the user signed in. Their local
+   * records and pending uploads move to this account before research starts (`adoptResearchAccounts`).
+   */
+  readonly adoptAccounts: readonly AdoptedAccount[]
   readonly controlTokenHash: string
+}
+
+export interface AdoptedAccount {
+  readonly accountID: string
+  readonly researchPartition: string
 }
 
 /** A source build without a control plane: battles run in process on the user's own OpenRouter key. */
@@ -67,10 +77,12 @@ function parseHosted(value: Record<string, unknown>): HostedArenaCredentials {
       "controlTokenHash",
       "researchPartition",
       "researchAccountID",
+      "adoptAccounts",
     ])
   )
     throw new ArenaCredentialsError()
   const { token, controlPlaneUrl, controlTokenHash, researchPartition, researchAccountID } = value
+  const adoptAccounts = parseAdoptedAccounts(value.adoptAccounts)
   if (
     typeof researchAccountID !== "string" ||
     !researchAccountID.trim() ||
@@ -96,10 +108,27 @@ function parseHosted(value: Record<string, unknown>): HostedArenaCredentials {
     mode: "hosted",
     researchPartition,
     researchAccountID,
+    adoptAccounts,
     token: token.trim(),
     controlPlaneUrl: url.toString().replace(/\/$/, ""),
     controlTokenHash,
   }
+}
+
+function parseAdoptedAccounts(value: unknown): readonly AdoptedAccount[] {
+  if (!Array.isArray(value) || value.length > 16) throw new ArenaCredentialsError()
+  return value.map((entry) => {
+    if (!isRecord(entry) || !hasExactly(entry, ["accountID", "researchPartition"])) throw new ArenaCredentialsError()
+    const { accountID, researchPartition } = entry
+    if (
+      typeof accountID !== "string" ||
+      !accountID.trim() ||
+      typeof researchPartition !== "string" ||
+      !researchPartition.trim()
+    )
+      throw new ArenaCredentialsError()
+    return { accountID, researchPartition }
+  })
 }
 
 function parseByok(value: Record<string, unknown>): ByokArenaCredentials {

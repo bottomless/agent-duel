@@ -1,4 +1,5 @@
 import type { SignInMethod } from "@getpaseo/protocol/accounts/schemas";
+import type { SignInPrompt } from "./sign-in-prompt";
 
 export type QueryPhase = "pending" | "success" | "error";
 
@@ -7,7 +8,9 @@ export type AccountGate =
   | { kind: "checking" }
   | { kind: "unreachable" }
   | { kind: "disabled" }
-  | { kind: "signed-out"; methods: readonly SignInMethod[] }
+  | { kind: "signed-out"; methods: readonly SignInMethod[]; allowAnonymous: boolean }
+  /** An anonymous session asked to sign in, by the user or because it used its messages. */
+  | { kind: "upgrade"; methods: readonly SignInMethod[]; prompt: SignInPrompt }
   | { kind: "acceptance-required" }
   | { kind: "update-required" }
   | { kind: "signed-in" };
@@ -20,7 +23,11 @@ export interface ResolveAccountGateInput {
   updateRequired: boolean;
   accountsEnabled: boolean;
   methods: readonly SignInMethod[];
+  /** The control plane lets this computer continue without an account. */
+  anonymousAllowed: boolean;
   hasStoredSession: boolean;
+  /** The stored session is anonymous and the sign-in screen was asked for over it. */
+  signInPrompt: SignInPrompt | null;
   sessionPhase: QueryPhase;
   sessionIsValid: boolean;
   legalDocumentsAvailable: boolean;
@@ -54,7 +61,7 @@ export function resolveAccountGate(input: ResolveAccountGateInput): AccountGate 
   }
   if (!input.legalDocumentsAvailable) return { kind: "unreachable" };
   if (!input.hasStoredSession) {
-    return { kind: "signed-out", methods: input.methods };
+    return signedOut(input);
   }
   if (input.sessionPhase === "pending") {
     return { kind: "checking" };
@@ -65,8 +72,15 @@ export function resolveAccountGate(input: ResolveAccountGateInput): AccountGate 
       : { kind: "acceptance-required" };
   }
   if (!input.sessionIsValid) {
-    return { kind: "signed-out", methods: input.methods };
+    return signedOut(input);
   }
   if (!input.hasAcceptedLegalDocuments) return { kind: "acceptance-required" };
+  if (input.signInPrompt) {
+    return { kind: "upgrade", methods: input.methods, prompt: input.signInPrompt };
+  }
   return { kind: "signed-in" };
+}
+
+function signedOut(input: ResolveAccountGateInput): AccountGate {
+  return { kind: "signed-out", methods: input.methods, allowAnonymous: input.anonymousAllowed };
 }

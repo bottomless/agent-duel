@@ -1397,6 +1397,14 @@ export const es: TranslationResources = {
         description: "Conecta tu teléfono a este demonio",
       },
     },
+    recent: {
+      title: "Proyectos recientes en este equipo",
+      loading: "Buscando proyectos...",
+      showAll: "Mostrar todo ({{count}})",
+      openLabel: "Iniciar un chat en {{name}}",
+      notFound: "No se encontró el directorio",
+      openFailed: "No se pudo añadir el proyecto",
+    },
   },
   projectPicker: {
     placeholder: "Escriba para buscar...",
@@ -1777,6 +1785,9 @@ export const es: TranslationResources = {
       signOut: "Cerrar sesión",
       signOutHint: "Tendrás que iniciar sesión de nuevo para usar Agent Duel.",
       signOutFailed: "No se pudo cerrar la sesión. Inténtalo de nuevo.",
+      notSignedIn: "Sin iniciar sesión",
+      notSignedInHint: "Inicia sesión para conservar tus duelos en tu cuenta.",
+      signIn: "Iniciar sesión",
     },
     editor: {
       title: "Editor",
