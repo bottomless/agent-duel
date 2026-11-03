@@ -163,7 +163,7 @@ export class OpenCodeV2AgentClient implements AgentClient {
         headers: {
           Accept: "application/json",
           "Content-Type": "application/json",
-          "x-opencode-directory": directory,
+          "x-opencode-directory": encodeURIComponent(directory),
           "x-paseo-control-token": acquisition.server.controlToken,
         },
         ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
@@ -305,7 +305,7 @@ export class OpenCodeV2AgentClient implements AgentClient {
           headers: {
             Accept: "application/json",
             "Content-Type": "application/json",
-            "x-opencode-directory": input.sourceCwd,
+            "x-opencode-directory": encodeURIComponent(input.sourceCwd),
             "x-paseo-control-token": arena.controlToken,
           },
           body: JSON.stringify({

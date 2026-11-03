@@ -17,8 +17,10 @@ Import their navigation hooks from `expo-router/react-navigation`: Expo 57 bundl
 React Navigation, so the standalone package reads a different context and can crash a routed page.
 
 Arena uses OpenCode's V2 session store and runner. Install its routes and engine plugin into the
-same Core service graph as the native `/api` routes. A second graph creates a separate session
-lifetime and can race worktree setup or winner promotion. The active engine typecheck excludes
+same Core service graph and directory boundary as the native `/api` routes. Project paths can
+contain Unicode, spaces, and literal percent signs; preserve them across requests and returned
+session locations. A second graph creates a separate session lifetime and can race worktree setup
+or winner promotion. The active engine typecheck excludes
 retained 1.x modules; check their imports separately when merging. Preview integration belongs to
 the V2 engine plugin. The Arena `info + parts` transcript is a wire projection; fork and graft canonical V2 messages so provider replay state, attachments, and
 compaction checkpoints survive a vote.

@@ -69,7 +69,7 @@ export function createArenaSessionApi(options: ArenaSessionApiOptions): ArenaApi
       headers: {
         Accept: "application/json",
         "Content-Type": "application/json",
-        "x-opencode-directory": options.directory,
+        "x-opencode-directory": encodeURIComponent(options.directory),
         "x-paseo-control-token": connection.controlToken,
       },
       ...(requestOptions.body ? { body: JSON.stringify(requestOptions.body) } : {}),
@@ -104,7 +104,7 @@ export function createArenaSessionApi(options: ArenaSessionApiOptions): ArenaApi
       signal,
       headers: {
         Accept: "text/event-stream",
-        "x-opencode-directory": options.directory,
+        "x-opencode-directory": encodeURIComponent(options.directory),
         "x-paseo-control-token": connection.controlToken,
       },
     });

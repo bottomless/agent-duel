@@ -872,7 +872,7 @@ export class OpenCodeV2Session implements AgentSession {
           headers: {
             Accept: "application/json",
             "Content-Type": "application/json",
-            "x-opencode-directory": this.config.cwd,
+            "x-opencode-directory": encodeURIComponent(this.config.cwd),
             "x-paseo-control-token": this.connection.arena.controlToken,
           },
           body: JSON.stringify({ enabled: value }),
