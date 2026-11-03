@@ -4,6 +4,12 @@ import type { JsonValue } from "@getpaseo/protocol/agent-types";
 const TOOL_CALL_CONTENT_MAX_LENGTH = 64 * 1024;
 export const PLUGIN_TIMELINE_DATA_MAX_BYTES = 64 * 1024;
 
+// Feedback uploads this bounded timeline. Keep the original sizes in metadata without changing
+// the text shown in chat; once sliced, the original lengths cannot be recovered from the rows.
+function truncationSize(originalLength: number, retainedLength: number) {
+  return { originalLength, retainedLength, unit: "utf16_code_units" };
+}
+
 export function assertPluginTimelineDataSize(data: JsonValue): void {
   const serializedBytes = Buffer.byteLength(JSON.stringify(data), "utf8");
   if (serializedBytes > PLUGIN_TIMELINE_DATA_MAX_BYTES) {
@@ -32,6 +38,13 @@ function limitFailedShellError(item: AgentTimelineItem): AgentTimelineItem {
   }
   return {
     ...item,
+    metadata: {
+      ...item.metadata,
+      errorContentTruncation: truncationSize(
+        item.error.content.length,
+        TOOL_CALL_CONTENT_MAX_LENGTH,
+      ),
+    },
     error: {
       ...item.error,
       content: retainTextPrefix(item.error.content, TOOL_CALL_CONTENT_MAX_LENGTH),
@@ -51,6 +64,13 @@ function limitPlainText(item: AgentTimelineItem): AgentTimelineItem {
   const notice = "\n\n[Content truncated]";
   return {
     ...item,
+    metadata: {
+      ...item.metadata,
+      textTruncation: truncationSize(
+        item.detail.text.length,
+        TOOL_CALL_CONTENT_MAX_LENGTH - notice.length,
+      ),
+    },
     detail: {
       ...item.detail,
       text:
@@ -74,6 +94,10 @@ export function limitAgentTimelineItemContent(item: AgentTimelineItem): AgentTim
   }
   return {
     ...item,
+    metadata: {
+      ...item.metadata,
+      outputTruncation: truncationSize(item.detail.output.length, TOOL_CALL_CONTENT_MAX_LENGTH),
+    },
     detail: {
       ...item.detail,
       output: retainTextPrefix(item.detail.output, TOOL_CALL_CONTENT_MAX_LENGTH),

@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
+import {
+  feedbackContextSchema,
+  feedbackContextStreamTimelineSchema,
+} from "@getpaseo/protocol/feedback/schemas";
+import type { AgentTimelineRow } from "../agent/agent-timeline-store-types.js";
+import { limitAgentTimelineItemContent } from "../agent/agent-timeline-content.js";
 import { createFeedbackContextCapture } from "./context.js";
+import { prepareFeedbackContextStream } from "./stream.js";
 
 const feedback = {
   id: "9d5b3081-70b8-4d51-82d4-5d76035ea62f",
@@ -48,6 +55,89 @@ const notGit = {
 };
 
 describe("feedback context", () => {
+  it("uploads cut-output sizes without changing retained content or the capture source", async () => {
+    const output = "x".repeat(5_000_024);
+    const rows: AgentTimelineRow[] = [
+      {
+        ...userMessage,
+        providerMessageId: "message-1",
+        item: limitAgentTimelineItemContent({
+          type: "tool_call",
+          callId: "large-shell",
+          name: "Bash",
+          status: "failed",
+          detail: { type: "shell", command: "echo large", output },
+          error: { content: output, exitCode: 1 },
+          metadata: { existing: "kept" },
+        }),
+      },
+      {
+        ...userMessage,
+        seq: 2,
+        item: limitAgentTimelineItemContent({
+          type: "tool_call",
+          callId: "large-text",
+          name: "terminal",
+          status: "completed",
+          detail: { type: "plain_text", text: output },
+          error: null,
+        }),
+      },
+      { ...userMessage, seq: 3 },
+    ];
+    const beforeCapture = JSON.stringify(rows);
+    const capture = createFeedbackContextCapture({
+      agents: { getAgent: () => agent("workspace-1"), getTimelineRows: async () => rows },
+      storage: { get: async () => ({ workspaceId: "workspace-1" }) },
+      loadAgent: async () => agent("workspace-1"),
+      git: notGit,
+    });
+
+    const context = feedbackContextSchema.parse(await capture.capture(feedback));
+    const prepared = prepareFeedbackContextStream({ feedbackId: feedback.id, attempt: 1, context });
+    const uploadedRows = prepared.chunks.slice(1).map((chunk) => {
+      const line: unknown = JSON.parse(new TextDecoder().decode(chunk));
+      return feedbackContextStreamTimelineSchema.parse(line).row;
+    });
+
+    expect(uploadedRows).toEqual(rows);
+    expect(uploadedRows[0].item).toMatchObject({
+      detail: { output: output.slice(0, 65_536) },
+      error: { content: output.slice(0, 65_536), exitCode: 1 },
+      metadata: {
+        existing: "kept",
+        outputTruncation: {
+          originalLength: output.length,
+          retainedLength: 65_536,
+          unit: "utf16_code_units",
+        },
+        errorContentTruncation: {
+          originalLength: output.length,
+          retainedLength: 65_536,
+          unit: "utf16_code_units",
+        },
+      },
+    });
+    const notice = "\n\n[Content truncated]";
+    expect(uploadedRows[1].item).toMatchObject({
+      detail: { text: output.slice(0, 65_536 - notice.length) + notice },
+      metadata: {
+        textTruncation: {
+          originalLength: output.length,
+          retainedLength: 65_536 - notice.length,
+          unit: "utf16_code_units",
+        },
+      },
+    });
+    expect(uploadedRows[2]).toEqual({ ...userMessage, seq: 3 });
+    expect(JSON.stringify(rows)).toBe(beforeCapture);
+    expect(prepared.transfer).toMatchObject({
+      originalTimelineItems: 3,
+      includedTimelineItems: 3,
+      truncated: false,
+    });
+  });
+
   it("captures the canonical timeline and a fresh git status", async () => {
     const capture = createFeedbackContextCapture({
       agents: {

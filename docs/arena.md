@@ -931,9 +931,11 @@ single-agent turn, and a steer belongs to the turn it steered. Clearing at the f
 a turn draws new models and a new worktree path, so its first request never reads the previous
 turn's cache. Never prune mid-turn, which would rewrite the warm prefix. Both sides have to clear
 the same output, so the send reads the boundary once, from the transcript it freezes, and forks
-again a side whose warm fork used another. The canonical session keeps every output, so the chat's
-history, its transcript hash, and single-agent turns, which continue one model whose cache does
-survive, are unchanged.
+again a side whose warm fork used another. Pruning leaves the canonical session and its transcript
+hash intact, including single-agent turns that continue one model whose cache survives. Use
+canonical history when you need complete tool output. Feedback context is a bounded diagnostic
+copy of the daemon timeline; cut tool fields carry original and retained sizes where those were
+recorded. Older rows cut without size metadata cannot report the missing size.
 
 Keep the winner's child transcripts available after a vote and after reloading the chat, including
 nested children. Their headings must open and close on the first click in both the newly applied
