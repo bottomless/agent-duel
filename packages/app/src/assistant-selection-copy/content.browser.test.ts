@@ -583,6 +583,28 @@ function copyAcross(root: Node, startText: string, endText: string) {
 }
 
 describe("assistant selection copy inside highlighted code", () => {
+  it.each([false, true])(
+    "keeps only selected code whitespace across a numbered list (semantic=%s)",
+    (semantic) => {
+      const message = mountHighlighted("python");
+      const list = document.createElement("div");
+      list.innerHTML = semantic
+        ? "<ol><li>First item</li><li>Second item</li></ol>"
+        : '<div data-paseo-markdown-tag="ol"><div data-paseo-markdown-tag="li"><span data-paseo-markdown-ignore="true" data-paseo-markdown-list-marker="true">1.</span><span>First item</span></div><div data-paseo-markdown-tag="li"><span data-paseo-markdown-ignore="true" data-paseo-markdown-list-marker="true">2.</span><span>Second item</span></div></div>';
+      message.prepend(list);
+      const code = fixtureElement(message, '[data-paseo-markdown-tag="code"]');
+      code.innerHTML =
+        "<span>def f(x):</span><span>\n</span><span>    return x + 1</span><span>\n</span><span>unselected()</span>";
+      const content = copyBetween(
+        [tokenText(message, "First item"), 6],
+        [tokenText(message, "    return x + 1"), 10],
+      );
+      expect(content?.plainText).toBe("item\n\n2. Second item\n\ndef f(x):\n    return");
+      expect(content?.html).toContain("<pre><code>def f(x):\n    return</code></pre>");
+      expect(content?.html).not.toContain("unselected");
+    },
+  );
+
   it("keeps the line break and the indentation of a partial multi-line selection", () => {
     const message = mountHighlighted();
 

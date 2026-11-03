@@ -46,6 +46,7 @@ export function configureGitProcessPolicy(policy: GitProcessPolicy): void {
 
 export interface GitCommandOptions {
   cwd: string;
+  signal?: AbortSignal;
   input?: string | Buffer;
   env?: ProcessEnvRecord;
   envOverlay?: ProcessEnvRecord;
@@ -401,6 +402,8 @@ function executeGitCommand<Output>(
           ["-c", "core.quotepath=false", "-c", "core.fsmonitor=false", ...args],
           {
             cwd: options.cwd,
+            signal: options.signal,
+            killSignal: "SIGKILL",
             envOverlay,
             shell: false,
             stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],

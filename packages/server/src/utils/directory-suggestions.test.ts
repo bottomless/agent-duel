@@ -14,7 +14,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { isPlatform } from "../test-utils/platform.js";
 import { startPathContainmentMetrics, stopPathContainmentMetrics } from "./path.js";
-import { startGitCommandMetrics, stopGitCommandMetrics } from "./run-git-command.js";
+import { runGitCommand, startGitCommandMetrics, stopGitCommandMetrics } from "./run-git-command.js";
 import {
   searchDirectoryEntries,
   WORKSPACE_SEARCH_HIDDEN_DIRECTORIES,
@@ -80,6 +80,158 @@ function initGitRepo(directory: string, ignorePatterns: string): void {
 }
 
 describe("searchDirectoryEntries", () => {
+  it("finds a late tracked file in a 25,000-file repository within bounded time and memory", async () => {
+    const root = realpathSync.native(mkdtempSync(path.join(tmpdir(), "indexed-search-")));
+    try {
+      initGitRepo(root, "ignored/\n");
+      for (let index = 0; index < 25_000; index += 1) {
+        writeFileSync(path.join(root, `file-${String(index).padStart(5, "0")}.ts`), "");
+      }
+      execFileSync("git", ["add", "--", "."], { cwd: root });
+      mkdirSync(path.join(root, "ignored"));
+      writeFileSync(path.join(root, "ignored", "file-24999-hidden.ts"), "");
+      const before = process.memoryUsage();
+      const started = performance.now();
+      const entries = await searchDirectoryEntries({
+        root,
+        query: "file-24999",
+        pathFormat: "relative",
+        includeFiles: true,
+        respectGitIgnore: true,
+        onScanLimit: (limit) => {
+          throw new Error(`Search stopped at the ${limit.toLocaleString("en-US")}-entry limit`);
+        },
+      });
+      const elapsedMs = performance.now() - started;
+      const after = process.memoryUsage();
+      writeFileSync(
+        path.join(tmpdir(), "shared-fixes-r46-metrics.json"),
+        JSON.stringify({
+          elapsedMs,
+          heapDeltaBytes: after.heapUsed - before.heapUsed,
+          rssDeltaBytes: after.rss - before.rss,
+          rssBytes: after.rss,
+        }),
+      );
+      expect(entries).toEqual([{ path: "file-24999.ts", kind: "file" }]);
+      expect(elapsedMs).toBeLessThan(10_000);
+      expect(after.heapUsed - before.heapUsed).toBeLessThan(64 * 1024 * 1024);
+      await expect(
+        searchDirectoryEntries({
+          root,
+          query: "file-24999",
+          pathFormat: "relative",
+          includeFiles: true,
+          includeDirectories: false,
+          respectGitIgnore: true,
+        }),
+      ).resolves.toEqual([{ path: "file-24999.ts", kind: "file" }]);
+      execFileSync("git", ["rm", "--cached", "-r", "-q", "."], { cwd: root });
+      await expect(
+        searchDirectoryEntries({
+          root,
+          query: "file-24999",
+          pathFormat: "relative",
+          includeFiles: true,
+          respectGitIgnore: true,
+          onScanLimit: (limit) => {
+            throw new Error(
+              `Search stopped at the ${limit.toLocaleString("en-US")}-entry limit; this search is incomplete.`,
+            );
+          },
+        }),
+      ).rejects.toThrow("Search stopped at the 20,000-entry limit; this search is incomplete.");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("keeps untracked discovery bounded and reports an incomplete Git search", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "indexed-limit-"));
+    try {
+      initGitRepo(root, "");
+      writeFileSync(path.join(root, "tracked.ts"), "");
+      execFileSync("git", ["add", "."], { cwd: root });
+      for (const name of ["a.ts", "b.ts", "z.ts"]) writeFileSync(path.join(root, name), "");
+      await expect(
+        searchDirectoryEntries({
+          root,
+          query: "z",
+          pathFormat: "relative",
+          includeFiles: true,
+          respectGitIgnore: true,
+          maxEntriesScanned: 2,
+          onScanLimit: (limit) => {
+            throw new Error(`Search stopped at the ${limit}-entry limit`);
+          },
+        }),
+      ).rejects.toThrow("Search stopped at the 2-entry limit");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves empty directories and allowed hidden files while excluding build output", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "indexed-policy-"));
+    try {
+      initGitRepo(root, "generated/\n");
+      for (const directory of ["empty-match", ".codex", ".hidden", "generated", "node_modules"]) {
+        mkdirSync(path.join(root, directory));
+        if (directory !== "empty-match") writeFileSync(path.join(root, directory, "match.ts"), "");
+      }
+      writeFileSync(path.join(root, "match.ts"), "");
+      await expect(
+        searchDirectoryEntries({
+          root,
+          query: "match",
+          pathFormat: "relative",
+          includeFiles: true,
+          includeDirectories: true,
+          respectGitIgnore: true,
+          traversableHiddenDirectoryNames: WORKSPACE_SEARCH_HIDDEN_DIRECTORIES,
+        }),
+      ).resolves.toEqual([
+        { path: "match.ts", kind: "file" },
+        { path: ".codex/match.ts", kind: "file" },
+        { path: "empty-match", kind: "directory" },
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("aborts the Git subprocess used by indexed search", async () => {
+    const controller = new AbortController();
+    const command = runGitCommand(["--version"], { cwd: tmpdir(), signal: controller.signal });
+    controller.abort();
+    await expect(command).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("rejects a cancelled search before filesystem or Git work starts", async () => {
+    const controller = new AbortController();
+    controller.abort(new Error("search cancelled"));
+    await expect(
+      searchDirectoryEntries({
+        root: "/unread",
+        query: "x",
+        pathFormat: "relative",
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("search cancelled");
+  });
+
+  it("cancels an in-flight search without waiting for its filesystem work", async () => {
+    const controller = new AbortController();
+    const searching = searchDirectoryEntries({
+      root: tmpdir(),
+      query: "needle",
+      pathFormat: "relative",
+      signal: controller.signal,
+    });
+    controller.abort(new Error("search cancelled"));
+    await expect(searching).rejects.toThrow("search cancelled");
+  });
+
   it("reports an incomplete search instead of claiming a file past the scan limit is absent", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "search-limit-"));
     try {

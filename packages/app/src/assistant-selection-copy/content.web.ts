@@ -26,6 +26,7 @@ const messageRowSelector = (messageId: string) => `[data-message-id="${CSS.escap
 const CODE_BLOCK_SELECTOR = `pre, [${MARKDOWN_COPY_TAG_ATTRIBUTE}="pre"]`;
 const CODE_REGION_SELECTOR = `${CODE_BLOCK_SELECTOR}, code, [${MARKDOWN_COPY_TAG_ATTRIBUTE}="code"]`;
 const IMAGE_FRAME_SELECTOR = `img, [${MARKDOWN_COPY_TAG_ATTRIBUTE}="img"]`;
+const PARTIAL_CODE_ATTRIBUTE = "data-paseo-partial-code";
 
 const SEMANTIC_TAGS =
   "p,blockquote,br,code,pre,h1,h2,h3,h4,h5,h6,hr,img,li,ol,ul,strong,em,s,del,table,thead,tbody,tr,th,td";
@@ -114,6 +115,18 @@ export function createAssistantSelectionClipboardContent(
   for (const part of parts) {
     container.append(cloneMarkdownSelection(part.range, part.message));
   }
+  // Protect partial blocks before Turndown normalizes prose whitespace. The fragment
+  // already clips both boundaries, so these payloads contain only selected code.
+  const partialBlocks = Array.from(container.querySelectorAll(`[${PARTIAL_CODE_ATTRIBUTE}]`)).map(
+    (element) => {
+      for (const ignored of element.querySelectorAll(`[${MARKDOWN_COPY_IGNORE_ATTRIBUTE}]`))
+        ignored.remove();
+      const code = element.textContent ?? "";
+      const token = `PASEOCODE${crypto.randomUUID().replaceAll("-", "")}`;
+      element.replaceChildren(document.createTextNode(token));
+      return { token, content: createCodeClipboardContent(code, { block: true }) };
+    },
+  );
   restoreMarkdownElements(container);
 
   const markdown = turndown.turndown(container.innerHTML).trim();
@@ -121,7 +134,15 @@ export function createAssistantSelectionClipboardContent(
     return null;
   }
   const content = createMarkdownClipboardContent(markdown);
-  return { ...content, html: flattenClipboardListMarkup(content.html) };
+  content.html = flattenClipboardListMarkup(content.html);
+  for (const block of partialBlocks) {
+    content.plainText = content.plainText.replace(block.token, () => block.content.plainText);
+    const html = block.content.html.replace('<meta charset="utf-8">', "");
+    content.html = content.html
+      .replace(`<p>${block.token}</p>`, () => html)
+      .replace(block.token, () => html);
+  }
+  return content;
 }
 
 /**
@@ -341,6 +362,7 @@ function removeUnselectedSemantics(range: Range, source: Element, clone: Element
     const tag = semanticTag(original);
     if (tag && isBlockBoundary(tag)) {
       copy.setAttribute(MARKDOWN_COPY_TAG_ATTRIBUTE, "p");
+      if (tag === "pre") copy.setAttribute(PARTIAL_CODE_ATTRIBUTE, "true");
       return;
     }
     copy.removeAttribute(MARKDOWN_COPY_TAG_ATTRIBUTE);

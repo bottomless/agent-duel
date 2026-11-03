@@ -19,6 +19,7 @@ export interface DirectorySuggestionEntry {
 
 export interface SearchDirectoryEntriesOptions {
   root: string;
+  signal?: AbortSignal;
   query: string;
   pathFormat: DirectorySuggestionPathFormat;
   includeFiles?: boolean;
@@ -107,6 +108,7 @@ const DEFAULT_LIMIT = 30;
 const MAX_LIMIT = 100;
 const DEFAULT_MAX_DEPTH = 12;
 const DEFAULT_MAX_ENTRIES_SCANNED = 20_000;
+const MAX_GIT_INDEX_BYTES = 8 * 1024 * 1024;
 const DIRECTORY_LIST_CACHE_TTL_MS = 8_000;
 const DIRECTORY_LIST_CACHE_MAX_ENTRIES = 4_000;
 const GIT_IGNORED_PATHS_CACHE_TTL_MS = 8_000;
@@ -185,12 +187,29 @@ const gitIgnoredPathsCache = new Map<string, GitIgnoredPathsCacheEntry>();
 export async function searchDirectoryEntries(
   options: SearchDirectoryEntriesOptions,
 ): Promise<DirectorySuggestionEntry[]> {
+  options.signal?.throwIfAborted();
+  const signal = options.signal;
+  if (!signal) return searchDirectoryEntriesUntilCancelled(options);
+  let cancel = () => {};
+  const cancelled = new Promise<never>((_resolve, reject) => {
+    cancel = () => reject(signal.reason);
+    signal.addEventListener("abort", cancel, { once: true });
+  });
+  try {
+    return await Promise.race([searchDirectoryEntriesUntilCancelled(options), cancelled]);
+  } finally {
+    signal.removeEventListener("abort", cancel);
+  }
+}
+
+async function searchDirectoryEntriesUntilCancelled(
+  options: SearchDirectoryEntriesOptions,
+): Promise<DirectorySuggestionEntry[]> {
   const root = await resolveDirectory(options.root);
+  options.signal?.throwIfAborted();
   if (!root) return [];
 
-  const gitIgnoredPaths = options.respectGitIgnore
-    ? await loadGitIgnoredPaths(root)
-    : new Set<string>();
+  const gitIgnoredPaths = new Set<string>();
   const excludedDiscoveryPaths = await resolveExistingPaths(options.excludedDiscoveryPaths ?? []);
   const input = buildSearchInput(options, root, gitIgnoredPaths, excludedDiscoveryPaths);
   if (!input) return [];
@@ -266,6 +285,8 @@ function buildSearchInput(
 
   return {
     root,
+    signal: options.signal,
+    respectGitIgnore: options.respectGitIgnore ?? false,
     plan,
     includeDirectories,
     includeFiles,
@@ -303,6 +324,8 @@ async function findExactEntry(input: SearchInput): Promise<DirectorySuggestionEn
 
 interface SearchInput {
   root: string;
+  signal: AbortSignal | undefined;
+  respectGitIgnore: boolean;
   plan: QueryPlan;
   includeDirectories: boolean;
   includeFiles: boolean;
@@ -320,6 +343,7 @@ interface SearchInput {
 }
 
 async function searchChildren(input: SearchInput): Promise<RankedEntry[]> {
+  if (input.respectGitIgnore) input.gitIgnoredPaths = await loadGitIgnoredPaths(input.root);
   const visibleParent = path.resolve(input.root, input.plan.parentPart || ".");
   const parent = await realpath(visibleParent).catch(() => null);
   if (!parent || !isPathInsideRoot(input.root, parent)) return [];
@@ -347,12 +371,27 @@ async function searchTree(
   start: WalkStart = { visiblePath: input.root, resolvedPath: input.root },
 ): Promise<RankedEntry[]> {
   if (!(input.maxEntriesScanned > 0)) return [];
+  if (input.respectGitIgnore && input.includeFiles) {
+    const indexed = await searchGitEntries(input, start);
+    if (indexed) {
+      if (!input.includeDirectories) return indexed;
+      input.gitIgnoredPaths = await loadGitIgnoredPaths(input.root);
+      const directories = await walkTree({ ...input, includeFiles: false }, start);
+      return [...indexed, ...directories];
+    }
+  }
+  if (input.respectGitIgnore) input.gitIgnoredPaths = await loadGitIgnoredPaths(input.root);
+  return walkTree(input, start);
+}
+
+async function walkTree(input: SearchInput, start: WalkStart): Promise<RankedEntry[]> {
   const visited = new Set<string>([start.resolvedPath]);
   const branches = walkChildren({ parent: start, depth: 1, input, visited });
   const ranked: RankedEntry[] = [];
   let scanned = 0;
   const threshold = input.confidentResultScanThreshold;
   for await (const entry of roundRobin(branches)) {
+    input.signal?.throwIfAborted();
     if (scanned >= input.maxEntriesScanned) {
       input.onScanLimit?.(input.maxEntriesScanned);
       break;
@@ -367,6 +406,93 @@ async function searchTree(
       break;
   }
   return ranked;
+}
+
+// The index is independent of filesystem traversal order. Untracked discovery runs
+// in a killable Git process, so a stuck mount cannot consume a libuv filesystem slot.
+async function searchGitEntries(
+  input: SearchInput,
+  start: WalkStart,
+): Promise<RankedEntry[] | null> {
+  const options = {
+    cwd: start.resolvedPath,
+    signal: input.signal,
+    envOverlay: { GIT_OPTIONAL_LOCKS: "0" },
+    timeout: 10_000,
+    maxOutputBytes: MAX_GIT_INDEX_BYTES,
+    acceptExitCodes: [0, 128],
+  };
+  const exclusions = Array.from(
+    input.excludedDiscoveryPaths,
+    (excluded) => `:(exclude,literal)${path.relative(start.resolvedPath, excluded)}`,
+  );
+  const tracked = await runGitCommand(
+    ["ls-files", "--cached", "-z", "--", ".", ...exclusions],
+    options,
+  ).catch((error: NodeJS.ErrnoException) => {
+    input.signal?.throwIfAborted();
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+  if (!tracked || tracked.exitCode === 128) return null;
+  const ignoredDirectories = Array.from(IGNORED_DIRECTORY_NAMES, (name) => `--exclude=${name}/`);
+  const untracked = await runGitCommand(
+    [
+      "ls-files",
+      "--others",
+      "--exclude-standard",
+      ...ignoredDirectories,
+      "-z",
+      "--",
+      ".",
+      ...exclusions,
+    ],
+    options,
+  );
+  const trackedPaths = tracked.stdout.split("\0");
+  const untrackedPaths = untracked.stdout.split("\0");
+  const incomplete =
+    tracked.truncated || untracked.truncated || untrackedPaths.length - 1 > input.maxEntriesScanned;
+  if (incomplete) input.onScanLimit?.(input.maxEntriesScanned);
+
+  const ranked: RankedEntry[] = [];
+  const seen = new Set<string>();
+  const paths = [...trackedPaths.slice(0, -1), ...untrackedPaths.slice(0, input.maxEntriesScanned)];
+  for (const relative of paths) {
+    input.signal?.throwIfAborted();
+    const segments = relative.split("/");
+    for (let depth = 1; depth <= segments.length && depth <= input.maxDepth; depth += 1) {
+      const name = segments[depth - 1]!;
+      const kind = depth === segments.length ? "file" : "directory";
+      const visiblePath = path.resolve(start.visiblePath, ...segments.slice(0, depth));
+      const entry: TraversedEntry = {
+        name,
+        kind,
+        visiblePath,
+        resolvedPath: visiblePath,
+        viaSymlink: false,
+        depth,
+      };
+      if (!isPathInsideRoot(input.root, visiblePath) || !shouldDiscover(entry, input)) break;
+      if (seen.has(visiblePath)) continue;
+      seen.add(visiblePath);
+      if (kind === "directory" || !shouldSuggest(entry, input)) continue;
+      // Only matching candidates touch the filesystem. Deleted index entries and
+      // symlinks outside the root must not become suggestions.
+      if (!(await isExistingGitCandidate(entry, input))) continue;
+      ranked.push(rank(entry, input));
+      if (ranked.length > input.limit * 2) ranked.sort(compareRank).splice(input.limit);
+    }
+  }
+  return ranked;
+}
+
+async function isExistingGitCandidate(entry: TraversedEntry, input: SearchInput): Promise<boolean> {
+  const resolved = await realpath(entry.visiblePath).catch(() => null);
+  if (!resolved || !isPathInsideRoot(input.root, resolved) || isInsideExcludedPath(resolved, input))
+    return false;
+  const info = await stat(resolved).catch(() => null);
+  return getEntryKind(info) === entry.kind;
 }
 
 async function* walkBranch(
