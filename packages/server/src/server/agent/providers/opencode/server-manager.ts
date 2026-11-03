@@ -17,7 +17,7 @@ import {
   type ProviderLaunchSource,
   type ProviderRuntimeSettings,
 } from "../../provider-launch-config.js";
-import { resolveOpenCodeHomeDir } from "./paths.js";
+import { resolveEngineLogPath, resolveOpenCodeHomeDir } from "./paths.js";
 import {
   isArenaCredentialsCurrent,
   issueArenaLaunchCredentials,
@@ -646,15 +646,19 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
 
       serverProcess.on("exit", (code, signal) => {
         if (!server.stopping) {
-          reportCrash({
-            process: "engine",
-            kind: "exit",
-            message: started
-              ? "The battle engine exited unexpectedly"
-              : "The battle engine exited before it was ready",
-            exitCode: code,
-            signal,
-          });
+          // The engine's stderr is in the daemon log; what it was doing is in its own.
+          reportCrash(
+            {
+              process: "engine",
+              kind: "exit",
+              message: started
+                ? "The battle engine exited unexpectedly"
+                : "The battle engine exited before it was ready",
+              exitCode: code,
+              signal,
+            },
+            [resolveEngineLogPath()],
+          );
         }
         if (server.arenaRuntimeToken) {
           revokeArenaRuntimeCredentials(server.arenaRuntimeToken);
@@ -740,6 +744,7 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
               : []),
             {
               [OPENCODE_CONTROL_TOKEN_ENV]: input.isArenaLaunch ? undefined : this.controlToken,
+              OPENCODE_LOG_FILE: resolveEngineLogPath(),
             },
           ],
         }),

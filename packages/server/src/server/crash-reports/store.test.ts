@@ -31,7 +31,7 @@ describe("crash report store", () => {
       home,
       crash: { process: "engine", kind: "exit", message: "The battle engine exited", exitCode: 1 },
       appVersion: "0.4.0-beta.15",
-      logPath,
+      logPaths: [logPath],
     });
 
     expect(report?.crash).toMatchObject({
@@ -47,6 +47,32 @@ describe("crash report store", () => {
 
     removeCrashReport(home, report!.id);
     expect(pendingCrashReports(home)).toEqual([]);
+  });
+
+  it("attaches the daemon's and the engine's log tails, each under its file name", () => {
+    const daemonLog = path.join(home, "daemon.log");
+    const engineLog = path.join(home, "engine.log");
+    writeFileSync(
+      daemonLog,
+      Array.from({ length: 150 }, (_, index) => `daemon ${index}`).join("\n"),
+    );
+    writeFileSync(
+      engineLog,
+      Array.from({ length: 150 }, (_, index) => `engine ${index}`).join("\n"),
+    );
+
+    const report = recordCrashReport({
+      home,
+      crash: { process: "engine", kind: "exit", message: "The battle engine exited", exitCode: 1 },
+      appVersion: "0.4.0-beta.16",
+      logPaths: [daemonLog, engineLog],
+    });
+
+    const tail = report?.logTail ?? [];
+    expect(tail).toHaveLength(200);
+    expect(tail.slice(0, 2)).toEqual(["==> daemon.log <==", "daemon 51"]);
+    expect(tail.slice(99, 102)).toEqual(["daemon 149", "==> engine.log <==", "engine 51"]);
+    expect(tail.at(-1)).toBe("engine 149");
   });
 
   it("drops the partial first line of a log it reads from the middle", () => {

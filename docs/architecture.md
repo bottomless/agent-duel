@@ -480,7 +480,8 @@ $PASEO_HOME/
 ├── daemon-keypair.json                         # Daemon identity for relay/E2EE
 ├── push-tokens.json                            # Mobile push tokens
 ├── paseo.sock / paseo.pid                      # Local IPC socket and pidfile
-└── daemon.log                                  # Daemon trace logs (rotated)
+├── daemon.log                                  # Daemon trace logs (rotated)
+└── engine.log                                  # Battle engine log (one predecessor kept)
 ```
 
 ## Deployment models

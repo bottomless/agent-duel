@@ -20,14 +20,17 @@ export function onCrashReported(listener: (() => void) | undefined): void {
   if (reporting) reporting.onRecorded = listener;
 }
 
-/** Writes a crash report synchronously. Does nothing until crash reporting is configured. */
-export function reportCrash(crash: CrashInput): void {
+/**
+ * Writes a crash report synchronously, with the daemon log's tail followed by each of `logPaths`.
+ * Does nothing until crash reporting is configured.
+ */
+export function reportCrash(crash: CrashInput, logPaths: readonly string[] = []): void {
   if (!reporting) return;
   const report = recordCrashReport({
     home: reporting.home,
     crash,
     appVersion: reporting.appVersion,
-    logPath: reporting.logPath,
+    logPaths: [reporting.logPath, ...logPaths],
   });
   if (report) reporting.onRecorded?.();
 }

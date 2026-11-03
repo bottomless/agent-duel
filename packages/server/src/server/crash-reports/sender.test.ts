@@ -43,7 +43,7 @@ function engineCrash() {
     home,
     crash: { process: "engine", kind: "exit", message: "The battle engine exited", exitCode: 1 },
     appVersion: "0.4.0-beta.15",
-    logPath,
+    logPaths: [logPath],
   })!;
 }
 

@@ -29,8 +29,15 @@ export function startCrashReporting(): void {
   const home = resolvePaseoHome(process.env);
   const version = app.getVersion();
   let quitting = false;
-  const record = (crash: CrashInput) =>
-    recordCrashReport({ home, crash, appVersion: version, logPath: desktopLogPath() });
+  const record = (crash: CrashInput) => {
+    const logPath = desktopLogPath();
+    return recordCrashReport({
+      home,
+      crash,
+      appVersion: version,
+      logPaths: logPath ? [logPath] : [],
+    });
+  };
 
   const previous = claimRunningMarker({ home, name: "app", version });
   if (previous) {

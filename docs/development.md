@@ -255,6 +255,11 @@ Check `$PASEO_HOME/daemon.log` for daemon logs. The default level is `info`; set
 `PASEO_LOG_LEVEL=trace` before launching the daemon when you need full provider,
 session, and agent-manager traces for stuck-state debugging.
 
+The battle engine logs to `$PASEO_HOME/engine.log`, which the daemon sets with
+`OPENCODE_LOG_FILE`; an engine started any other way logs to
+`~/.local/share/opencode/log/opencode.log`. The engine's stderr lands in `daemon.log`, so an engine
+crash report attaches the tails of both.
+
 The supervisor rotates `daemon.log`. Persisted `log.file.rotate` settings in
 `$PASEO_HOME/config.json` win first. Without persisted config, the optional
 `PASEO_LOG_ROTATE_SIZE` and `PASEO_LOG_ROTATE_COUNT` env vars override the

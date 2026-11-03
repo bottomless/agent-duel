@@ -1493,7 +1493,7 @@ The control plane deploys the replay route as its own function, and the daemon's
 allows it by path.
 
 The contestant sees only a neutral error, so diagnose a deadline from the engine log,
-`~/.local/share/opencode/log/opencode.log` for the packaged app too. Each timeout writes
+`$PASEO_HOME/engine.log`. Each timeout writes
 `arena model response idle` with the last part types the model produced and the proxy's record of
 that stream: when it last received a chunk, ended, started and finished saving the response, and
 closed. A stream that ended but never closed stalled inside the engine, not upstream. Compare it

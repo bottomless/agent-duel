@@ -62,8 +62,10 @@ function rotate(file: string, limit: number) {
   }
 }
 
+// Agent Duel's daemon points this at its own home, so the engine's log is not shared with an
+// OpenCode install on the same machine and a crash report can attach it.
 export function fileLogger(
-  file = path.join(Global.Path.log, "opencode.log"),
+  file = process.env.OPENCODE_LOG_FILE || path.join(Global.Path.log, "opencode.log"),
   id: string = runID,
   limit = MAX_LOG_BYTES,
 ) {

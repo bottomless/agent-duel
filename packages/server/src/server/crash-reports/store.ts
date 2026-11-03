@@ -58,7 +58,7 @@ export function operatingSystemName(): string {
 }
 
 /** The last lines of a log, oldest first, read without loading the whole file. */
-export function readLogTail(logPath: string): string[] {
+export function readLogTail(logPath: string, maximumLines = feedbackLogTailMaximumLines): string[] {
   let descriptor: number | undefined;
   try {
     descriptor = openSync(logPath, "r");
@@ -71,7 +71,7 @@ export function readLogTail(logPath: string): string[] {
     if (start > 0) lines.shift();
     return lines
       .filter((line) => line.trim().length > 0)
-      .slice(-feedbackLogTailMaximumLines)
+      .slice(-maximumLines)
       .map((line) => line.slice(0, feedbackLogLineMaximumLength));
   } catch {
     return [];
@@ -80,11 +80,24 @@ export function readLogTail(logPath: string): string[] {
   }
 }
 
+/**
+ * The tails of the logs, in order. Several logs share the line budget, each under a header line
+ * naming its file.
+ */
+export function readLogTails(logPaths: readonly string[]): string[] {
+  if (logPaths.length <= 1) return logPaths[0] ? readLogTail(logPaths[0]) : [];
+  const share = Math.floor(feedbackLogTailMaximumLines / logPaths.length) - 1;
+  return logPaths.flatMap((logPath) => [
+    `==> ${path.basename(logPath)} <==`,
+    ...readLogTail(logPath, share),
+  ]);
+}
+
 export function recordCrashReport(input: {
   readonly home: string;
   readonly crash: CrashInput;
   readonly appVersion: string | null;
-  readonly logPath?: string;
+  readonly logPaths?: readonly string[];
 }): StoredCrashReport | null {
   try {
     const report = storedCrashReportSchema.parse({
@@ -99,7 +112,7 @@ export function recordCrashReport(input: {
       },
       appVersion: input.appVersion?.trim().slice(0, 64) || null,
       operatingSystem: operatingSystemName(),
-      logTail: input.logPath ? readLogTail(input.logPath) : [],
+      logTail: readLogTails(input.logPaths ?? []),
     });
     const directory = crashReportsDirectory(input.home);
     mkdirSync(directory, { recursive: true });
