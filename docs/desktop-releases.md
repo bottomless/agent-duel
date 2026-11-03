@@ -68,8 +68,9 @@ release; Linux reads `latest-linux.yml` and the AppImage or deb.
   the next release's `Agent-Duel-<version>-amd64.deb` with `dpkg`, which asks
   for an administrator password through pkexec or sudo.
 - Both Linux packages need `git`, `lsof`, `procps` (`ps`) and libsecret at run
-  time. The deb declares only libsecret, so users install the others themselves.
-  libsecret lets Electron keep the stored session's key in the desktop keyring.
+  time. The deb declares all of them, so apt installs them; AppImage users
+  install them themselves. libsecret lets Electron keep the stored session's key
+  in the desktop keyring.
 
 The workflow fetches the complete tag history and refuses a version that is not
 newer than the highest canonical `vX.Y.Z` or `vX.Y.Z-beta.N` tag. Stable versions

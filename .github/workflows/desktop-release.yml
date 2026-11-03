@@ -241,10 +241,12 @@ jobs:
           PASEO_WEB_PLATFORM: electron
           # The published release is the update feed, so release builds check it.
           PASEO_DESKTOP_UPDATES_ENABLED: "1"
+          # Same numbering as the macOS build: battles record it as their build provenance.
+          AGENT_DUEL_BUILD_NUMBER: ${{ github.run_number }}
         run: |
           npm run build:app-deps:clean
           (cd packages/app && npx expo export --platform web --max-workers 1)
-          npm run build --workspace=@getpaseo/desktop -- --publish never --linux --x64
+          npm run build --workspace=@getpaseo/desktop -- --publish never --linux --x64 -c.buildVersion="$AGENT_DUEL_BUILD_NUMBER"
 
       # The packaged smoke drives the daemon without signing in, which the hosted build refuses
       # ("Sign in to use Agent Duel"), so it runs on a bring-your-own-key package of the same tree,

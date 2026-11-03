@@ -34,7 +34,9 @@ cd arena-backend && bun install
   same as for the [macOS build](deployment.md#build-the-macos-desktop-application).
 
 - Set `PASEO_DESKTOP_SMOKE=1` to launch the unpacked app under `xvfb-run` after packing and fail
-  the build if it does not start; install `xvfb` and `xauth` first. The smoke makes `chrome-sandbox`
+  the build if it does not start; install `xvfb` and `xauth` first. The smoke creates a terminal
+  without signing in, so it needs a BYOK build: set `PASEO_BYOK_BUILD=1` too, as CI does (a hosted
+  build fails with "Sign in to use Agent Duel"). The smoke makes `chrome-sandbox`
   root-owned and setuid with `sudo -n`, so run it where sudo needs no password, such as CI or a
   container.
 
