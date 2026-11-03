@@ -227,7 +227,9 @@ import {
 import {
   assignProxyRoutes,
   captureOwnedServices,
+  pauseOwnedProcessGroups,
   persistedProxyRoutes,
+  resumeProcessGroups,
   stopOwnedServices,
   terminalOpenUnder,
 } from "./services"
@@ -4096,15 +4098,23 @@ export const layer: Layer.Layer<
         stored?.permanentRef === permanentRef && stored.finalCommit
           ? { commit: stored.finalCommit, indexTree: stored.finalIndexTree }
           : yield* withGit(readResultRefs(run.worktree.directory, permanentRef)).pipe(Effect.mapError(error))
-      const result = yield* withGit(
-        finalize({
-          worktree: run.worktree.directory,
-          baseSHA: turn.frozenBaseSHA,
-          frozenHead: turn.baseSnapshot?.canonicalHead ?? turn.frozenBaseSHA,
-          permanentRef,
-          ...(previous.commit ? { expectedPermanentCommit: previous.commit } : {}),
-          ...(previous.indexTree ? { expectedFinalIndexTree: previous.indexTree } : {}),
-        }),
+      // What the contestant left running is paused while the result is read, so it cannot change
+      // the files under Git (`pauseOwnedProcessGroups`). Finding it is best effort: without it the
+      // snapshot still runs, with only its own retry.
+      const result = yield* Effect.acquireUseRelease(
+        Effect.promise(() => pauseOwnedProcessGroups(run.worktree.directory).catch(() => [])),
+        () =>
+          withGit(
+            finalize({
+              worktree: run.worktree.directory,
+              baseSHA: turn.frozenBaseSHA,
+              frozenHead: turn.baseSnapshot?.canonicalHead ?? turn.frozenBaseSHA,
+              permanentRef,
+              ...(previous.commit ? { expectedPermanentCommit: previous.commit } : {}),
+              ...(previous.indexTree ? { expectedFinalIndexTree: previous.indexTree } : {}),
+            }),
+          ),
+        (paused) => Effect.promise(() => resumeProcessGroups(paused)),
       ).pipe(Effect.mapError(error))
       const chat = yield* promise(() => store.chat(turn.chatID))
       if (!chat) return yield* Effect.fail(new Error(`Arena chat not found: ${turn.chatID}`))

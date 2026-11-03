@@ -991,7 +991,11 @@ Git state are recorded under the generation's private battle refs, numstat is st
 applicability is set to `applicable` only when the frozen base is an ancestor of the result. A
 companion private ref transports the final index tree. Recording must preserve empty and multiple
 commits, commit-plus-residual state, and the index and dirty working tree; Arena does not add a
-wrapper commit to the developer-visible history. Untracked dependency and cache folders
+wrapper commit to the developer-visible history. A dev server or build watcher the contestant left
+running is paused (`SIGSTOP`) while the result is read and resumed afterwards: one that keeps
+creating and deleting files fails nearly every `git add`, and killing it would take the preview the
+voter opens. Groups with a controlling terminal keep running, since stopping a terminal's job
+suspends it in its shell (`pauseOwnedProcessGroups` in `arena/services.ts`). Untracked dependency and cache folders
 (`node_modules`, `.venv` and the like, at any depth) are not part of a side's result: the
 contestant's own repository excludes them, because a project that ignores only its root
 `/node_modules` would otherwise count a tool a contestant installed under `qa/` as its change and

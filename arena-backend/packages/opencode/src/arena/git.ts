@@ -2869,9 +2869,10 @@ const stageEmbeddedRepositories = Effect.fnUntraced(function* (
 })
 
 // A process the contestant left running, a scraper or a build, can delete a file between `add`
-// listing it and reading it, and Git then fails the whole snapshot. Stopping those processes first
-// would also stop the previews the voter opens, so the snapshot is taken again: the file is gone,
-// which is the state the result should record. `--ignore-errors` does not cover a vanished file.
+// listing it and reading it, and Git then fails the whole snapshot. The battle pauses those
+// processes during finalization (`ArenaServices.pauseOwnedProcessGroups`); this retry covers one it
+// could not find. The file is gone, which is the state the result should record. `--ignore-errors`
+// does not cover a vanished file.
 const VANISHED_FILE = /(?:unable to stat '.*'|open\(".*"\)): No such file or directory/
 const SNAPSHOT_ATTEMPTS = 3
 
