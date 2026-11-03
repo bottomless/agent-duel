@@ -845,7 +845,7 @@ export type ReviewEventInput = {
 export const reviewFlushLimit = 500
 
 /** Bump when a derived field changes meaning, then recompute the whole table. */
-export const battleMetricsSchemaVersion = 9
+export const battleMetricsSchemaVersion = 10
 
 /** The current `RunDocument.telemetryVersion`; see there. */
 export const runTelemetryVersion = 1
