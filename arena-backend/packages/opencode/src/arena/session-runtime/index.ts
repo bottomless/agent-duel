@@ -37,6 +37,7 @@ import { CurrentDirectory } from "@/project/instance-context"
 import { getArenaAutoAccept, idleRecovery, setArenaAutoAccept } from "@/arena/engine-runtime"
 import { ArenaResponseRecovery } from "@/arena/response-recovery"
 import { shellRestartInput } from "@/arena/shell-restart"
+import { cancelSessionShells } from "@/arena/engine-runtime/shell"
 import { EXTERNAL_WRITE } from "@/arena/contestant"
 import type {
   ArenaMessageInfo,
@@ -143,6 +144,10 @@ export interface SessionInterface {
 
 export class Session extends Context.Service<Session, SessionInterface>()("@agent-duel/ArenaSession") {}
 
+export interface CancelOptions {
+  readonly shells: boolean
+}
+
 export interface PromptInterface {
   readonly prompt: (input: ArenaPromptInput) => Effect.Effect<import("./schema").WithParts | undefined, Error>
   readonly loop: (input: {
@@ -161,8 +166,8 @@ export interface PromptInterface {
    * answer. The runner that owns the turn delivers it at its next step boundary.
    */
   readonly steer: (input: ArenaPromptInput) => Effect.Effect<void, Error>
-  /** Interrupts the session and, for a child, its job. Core has no call that cancels a parent's children. */
-  readonly cancel: (sessionID: SessionSchema.ID) => Effect.Effect<void, Error>
+  /** Interrupts the session and its child job. Stop also ends shells; steering keeps Preview alive. */
+  readonly cancel: (sessionID: SessionSchema.ID, options?: CancelOptions) => Effect.Effect<void, Error>
   /** Child results stop starting runs of these sessions until the next `prompt` or `loop` of each. */
   readonly holdChildResults: (sessionIDs: readonly SessionSchema.ID[]) => Effect.Effect<void, Error>
   /** Whether the session has a run, a running job, or a job result that has not reached its parent. */
@@ -869,9 +874,16 @@ const promptLayer: Layer.Layer<
       steer: (input) => normalizeError(admit(input, true).pipe(Effect.asVoid)),
       loop: (input) => normalizeError(loop(input)),
       join: (input) => normalizeError(join(input)),
-      cancel: (sessionID) =>
+      cancel: (sessionID, options) =>
         normalizeError(
-          sessions.interrupt(sessionID, { resume: false }).pipe(Effect.andThen(jobs.cancel(sessionID)), Effect.asVoid),
+          Effect.gen(function* () {
+            yield* sessions.interrupt(sessionID, { resume: false })
+            yield* jobs.cancel(sessionID)
+            if (options?.shells) {
+              const ref = yield* directory.ref()
+              yield* directory.provide(ref, cancelSessionShells(sessionID))
+            }
+          }),
         ),
       holdChildResults: (sessionIDs) =>
         Effect.forEach(sessionIDs, (sessionID) => subagents.hold(sessionID), { discard: true }),

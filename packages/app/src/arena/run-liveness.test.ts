@@ -93,6 +93,25 @@ describe("arenaRunningTool", () => {
 describe("arenaLongRunningTool", () => {
   const now = Date.parse("2026-08-14T12:05:00.000Z");
   const fresh = new Date(now - 1_000).toISOString();
+  it("does not label a completed background-shell acknowledgement as a running command", () => {
+    const parts = {
+      step: [
+        {
+          type: "tool",
+          tool: "shell",
+          state: {
+            status: "completed",
+            input: { command: "npm run dev", background: true },
+            metadata: { status: "running", shellID: "sh_preview" },
+            time: { start: now - 180_000 },
+          },
+        },
+      ],
+    };
+    const lastEventAt = new Date(now - 120_000).toISOString();
+    expect(arenaLongRunningTool(run({ parts, lastEventAt }), now)).toBeNull();
+    expect(arenaLongRunningTool(run({ parts, lastEventAt, runState: "complete" }), now)).toBeNull();
+  });
   const call = (name: string, input: unknown, ranMs: number) => ({
     type: "tool",
     tool: name,

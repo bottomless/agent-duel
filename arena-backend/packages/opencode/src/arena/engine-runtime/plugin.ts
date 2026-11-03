@@ -5,6 +5,8 @@ import { Context as EffectContext, Effect, Stream } from "effect"
 import type { SystemPart } from "@opencode/ai"
 import { createOpenRouter } from "@openrouter/ai-sdk-provider"
 import { AISDK } from "@opencode/core/aisdk"
+import { ShellTool } from "@opencode/core/tool/plugin/shell"
+import { contestantShellInput, contestantShellTimeoutMessage, shellNotification } from "./shell"
 import { define } from "@opencode/plugin/effect/plugin"
 import type { Context } from "@opencode/plugin/effect/plugin"
 import type { Model } from "@opencode/schema/model"
@@ -579,7 +581,13 @@ function install(context: Context, options: InstalledOptions) {
               }).pipe(Effect.orElseSucceed(() => undefined))
               if (refusal) return yield* new Tool.Error({ message: refusal })
             }
-            if (options.assignments.assignments.get(sessionID)?.telemetry) return yield* execute(input, call)
+            const assignment = options.assignments.assignments.get(sessionID)
+            if (assignment?.telemetry) {
+              return yield* execute(contestantShellInput(input as Record<string, unknown>), call).pipe(
+                Effect.provideService(ShellTool.Notification, shellNotification(assignment.rootSessionID)),
+                Effect.provideService(ShellTool.TimeoutMessage, contestantShellTimeoutMessage),
+              )
+            }
             const { directory, project } = context.location
             const cwd = path.resolve(directory, typeof params.workdir === "string" ? params.workdir : ".")
             const resources = yield* Effect.promise(() =>
