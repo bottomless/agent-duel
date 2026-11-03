@@ -924,9 +924,12 @@ again a side whose warm fork used another. The canonical session keeps every out
 history, its transcript hash, and single-agent turns, which continue one model whose cache does
 survive, are unchanged.
 
-Keep the winner's child transcripts available after a vote, including nested children. Open each
-child in the chat to read its task prompt, commands and result, even after the contestant releases
-its worktree. Task prompt and command rows open and close immediately inside the open child.
+Keep the winner's child transcripts available after a vote and after reloading the chat, including
+nested children. Their headings must open and close on the first click in both the newly applied
+turn and older history, even after the contestant releases its worktree. Hovering a heading must
+keep it under the pointer while following is enabled; paced streaming text must still follow the
+bottom as it grows. Inside each child, open its task prompt, commands and result without reopening
+the child.
 OpenCode 2.0's `subagent` calls use the same inline child view as 1.x's `task` calls.
 The graft copies descendants under the chat and retargets their session references; the run's own
 sessions are deleted on release. Losing contestants and earlier turns have separate session

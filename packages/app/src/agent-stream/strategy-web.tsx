@@ -31,6 +31,7 @@ import {
 } from "./spacing";
 import { estimateStreamItemHeight } from "./web-virtualization";
 import { createReadingAnchor } from "./reading-anchor";
+import { createContentMutationCallback } from "./content-mutation";
 import { HoldStreamPositionProvider } from "./hold-position";
 import type { StreamRenderInput, StreamStrategy, StreamViewportHandle } from "./strategy";
 import { useRevisedHistoryRows } from "./history-row-revision";
@@ -1042,14 +1043,20 @@ function WebStreamViewport(props: StreamRenderInput & { isMobileBreakpoint: bool
     // Paced reveal commits inside a message without rerendering this viewport.
     // Observe those commits too, so the next frame sees the grown content at the
     // bottom instead of waiting for the resize notification after animation frames.
-    const contentChanges = new MutationObserver(() => {
-      if (isActiveRef.current && followOutputRef.current) forceStickToBottom();
-    });
-    if (contentNode)
+    let contentChanges: MutationObserver | null = null;
+    if (contentNode) {
+      contentChanges = new MutationObserver(
+        createContentMutationCallback({
+          content: contentNode,
+          shouldFollow: () => isActiveRef.current && followOutputRef.current,
+          forceStickToBottom,
+        }),
+      );
       contentChanges.observe(contentNode, { childList: true, characterData: true, subtree: true });
+    }
     return () => {
       observer.disconnect();
-      contentChanges.disconnect();
+      contentChanges?.disconnect();
     };
   }, [
     reconcileReadingPosition,

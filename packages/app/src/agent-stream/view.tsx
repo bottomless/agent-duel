@@ -1,3 +1,4 @@
+import { renderStreamRow } from "./row";
 import { ChatFind, ChatFindExpansion } from "@/agent-stream/chat-find";
 import type { ChatFindHistory } from "@/agent-stream/chat-find/types";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
@@ -247,41 +248,6 @@ function renderListEmptyComponent(input: {
     <View style={input.emptyStateStyle}>
       <Text style={stylesheet.emptyStateText}>{input.emptyText}</Text>
     </View>
-  );
-}
-
-// Live and retained rows use the same boundary so completion preserves the message
-// subtree, including measured diagrams and selections. FlatList recreates history
-// cells with fresh refs and shifted indexes on data changes. This boundary is
-// what stops that churn: a row renders again only when its stream item identity, its layout item
-// identity, or the renderer itself changes. Item identity is the revision signal the strategy
-// already uses (`useRevisedHistoryRows` clones items whose content or display state changed).
-const StreamRow = memo(function StreamRow({
-  layoutItem,
-  renderStreamItem,
-}: {
-  item: StreamItem;
-  layoutItem: StreamLayoutItem;
-  renderStreamItem: (layoutItem: StreamLayoutItem) => ReactNode;
-}) {
-  return <>{renderStreamItem(layoutItem)}</>;
-});
-
-function renderStreamRow(input: {
-  item: StreamItem;
-  layoutItemById: Map<string, StreamLayoutItem>;
-  renderStreamItem: (layoutItem: StreamLayoutItem) => ReactNode;
-}): ReactNode {
-  const layoutItem = input.layoutItemById.get(input.item.id);
-  if (!layoutItem) {
-    return null;
-  }
-  return (
-    <StreamRow
-      item={input.item}
-      layoutItem={layoutItem}
-      renderStreamItem={input.renderStreamItem}
-    />
   );
 }
 
@@ -1306,10 +1272,11 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       (item: StreamItem) =>
         renderStreamRow({
           item,
+          arenaChat,
           layoutItemById: layoutHistoryItemById,
           renderStreamItem,
         }),
-      [layoutHistoryItemById, renderStreamItem],
+      [arenaChat, layoutHistoryItemById, renderStreamItem],
     );
 
     const renderHistoryVirtualizedRow = useCallback<
@@ -1327,9 +1294,22 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       (item: StreamItem) =>
         renderStreamRow({
           item,
+          arenaChat,
           layoutItemById: layoutLiveHeadItemById,
           renderStreamItem,
         }),
+    );
+    // Arena expansions must reach the viewport as a changed renderer as well as a revision.
+    // A stable live render port can otherwise retain a collapsed winner row after a vote.
+    const renderArenaLiveHeadRow = useCallback<StreamSegmentRenderers["renderLiveHeadRow"]>(
+      (item) =>
+        renderStreamRow({
+          item,
+          arenaChat: true,
+          layoutItemById: layoutLiveHeadItemById,
+          renderStreamItem,
+        }),
+      [layoutLiveHeadItemById, renderStreamItem],
     );
     const renderLiveAuxiliary = useCallback<StreamSegmentRenderers["renderLiveAuxiliary"]>(() => {
       const existingTailSpacing =
@@ -1355,12 +1335,14 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       () => ({
         renderHistoryVirtualizedRow,
         renderHistoryMountedRow,
-        renderLiveHeadRow,
+        renderLiveHeadRow: arenaChat ? renderArenaLiveHeadRow : renderLiveHeadRow,
         renderLiveAuxiliary,
       }),
       [
+        arenaChat,
         renderHistoryVirtualizedRow,
         renderHistoryMountedRow,
+        renderArenaLiveHeadRow,
         renderLiveHeadRow,
         renderLiveAuxiliary,
       ],

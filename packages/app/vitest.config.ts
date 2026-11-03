@@ -25,7 +25,10 @@ export default defineConfig({
       transform(source, id) {
         // Exercise invalidation across the compiler's caches as well as React.memo.
         const compiledComponent =
-          id.includes("/src/usage/") || id.endsWith("/src/arena/chat-subagent.tsx");
+          id.includes("/src/usage/") ||
+          id.endsWith("/src/arena/chat-subagent.tsx") ||
+          id.endsWith("/src/agent-stream/row.tsx") ||
+          id.endsWith("/src/agent-stream/view.tsx");
         if (!compiledComponent || !id.endsWith(".tsx") || id.includes(".test.")) return;
         const result = transformSync(source, {
           filename: id,
