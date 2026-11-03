@@ -76,6 +76,7 @@ function createWorkspace(
     workspaceKind: input.workspaceKind ?? "local_checkout",
     name: input.name ?? "main",
     status: input.status ?? "done",
+    activityAt: input.activityAt ?? null,
     statusEnteredAt: input.statusEnteredAt ?? null,
     archivingAt: input.archivingAt ?? null,
     diffStat: input.diffStat ?? null,
@@ -452,7 +453,7 @@ describe("message submission ordering", () => {
 });
 
 describe("normalizeWorkspaceDescriptor", () => {
-  it("normalizes workspace scripts and invalid activity timestamps", () => {
+  it("normalizes workspace scripts and retains valid activity timestamps", () => {
     const scripts = [
       {
         scriptName: "web",
@@ -478,11 +479,12 @@ describe("normalizeWorkspaceDescriptor", () => {
       archivingAt: null,
       status: "running",
       statusEnteredAt: null,
-      activityAt: "not-a-date",
+      activityAt: "2026-10-29T12:00:00.000Z",
       diffStat: null,
       scripts,
     });
 
+    expect(workspace.activityAt).toBe("2026-10-29T12:00:00.000Z");
     expect(workspace.scripts).toEqual([
       {
         scriptName: "web",
@@ -497,6 +499,25 @@ describe("normalizeWorkspaceDescriptor", () => {
       },
     ]);
     expect(workspace.scripts).not.toBe(scripts);
+  });
+
+  it.each([null, "", "invalid-date"])("clears invalid activity timestamps: %j", (activityAt) => {
+    const workspace = normalizeWorkspaceDescriptor({
+      id: "1",
+      projectId: "1",
+      projectDisplayName: "Project 1",
+      projectRootPath: "/repo",
+      workspaceDirectory: "/repo",
+      projectKind: "git",
+      workspaceKind: "checkout",
+      name: "main",
+      status: "running",
+      archivingAt: null,
+      statusEnteredAt: null,
+      activityAt,
+      scripts: [],
+    });
+    expect(workspace.activityAt).toBeNull();
   });
 
   it("canonicalizes the workspace directory and treats a blank one as empty", () => {

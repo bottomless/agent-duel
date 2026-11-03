@@ -1,9 +1,25 @@
 import { createHash, createHmac, randomUUID } from "crypto"
 import { recordAssignmentGenerationMetrics, reserveRoutingAssignment, type SingleAgentModelSize } from "./assignments"
 import { authorize, type ArenaContext, type Fetch } from "./context"
+import { KEEP_ALIVE_HEADER, keepAliveAnswer, keepsCacheWarm } from "./keep-alive"
 import type { StoredGenerationMetrics, UsageTotals } from "./metrics"
-import { classifyPaymentError, networkUnavailableError, retryableStreamError } from "./request-error"
-import type { ModelPool, ModelProfile } from "./pool"
+import {
+  classifyPaymentError,
+  compactionRequiredError,
+  isContextOverflow,
+  networkUnavailableError,
+  retryableStreamError,
+} from "./request-error"
+import { modelLimits, type ModelLimits, type ModelPool, type ModelProfile } from "./pool"
+import { COMPACTION_HEADER, COMPACTION_OFFER, prepareRequest } from "./request-budget"
+import {
+  calibrate,
+  MAX_CALIBRATION_RATIO,
+  needsCalibration,
+  readCalibration,
+  recordCalibration,
+  type CalibrationSample,
+} from "./request-calibration"
 import { createReasoningRedactor } from "./reasoning"
 import {
   HEARTBEAT_HEADER,
@@ -393,6 +409,74 @@ function logRefusal(context: RefusalContext, status: number, upstream: string) {
   )
 }
 
+// Nobody reads a ping's one token. Whether it read the cache is what tells a ping that kept the
+// entry from one that landed on another provider and wrote a new one, so that much is logged.
+/**
+ * A ping that failed kept nothing warm, so it gets one more try. Every ping still gets the same
+ * answer, so a failure names no model.
+ */
+async function keepCacheWarm(send: () => Promise<Response>, startedAt: number, signal: AbortSignal) {
+  for (let attempt = 0; attempt < 2 && !signal.aborted; attempt++) {
+    if (await logKeepAlive(await send().catch(() => undefined), startedAt)) break
+  }
+  return keepAliveAnswer()
+}
+
+async function logKeepAlive(response: Response | undefined, startedAt: number) {
+  const text = await response?.text().catch(() => undefined)
+  if (!response?.ok || text === undefined) {
+    console.warn("[arena-service] Keep-alive ping failed", JSON.stringify({ status: response?.status ?? "unsent" }))
+    return false
+  }
+  const metrics = metricsCollector("keep-alive", startedAt)
+  const values = (response.headers.get("content-type") ?? "").includes("text/event-stream")
+    ? text.split("\n").flatMap((line) => {
+        const raw = line.startsWith("data:") ? line.slice("data:".length).trim() : ""
+        return raw && raw !== "[DONE]" ? [raw] : []
+      })
+    : [text]
+  for (const raw of values) {
+    try {
+      metrics.observe(JSON.parse(raw))
+    } catch {
+      // A line that is not JSON carries no usage.
+    }
+  }
+  const measured = metrics.value()
+  console.info(
+    "[arena-service] Keep-alive ping",
+    JSON.stringify({
+      provider: measured?.provider,
+      promptTokens: measured?.usage?.promptTokens,
+      cacheReadTokens: measured?.usage?.cacheReadTokens,
+      cacheWriteTokens: measured?.usage?.cacheWriteTokens,
+    }),
+  )
+  return true
+}
+
+/**
+ * The engine sends `auto` for a step it could summarize first, and nothing for a request it cannot
+ * shrink: a chat's first message, the step right after a summary, or the summary request itself,
+ * which the engine splits into smaller batches when it does not fit. Only `auto` compacts at the
+ * model's level; every request still compacts when it cannot fit the endpoint at all. An engine that sends no header
+ * therefore keeps its own threshold. The answer names no limit: the levels identify the model.
+ */
+async function compactionRequired(
+  request: Request,
+  budget: { readonly input: number; readonly output: number },
+  limits: ModelLimits,
+  sample: () => Promise<CalibrationSample | undefined>,
+) {
+  const fits = limits.context - budget.output
+  // modelLimits keeps compactAt within context − output, so it always fits.
+  const level = request.headers.get(COMPACTION_HEADER) === COMPACTION_OFFER ? limits.compactAt : fits
+  // Most requests are far below their level whatever the tokenizer; skip the read for those.
+  if (budget.input * MAX_CALIBRATION_RATIO < level) return false
+  const measured = calibrate(budget.input, await sample().catch(() => undefined))
+  return measured >= level
+}
+
 async function sanitizeAssignedResponse(
   response: Response,
   refusal: RefusalContext,
@@ -406,6 +490,9 @@ async function sanitizeAssignedResponse(
   if (!response.ok) {
     const upstream = await response.text().catch(() => "")
     logRefusal(refusal, response.status, upstream)
+    if (isContextOverflow(response.status, upstream)) {
+      return Response.json(compactionRequiredError(), { status: 413, headers })
+    }
     if (response.status === 402) {
       let payload: unknown = null
       try {
@@ -509,9 +596,14 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
     const db = await context.db()
     const routeAssignment = await reserveRoutingAssignment(db, caller.id, assignment.scopeID, assignment.assignmentID)
     if (!routeAssignment) return Response.json({ error: { message: "Arena assignment is invalid" } }, { status: 403 })
+    const calibrationKey = { userId: caller.id, scopeID: assignment.scopeID, assignmentID: assignment.assignmentID }
     const expectedModel = routeAssignment.modelSize === "medium" ? "medium" : "contestant"
     if (input.model !== expectedModel) {
       return Response.json({ error: { message: "Arena contestant model is invalid" } }, { status: 400 })
+    }
+    const keepAlive = request.headers.get(KEEP_ALIVE_HEADER) === "1"
+    if (keepAlive && (suffix !== "/api/v1/chat/completions" || !keepsCacheWarm(routeAssignment.model.slug))) {
+      return keepAliveAnswer()
     }
     const reasoning = createReasoningRedactor(apiKey, {
       userId: caller.id,
@@ -521,20 +613,37 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
     const restored = reasoning.restore(input)
     const generationID = requestedGenerationID || `gen_${randomUUID().replaceAll("-", "")}`
     const startedAt = Date.now()
-    body = new TextEncoder().encode(
-      JSON.stringify({
-        ...withoutSampling(restored),
-        ...assignedRouting(
-          routeAssignment.model,
-          routeAssignment.modelSize,
-          cacheKey(apiKey, caller.id, assignment.scopeID, routeAssignment),
-        ),
-        ...promptCache(routeAssignment.model.slug, input),
-        stream_options: record(input.stream_options)
-          ? { ...input.stream_options, include_usage: true }
-          : { include_usage: true },
-      }),
-    ).buffer
+    const endpoint = suffix === "/api/v1/responses" ? "responses" : "chat"
+    const routed = {
+      ...withoutSampling(restored),
+      ...assignedRouting(
+        routeAssignment.model,
+        routeAssignment.modelSize,
+        cacheKey(apiKey, caller.id, assignment.scopeID, routeAssignment),
+      ),
+      ...promptCache(routeAssignment.model.slug, input),
+      stream_options: record(input.stream_options)
+        ? { ...input.stream_options, include_usage: true }
+        : { include_usage: true },
+    }
+    if (keepAlive) {
+      // A ping repeats a request the proxy already accepted. The output cap is not part of the
+      // cached prompt, so the ping reads what the call wrote.
+      body = new TextEncoder().encode(
+        JSON.stringify({ ...routed, max_tokens: 1, max_completion_tokens: undefined }),
+      ).buffer
+      return await keepCacheWarm(
+        () => context.fetch(upstream, { method: request.method, headers, body, signal: request.signal }),
+        startedAt,
+        request.signal,
+      )
+    }
+    const limits = modelLimits(routeAssignment.model)
+    const budget = prepareRequest(routed, endpoint, limits)
+    if (await compactionRequired(request, budget, limits, () => readCalibration(db, calibrationKey))) {
+      return Response.json(compactionRequiredError(), { status: 413 })
+    }
+    body = new TextEncoder().encode(budget.body).buffer
     const response = await context.fetch(upstream, {
       method: request.method,
       headers,
@@ -549,7 +658,7 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
       generationID,
       model: routeAssignment.model.slug,
     }
-    const recordMetrics = async (metrics: StoredGenerationMetrics | undefined) => {
+    const recordGeneration = async (metrics: StoredGenerationMetrics | undefined) => {
       if (!metrics || !requestedGenerationID) return
       try {
         await recordAssignmentGenerationMetrics(db, {
@@ -561,6 +670,17 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
       } catch {
         console.error("[arena-service] Arena generation metrics could not be recorded")
       }
+    }
+    const recordMeasuredInput = async (metrics: StoredGenerationMetrics | undefined) => {
+      const promptTokens = metrics?.usage?.promptTokens
+      if (!promptTokens || !needsCalibration(budget.input, limits.compactAt)) return
+      await recordCalibration(db, calibrationKey, { estimate: budget.input, promptTokens }).catch(() => {
+        console.error("[arena-service] Arena request calibration could not be recorded")
+      })
+    }
+    // Both writes finish before the stream closes, so they run side by side.
+    const recordMetrics = async (metrics: StoredGenerationMetrics | undefined) => {
+      await Promise.all([recordGeneration(metrics), recordMeasuredInput(metrics)])
     }
     const recovery = () =>
       context.streamRecovery && requestedGenerationID

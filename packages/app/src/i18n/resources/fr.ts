@@ -945,7 +945,11 @@ export const fr: TranslationResources = {
         started: "Commencée",
         completed: "Terminée",
         cancelled: "Annulée",
+
+        reopened: "Rouverte",
       },
+
+      tasksProgressCurrent: "{{completed}}/{{total}} tâches · {{task}}",
     },
     turnFooter: {
       endedAt: "{{duration}}, terminé à {{time}}",
@@ -1563,6 +1567,14 @@ export const fr: TranslationResources = {
           loadError: "Impossible de charger les commits",
           empty: "Aucun commit pour l’instant",
         },
+
+        showTreeView: "Afficher l'arborescence des dossiers",
+        showFlatView: "Afficher la liste de fichiers à plat",
+        collapseAll: "Réduire tous les fichiers",
+        expandAll: "Développer tous les fichiers",
+        emptyHiddenWhitespace: "Aucun changement visible après avoir masqué les espaces",
+        emptyUncommitted: "Aucune modification non validée",
+        emptyAgainstBase: "Aucun changement par rapport à {{baseRef}}",
       },
       openInEditor: {
         open: "Ouvrir",
@@ -1767,6 +1779,13 @@ export const fr: TranslationResources = {
         project: "Projet",
         status: "Statut",
         labels: "Libellés",
+        none: "Aucun",
+      },
+      sorting: {
+        groupLabel: "Ordre des groupes",
+        label: "Trier",
+        default: "Par défaut",
+        lastChat: "Dernier chat",
       },
       titleSource: {
         label: "Titre",
@@ -1959,6 +1978,8 @@ export const fr: TranslationResources = {
       branch: "Branche",
       baseNotApplicable: "Non applicable",
       host: "Hôte",
+
+      base: "Base",
     },
     titlePlaceholder: "Titre (facultatif)",
     errors: {
@@ -2204,6 +2225,15 @@ export const fr: TranslationResources = {
         statusFailed: "Impossible de vérifier l’installation de la CLI.",
         installFailed: "Impossible d’installer la CLI Agent Duel.",
       },
+
+      skills: {
+        statusFailed: "Impossible de vérifier l'état des compétences d'orchestration.",
+        installFailed: "Impossible d'installer les compétences d'orchestration.",
+        updateFailed: "Impossible de mettre à jour les compétences d'orchestration.",
+        uninstallFailed: "Impossible de désinstaller les compétences d'orchestration.",
+        saveSelectionFailed:
+          "Impossible d'enregistrer la sélection des compétences d'orchestration.",
+      },
     },
   },
   rootError: {
@@ -2414,6 +2444,8 @@ export const fr: TranslationResources = {
     archiveTooltip: "Archiver le sous-agent",
     archiveFinishedAction: "Archiver les sous-agents terminés",
     archiveFinishedRetry: "Réessayer ({{failed}}/{{total}})",
+
+    archiveFinishedTooltip: "Archiver les terminés",
   },
   panels: {
     draft: {
@@ -2468,6 +2500,8 @@ export const fr: TranslationResources = {
         reload: "Recharger",
         reloadTitle: "Recharger depuis le disque ?",
         reloadMessage: "Vos modifications locales seront perdues.",
+
+        checkFailedTitle: "Impossible de vérifier le fichier sur le disque",
       },
     },
     changes: {
@@ -2540,6 +2574,33 @@ export const fr: TranslationResources = {
   },
   sidebarCallout: {
     dismiss: "Ignorer",
+  },
+  leaderboard: {
+    title: "Mon classement",
+    refresh: "Actualiser",
+    refreshing: "Actualisation...",
+    retry: "Réessayer",
+    connect: "Connectez-vous pour voir votre classement",
+    loading: "Calcul de votre classement...",
+    error: "Votre classement n’a pas pu être chargé",
+    unlock: "Votre classement se débloque à {{minimum}} votes valides",
+    progress: "Vous avez {{count}} votes valides · encore {{remaining}}",
+    eligible:
+      "Les duels où un concurrent a échoué et ceux avec des sous-agents sur les versions concernées ne comptent pas",
+    filters: "Échecs d’exécution exclus · Sous-agents filtrés par commit",
+    summary: "{{count}} votes valides · {{earlyVotes}} · Mis à jour le {{date}}",
+    excludeEarlyVotes: "Exclure les votes anticipés",
+    earlyIncluded: "Votes anticipés inclus",
+    earlyExcluded: "Votes anticipés exclus",
+    disconnected:
+      "Certains groupes de modèles n’ont encore aucune comparaison commune. Les scores entre ces groupes dépendent de la loi a priori.",
+    noModels: "Les modèles actifs apparaissent à partir de 4 votes valides chacun",
+    chartLabel:
+      "Scores de vos modèles avec intervalles de crédibilité à 95 %, vitesses d’inférence médianes et nombre de votes",
+    votes: "Votes",
+    axis: "Score Bradley–Terry (échelle Elo)",
+    medianSpeed: "{{speed}} tokens/s en médiane",
+    noSpeed: "Vitesse indisponible",
   },
   feedback: {
     sidebarAction: "Envoyer un avis",
@@ -2784,6 +2845,8 @@ export const fr: TranslationResources = {
       modelHint: "Seul ce modèle est utilisé. S’il échoue, Agent Duel n’essaie pas d’autre modèle",
       docs: "Documentation",
       saveError: "Impossible de mettre à jour la génération de métadonnées",
+
+      fallbackHint: "S’il est indisponible, Agent Duel utilise un autre modèle disponible",
     },
     storage: {
       title: "Environnements de duel",
@@ -2872,6 +2935,8 @@ export const fr: TranslationResources = {
           overview: "Résumé",
           detailed: "Détails complets",
         },
+
+        accessibilityLabel: "Sélectionner l’affichage des appels d’outils ({{value}})",
       },
       language: {
         label: "Langue",
@@ -3079,6 +3144,39 @@ export const fr: TranslationResources = {
         install: "Installer",
         installing: "Installation…",
         installed: "Installé",
+
+        update: "Mise à jour",
+        working: "Fonctionnement...",
+        remove: "Supprimer",
+        uninstall: "Désinstaller",
+        save: "Enregistrer",
+        saving: "Enregistrement...",
+      },
+
+      skills: {
+        title: "Compétences en orchestration",
+        description: "Apprenez à vos agents à orchestrer via leCLI",
+        updateAvailable: "Mise à jour disponible",
+        updateTitle: "Mettre à jour les compétences Agent Duel?",
+        updateFallback: "Synchronisez les compétences regroupées sur votre machine.",
+        uninstallTitle: "Désinstaller les compétences Agent Duel?",
+        uninstallMessage:
+          "Supprime toutes les compétences d'orchestration Agent Duel de ~/.agents, ~/.claude, ~/.codex.",
+        choose: "Choisir les compétences",
+        chooseAll: "Toutes les compétences",
+        chooseAllHint:
+          "Gardez installées toutes les compétences fournies, y compris celles ajoutées plus tard.",
+        chooseList: "Compétences fournies",
+        chooseEmpty: "Cette version ne fournit aucune compétence.",
+        removeTitle: "Supprimer les compétences décochées ?",
+        removeMessage:
+          "{{skills}} seront supprimées de ~/.agents, ~/.claude et ~/.codex. Tout ce que vous avez ajouté dans ces dossiers de compétences est également supprimé.",
+        saveFailed: "Impossible d'enregistrer votre sélection de compétences.",
+      },
+      operations: {
+        add: "Ajouter une compétence",
+        update: "Mettre à jour la compétence",
+        delete: "Supprimer la compétence",
       },
     },
     permissions: {

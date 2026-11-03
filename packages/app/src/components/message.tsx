@@ -10,6 +10,11 @@ import {
   AttachmentLabel,
   AttachmentThumbnail,
 } from "@/components/attachment-pill";
+import {
+  AssistantFileLinkResolverProvider,
+  type AssistantFileLinkResolverProviderProps,
+} from "@/assistant-file-links";
+import { createSizeLimitedImageClient } from "@/assistant-image/size-limited-client";
 import { MarkdownRenderer } from "@/components/markdown/renderer";
 import { useRetainedPanelActive } from "@/components/retained-panel";
 import { RewindMenu, type RewindMode } from "@/components/rewind/rewind-menu";
@@ -1224,6 +1229,47 @@ function NativeShimmerPeakSvg({ gradientId }: { gradientId: string }) {
   );
 }
 
+interface AssistantMarkdownProps extends Pick<
+  AssistantMessageProps,
+  "occurrenceKey" | "message" | "workspaceRoot" | "serverId" | "client" | "phase"
+> {
+  compact?: boolean;
+  onOpenWorkspaceFile?: AssistantFileLinkResolverProviderProps["onOpenWorkspaceFile"];
+  toast?: AssistantFileLinkResolverProviderProps["toast"];
+}
+
+/** Battle prose shares the chat renderer, file resolution, and image acquisition. */
+export function AssistantMarkdown({
+  message,
+  client,
+  serverId,
+  workspaceRoot,
+  phase,
+  compact,
+  onOpenWorkspaceFile,
+  toast,
+}: AssistantMarkdownProps) {
+  const imageClient = useMemo(() => createSizeLimitedImageClient(client), [client]);
+  return (
+    <AssistantFileLinkResolverProvider
+      client={client}
+      serverId={serverId}
+      workspaceRoot={workspaceRoot}
+      onOpenWorkspaceFile={onOpenWorkspaceFile}
+      toast={toast}
+    >
+      <MarkdownRenderer
+        text={message}
+        compact={compact}
+        streaming={phase !== "complete"}
+        client={imageClient}
+        workspaceRoot={workspaceRoot}
+        serverId={serverId}
+      />
+    </AssistantFileLinkResolverProvider>
+  );
+}
+
 export const AssistantMessage = memo(function AssistantMessage({
   renderFullContent = false,
   occurrenceKey,
@@ -1235,6 +1281,7 @@ export const AssistantMessage = memo(function AssistantMessage({
   spacing = "default",
   phase,
 }: AssistantMessageProps) {
+  const imageClient = useMemo(() => createSizeLimitedImageClient(client), [client]);
   const { t } = useTranslation();
   const renderedMessage = useMemo(
     () =>
@@ -1283,7 +1330,7 @@ export const AssistantMessage = memo(function AssistantMessage({
       <MarkdownRenderer
         text={revealedMessage}
         streaming={phase !== "complete" || revealedMessage.length < renderedMessage.text.length}
-        client={client}
+        client={imageClient}
         workspaceRoot={workspaceRoot}
         serverId={serverId}
       />
@@ -1617,6 +1664,10 @@ interface ExpandableBadgeProps {
   /** Draws the expanded highlight as a band across a pane instead of a chip. */
   bandWhenExpanded?: boolean;
   compactLabel?: boolean;
+  /** Foreground treatment for a collapsed activity summary. */
+  labelTextStyle?: StyleProp<TextStyle>;
+  /** A collapsed activity summary remains visibly expandable. */
+  alwaysShowChevron?: boolean;
   /**
    * No vertical padding, so the row hugs its icon badge. For a work summary sitting in prose,
    * where the row's own padding would add to the prose rhythm; rows inside an expanded list
@@ -1879,6 +1930,20 @@ function iconSizeFor(compact: boolean, labelSized: boolean): number {
   return labelSized ? ICON_SIZE.md : 12;
 }
 
+function shouldShowExpandableBadgeChevron({
+  isInteractive,
+  alwaysShowChevron,
+  isHovered,
+  isExpanded,
+}: {
+  isInteractive: boolean;
+  alwaysShowChevron: boolean | undefined;
+  isHovered: boolean;
+  isExpanded: boolean;
+}): boolean {
+  return isInteractive && (alwaysShowChevron === true || isHovered || isExpanded);
+}
+
 function renderExpandableBadgeIconSlot({
   showChevron,
   chevronStyle,
@@ -2018,6 +2083,8 @@ export const ExpandableBadge = memo(function ExpandableBadge({
   transparentWhenExpanded = false,
   bandWhenExpanded,
   compactLabel = false,
+  labelTextStyle,
+  alwaysShowChevron,
   flushRow,
   labelSizedIcon,
   testID,
@@ -2224,10 +2291,11 @@ export const ExpandableBadge = memo(function ExpandableBadge({
     () => [
       expandableBadgeStylesheet.label,
       isActive && expandableBadgeStylesheet.labelActive,
+      labelTextStyle,
       isLoading && expandableBadgeStylesheet.labelLoading,
       compactLabel && expandableBadgeStylesheet.labelCompact,
     ],
-    [isActive, isLoading, compactLabel],
+    [isActive, isLoading, compactLabel, labelTextStyle],
   );
 
   const secondaryLabelStyle = useMemo(
@@ -2280,7 +2348,12 @@ export const ExpandableBadge = memo(function ExpandableBadge({
     labelSized: labelSizedIcon === true,
   });
   const iconSlotNode = renderExpandableBadgeIconSlot({
-    showChevron: isInteractive && (isHovered || isExpanded),
+    showChevron: shouldShowExpandableBadgeChevron({
+      isInteractive,
+      alwaysShowChevron,
+      isHovered,
+      isExpanded,
+    }),
     chevronStyle,
     iconNode,
   });
@@ -2353,6 +2426,8 @@ export const ExpandableBadge = memo(function ExpandableBadge({
 function areExpandableBadgePropsEqual(previous: ExpandableBadgeProps, next: ExpandableBadgeProps) {
   if (previous.label !== next.label) return false;
   if (previous.secondaryLabel !== next.secondaryLabel) return false;
+  if (previous.labelTextStyle !== next.labelTextStyle) return false;
+  if (previous.alwaysShowChevron !== next.alwaysShowChevron) return false;
   if (previous.icon !== next.icon) return false;
   if (previous.isExpanded !== next.isExpanded) return false;
   if (previous.style !== next.style) return false;

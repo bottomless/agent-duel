@@ -1,8 +1,8 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { resolveArenaAccessConfig } from "./config.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clientHeaders, resolveArenaAccessConfig } from "./config.js";
 
 describe("resolveArenaAccessConfig", () => {
   it("leaves a daemon without Arena or a control plane alone", () => {
@@ -137,5 +137,61 @@ describe("resolveArenaAccessConfig", () => {
         PASEO_ARENA_STORE_URL: "http://127.0.0.1:8790",
       }),
     ).toEqual({ kind: "none" });
+  });
+});
+
+describe("clientHeaders", () => {
+  // The machine facts are read once per process, so each case that fakes them loads a fresh module.
+  beforeEach(() => {
+    vi.resetModules();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("sends the build and coarse machine facts", () => {
+    const headers = clientHeaders("0.4.0-beta.14");
+    expect(headers).toMatchObject({
+      "X-Agent-Duel-Version": "0.4.0-beta.14",
+      "X-Agent-Duel-OS": process.platform,
+      "X-Agent-Duel-OS-Version": os.release(),
+      "X-Agent-Duel-Arch": process.arch,
+      "X-Agent-Duel-Memory-GB": String(Math.round(os.totalmem() / 1024 ** 3)),
+      "X-Agent-Duel-Timezone": Intl.DateTimeFormat().resolvedOptions().timeZone,
+    });
+    expect(Object.keys(headers).sort()).toEqual(
+      [
+        "X-Agent-Duel-Arch",
+        "X-Agent-Duel-CPU",
+        "X-Agent-Duel-CPU-Cores",
+        "X-Agent-Duel-Memory-GB",
+        "X-Agent-Duel-OS",
+        "X-Agent-Duel-OS-Version",
+        "X-Agent-Duel-Timezone",
+        "X-Agent-Duel-Version",
+      ].sort(),
+    );
+  });
+
+  it("keeps a CPU name to printable ASCII so fetch accepts it", async () => {
+    const cpu = {
+      model: "  Intel(R)\u00ae Core\u2122  i7   ",
+      speed: 0,
+      times: { user: 0, nice: 0, sys: 0, idle: 0, irq: 0 },
+    };
+    vi.spyOn(os, "cpus").mockReturnValue([cpu, cpu]);
+    const fresh = await import("./config.js");
+    const headers = fresh.clientHeaders("0.4.0-beta.14");
+    expect(headers["X-Agent-Duel-CPU"]).toBe("Intel(R) Core i7");
+    expect(headers["X-Agent-Duel-CPU-Cores"]).toBe("2");
+    expect(() => new Headers(headers)).not.toThrow();
+  });
+
+  it("leaves out the CPU when the OS reports none", async () => {
+    vi.spyOn(os, "cpus").mockReturnValue([]);
+    const fresh = await import("./config.js");
+    const headers = fresh.clientHeaders("0.4.0-beta.14");
+    expect(headers).not.toHaveProperty("X-Agent-Duel-CPU");
+    expect(headers).not.toHaveProperty("X-Agent-Duel-CPU-Cores");
   });
 });

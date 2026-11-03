@@ -64,6 +64,10 @@ export function getLastWorkspaceSelection(): ActiveWorkspaceSelection | null {
   return lastWorkspaceSelectionStore.getSelection();
 }
 
+export function forgetLastWorkspaceSelection(selection: ActiveWorkspaceSelection): void {
+  lastWorkspaceSelectionStore.forget(selection);
+}
+
 export function getIsLastWorkspaceSelectionHydrated(): boolean {
   return lastWorkspaceSelectionStore.isHydrated();
 }

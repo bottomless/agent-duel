@@ -193,6 +193,7 @@ export async function startE2EWorker(
       paseoHome,
       preserveHome,
       environment: {
+        ...options.environment,
         NODE_ENV: "development",
         PATH: `${fakeEditorBin}${path.delimiter}${process.env.PATH ?? ""}`,
         PASEO_E2E_EDITOR_RECORD_PATH: editorRecordPath,

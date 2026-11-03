@@ -43,6 +43,8 @@ export interface SessionCompactionResult {
 }
 
 export interface SessionCompaction extends SessionContext {
+  /** Keep unanswered user messages, including attachments, outside the textual checkpoint. */
+  preservePendingInput?: boolean
   /** Set to use this compaction and skip the model request. */
   result?: SessionCompactionResult
 }

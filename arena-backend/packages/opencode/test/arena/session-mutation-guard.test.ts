@@ -17,6 +17,8 @@ const controlToken = "private-control-token"
 function enableArena() {
   setArenaCredentials({
     mode: "hosted",
+    researchPartition: "test-research-partition",
+    researchAccountID: "test-account",
     token: "private-runtime-token",
     controlPlaneUrl: "https://control.test",
     controlTokenHash: hashArenaControlToken(controlToken),

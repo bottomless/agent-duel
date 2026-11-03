@@ -7,6 +7,7 @@ import {
   decisionBarShowsPhase,
   showsArenaDecisionBar,
 } from "./decision-state";
+import { isArenaBattleOnScreen } from "./summary-anchor";
 
 type TurnState = NonNullable<ArenaSnapshot["turn"]>["state"];
 type Turn = NonNullable<ArenaSnapshot["turn"]>;
@@ -248,6 +249,71 @@ describe("arenaDecisionPhase", () => {
         }),
       ),
     ).toEqual({ kind: "awaiting_stop_resolution", canKeepA: true, canKeepB: false });
+  });
+
+  it.each([
+    { canKeepA: true, canKeepB: true },
+    { canKeepA: true, canKeepB: false },
+    { canKeepA: false, canKeepB: true },
+    { canKeepA: false, canKeepB: false },
+  ])("keeps pending stop choices visible: A=$canKeepA B=$canKeepB", ({ canKeepA, canKeepB }) => {
+    const pending = snapshot({
+      state: "awaiting_stop_resolution",
+      runs: [
+        run({ id: "run-a", side: "a", runState: "stopped", applicable: canKeepA }),
+        run({ id: "run-b", side: "b", runState: "stopped", applicable: canKeepB }),
+      ],
+    });
+
+    expect(isArenaBattleOnScreen(pending)).toBe(true);
+    expect(showsArenaDecisionBar(pending)).toBe(true);
+    expect(arenaDecisionPhase(pending)).toEqual({
+      kind: "awaiting_stop_resolution",
+      canKeepA,
+      canKeepB,
+    });
+  });
+
+  it.each<NonNullable<Turn["resolution"]>>([
+    { kind: "stopped", resolution: "apply_a", appliedSide: "a" },
+    { kind: "stopped", resolution: "apply_b", appliedSide: "b" },
+    { kind: "stopped", resolution: "discard" },
+  ])("hides stopped choices after $resolution while the panes remain", (resolution) => {
+    const retained = snapshot({
+      state: "awaiting_stop_resolution",
+      turn: { resolution },
+      runs: [
+        run({ id: "run-a", side: "a", runState: "stopped", applicable: true }),
+        run({ id: "run-b", side: "b", runState: "stopped", applicable: true }),
+      ],
+    });
+
+    expect(isArenaBattleOnScreen(retained)).toBe(true);
+    expect(showsArenaDecisionBar(retained)).toBe(false);
+    expect(arenaDecisionPhase(retained)).toEqual({
+      kind: "transitional",
+      label: "Resolving the battle",
+      busy: true,
+    });
+  });
+
+  it.each<[TurnState, NonNullable<Turn["resolution"]>]>([
+    ["awaiting_vote", { kind: "vote", vote: "a", appliedSide: "a" }],
+    ["awaiting_vote", { kind: "vote", vote: "b", appliedSide: "b" }],
+    ["awaiting_vote", { kind: "vote", vote: "tie", appliedSide: "a" }],
+    ["awaiting_vote", { kind: "stopped", resolution: "discard" }],
+    ["running", { kind: "early", vote: "a", appliedSide: "a" }],
+    ["running", { kind: "early", vote: "b", appliedSide: "b" }],
+    ["creation_failed", { kind: "aborted", reason: "setup failed" }],
+  ])("hides decisions in %s after recording %j", (state, resolution) => {
+    const decided = snapshot({ state, turn: { resolution } });
+
+    expect(showsArenaDecisionBar(decided)).toBe(false);
+    expect(arenaDecisionPhase(decided)).toEqual({
+      kind: "transitional",
+      label: "Resolving the battle",
+      busy: true,
+    });
   });
 
   it("surfaces a retryable resolution even though the turn is resolved", () => {

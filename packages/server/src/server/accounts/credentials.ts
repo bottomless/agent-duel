@@ -5,6 +5,8 @@ export interface HostedArenaCredentials {
   readonly mode: "hosted";
   readonly token: string;
   readonly controlPlaneUrl: string;
+  readonly researchPartition: string;
+  readonly researchAccountID: string;
 }
 
 /** The user's own OpenRouter key, in a build without a control plane. */
@@ -137,6 +139,8 @@ export function issueArenaLaunchCredentials(
   return {
     credentials: {
       mode: "hosted",
+      researchPartition: current.researchPartition,
+      researchAccountID: current.researchAccountID,
       token,
       controlPlaneUrl: `${daemonBaseUrl.replace(/\/$/, "")}/api/arena-runtime`,
     },

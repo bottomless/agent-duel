@@ -18,6 +18,7 @@ function createDeps(agentIds: string[]) {
       savedDrafts.push(draft);
       calls.push("save");
     },
+    forgetWorkspace: (_serverId, workspaceId) => calls.push(`forget ${workspaceId}`),
     navigate: (route) => calls.push(`navigate ${String(route)}`),
     showError: (message) => {
       calls.push(`error ${message}`);
@@ -58,10 +59,20 @@ describe("returnFailedFirstSendToNewChat", () => {
     expect(savedDrafts).toEqual([draft]);
     expect(calls).toEqual([
       "save",
+      "forget wks",
       "navigate /new?serverId=srv",
       "error Battles cannot include image/bmp images\n\nYour message is saved. Resolve the error above, then send it again.",
       "archive wks",
     ]);
+  });
+
+  it("stops restoring the chat it archives, so a relaunch or leaving Settings does not reopen it", () => {
+    const { deps, calls } = createDeps(["agent-1"]);
+    const error = new FirstSendError(new Error("No OpenRouter key"), "agent-1");
+
+    expect(returnFailedFirstSendToNewChat(failed(error), deps)).toBe(true);
+    expect(calls.indexOf("forget wks")).toBeGreaterThanOrEqual(0);
+    expect(calls.indexOf("forget wks")).toBeLessThan(calls.indexOf("navigate /new?serverId=srv"));
   });
 
   it("archives a chat that has no agent yet", () => {

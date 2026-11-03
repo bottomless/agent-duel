@@ -3,6 +3,7 @@ import { ActivityIndicator, View, type ViewStyle } from "react-native";
 import {
   hasAcceptedLegalDocuments,
   legalAcceptanceSchema,
+  type AuthMethodsResponse,
   type LegalDocuments,
 } from "@getpaseo/protocol/accounts/schemas";
 import { useQueryClient } from "@tanstack/react-query";
@@ -21,11 +22,20 @@ import { recheckAccountSession } from "./session-rejected";
 import { SignInScreen } from "./sign-in-screen";
 import { DaemonUnreachable } from "./daemon-unreachable";
 import { TermsAcceptanceModal } from "./terms-acceptance-modal";
+import { UpdateRequired } from "./update-required";
 
 const STALE_TIME_MS = 5 * 60 * 1000;
 
 function phaseOf(status: "pending" | "success" | "error"): QueryPhase {
   return status;
+}
+
+function methodsGateInput(methods: AuthMethodsResponse | undefined) {
+  return {
+    updateRequired: methods?.updateRequired ?? false,
+    accountsEnabled: methods?.enabled ?? false,
+    methods: methods?.methods ?? [],
+  };
 }
 
 function requireEndpoint(endpoint: AccountsEndpoint | null): AccountsEndpoint {
@@ -142,8 +152,7 @@ export function AccountGate({ children }: { children: ReactNode }): ReactNode {
     hasEndpoint: endpoint !== null,
     storeHydrated: hydrated,
     methodsPhase: phaseOf(methodsQuery.status),
-    accountsEnabled: methodsQuery.data?.enabled ?? false,
-    methods: methodsQuery.data?.methods ?? [],
+    ...methodsGateInput(methodsQuery.data),
     hasStoredSession: sessionToken !== null,
     sessionPhase: phaseOf(sessionQuery.status),
     sessionIsValid: resolvedSession != null,
@@ -210,6 +219,9 @@ function AccountGateContent({
         expired={expired}
       />
     );
+  }
+  if (gate.kind === "update-required") {
+    return <UpdateRequired />;
   }
   if (gate.kind === "unreachable") {
     return <DaemonUnreachable endpoint={endpoint.baseUrl} onRetry={onRetry} />;

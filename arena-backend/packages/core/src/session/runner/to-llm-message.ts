@@ -56,7 +56,9 @@ const textAttachment = (file: FileAttachment): ContentPart => ({
 const directoryAttachment = (file: FileAttachment): ContentPart => ({
   type: "text",
   text: `\n\n${[
-    `Attached directory: ${attachmentLocation(file) ?? file.name ?? (file.source.type === "uri" ? file.source.uri : "directory")}`,
+    `Attached directory: ${
+      attachmentLocation(file) ?? file.name ?? (file.source.type === "uri" ? file.source.uri : "directory")
+    }`,
     file.description === undefined ? undefined : `Description: ${file.description}`,
     file.data.length === 0 ? undefined : "",
     file.data.length === 0 ? undefined : Buffer.from(file.data, "base64").toString("utf8"),
@@ -297,17 +299,22 @@ function toLLMMessage(message: SessionMessage.Info, model: Model.Ref, providerMe
         Message.make({
           id: message.id,
           role: "user",
-          content: `The following shell command was executed by the user:\n\nCommand:\n${message.command}\n\nOutput:\n${message.output?.output ?? ""}`,
+          content: `The following shell command was executed by the user:\n\nCommand:\n${message.command}\n\nOutput:\n${
+            message.output?.output ?? ""
+          }`,
           metadata: message.metadata,
         }),
       ]
     case "assistant":
       return assistant(message, model, providerMetadataKey)
-    case "compaction":
+    case "compaction": {
       if (message.status !== "completed") return []
       // History selection only keeps native windows the target model can replay.
       if (SessionProviderContext.isCheckpoint(message))
         return [...SessionProviderContext.decode(message.providerContext)]
+      const { [RETAINED_INPUT]: retained, ...metadata } = message.metadata ?? {}
+      const pending =
+        retained === undefined ? [] : Schema.decodeUnknownSync(Schema.Array(SessionMessage.User))(retained)
       return [
         Message.make({
           id: message.id,
@@ -320,11 +327,15 @@ function toLLMMessage(message: SessionMessage.Info, model: Model.Ref, providerMe
             ...(message.recent ? ["", `<recent-context>\n${message.recent}\n</recent-context>`] : []),
             "</conversation-checkpoint>",
           ].join("\n"),
-          metadata: message.metadata,
+          metadata: retained === undefined ? message.metadata : metadata,
         }),
+        ...pending.flatMap((input) => toLLMMessage(input, model, providerMetadataKey)),
       ]
+    }
   }
 }
+
+export const RETAINED_INPUT = "compactionRetainedInput"
 
 /** Translate projected Session history into canonical @opencode/ai context. */
 export const toLLMMessages = (

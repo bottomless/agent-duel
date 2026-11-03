@@ -910,7 +910,11 @@ export const ar: TranslationResources = {
         started: "بدأت",
         completed: "اكتملت",
         cancelled: "أُلغيت",
+
+        reopened: "أُعيد فتحها",
       },
+
+      tasksProgressCurrent: "{{completed}}/{{total}} مهام · {{task}}",
     },
     turnFooter: {
       endedAt: "{{duration}}، انتهى في {{time}}",
@@ -1505,6 +1509,14 @@ export const ar: TranslationResources = {
           loadError: "تعذّر تحميل الإيداعات",
           empty: "لا توجد إيداعات بعد",
         },
+
+        showTreeView: "إظهار شجرة المجلدات",
+        showFlatView: "إظهار قائمة الملفات المسطحة",
+        collapseAll: "طي كافة الملفات",
+        expandAll: "قم بتوسيع كافة الملفات",
+        emptyHiddenWhitespace: "لا توجد تغييرات مرئية بعد إخفاء المسافة البيضاء",
+        emptyUncommitted: "لا توجد تغييرات غير ملتزم بها",
+        emptyAgainstBase: "لا توجد تغييرات مقابل{{baseRef}}",
       },
       openInEditor: {
         open: "يفتح",
@@ -1706,6 +1718,13 @@ export const ar: TranslationResources = {
         project: "المشروع",
         status: "الحالة",
         labels: "التسميات",
+        none: "بدون",
+      },
+      sorting: {
+        groupLabel: "ترتيب المجموعات",
+        label: "ترتيب",
+        default: "الافتراضي",
+        lastChat: "آخر محادثة",
       },
       titleSource: {
         label: "العنوان",
@@ -1897,6 +1916,8 @@ export const ar: TranslationResources = {
       branch: "الفرع",
       baseNotApplicable: "غير قابل للتطبيق",
       host: "المضيف",
+
+      base: "الأساس",
     },
     titlePlaceholder: "العنوان (اختياري)",
     errors: {
@@ -2127,6 +2148,14 @@ export const ar: TranslationResources = {
         statusFailed: "غير قادر على التحقق من حالة تثبيت CLI.",
         installFailed: "غير قادر على تثبيت Agent Duel CLI.",
       },
+
+      skills: {
+        statusFailed: "غير قادر على التحقق من حالة مهارات التنسيق.",
+        installFailed: "غير قادر على تثبيت مهارات التنسيق.",
+        updateFailed: "غير قادر على تحديث مهارات التنسيق.",
+        uninstallFailed: "غير قادر على إلغاء تثبيت مهارات التنسيق.",
+        saveSelectionFailed: "غير قادر على حفظ اختيار مهارات التنسيق.",
+      },
     },
   },
   rootError: {
@@ -2334,6 +2363,8 @@ export const ar: TranslationResources = {
     archiveTooltip: "أرشفة الوكيل الفرعي",
     archiveFinishedAction: "أرشفة الوكلاء الفرعيين المكتملين",
     archiveFinishedRetry: "إعادة المحاولة ({{failed}}/{{total}})",
+
+    archiveFinishedTooltip: "أرشفة المكتملين",
   },
   panels: {
     draft: {
@@ -2387,6 +2418,8 @@ export const ar: TranslationResources = {
         reload: "إعادة تحميل",
         reloadTitle: "إعادة التحميل من القرص؟",
         reloadMessage: "ستفقد تغييراتك المحلية.",
+
+        checkFailedTitle: "تعذّر التحقق من الملف على القرص",
       },
     },
     changes: {
@@ -2458,6 +2491,32 @@ export const ar: TranslationResources = {
   },
   sidebarCallout: {
     dismiss: "رفض",
+  },
+  leaderboard: {
+    title: "ترتيبي",
+    refresh: "تحديث",
+    refreshing: "جارٍ التحديث...",
+    retry: "إعادة المحاولة",
+    connect: "سجّل الدخول واتصل لعرض ترتيبك",
+    loading: "جارٍ حساب ترتيبك...",
+    error: "تعذّر تحميل ترتيبك",
+    unlock: "يُفتح ترتيبك عند {{minimum}} صوتًا مؤهلًا",
+    progress: "لديك {{count}} صوتًا مؤهلًا · بقي {{remaining}}",
+    eligible:
+      "لا تُحتسب المعارك التي فشل فيها أحد المتنافسين ولا التي استخدمت وكلاء فرعيين في الإصدارات المتأثرة",
+    filters: "استُبعدت حالات فشل التشغيل · رُشّح الوكلاء الفرعيون حسب الـ commit",
+    summary: "{{count}} صوتًا مؤهلًا · {{earlyVotes}} · آخر تحديث {{date}}",
+    excludeEarlyVotes: "استبعاد الأصوات المبكرة",
+    earlyIncluded: "الأصوات المبكرة مشمولة",
+    earlyExcluded: "الأصوات المبكرة مستبعدة",
+    disconnected:
+      "بعض مجموعات النماذج ليس بينها مقارنات مشتركة بعد. تعتمد التقييمات بين هذه المجموعات على التوزيع المسبق.",
+    noModels: "تظهر النماذج النشطة بعد حصول كل منها على 4 أصوات مؤهلة",
+    chartLabel: "تقييمات نماذجك مع فترات موثوقية 95% ومتوسط سرعات الاستدلال وعدد الأصوات",
+    votes: "الأصوات",
+    axis: "تقييم Bradley–Terry (مقياس Elo)",
+    medianSpeed: "الوسيط {{speed}} رمز/ث",
+    noSpeed: "السرعة غير متاحة",
   },
   feedback: {
     sidebarAction: "إرسال ملاحظات",
@@ -2735,6 +2794,8 @@ export const ar: TranslationResources = {
       modelHint: "يُستخدم هذا النموذج فقط. إذا فشل، لا يجرّب Agent Duel نموذجًا آخر",
       docs: "الوثائق",
       saveError: "تعذر تحديث إنشاء البيانات الوصفية",
+
+      fallbackHint: "إذا لم يكن متاحًا، يستخدم Agent Duel نموذجًا آخر متاحًا",
     },
     storage: {
       title: "بيئات المبارزة",
@@ -2820,6 +2881,8 @@ export const ar: TranslationResources = {
           overview: "ملخص",
           detailed: "التفاصيل الكاملة",
         },
+
+        accessibilityLabel: "حدد عرض استدعاءات الأدوات ({{value}})",
       },
       language: {
         label: "لغة",
@@ -3022,6 +3085,37 @@ export const ar: TranslationResources = {
         install: "ثَبَّتَ",
         installing: "جارٍ التثبيت...",
         installed: "تم التثبيت",
+
+        update: "تحديث",
+        working: "عمل...",
+        remove: "إزالة",
+        uninstall: "إلغاء التثبيت",
+        save: "حفظ",
+        saving: "جارٍ الحفظ...",
+      },
+
+      skills: {
+        title: "مهارات التنسيق",
+        description: "قم بتعليم عملائك كيفية التنسيق من خلال CLI",
+        updateAvailable: "التحديث متاح",
+        updateTitle: "تحديث مهارات Agent Duel ؟",
+        updateFallback: "مزامنة المهارات المجمعة لجهازك.",
+        uninstallTitle: "إلغاء تثبيت مهارات Agent Duel ؟",
+        uninstallMessage: "يزيل جميع مهارات تنسيق Agent Duel من ~/.agents ، ~/.claude ، ~/.codex.",
+        choose: "اختيار المهارات",
+        chooseAll: "كل المهارات",
+        chooseAllHint: "أبقِ جميع المهارات المرفقة مثبتة، بما فيها ما يُضاف لاحقًا.",
+        chooseList: "المهارات المرفقة",
+        chooseEmpty: "لا تتضمن هذه النسخة أي مهارات.",
+        removeTitle: "إزالة المهارات غير المحددة؟",
+        removeMessage:
+          "سيتم حذف {{skills}} من ~/.agents و~/.claude و~/.codex. كما يُحذف كل ما أضفته داخل مجلدات المهارات تلك.",
+        saveFailed: "تعذر حفظ اختيار المهارات.",
+      },
+      operations: {
+        add: "أضف مهارة",
+        update: "تحديث المهارة",
+        delete: "حذف المهارة",
       },
     },
     permissions: {

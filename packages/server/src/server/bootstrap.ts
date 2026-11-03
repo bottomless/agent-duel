@@ -232,6 +232,7 @@ import { createArenaRuntimeRouter } from "./accounts/arena-runtime-router.js";
 import { FeedbackBackend } from "./feedback/backend.js";
 import { createFeedbackContextCapture, type FeedbackContextCapture } from "./feedback/context.js";
 import { ensureAgentLoaded } from "./agent/agent-loading.js";
+import { createLeaderboardRouter } from "./leaderboard/routes.js";
 import { createFeedbackRouter } from "./feedback/routes.js";
 import { WorkspaceAutoName } from "./workspace-auto-name.js";
 import { createGitMetadataGenerator } from "./session/checkout/git-metadata-generator.js";
@@ -543,6 +544,7 @@ interface MountAccountsOptions {
   arenaAccess: ArenaAccessConfig;
   logger: Logger;
   feedbackContext: FeedbackContextCapture;
+  appVersion: string;
 }
 
 /**
@@ -577,13 +579,25 @@ function mountAccounts(
   const accounts = createAccountsService({
     config: accountsConfig,
     logger,
+    appVersion: options.appVersion,
   });
   app.use("/api/auth", createAccountsRouter(accounts));
   app.use(createRequireSessionMiddleware(accounts));
   app.use(
+    "/api/leaderboard",
+    createLeaderboardRouter({
+      controlPlaneUrl: accountsConfig.controlPlaneUrl,
+      sessions: accounts.sessions,
+      appVersion: options.appVersion,
+    }),
+  );
+  app.use(
     "/api/feedback",
     createFeedbackRouter({
-      backend: new FeedbackBackend(accountsConfig.controlPlaneUrl, { logger }),
+      backend: new FeedbackBackend(accountsConfig.controlPlaneUrl, {
+        logger,
+        appVersion: options.appVersion,
+      }),
       sessions: accounts.sessions,
       context: options.feedbackContext,
     }),
@@ -863,7 +877,10 @@ export async function createPaseoDaemon(
   // daemon memory, and this router can reach only the Arena control-plane APIs.
   app.use(
     "/api/arena-runtime",
-    createArenaRuntimeRouter({ logger: logger.child({ module: "arena-runtime-proxy" }) }),
+    createArenaRuntimeRouter({
+      logger: logger.child({ module: "arena-runtime-proxy" }),
+      appVersion: daemonVersion,
+    }),
   );
 
   // Local, harmless, and token-gated; deliberately skips daemon auth.
@@ -901,6 +918,7 @@ export async function createPaseoDaemon(
       : null;
   const accounts = mountAccounts(app, {
     arenaAccess,
+    appVersion: daemonVersion,
     logger,
     feedbackContext: {
       capture: (feedback) => {

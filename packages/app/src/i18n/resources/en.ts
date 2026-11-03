@@ -917,7 +917,11 @@ export const en = {
         started: "Started",
         completed: "Completed",
         cancelled: "Cancelled",
+
+        reopened: "Reopened",
       },
+
+      tasksProgressCurrent: "{{completed}}/{{total}} tasks · {{task}}",
     },
     turnFooter: {
       endedAt: "{{duration}}, ended {{time}}",
@@ -1523,6 +1527,14 @@ export const en = {
           loadError: "Failed to load commits",
           empty: "No commits yet",
         },
+
+        showTreeView: "Show folder tree",
+        showFlatView: "Show flat file list",
+        collapseAll: "Collapse all files",
+        expandAll: "Expand all files",
+        emptyHiddenWhitespace: "No visible changes after hiding whitespace",
+        emptyUncommitted: "No uncommitted changes",
+        emptyAgainstBase: "No changes vs {{baseRef}}",
       },
       openInEditor: {
         open: "Open",
@@ -1724,6 +1736,13 @@ export const en = {
         project: "Project",
         status: "Status",
         labels: "Labels",
+        none: "None",
+      },
+      sorting: {
+        groupLabel: "Group order",
+        label: "Sort",
+        default: "Default",
+        lastChat: "Last chat",
       },
       titleSource: {
         label: "Title",
@@ -1915,6 +1934,8 @@ export const en = {
       branch: "Branch",
       baseNotApplicable: "Not applicable",
       host: "Host",
+
+      base: "Base",
     },
     titlePlaceholder: "Title (optional)",
     errors: {
@@ -2163,6 +2184,14 @@ export const en = {
         statusFailed: "Unable to check CLI install status.",
         installFailed: "Unable to install the Agent Duel CLI.",
       },
+
+      skills: {
+        statusFailed: "Unable to check orchestration skills status.",
+        installFailed: "Unable to install orchestration skills.",
+        updateFailed: "Unable to update orchestration skills.",
+        uninstallFailed: "Unable to uninstall orchestration skills.",
+        saveSelectionFailed: "Unable to save the orchestration skills selection.",
+      },
     },
   },
   rootError: {
@@ -2371,6 +2400,8 @@ export const en = {
     archiveTooltip: "Archive subagent",
     archiveFinishedAction: "Archive finished subagents",
     archiveFinishedRetry: "Retry ({{failed}}/{{total}})",
+
+    archiveFinishedTooltip: "Archive finished",
   },
   panels: {
     draft: {
@@ -2425,6 +2456,8 @@ export const en = {
         reload: "Reload",
         reloadTitle: "Reload from disk?",
         reloadMessage: "Your local changes will be lost.",
+
+        checkFailedTitle: "Couldn't check file on disk",
       },
     },
     changes: {
@@ -2496,6 +2529,32 @@ export const en = {
   },
   sidebarCallout: {
     dismiss: "Dismiss",
+  },
+  leaderboard: {
+    title: "My leaderboard",
+    refresh: "Refresh",
+    refreshing: "Refreshing...",
+    retry: "Try again",
+    connect: "Sign in and connect to view your leaderboard",
+    loading: "Calculating your leaderboard...",
+    error: "Your leaderboard could not be loaded",
+    unlock: "Your leaderboard unlocks at {{minimum}} eligible votes",
+    progress: "You have {{count}} eligible votes · {{remaining}} more to go",
+    eligible: "Battles with contestant errors and subagents on affected builds do not count",
+    filters: "Run failures excluded · Subagents filtered by commit",
+    summary: "{{count}} eligible votes · {{earlyVotes}} · Updated {{date}}",
+    excludeEarlyVotes: "Exclude early votes",
+    earlyIncluded: "Early votes included",
+    earlyExcluded: "Early votes excluded",
+    disconnected:
+      "Some groups of models have no shared comparisons yet. Ratings between those groups depend on the prior.",
+    noModels: "Active models appear after 4 eligible votes each",
+    chartLabel:
+      "Your model ratings with 95% credible intervals, median inference speeds, and vote counts",
+    votes: "Votes",
+    axis: "Bradley–Terry rating (Elo scale)",
+    medianSpeed: "{{speed}} tokens/s median",
+    noSpeed: "Speed unavailable",
   },
   feedback: {
     sidebarAction: "Send feedback",
@@ -2838,6 +2897,8 @@ export const en = {
       modelHint: "Only this model is used. If it fails, Agent Duel does not try another model",
       docs: "Docs",
       saveError: "Unable to update metadata generation",
+
+      fallbackHint: "If it is unavailable, Agent Duel falls back to another available model",
     },
     storage: {
       title: "Battle environments",
@@ -2923,6 +2984,8 @@ export const en = {
           overview: "Summary",
           detailed: "Full detail",
         },
+
+        accessibilityLabel: "Select tool call display ({{value}})",
       },
       language: {
         label: "Language",
@@ -3124,6 +3187,38 @@ export const en = {
         install: "Install",
         installing: "Installing...",
         installed: "Installed",
+
+        update: "Update",
+        working: "Working...",
+        remove: "Remove",
+        uninstall: "Uninstall",
+        save: "Save",
+        saving: "Saving...",
+      },
+
+      skills: {
+        title: "Orchestration skills",
+        description: "Teach your agents to orchestrate through the CLI",
+        updateAvailable: "Update available",
+        updateTitle: "Update Agent Duel skills?",
+        updateFallback: "Sync bundled skills to your machine.",
+        uninstallTitle: "Uninstall Agent Duel skills?",
+        uninstallMessage:
+          "Removes all Agent Duel orchestration skills from ~/.agents, ~/.claude, ~/.codex.",
+        choose: "Choose skills",
+        chooseAll: "All skills",
+        chooseAllHint: "Keep every bundled skill installed, including ones added later.",
+        chooseList: "Bundled skills",
+        chooseEmpty: "This build bundles no skills.",
+        removeTitle: "Remove deselected skills?",
+        removeMessage:
+          "{{skills}} will be deleted from ~/.agents, ~/.claude, and ~/.codex. Anything you added inside those skill folders is deleted too.",
+        saveFailed: "Could not save your skill selection.",
+      },
+      operations: {
+        add: "Add skill",
+        update: "Update skill",
+        delete: "Delete skill",
       },
     },
     permissions: {

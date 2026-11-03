@@ -31,6 +31,7 @@ import {
 } from "./spacing";
 import { estimateStreamItemHeight } from "./web-virtualization";
 import { createReadingAnchor } from "./reading-anchor";
+import { HoldStreamPositionProvider } from "./hold-position";
 import type { StreamRenderInput, StreamStrategy, StreamViewportHandle } from "./strategy";
 import { useRevisedHistoryRows } from "./history-row-revision";
 import { createStreamStrategy } from "./strategy";
@@ -535,6 +536,43 @@ function WebStreamViewport(props: StreamRenderInput & { isMobileBreakpoint: bool
     setHistoryStartPaginationState(rearmed);
     evaluateHistoryStart();
   });
+  const heldPositionRef = useRef<{ element: HTMLElement; viewportOffset: number } | null>(null);
+  const holdPosition = useStableEvent((element: HTMLElement) => {
+    const scrollContainer = scrollContainerRef.current;
+    if (!scrollContainer) {
+      return;
+    }
+    cancelPendingStickToBottom();
+    if (followOutputRef.current) {
+      setFollowOutput(false);
+    }
+    heldPositionRef.current = {
+      element,
+      viewportOffset:
+        element.getBoundingClientRect().top - scrollContainer.getBoundingClientRect().top,
+    };
+  });
+  const applyHeldPosition = useStableEvent(() => {
+    const scrollContainer = scrollContainerRef.current;
+    const held = heldPositionRef.current;
+    if (!scrollContainer || !held) {
+      return;
+    }
+    if (!held.element.isConnected) {
+      heldPositionRef.current = null;
+      return;
+    }
+    const viewportOffset =
+      held.element.getBoundingClientRect().top - scrollContainer.getBoundingClientRect().top;
+    const delta = viewportOffset - held.viewportOffset;
+    scrollContainer.scrollTop += delta;
+    lastKnownScrollTopRef.current = scrollContainer.scrollTop;
+    // A row that closed again can leave the reader at the end, where the transcript follows.
+    if (Math.abs(delta) > 0.5 && isScrollContainerAtBottom(scrollContainer)) {
+      heldPositionRef.current = null;
+      setFollowOutput(true);
+    }
+  });
   const scheduleHistoryStartPrependSettle = useStableEvent(() => {
     let scheduler = historyStartSettleSchedulerRef.current;
     if (!scheduler) {
@@ -746,7 +784,9 @@ function WebStreamViewport(props: StreamRenderInput & { isMobileBreakpoint: bool
         return { id, top: bounds.top - viewportTop + scrollTop, height: bounds.height };
       },
     );
-    const shouldAnchor = !followOutputRef.current && !isJumpSettling();
+    const holdingPosition = heldPositionRef.current !== null;
+    if (holdingPosition) applyHeldPosition();
+    const shouldAnchor = !holdingPosition && !followOutputRef.current && !isJumpSettling();
     if (!shouldAnchor) readingAnchor.reset();
     const correctedTop = readingAnchor.reconcile(container.scrollTop, rows);
     if (!shouldAnchor) {
@@ -786,6 +826,12 @@ function WebStreamViewport(props: StreamRenderInput & { isMobileBreakpoint: bool
     rearmHistoryStartFromUserIntent();
   });
 
+  const releaseHeldPositionOnScroll = useStableEvent((scrollTop: number) => {
+    if (Math.abs(scrollTop - lastKnownScrollTopRef.current) > USER_SCROLL_DELTA_EPSILON) {
+      heldPositionRef.current = null;
+    }
+  });
+
   const handleDomScroll = useCallback(() => {
     const scrollContainer = scrollContainerRef.current;
     if (!isActiveRef.current || !scrollContainer || !isScrollContainerMeasurable(scrollContainer)) {
@@ -793,6 +839,7 @@ function WebStreamViewport(props: StreamRenderInput & { isMobileBreakpoint: bool
     }
 
     const currentScrollTop = scrollContainer.scrollTop;
+    releaseHeldPositionOnScroll(currentScrollTop);
     const isAtBottom = isScrollContainerAtBottom(scrollContainer);
     const scrolledUp = currentScrollTop < lastKnownScrollTopRef.current - USER_SCROLL_DELTA_EPSILON;
     const scrolledDown =
@@ -821,6 +868,7 @@ function WebStreamViewport(props: StreamRenderInput & { isMobileBreakpoint: bool
     readingAnchor,
     stopFollowingOutputFromUserIntent,
     updateScrollMetrics,
+    releaseHeldPositionOnScroll,
   ]);
 
   useEffect(() => {
@@ -1312,7 +1360,7 @@ function WebStreamViewport(props: StreamRenderInput & { isMobileBreakpoint: bool
     !boundary.hasLiveHead &&
     !liveAuxiliary;
 
-  return (
+  const viewport = (
     <div style={viewportStyle} data-window-content>
       <div
         ref={handleScrollContainerRef}
@@ -1365,6 +1413,7 @@ function WebStreamViewport(props: StreamRenderInput & { isMobileBreakpoint: bool
       ) : null}
     </div>
   );
+  return <HoldStreamPositionProvider value={holdPosition}>{viewport}</HoldStreamPositionProvider>;
 }
 
 export function createWebStreamStrategy(input: CreateWebStreamStrategyInput): StreamStrategy {

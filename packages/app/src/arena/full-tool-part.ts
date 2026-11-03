@@ -2,13 +2,22 @@ import { createContext, useContext } from "react";
 import { useFetchQuery } from "@/data/query";
 import { useSessionStore } from "@/stores/session-store";
 import { arenaSizeErrorOr, isArenaSizeError } from "./chat-too-large";
+import type { WorkspaceFileOpenRequest } from "@/workspace/file-open";
+import type { ToastApi } from "@/components/toast-host";
 
 type UnknownRecord = Record<string, unknown>;
 
-/** The daemon and chat a battle's panes come from, so a pane can ask for one of its parts whole. */
-export const ArenaPartSourceContext = createContext<{ serverId: string; agentId: string } | null>(
-  null,
-);
+/** The host services shared by a battle's panes; paths are resolved against each run's worktree. */
+interface ArenaPartSource {
+  serverId: string;
+  agentId: string;
+  /** The chat's workspace, where the applied side's files are once its worktree is gone. */
+  workspaceRoot?: string;
+  onOpenWorkspaceFile?: (request: WorkspaceFileOpenRequest) => void;
+  toast?: ToastApi;
+}
+
+export const ArenaPartSourceContext = createContext<ArenaPartSource | null>(null);
 
 function record(value: unknown): UnknownRecord | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)

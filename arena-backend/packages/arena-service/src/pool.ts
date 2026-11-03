@@ -3,10 +3,56 @@ export type ModelProfile = {
   readonly slug: string
   readonly canonicalSlug: string
   readonly contextWindow: number
+  /** Private endpoint limits. These are never part of a public assignment response. */
+  readonly limits?: {
+    readonly context?: number
+    readonly output?: number
+    /** Input tokens at which a compactable request is answered with the compaction signal. */
+    readonly compactAt?: number
+  }
   /** Sent to OpenRouter as `provider`. */
   readonly routing: Readonly<Record<string, unknown>>
   /** Null enables reasoning without an effort level for models that do not expose one. */
   readonly reasoningEffort?: "high" | "xhigh" | null
+}
+
+export const DEFAULT_MODEL_OUTPUT_LIMIT = 32_000
+/** The savings level every large window compacts at, in measured input tokens. */
+export const DEFAULT_COMPACT_AT = 272_000
+// Below the savings level a window compacts at this share of its input room. The rest absorbs the
+// error of the calibrated estimate; a provider refusal still compacts when it is not enough.
+const COMPACT_SHARE = 0.85
+
+export type ModelLimits = {
+  readonly context: number
+  readonly output: number
+  readonly compactAt: number
+}
+
+function positiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0
+}
+
+/**
+ * Resolves private endpoint limits without making them part of the assignment contract. A small
+ * model that does not specify an output limit gets the normal 32k cap, reduced to a quarter of its
+ * context when the endpoint is smaller: the system prompt and tools alone take about 15k, so half
+ * would leave a 64k window almost no room for history.
+ */
+export function modelLimits(profile: Pick<ModelProfile, "contextWindow" | "limits">): ModelLimits {
+  const advertisedContext = profile.contextWindow
+  if (!positiveInteger(advertisedContext)) throw new Error("Arena model context limit is invalid")
+  const context = profile.limits?.context ?? advertisedContext
+  if (!positiveInteger(context)) throw new Error("Arena model context limit is invalid")
+  if (context > advertisedContext) throw new Error("Arena model context limit is invalid")
+  const output = profile.limits?.output ?? Math.min(DEFAULT_MODEL_OUTPUT_LIMIT, Math.max(1, Math.floor(context / 4)))
+  if (!positiveInteger(output) || output >= context) throw new Error("Arena model output limit is invalid")
+  const compactAt =
+    profile.limits?.compactAt ?? Math.min(DEFAULT_COMPACT_AT, Math.floor((context - output) * COMPACT_SHARE))
+  if (!positiveInteger(compactAt) || compactAt > context - output) {
+    throw new Error("Arena model compaction level is invalid")
+  }
+  return { context, output, compactAt }
 }
 
 export type ModelPool = readonly ModelProfile[]
@@ -32,6 +78,7 @@ export function validateCatalog(pool: ModelPool, value: unknown) {
   if (!record(value) || !Array.isArray(value.data)) throw new Error("OpenRouter returned an invalid model catalog")
   const catalog = value.data.filter(record) as CatalogModel[]
   for (const profile of pool) {
+    modelLimits(profile)
     const model = catalog.find(
       (item) =>
         item.canonical_slug === profile.canonicalSlug ||

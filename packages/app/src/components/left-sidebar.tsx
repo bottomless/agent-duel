@@ -3,6 +3,7 @@ import {
   Archive,
   ArrowLeft,
   CircleGauge,
+  ChartNoAxesCombined,
   FolderPlus,
   GitBranch,
   Home,
@@ -58,6 +59,7 @@ import { density } from "@/styles/density";
 import { useSidebarModel } from "@/components/sidebar/sidebar-model";
 import type { PinnedSidebarGroups } from "@/hooks/use-sidebar-pins";
 import { RetainedPanelActivity } from "@/components/retained-panel";
+import { useAccountGateKind } from "@/accounts/gate-context";
 import { useFeedbackAvailable } from "@/feedback/availability";
 import { FeedbackSheet } from "@/feedback/feedback-sheet";
 import { resolveCurrentFeedbackChat } from "@/feedback/current-chat";
@@ -99,6 +101,7 @@ const DEV_BUILD_LABEL = process.env.EXPO_PUBLIC_PASEO_DEV_BUILD_LABEL?.trim() ||
 interface SidebarSharedProps {
   theme: SidebarTheme;
   workspaceGroups: SidebarWorkspaceGroup[];
+  flatWorkspaces: SidebarWorkspaceEntry[];
   projectIconTargets: SidebarProjectIconTarget[];
   pinnedGroups: PinnedSidebarGroups;
   projects: SidebarProjectEntry[];
@@ -118,6 +121,7 @@ interface SidebarSharedProps {
   handleSettings: () => void;
   /** Null when this daemon takes no feedback, which hides the entry. */
   handleFeedback: (() => void) | null;
+  handleLeaderboard: (() => void) | null;
   labels: SidebarLabels;
 }
 
@@ -126,6 +130,7 @@ interface SidebarLabels {
   home: string;
   settings: string;
   feedback: string;
+  leaderboard: string;
   usage: string;
   closeSidebar: string;
 }
@@ -150,6 +155,7 @@ export const LeftSidebar = memo(function LeftSidebar({ active }: { active: boole
   const showMobileAgent = usePanelStore((state) => state.showMobileAgent);
   const pathname = usePathname();
   const feedbackAvailable = useFeedbackAvailable();
+  const leaderboardAvailable = useAccountGateKind() === "signed-in";
   const currentFeedbackChat = useWorkspaceLayoutStore(
     useShallow((state) =>
       resolveCurrentFeedbackChat({ pathname, layouts: state.layoutByWorkspace }),
@@ -165,6 +171,7 @@ export const LeftSidebar = memo(function LeftSidebar({ active }: { active: boole
     isRevalidating,
     refreshAll,
     workspaceGroups,
+    flatWorkspaces,
     projectIconTargets,
     pinnedGroups,
     collapsedProjectKeys,
@@ -212,6 +219,10 @@ export const LeftSidebar = memo(function LeftSidebar({ active }: { active: boole
     setFeedbackChat(currentFeedbackChat);
     setFeedbackVisible(true);
   }, [currentFeedbackChat]);
+  const handleLeaderboard = useCallback(() => {
+    showMobileAgent();
+    if (pathname !== "/leaderboard") router.push("/leaderboard");
+  }, [pathname, showMobileAgent]);
   const handleFeedbackClose = useCallback(() => setFeedbackVisible(false), []);
   const handleHomeMobile = useCallback(() => {
     showMobileAgent();
@@ -228,6 +239,7 @@ export const LeftSidebar = memo(function LeftSidebar({ active }: { active: boole
       home: t("sidebar.actions.home"),
       settings: t("sidebar.actions.settings"),
       feedback: t("feedback.sidebarAction"),
+      leaderboard: t("leaderboard.title"),
       usage: t(builtinSidebarNavLabelKey("usage")),
       closeSidebar: t("sidebar.actions.closeSidebar"),
     }),
@@ -237,6 +249,7 @@ export const LeftSidebar = memo(function LeftSidebar({ active }: { active: boole
   const sharedProps = {
     theme,
     workspaceGroups,
+    flatWorkspaces,
     projectIconTargets,
     pinnedGroups,
     projects,
@@ -252,6 +265,7 @@ export const LeftSidebar = memo(function LeftSidebar({ active }: { active: boole
     toggleProjectCollapsed,
     handleRefresh,
     handleFeedback: feedbackAvailable ? handleFeedback : null,
+    handleLeaderboard: leaderboardAvailable ? handleLeaderboard : null,
     labels,
   };
 
@@ -367,6 +381,7 @@ function SidebarFooter({
   handleHome,
   handleSettings,
   handleFeedback,
+  handleLeaderboard,
   labels,
   onBeforeNavigate,
 }: {
@@ -374,11 +389,13 @@ function SidebarFooter({
   handleHome: () => void;
   handleSettings: () => void;
   handleFeedback: (() => void) | null;
+  handleLeaderboard: (() => void) | null;
   labels: {
     addProject: string;
     home: string;
     settings: string;
     feedback: string;
+    leaderboard: string;
     usage: string;
   };
   onBeforeNavigate?: () => void;
@@ -394,6 +411,8 @@ function SidebarFooter({
           onBeforeNavigate={onBeforeNavigate}
           feedbackLabel={labels.feedback}
           onFeedback={handleFeedback}
+          leaderboardLabel={labels.leaderboard}
+          onLeaderboard={handleLeaderboard}
         />
         <View style={styles.sidebarFooter} testID="sidebar-footer-bottom-line">
           <FooterIconButton
@@ -444,10 +463,14 @@ function SidebarFooterRows({
   onBeforeNavigate,
   feedbackLabel,
   onFeedback,
+  leaderboardLabel,
+  onLeaderboard,
 }: {
   onBeforeNavigate?: () => void;
   feedbackLabel: string;
   onFeedback: (() => void) | null;
+  leaderboardLabel: string;
+  onLeaderboard: (() => void) | null;
 }) {
   const { items } = useSidebarNavItems("footer");
   const hasUsageSummary = useHasUsageSummary();
@@ -455,7 +478,7 @@ function SidebarFooterRows({
   const visibleItems = items.filter(
     (item) => item.visible && (item.kind === "plugin" || hasUsageSummary),
   );
-  if (visibleItems.length === 0 && !onFeedback) return null;
+  if (visibleItems.length === 0 && !onFeedback && !onLeaderboard) return null;
   return (
     <>
       <View ref={rowsRef} collapsable={false} style={styles.footerRows}>
@@ -466,6 +489,16 @@ function SidebarFooterRows({
             onPress={onFeedback}
             testID="sidebar-feedback"
             nativeID="sidebar-feedback"
+            variant="inline"
+          />
+        ) : null}
+        {onLeaderboard ? (
+          <SidebarHeaderRow
+            icon={ChartNoAxesCombined}
+            label={leaderboardLabel}
+            onPress={onLeaderboard}
+            testID="sidebar-leaderboard"
+            nativeID="sidebar-leaderboard"
             variant="inline"
           />
         ) : null}
@@ -492,6 +525,7 @@ function MobileSidebar({
   active,
   theme,
   workspaceGroups,
+  flatWorkspaces,
   projectIconTargets,
   pinnedGroups,
   projects,
@@ -510,6 +544,7 @@ function MobileSidebar({
   handleHome,
   handleSettings,
   handleFeedback,
+  handleLeaderboard,
   labels,
   insetsTop,
   insetsBottom,
@@ -570,6 +605,7 @@ function MobileSidebar({
             shortcutIndexByWorkspaceKey={shortcutIndexByWorkspaceKey}
             groupMode={groupMode}
             workspaceGroups={workspaceGroups}
+            flatWorkspaces={flatWorkspaces}
             projectIconTargets={projectIconTargets}
             pinnedGroups={pinnedGroups}
             projects={projects}
@@ -591,6 +627,7 @@ function MobileSidebar({
           handleHome={handleHome}
           handleSettings={handleSettings}
           handleFeedback={handleFeedback}
+          handleLeaderboard={handleLeaderboard}
           labels={labels}
           onBeforeNavigate={closeSidebar}
         />
@@ -602,6 +639,7 @@ function MobileSidebar({
 function DesktopSidebar({
   theme,
   workspaceGroups,
+  flatWorkspaces,
   projectIconTargets,
   pinnedGroups,
   projects,
@@ -620,6 +658,7 @@ function DesktopSidebar({
   handleHome,
   handleSettings,
   handleFeedback,
+  handleLeaderboard,
   labels,
   insetsTop,
   active,
@@ -757,6 +796,7 @@ function DesktopSidebar({
             shortcutIndexByWorkspaceKey={shortcutIndexByWorkspaceKey}
             groupMode={groupMode}
             workspaceGroups={workspaceGroups}
+            flatWorkspaces={flatWorkspaces}
             projectIconTargets={projectIconTargets}
             pinnedGroups={pinnedGroups}
             projects={projects}
@@ -777,6 +817,7 @@ function DesktopSidebar({
           handleHome={handleHome}
           handleSettings={handleSettings}
           handleFeedback={handleFeedback}
+          handleLeaderboard={handleLeaderboard}
           labels={labels}
         />
 

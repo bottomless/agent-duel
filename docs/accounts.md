@@ -23,11 +23,24 @@ No account storage code ships in this repository or the desktop app. The account
 records; the daemon passes the locally verified user to
 the Arena runtime when it resolves a session into a chat.
 
+## Personal leaderboard
+
+The hosted account's “My leaderboard” page reads its cross-device research history through the
+daemon. The control plane owns eligibility, ratings, and the live contestant pool. Keep account IDs
+out of the client request; forward the signed-in session and desktop version. BYOK builds have no
+hosted vote history, so hide the sidebar entry there.
+
+The endpoint returns both early-vote datasets in one response. Keep the toggle out of the query key
+and request parameters so it switches immediately, including while a refresh is pending or fails.
+Deploy the control-plane endpoint before shipping this desktop feature.
+
 ## Terms acceptance
 
 The hosted sign-in screen starts with an unchecked agreement to the Terms of Service and an
 acknowledgment of the separate Privacy Policy. All email, Google, and GitHub sign-in actions require
-the checkbox. Links and document versions come from `GET /api/auth/methods`, not a build-time URL.
+the checkbox. It sits once below every sign-in button, and the buttons stay enabled: pressing one
+unchecked shows an error at the checkbox and focuses it. Disabled buttons below the "or" divider
+read as broken, because nothing ties them to a checkbox inside the email form. Links and document versions come from `GET /api/auth/methods`, not a build-time URL.
 The accepted version pair travels with the sign-in flow and is saved on the authenticated account
 with a server timestamp when that flow is claimed.
 
@@ -116,6 +129,17 @@ The daemon password and account session are separate credentials; a remote clien
 - The control-plane OpenRouter route replaces the account session with the server's real OpenRouter
   key. The Arena process and its contestant subprocesses never receive the account token or provider
   key.
+- Every daemon request to the control plane (accounts, the Arena runtime proxy, feedback) carries
+  the headers from `clientHeaders` in `packages/server/src/server/accounts/config.ts`: the daemon's
+  package version, OS, OS release, CPU type, timezone, CPU model and core count, and memory in whole
+  gigabytes. Keep it to coarse build and machine facts; never add the computer name, user name,
+  paths, network addresses or device identifiers. The control plane keeps the latest values on the
+  account; the private repository's `scripts/db/app-versions.ts` counts them. Builds before
+  0.4.0-beta.14 send none.
+- The control plane can refuse builds below a minimum version or on a blocklist. It then answers
+  `/api/auth/methods` with `updateRequired: true`, and the account gate shows the update screen
+  (`packages/app/src/accounts/update-required.tsx`) in place of sign-in, terms and the app. The
+  private repository's `docs/accounts.md` owns the settings.
 
 `DaemonClient` reads the token through `getSessionToken` on every connection attempt rather than
 capturing it at construction. A client rejected while signed out is already reconnecting when the

@@ -509,6 +509,7 @@ describe("translation resources", () => {
       created: "Created {{count}} tasks",
       added: "Added",
       started: "Started",
+      reopened: "Reopened",
       completed: "Completed",
       cancelled: "Cancelled",
     });

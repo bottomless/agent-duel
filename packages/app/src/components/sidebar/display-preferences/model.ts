@@ -9,6 +9,7 @@ import {
   useSidebarViewStore,
   type SidebarGroupMode,
   type SidebarLabelFilter,
+  type SidebarSortMode,
 } from "@/stores/sidebar-view-store";
 import { DEFAULT_SIDEBAR_CHECKS_DISPLAY, type SidebarChecksDisplay } from "./checks-display";
 import { DEFAULT_SIDEBAR_ROW_ITEMS, type SidebarRowItem, type SidebarRowItems } from "./row-items";
@@ -20,6 +21,10 @@ export interface SidebarDisplayPreferences {
   showBackground: boolean;
   toggleBackground: () => void;
   grouping: SidebarGroupMode;
+  sorting: SidebarSortMode;
+  setSorting: (mode: SidebarSortMode) => void;
+  groupSorting: SidebarSortMode;
+  setGroupSorting: (mode: SidebarSortMode) => void;
   workspaceSort: WorkspaceSort;
   setWorkspaceSort: (sort: WorkspaceSort) => void;
   setGrouping: (mode: SidebarGroupMode) => void;
@@ -57,6 +62,10 @@ export function useSidebarDisplayPreferences(): SidebarDisplayPreferences {
   const toggleBackground = useSidebarViewStore((state) => state.toggleBackground);
   const workspaceSort = useSidebarViewStore((state) => state.workspaceSort);
   const setWorkspaceSort = useSidebarViewStore((state) => state.setWorkspaceSort);
+  const sorting = useSidebarViewStore((state) => state.sortMode);
+  const setSorting = useSidebarViewStore((state) => state.setSortMode);
+  const groupSorting = useSidebarViewStore((state) => state.groupSortMode);
+  const setGroupSorting = useSidebarViewStore((state) => state.setGroupSortMode);
   const grouping = useSidebarViewStore((state) => state.groupMode);
   const setGrouping = useSidebarViewStore((state) => state.setGroupMode);
   const hostFilters = useSidebarViewStore((state) => state.hostFilters);
@@ -116,6 +125,10 @@ export function useSidebarDisplayPreferences(): SidebarDisplayPreferences {
       showBackground,
       toggleBackground,
       grouping,
+      sorting,
+      setSorting,
+      groupSorting,
+      setGroupSorting,
       workspaceSort,
       setWorkspaceSort,
       setGrouping,
@@ -141,6 +154,10 @@ export function useSidebarDisplayPreferences(): SidebarDisplayPreferences {
       showBackground,
       toggleBackground,
       grouping,
+      sorting,
+      setSorting,
+      groupSorting,
+      setGroupSorting,
       workspaceSort,
       setWorkspaceSort,
       setGrouping,

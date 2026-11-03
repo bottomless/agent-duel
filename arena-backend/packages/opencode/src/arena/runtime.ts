@@ -6,9 +6,13 @@ import { arenaDirectory } from "./database-upgrade"
 import { ResearchUploader } from "./research"
 import { arenaCredentials, type ArenaCredentials } from "./credentials"
 import { createArenaBackend, type ArenaBackend } from "./backend"
+import { idleSession, KeepAlive } from "./keep-alive"
+import { GlobalBus } from "@/bus/global"
 
 export const providerID = "arena"
 export const registry = new AssignmentRegistry()
+export const keepAlive = new KeepAlive()
+let watchingIdle = false
 
 let persistence: Promise<Store> | undefined
 let telemetry: Telemetry | undefined
@@ -45,20 +49,59 @@ export function shellLedgerDirectory() {
 async function openLocalStore() {
   const { connectLocalStore } = await import("./local-store")
   let uploader: ResearchUploader | undefined
+  let backfill: Promise<void> | undefined
+  const backfillController = new AbortController()
+  const directory = arenaDirectory()
+  const credentials = arenaCredentials()
   const local = await connectLocalStore({
-    directory: arenaDirectory(),
-    onMutation: (mutation) => uploader?.enqueue(mutation),
-    onClose: () => uploader?.close(),
+    directory,
+    researchPartition: credentials?.mode === "hosted" ? credentials.researchPartition : undefined,
+    onMutation: () => uploader?.wake(),
+    onClose: async () => {
+      backfillController.abort()
+      await uploader?.close()
+      await backfill
+    },
   })
   // Research is the hosted product's data; a BYOK build keeps everything local.
-  const credentials = arenaCredentials()
   if (credentials?.mode === "hosted") {
+    if (!local.researchQueue) throw new Error("Hosted research queue is unavailable")
     uploader = new ResearchUploader({
       url: credentials.controlPlaneUrl,
       token: credentials.token,
       sourceID: local.sourceID,
-      warn: (warning) => console.warn("[arena-research] Dropped research data", warning),
+      queue: local.researchQueue,
+      warn: (warning) => console.warn("[arena-research] Upload status", warning),
     })
+  }
+  if (credentials?.mode === "hosted") {
+    const accountID = credentials.researchAccountID
+    backfill = (async () => {
+      const signal = backfillController.signal
+      let retryUnavailable = true
+      while (!signal.aborted) {
+        try {
+          if (await local.backfillResearch(accountID, signal, { retryUnavailable })) return
+        } catch {
+          console.warn("[arena-research] Historical backfill pending; will retry")
+        } finally {
+          retryUnavailable = false
+        }
+        if (signal.aborted) return
+        await new Promise<void>((resolve) => {
+          const stop = () => {
+            clearTimeout(timer)
+            resolve()
+          }
+          const timer = setTimeout(() => {
+            signal.removeEventListener("abort", stop)
+            resolve()
+          }, 60_000)
+          timer.unref()
+          signal.addEventListener("abort", stop, { once: true })
+        })
+      }
+    })()
   }
   return local
 }
@@ -119,6 +162,25 @@ export function backend() {
   return built.backend
 }
 
+/** End cache pings on both legacy idle events and Core's native execution lifecycle. */
+export function stopIdleKeepAlive(payload: Record<string, unknown>, waits: KeepAlive = keepAlive) {
+  const legacy = idleSession(payload)
+  if (legacy) {
+    waits.idle(legacy)
+    return
+  }
+  if (
+    payload.type !== "session.execution.succeeded" &&
+    payload.type !== "session.execution.failed" &&
+    payload.type !== "session.execution.interrupted" &&
+    payload.type !== "session.deleted"
+  )
+    return
+  const properties = payload.properties
+  if (typeof properties !== "object" || properties === null || !("sessionID" in properties)) return
+  if (typeof properties.sessionID === "string") waits.idle(properties.sessionID)
+}
+
 export async function contestantFetch(input: string | URL | Request, init?: RequestInit) {
   const target = backend()
   if (!target) {
@@ -127,10 +189,18 @@ export async function contestantFetch(input: string | URL | Request, init?: Requ
       { status: 503 },
     )
   }
+  // A session's loop reports idle when its turn ends, by finishing, Stop, an error or the battle's end.
+  if (!watchingIdle) {
+    watchingIdle = true
+    GlobalBus.on("event", (event) => {
+      stopIdleKeepAlive(event.payload)
+    })
+  }
   return proxy(new Request(input, init), registry, {
     upstream: `${target.url}/api/openrouter`,
     fetch: target.fetch,
     telemetry,
+    keepAlive,
   })
 }
 

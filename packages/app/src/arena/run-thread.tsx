@@ -1,6 +1,14 @@
 import { i18n } from "@/i18n/i18next";
 import { useTranslation } from "react-i18next";
-import { useCallback, useContext, useMemo, useState, type ReactNode } from "react";
+import {
+  Fragment,
+  useCallback,
+  useContext,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { Text, View } from "react-native";
 import { Check, CircleStop, FileText, Users, Wrench } from "lucide-react-native";
 import { StyleSheet } from "react-native-unistyles";
@@ -14,9 +22,18 @@ import {
 } from "@/components/message";
 import { QuestionFormCard } from "@/components/question-form-card";
 import { MarkdownRenderer } from "@/components/markdown/renderer";
+import { ArenaAssistantMessage } from "./assistant-message";
+import { arenaReplyFiles, type ArenaReplyFiles } from "./reply-files";
 import { resolveToolCallIcon } from "@/utils/tool-call-icon";
+import { isWeb } from "@/constants/platform";
+import { useHoldStreamPosition } from "@/agent-stream/hold-position";
 import { arenaThreadMessages } from "./run-thread-selection";
-import { arenaPendingQuestions, arenaQuestionResult, type ArenaPendingQuestion } from "./question";
+import {
+  arenaPendingQuestions,
+  arenaQuestionResult,
+  isArenaQuestionPart,
+  type ArenaPendingQuestion,
+} from "./question";
 import { ArenaQuestionResultView } from "./question-result";
 import {
   ArenaPermissionCard,
@@ -29,6 +46,7 @@ import { arenaRunErrorToShow, stoppedByEarlyPickNote } from "./battle-result";
 import { arenaRunTasks, arenaTodoWriteTasks } from "./task-progress";
 import { ArenaTaskProgressCard } from "./task-progress-card";
 import { arenaUserMessageContent } from "./prompt-images";
+import { ArenaMessageAnchor, useArenaPauseFollow } from "./run-turns";
 import { arenaMessageAttachmentPills } from "./prompt-attachment-pills";
 import { arenaQueuedSteering, arenaToolOutput } from "./steering";
 import { ArenaPartSourceContext, arenaToolPartPreviewed, useFullToolPart } from "./full-tool-part";
@@ -37,8 +55,11 @@ import {
   arenaPartIsWork,
   arenaRunIsAwaitingResponse,
   arenaRunIsResponding,
+  arenaWorkSummaryLabel,
   presentArenaWork,
+  projectArenaActivityRows,
   projectArenaActivitySegments,
+  summarizeArenaWork,
   type ArenaActivityPart,
   type ArenaActivitySegment,
 } from "./work-summary";
@@ -117,6 +138,9 @@ function ArenaPart({
   value,
   cwd,
   runId,
+  occurrenceKey,
+  pending,
+  replyFiles,
   question,
   permission,
   questionResponding,
@@ -127,6 +151,9 @@ function ArenaPart({
   value: unknown;
   cwd?: string;
   runId?: string;
+  occurrenceKey: string;
+  pending: boolean;
+  replyFiles: ArenaReplyFiles;
   question?: ArenaPendingQuestion;
   permission?: ArenaPendingPermission;
   questionResponding: boolean;
@@ -148,7 +175,14 @@ function ArenaPart({
   const type = typeof part.type === "string" ? part.type : "unknown";
   const text = typeof part.text === "string" ? part.text : "";
   if (type === "text" && text) {
-    return <MarkdownRenderer text={text} compact />;
+    return (
+      <ArenaAssistantMessage
+        text={text}
+        files={replyFiles}
+        occurrenceKey={occurrenceKey}
+        pending={pending}
+      />
+    );
   }
   if (type === "tool" && question && onQuestionResponse) {
     return (
@@ -264,6 +298,7 @@ function buildRenderGroups(run: Pick<ArenaRun, "messages" | "parts" | "id">): Re
 
 interface AssistantPartsContext {
   run: ArenaRun;
+  replyFiles: ArenaReplyFiles;
   subagents: Map<unknown, ArenaSessionThread>;
   sessionPath: string[];
   pendingQuestions: ArenaPendingQuestion[];
@@ -343,6 +378,9 @@ function ArenaActivityPartView({
       value={entry.part}
       cwd={context.run.worktree}
       runId={context.run.id}
+      occurrenceKey={`${context.run.id}:${activityPartKey(entry)}`}
+      pending={context.run.runState === "pending"}
+      replyFiles={context.replyFiles}
       question={question}
       permission={permission}
       questionResponding={question?.id === respondingQuestionId}
@@ -446,6 +484,84 @@ function ArenaActivitySegmentView({
   );
 }
 
+function segmentStandsAlone(
+  segment: ArenaActivitySegment,
+  context: AssistantPartsContext,
+): boolean {
+  if (!segment.content) return false;
+  return isArenaQuestionPart(segment.content.part) || context.subagents.has(segment.content.part);
+}
+
+function ArenaEarlierActivity({
+  segments,
+  context,
+}: {
+  segments: ArenaActivitySegment[];
+  context: AssistantPartsContext;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const rowRef = useRef<View>(null);
+  const pauseFollow = useArenaPauseFollow();
+  const holdStreamPosition = useHoldStreamPosition();
+  // A done pane is only as tall as its content, so opening the row grows the battle; the chat
+  // would follow its end and carry the row up from under the pointer.
+  const toggle = useCallback(() => {
+    pauseFollow?.();
+    const row = rowRef.current;
+    if (isWeb && row instanceof HTMLElement) holdStreamPosition?.(row);
+    setExpanded((current) => !current);
+  }, [holdStreamPosition, pauseFollow]);
+  const parts = useMemo(
+    () =>
+      segments.flatMap((segment) =>
+        [segment.content, ...segment.trailing]
+          .filter((entry) => entry !== null)
+          .map((entry) => entry.part),
+      ),
+    [segments],
+  );
+  const hasWork = parts.some(arenaPartIsWork);
+  const label = useMemo(() => {
+    if (hasWork) return arenaWorkSummaryLabel(summarizeArenaWork(parts), false);
+    const updates = segments.filter((segment) => segment.content !== null).length;
+    return `${updates} earlier ${updates === 1 ? "update" : "updates"}`;
+  }, [hasWork, parts, segments]);
+  const renderDetails = useCallback(
+    () => (
+      <View style={styles.historyDetails}>
+        {segments.map((segment) => (
+          <ArenaActivitySegmentView
+            key={segment.key}
+            segment={segment}
+            context={context}
+            isLatest={false}
+            awaitingResponse={false}
+          />
+        ))}
+      </View>
+    ),
+    [context, segments],
+  );
+  return (
+    <View ref={rowRef} collapsable={false}>
+      <ExpandableBadge
+        testID="arena-earlier-activity"
+        label={label}
+        isExpanded={expanded}
+        onToggle={toggle}
+        renderDetails={renderDetails}
+        disableOuterSpacing
+        borderlessWhenExpanded
+        bandWhenExpanded
+        compactLabel
+        labelTextStyle={styles.earlierActivityLabel}
+        alwaysShowChevron
+        flushRow
+      />
+    </View>
+  );
+}
+
 function ArenaActivityGroup({
   messageIds,
   context,
@@ -467,15 +583,25 @@ function ArenaActivityGroup({
     segments.length === 0 && awaitingResponse
       ? [{ key: `${messageIds[0]}:activity`, content: null, trailing: [] }]
       : segments;
-  return visibleSegments.map((segment) => (
-    <ArenaActivitySegmentView
-      key={segment.key}
-      segment={segment}
-      context={context}
-      isLatest={isLatest && segment === visibleSegments.at(-1)}
-      awaitingResponse={awaitingResponse && segment === visibleSegments.at(-1)}
-    />
-  ));
+  const rows = projectArenaActivityRows(
+    visibleSegments,
+    context.run.runState,
+    (segment) => segmentStandsAlone(segment, context),
+    { superseded: !isLatest },
+  );
+  return rows.map((row) =>
+    row.kind === "earlier" ? (
+      <ArenaEarlierActivity key={row.key} segments={row.segments} context={context} />
+    ) : (
+      <ArenaActivitySegmentView
+        key={row.key}
+        segment={row.segment}
+        context={context}
+        isLatest={isLatest && row.segment === visibleSegments.at(-1)}
+        awaitingResponse={awaitingResponse && row.segment === visibleSegments.at(-1)}
+      />
+    ),
+  );
 }
 
 function ArenaSubagent({
@@ -610,7 +736,7 @@ function ArenaSessionMessages({ context }: { context: AssistantPartsContext }) {
   const isSubagent = context.sessionPath.length > 1;
   const chat = useContext(ArenaPartSourceContext);
   const imageSource = useMemo(
-    () => (chat ? { ...chat, runId: run.id } : undefined),
+    () => (chat ? { serverId: chat.serverId, agentId: chat.agentId, runId: run.id } : undefined),
     [chat, run.id],
   );
   const renderGroups = useMemo(
@@ -646,9 +772,8 @@ function ArenaSessionMessages({ context }: { context: AssistantPartsContext }) {
       const fallbackTimestamp = new Date(
         run.firstEventAt ?? run.startedAt ?? run.completedAt ?? 0,
       ).getTime();
-      return (
+      const userMessage = (
         <UserMessage
-          key={id}
           messageId={id}
           message={content.text}
           images={content.images}
@@ -657,6 +782,12 @@ function ArenaSessionMessages({ context }: { context: AssistantPartsContext }) {
           disableOuterSpacing
           withoutTrailingRow
         />
+      );
+      if (isSubagent) return <Fragment key={id}>{userMessage}</Fragment>;
+      return (
+        <ArenaMessageAnchor key={id} messageId={id}>
+          {userMessage}
+        </ArenaMessageAnchor>
       );
     }
     return (
@@ -673,6 +804,7 @@ function ArenaSessionMessages({ context }: { context: AssistantPartsContext }) {
 
 export function ArenaRunThread({
   run,
+  applied = false,
   stoppedByEarlyPick = false,
   queuedSteers,
   retry,
@@ -682,6 +814,8 @@ export function ArenaRunThread({
   onPermissionResponse,
 }: {
   run: ArenaRun;
+  /** This side's result was written to the chat's workspace. */
+  applied?: boolean;
   /** This side was cancelled by an early pick of the other, so its end is not a failure. */
   stoppedByEarlyPick?: boolean;
   /** Steers the model has not received yet; they show after everything the run has done. */
@@ -705,6 +839,10 @@ export function ArenaRunThread({
       return id === null || !queued.has(id);
     });
   }, [run]);
+  const replyFiles = useMemo(
+    () => arenaReplyFiles({ worktree: run.worktree, worktreeActive: run.worktreeActive }, applied),
+    [applied, run.worktree, run.worktreeActive],
+  );
   const pendingQuestions = useMemo(() => arenaPendingQuestions(run), [run]);
   const pendingPermissions = useMemo(() => arenaPendingPermissions(run), [run]);
   const pending = run.runState === "pending";
@@ -717,6 +855,7 @@ export function ArenaRunThread({
   const assistantPartsContext: AssistantPartsContext = useMemo(
     () => ({
       run: { ...run, messages: sessions.root.messages },
+      replyFiles,
       subagents: sessions.byTask,
       sessionPath: [sessions.root.id],
       pendingQuestions,
@@ -728,6 +867,7 @@ export function ArenaRunThread({
     }),
     [
       run,
+      replyFiles,
       sessions,
       pendingQuestions,
       pendingPermissions,
@@ -780,6 +920,14 @@ const styles = StyleSheet.create((theme) => ({
   workDetails: {
     paddingTop: theme.spacing[2],
     paddingHorizontal: EXPANDABLE_BADGE_DETAIL_INSET,
+  },
+  historyDetails: {
+    paddingTop: theme.spacing[2],
+    paddingHorizontal: EXPANDABLE_BADGE_DETAIL_INSET,
+    gap: theme.spacing[3],
+  },
+  earlierActivityLabel: {
+    color: theme.colors.foreground,
   },
   activitySegment: {
     gap: 0,

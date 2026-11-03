@@ -920,7 +920,11 @@ export const ko: TranslationResources = {
         started: "시작됨",
         completed: "완료됨",
         cancelled: "취소됨",
+
+        reopened: "다시 열림",
       },
+
+      tasksProgressCurrent: "작업 {{completed}}/{{total}}개 · {{task}}",
     },
     turnFooter: {
       endedAt: "{{duration}}, {{time}}에 종료",
@@ -1521,6 +1525,14 @@ export const ko: TranslationResources = {
           loadError: "커밋을 로드하지 못했습니다.",
           empty: "아직 커밋이 없습니다.",
         },
+
+        showTreeView: "폴더 트리 표시",
+        showFlatView: "플랫 파일 목록 표시",
+        collapseAll: "모든 파일 접기",
+        expandAll: "모든 파일 펼치기",
+        emptyHiddenWhitespace: "공백을 숨긴 후 표시할 변경 사항이 없습니다",
+        emptyUncommitted: "커밋되지 않은 변경 사항이 없습니다",
+        emptyAgainstBase: "{{baseRef}} 대비 변경 사항이 없습니다",
       },
       openInEditor: {
         open: "열기",
@@ -1722,6 +1734,13 @@ export const ko: TranslationResources = {
         project: "프로젝트",
         status: "상태",
         labels: "레이블",
+        none: "없음",
+      },
+      sorting: {
+        groupLabel: "그룹 순서",
+        label: "정렬",
+        default: "기본값",
+        lastChat: "최근 채팅",
       },
       titleSource: {
         label: "제목",
@@ -1913,6 +1932,8 @@ export const ko: TranslationResources = {
       branch: "브랜치",
       baseNotApplicable: "해당 없음",
       host: "호스트",
+
+      base: "기준",
     },
     titlePlaceholder: "제목(선택 사항)",
     errors: {
@@ -2147,6 +2168,14 @@ export const ko: TranslationResources = {
         statusFailed: "CLI 설치 상태를 확인할 수 없습니다.",
         installFailed: "Agent Duel CLI를 설치할 수 없습니다.",
       },
+
+      skills: {
+        statusFailed: "오케스트레이션 스킬 상태를 확인할 수 없습니다.",
+        installFailed: "오케스트레이션 스킬을 설치할 수 없습니다.",
+        updateFailed: "오케스트레이션 스킬을 업데이트할 수 없습니다.",
+        uninstallFailed: "오케스트레이션 스킬을 제거할 수 없습니다.",
+        saveSelectionFailed: "오케스트레이션 스킬 선택을 저장하지 못했습니다.",
+      },
     },
   },
   rootError: {
@@ -2355,6 +2384,8 @@ export const ko: TranslationResources = {
     archiveTooltip: "서브에이전트 보관",
     archiveFinishedAction: "완료된 하위 에이전트 보관",
     archiveFinishedRetry: "다시 시도 ({{failed}}/{{total}})",
+
+    archiveFinishedTooltip: "아카이브 완료",
   },
   panels: {
     draft: {
@@ -2409,6 +2440,8 @@ export const ko: TranslationResources = {
         reload: "새로고침",
         reloadTitle: "디스크에서 다시 로드하시겠습니까?",
         reloadMessage: "로컬 변경사항이 손실됩니다.",
+
+        checkFailedTitle: "디스크의 파일을 확인할 수 없습니다.",
       },
     },
     changes: {
@@ -2480,6 +2513,32 @@ export const ko: TranslationResources = {
   },
   sidebarCallout: {
     dismiss: "닫기",
+  },
+  leaderboard: {
+    title: "내 순위표",
+    refresh: "새로고침",
+    refreshing: "새로고침 중...",
+    retry: "다시 시도",
+    connect: "순위표를 보려면 로그인하고 연결하세요",
+    loading: "순위표를 계산하는 중...",
+    error: "순위표를 불러오지 못했습니다",
+    unlock: "유효 투표가 {{minimum}}개가 되면 순위표가 열립니다",
+    progress: "유효 투표 {{count}}개 · {{remaining}}개 남음",
+    eligible:
+      "참가자 오류가 있는 배틀과 영향받은 빌드에서 서브에이전트를 쓴 배틀은 집계하지 않습니다",
+    filters: "실행 실패 제외 · 서브에이전트는 커밋 기준으로 제외",
+    summary: "유효 투표 {{count}}개 · {{earlyVotes}} · {{date}} 업데이트",
+    excludeEarlyVotes: "조기 투표 제외",
+    earlyIncluded: "조기 투표 포함",
+    earlyExcluded: "조기 투표 제외됨",
+    disconnected:
+      "일부 모델 그룹 사이에는 아직 공통 비교가 없습니다. 그 그룹 간 레이팅은 사전 분포에 따라 달라집니다.",
+    noModels: "활성 모델은 각각 유효 투표가 4개 이상이면 표시됩니다",
+    chartLabel: "95% 신용 구간, 추론 속도 중앙값, 투표 수가 포함된 모델 레이팅",
+    votes: "투표",
+    axis: "Bradley–Terry 레이팅(Elo 척도)",
+    medianSpeed: "중앙값 {{speed}} tokens/s",
+    noSpeed: "속도 정보 없음",
   },
   feedback: {
     sidebarAction: "피드백 보내기",
@@ -2722,6 +2781,8 @@ export const ko: TranslationResources = {
       modelHint: "이 모델만 사용합니다. 실패해도 Agent Duel은 다른 모델을 시도하지 않습니다",
       docs: "문서",
       saveError: "메타데이터 생성을 업데이트할 수 없습니다",
+
+      fallbackHint: "사용할 수 없으면 Agent Duel가 다른 사용 가능한 모델을 사용합니다",
     },
     storage: {
       title: "배틀 환경",
@@ -2808,6 +2869,8 @@ export const ko: TranslationResources = {
           overview: "요약",
           detailed: "전체 세부정보",
         },
+
+        accessibilityLabel: "도구 호출 표시 선택({{value}})",
       },
       language: {
         label: "언어",
@@ -3010,6 +3073,38 @@ export const ko: TranslationResources = {
         install: "설치",
         installing: "설치 중...",
         installed: "설치됨",
+
+        update: "업데이트",
+        working: "작업 중...",
+        remove: "제거",
+        uninstall: "제거",
+        save: "저장",
+        saving: "저장 중...",
+      },
+
+      skills: {
+        title: "오케스트레이션 스킬",
+        description: "CLI를 통해 에이전트가 오케스트레이션하도록 가르칩니다",
+        updateAvailable: "업데이트 사용 가능",
+        updateTitle: "Agent Duel 스킬을 업데이트할까요?",
+        updateFallback: "번들된 스킬을 내 컴퓨터에 동기화합니다.",
+        uninstallTitle: "Agent Duel 스킬을 제거할까요?",
+        uninstallMessage:
+          "~/.agents, ~/.claude, ~/.codex에서 모든 Agent Duel 오케스트레이션 스킬을 제거합니다.",
+        choose: "스킬 선택",
+        chooseAll: "모든 스킬",
+        chooseAllHint: "나중에 추가되는 항목을 포함하여 모든 번들 스킬을 설치된 상태로 유지합니다.",
+        chooseList: "번들 스킬",
+        chooseEmpty: "이 빌드에는 번들 스킬이 없습니다.",
+        removeTitle: "선택 해제한 스킬을 제거할까요?",
+        removeMessage:
+          "{{skills}}는 ~/.agents, ~/.claude 및 ~/.codex에서 삭제됩니다. 해당 스킬 폴더 안에 추가한 모든 항목도 삭제됩니다.",
+        saveFailed: "선택한 스킬을 저장하지 못했습니다.",
+      },
+      operations: {
+        add: "스킬 추가",
+        update: "스킬 업데이트",
+        delete: "스킬 삭제",
       },
     },
     permissions: {

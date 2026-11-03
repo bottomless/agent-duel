@@ -29,7 +29,10 @@ export function arenaChatCanStartBattle(
 export function isArenaBattleOnScreen(snapshot: ArenaSnapshot | undefined): boolean {
   if (snapshot?.chat.status !== "battle_active") return false;
   if (snapshot.turn?.resolution === undefined) return true;
-  return isResolvingBattleState(snapshot.turn.state);
+  return (
+    isResolvingBattleState(snapshot.turn.state) ||
+    snapshot.turn.state === "awaiting_stop_resolution"
+  );
 }
 
 interface ArenaPromptTimelineItem extends Pick<StreamItem, "id" | "kind"> {
@@ -211,7 +214,12 @@ export function partitionArenaSummaries(
   // That turn still belongs to the live battle, even if its history anchor already exists. A
   // battle nobody saw (it failed to start, or was discarded before either side answered) is
   // decided without identities.
-  const resolved = history.filter((item) => item.resolution && !isResolvingBattleState(item.state));
+  const resolved = history.filter(
+    (item) =>
+      item.resolution &&
+      !isResolvingBattleState(item.state) &&
+      item.state !== "awaiting_stop_resolution",
+  );
   if (battleIsActive || resolved.length === 0) {
     return { inline: resolved, live: null };
   }

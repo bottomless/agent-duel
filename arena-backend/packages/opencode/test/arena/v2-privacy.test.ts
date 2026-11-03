@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { REDACTED_THINKING } from "@agent-duel/arena-service/reasoning"
+import { requestTooLargeMessage } from "@agent-duel/arena-service/request-error"
 import { sanitizeV2 } from "@/arena/v2-privacy"
 
 describe("sanitizeV2", () => {
@@ -170,5 +171,22 @@ describe("sanitizeV2", () => {
     // The reporter belongs to one call.
     sanitizeV2({ error: "another failure" })
     expect(hidden).toHaveLength(2)
+  })
+})
+
+test("keeps the neutral request-size refusal on native errors while hiding upstream details", () => {
+  const result = sanitizeV2({
+    type: "session.step.failed",
+    data: {
+      error: {
+        type: "provider.invalid-request",
+        message: requestTooLargeMessage,
+        response: { body: "private provider limit" },
+      },
+    },
+  })
+  expect(result).toEqual({
+    type: "session.step.failed",
+    data: { error: { type: "provider.invalid-request", message: requestTooLargeMessage } },
   })
 })

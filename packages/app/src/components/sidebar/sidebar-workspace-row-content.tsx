@@ -169,6 +169,15 @@ export const SidebarWorkspaceRowContent = memo(function SidebarWorkspaceRowConte
             <Text style={workspaceBranchTextStyle} numberOfLines={1}>
               {workspaceLabel}
             </Text>
+            {leadingProjectName ? (
+              <Text
+                style={styles.workspaceProjectName}
+                numberOfLines={1}
+                testID={`sidebar-row-project-name-${workspace.workspaceKey}`}
+              >
+                {leadingProjectName}
+              </Text>
+            ) : null}
             <View style={sidebarWorkspaceRowStyles.rowRight}>{children}</View>
           </View>
           <WorkspaceMetaRow
@@ -632,6 +641,13 @@ const styles = StyleSheet.create((theme) => ({
     opacity: 0.76,
     flex: 1,
     minWidth: 0,
+  },
+  workspaceProjectName: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.sm,
+    lineHeight: 20,
+    flexShrink: 1,
+    maxWidth: "40%",
   },
   workspaceBranchTextCreating: {
     opacity: 0.92,

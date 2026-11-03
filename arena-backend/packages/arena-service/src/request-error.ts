@@ -2,6 +2,48 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value)
 }
 
+export const compactionRequiredType = "arena_compaction_required"
+
+export function compactionRequiredError() {
+  return { error: { message: "Arena request needs compaction", type: compactionRequiredType } }
+}
+
+/** Shown before the vote too: it names no model, and only the voter can shorten the message. */
+export const requestTooLargeMessage =
+  "This request is too large to process. Reduce the message or attachments and try again."
+
+/** Reads only the exact neutral type; upstream text and numeric limits are never trusted. */
+export function readCompactionRequired(body: string | undefined) {
+  if (!body) return false
+  let payload: unknown
+  try {
+    payload = JSON.parse(body)
+  } catch {
+    return false
+  }
+  return isRecord(payload) && isRecord(payload.error) && payload.error.type === compactionRequiredType
+}
+
+/**
+ * Recognizes provider context refusals while keeping their model and numeric details private. Only
+ * phrases about the context are matched: a quota or output-cap error that mentions tokens must reach
+ * the voter as itself, not start a paid summary.
+ */
+export function isContextOverflow(status: number | undefined, body: string | undefined) {
+  if (status !== 400 && status !== 413 && status !== 422) return false
+  if (!body) return false
+  const text = body.toLowerCase()
+  return [
+    "context_length_exceeded",
+    "context length",
+    "context window",
+    "maximum context",
+    "prompt is too long",
+    "input is too long",
+    "request is too long",
+  ].some((signal) => text.includes(signal))
+}
+
 // Keep billing categories for retry decisions, but do not expose billing details in UI copy.
 export const paymentMessages = {
   arena_temporary_budget: "The agent is temporarily unavailable. Please try again later.",

@@ -893,7 +893,11 @@ export const zhCN: TranslationResources = {
         started: "已开始",
         completed: "已完成",
         cancelled: "已取消",
+
+        reopened: "已重新打开",
       },
+
+      tasksProgressCurrent: "{{completed}}/{{total}} 项任务 · {{task}}",
     },
     turnFooter: {
       endedAt: "{{duration}}，结束于 {{time}}",
@@ -1479,6 +1483,14 @@ export const zhCN: TranslationResources = {
           loadError: "加载提交失败",
           empty: "暂无提交",
         },
+
+        showTreeView: "显示文件夹树",
+        showFlatView: "显示平铺文件列表",
+        collapseAll: "折叠所有文件",
+        expandAll: "展开所有文件",
+        emptyHiddenWhitespace: "隐藏空白差异后没有可见变更",
+        emptyUncommitted: "没有未 commit 的变更",
+        emptyAgainstBase: "相对于 {{baseRef}} 没有变更",
       },
       openInEditor: {
         open: "打开",
@@ -1680,6 +1692,13 @@ export const zhCN: TranslationResources = {
         project: "项目",
         status: "状态",
         labels: "标签",
+        none: "无",
+      },
+      sorting: {
+        groupLabel: "分组顺序",
+        label: "排序",
+        default: "默认",
+        lastChat: "最近聊天",
       },
       titleSource: {
         label: "标题",
@@ -1868,6 +1887,8 @@ export const zhCN: TranslationResources = {
       branch: "分支",
       baseNotApplicable: "不适用",
       host: "主机",
+
+      base: "基线",
     },
     titlePlaceholder: "标题（可选）",
     errors: {
@@ -2093,6 +2114,14 @@ export const zhCN: TranslationResources = {
         statusFailed: "无法检查 CLI 安装状态。",
         installFailed: "无法安装 Agent Duel CLI。",
       },
+
+      skills: {
+        statusFailed: "无法检查编排 skills 状态。",
+        installFailed: "无法安装编排 skills。",
+        updateFailed: "无法更新编排 skills。",
+        uninstallFailed: "无法卸载编排 skills。",
+        saveSelectionFailed: "无法保存编排 skills 的选择。",
+      },
     },
   },
   rootError: {
@@ -2299,6 +2328,8 @@ export const zhCN: TranslationResources = {
     archiveTooltip: "归档 subagent",
     archiveFinishedAction: "归档已完成的 subagent",
     archiveFinishedRetry: "重试 ({{failed}}/{{total}})",
+
+    archiveFinishedTooltip: "归档已完成项",
   },
   panels: {
     draft: {
@@ -2352,6 +2383,8 @@ export const zhCN: TranslationResources = {
         reload: "重新加载",
         reloadTitle: "从磁盘重新加载？",
         reloadMessage: "本地更改将丢失。",
+
+        checkFailedTitle: "无法检查磁盘上的文件",
       },
     },
     changes: {
@@ -2423,6 +2456,30 @@ export const zhCN: TranslationResources = {
   },
   sidebarCallout: {
     dismiss: "关闭",
+  },
+  leaderboard: {
+    title: "我的排行榜",
+    refresh: "刷新",
+    refreshing: "正在刷新...",
+    retry: "重试",
+    connect: "登录并连接后即可查看你的排行榜",
+    loading: "正在计算你的排行榜...",
+    error: "无法加载你的排行榜",
+    unlock: "有效投票达到 {{minimum}} 票后解锁排行榜",
+    progress: "你已有 {{count}} 票有效投票 · 还差 {{remaining}} 票",
+    eligible: "出现参赛方错误的对战，以及在受影响版本中使用子代理的对战不计入",
+    filters: "已排除运行失败 · 按提交过滤子代理",
+    summary: "{{count}} 票有效投票 · {{earlyVotes}} · 更新于 {{date}}",
+    excludeEarlyVotes: "排除提前投票",
+    earlyIncluded: "包含提前投票",
+    earlyExcluded: "已排除提前投票",
+    disconnected: "部分模型组之间还没有共同的比较。这些组之间的评分取决于先验分布。",
+    noModels: "活跃模型各有 4 票有效投票后显示",
+    chartLabel: "你的模型评分，含 95% 可信区间、推理速度中位数和投票数",
+    votes: "投票",
+    axis: "Bradley–Terry 评分（Elo 刻度）",
+    medianSpeed: "中位数 {{speed}} tokens/s",
+    noSpeed: "速度不可用",
   },
   feedback: {
     sidebarAction: "发送反馈",
@@ -2663,6 +2720,8 @@ export const zhCN: TranslationResources = {
       modelHint: "只使用此模型。如果失败，Agent Duel 不会尝试其他模型",
       docs: "文档",
       saveError: "无法更新元数据生成设置",
+
+      fallbackHint: "如果不可用，Agent Duel 会改用其他可用模型",
     },
     storage: {
       title: "对战环境",
@@ -2746,6 +2805,8 @@ export const zhCN: TranslationResources = {
           overview: "摘要",
           detailed: "完整详情",
         },
+
+        accessibilityLabel: "选择工具调用显示方式（{{value}}）",
       },
       language: {
         label: "语言",
@@ -2945,6 +3006,37 @@ export const zhCN: TranslationResources = {
         install: "安装",
         installing: "正在安装...",
         installed: "已安装",
+
+        update: "更新",
+        working: "处理中...",
+        remove: "移除",
+        uninstall: "卸载",
+        save: "保存",
+        saving: "正在保存...",
+      },
+
+      skills: {
+        title: "编排 skills",
+        description: "教会 Agent 通过 CLI 编排任务",
+        updateAvailable: "有更新可用",
+        updateTitle: "更新 Agent Duel skills？",
+        updateFallback: "将内置 skills 同步到你的机器。",
+        uninstallTitle: "卸载 Agent Duel skills？",
+        uninstallMessage: "会从 ~/.agents、~/.claude、~/.codex 移除所有 Agent Duel 编排 skills。",
+        choose: "选择 skills",
+        chooseAll: "全部 skills",
+        chooseAllHint: "保持安装所有内置 skills，包括以后新增的。",
+        chooseList: "内置 skills",
+        chooseEmpty: "此版本未内置 skills。",
+        removeTitle: "移除取消勾选的 skills？",
+        removeMessage:
+          "将从 ~/.agents、~/.claude、~/.codex 中删除 {{skills}}。你在这些 skill 文件夹里添加的内容也会一并删除。",
+        saveFailed: "无法保存你的 skills 选择。",
+      },
+      operations: {
+        add: "添加 skill",
+        update: "更新 skill",
+        delete: "删除 skill",
       },
     },
     permissions: {

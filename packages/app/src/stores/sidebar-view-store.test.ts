@@ -30,15 +30,70 @@ function createMemoryStorage(entries: Record<string, string | null>): MemoryStor
 }
 
 describe("sidebar view store", () => {
+  it("starts grouped by project with latest chats and latest projects", () => {
+    expect(useSidebarViewStore.getInitialState()).toMatchObject({
+      groupMode: "project",
+      sortMode: "lastChat",
+      groupSortMode: "lastChat",
+    });
+  });
+
+  it.each([null, {}, { groupMode: "invalid", sortMode: "invalid" }])(
+    "uses the project and last-chat defaults for missing or invalid preferences: %j",
+    (preferences) => {
+      expect(migrateSidebarViewState(preferences)).toEqual({
+        groupMode: "project",
+        sortMode: "lastChat",
+        groupSortMode: "lastChat",
+        workspaceSort: "created",
+        showBackground: false,
+        hostFilters: [],
+        projectFilters: [],
+        labelFilter: { labels: [] },
+      });
+    },
+  );
+
+  it("preserves ungrouped last-chat preferences during hydration", () => {
+    expect(
+      migrateSidebarViewState({ groupMode: "none", sortMode: "lastChat", hostFilters: ["host-a"] }),
+    ).toEqual({
+      groupMode: "none",
+      sortMode: "lastChat",
+      groupSortMode: "lastChat",
+      workspaceSort: "created",
+      showBackground: false,
+      hostFilters: ["host-a"],
+      projectFilters: [],
+      labelFilter: { labels: [] },
+    });
+  });
+
   beforeEach(() => {
     useSidebarViewStore.setState({
       workspaceSort: "created",
       showBackground: false,
       groupMode: "project",
+      sortMode: "lastChat",
+      groupSortMode: "lastChat",
       hostFilters: [],
       projectFilters: [],
       labelFilter: { labels: [] },
     });
+  });
+
+  it("hydrates activity sorting together with the retained sidebar facets", () => {
+    const preferences = {
+      groupMode: "none",
+      sortMode: "lastChat",
+      groupSortMode: "default",
+      workspaceSort: "manual",
+      showBackground: true,
+      hostFilters: ["host-a"],
+      projectFilters: ["project-a"],
+      labelFilter: { labels: ["urgent"] },
+    };
+    expect(migrateSidebarViewState(preferences)).toEqual(preferences);
   });
 
   it("toggles multiple hosts into and out of the filter", () => {
@@ -89,6 +144,8 @@ describe("sidebar view store", () => {
       workspaceSort: "created",
       showBackground: false,
       groupMode: "status",
+      sortMode: "lastChat",
+      groupSortMode: "lastChat",
       hostFilters: [],
       projectFilters: [],
       labelFilter: { labels: [] },
@@ -105,6 +162,8 @@ describe("sidebar view store", () => {
       workspaceSort: "created",
       showBackground: false,
       groupMode: "status",
+      sortMode: "lastChat",
+      groupSortMode: "lastChat",
       hostFilters: ["host-a"],
       projectFilters: [],
       labelFilter: { labels: [] },
@@ -115,12 +174,16 @@ describe("sidebar view store", () => {
     expect(
       migrateSidebarViewState({
         groupMode: "status",
+        sortMode: "default",
+        groupSortMode: "default",
         hostFilters: ["host-a", "host-b"],
       }),
     ).toEqual({
       workspaceSort: "created",
       showBackground: false,
       groupMode: "status",
+      sortMode: "default",
+      groupSortMode: "default",
       hostFilters: ["host-a", "host-b"],
       projectFilters: [],
       labelFilter: { labels: [] },
@@ -233,6 +296,8 @@ describe("sidebar view store", () => {
       workspaceSort: "created",
       showBackground: false,
       groupMode: "project",
+      sortMode: "lastChat",
+      groupSortMode: "lastChat",
       hostFilters: ["host-a"],
       projectFilters: ["project-a", "project-b"],
       labelFilter: { labels: [] },
@@ -244,6 +309,8 @@ describe("sidebar view store", () => {
       workspaceSort: "created",
       showBackground: false,
       groupMode: "project",
+      sortMode: "lastChat",
+      groupSortMode: "lastChat",
       hostFilters: [],
       projectFilters: [],
       labelFilter: { labels: [] },

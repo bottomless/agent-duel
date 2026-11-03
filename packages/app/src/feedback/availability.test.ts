@@ -6,6 +6,7 @@ const signedIn: ResolveAccountGateInput = {
   hasEndpoint: true,
   storeHydrated: true,
   methodsPhase: "success",
+  updateRequired: false,
   accountsEnabled: true,
   methods: ["email", "google", "github"],
   hasStoredSession: true,

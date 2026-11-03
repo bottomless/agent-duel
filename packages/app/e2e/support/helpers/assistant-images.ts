@@ -25,7 +25,7 @@ export interface AssistantImageFixture {
 }
 
 export async function createSmallAssistantPng(
-  workspace: SeededWorkspace,
+  workspace: Pick<SeededWorkspace, "repoPath">,
   input: { alt: string; fileName: string; width?: number; height?: number },
 ): Promise<AssistantImageFixture> {
   const width = input.width ?? 1;

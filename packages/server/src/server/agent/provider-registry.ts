@@ -955,7 +955,9 @@ function addDerivedProviders(
       profileModels: override.models ?? [],
       additionalModels: override.additionalModels ?? [],
       profileModelsAreAdditive: false,
-      enabled: override.enabled !== false,
+      // A profile starts with its base agent's default, so one built on a disabled CLI agent stays
+      // off (and its binary unprobed) until it sets `enabled: true`.
+      enabled: override.enabled ?? baseDefinition.enabledByDefault ?? true,
       derivedFromProviderId: baseProviderId,
       providerOptions,
       createBaseClient: (logger) =>

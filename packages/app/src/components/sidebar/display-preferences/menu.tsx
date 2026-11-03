@@ -21,6 +21,7 @@ import {
   GitBranch,
   GitPullRequest,
   Globe,
+  List,
   Settings2,
   Tag,
   Type,
@@ -48,6 +49,7 @@ import {
   hasActiveSidebarLabelFilter,
   SIDEBAR_UNLABELLED_LABEL_KEY,
   type SidebarGroupMode,
+  type SidebarSortMode,
 } from "@/stores/sidebar-view-store";
 import { workspaceLabelKey, type WorkspaceLabelColor } from "@getpaseo/protocol/workspace-labels";
 import type { WorkspaceTitleSource } from "@/hooks/use-settings";
@@ -88,6 +90,17 @@ type OptionIcon = ComponentType<{
 const GROUPING_ICONS: Record<SidebarGroupMode, OptionIcon> = {
   project: withUnistyles(Folder),
   status: withUnistyles(CircleDashed),
+  none: withUnistyles(List),
+};
+
+const SORT_ICONS: Record<SidebarSortMode, OptionIcon> = {
+  default: withUnistyles(List),
+  lastChat: withUnistyles(Clock),
+};
+const SORT_MODES: readonly SidebarSortMode[] = ["default", "lastChat"];
+const SORT_LABEL_KEYS: Record<SidebarSortMode, string> = {
+  default: "sidebar.display.sorting.default",
+  lastChat: "sidebar.display.sorting.lastChat",
 };
 
 const TITLE_SOURCE_ICONS: Record<WorkspaceTitleSource, OptionIcon> = {
@@ -118,13 +131,14 @@ const TRAILING_ICONS: Record<SidebarTrailingChoice, OptionIcon> = {
   timestamp: withUnistyles(Clock),
 };
 
-const GROUPING_MODES: readonly SidebarGroupMode[] = ["project", "status"];
+const GROUPING_MODES: readonly SidebarGroupMode[] = ["project", "status", "none"];
 const TITLE_SOURCES: readonly WorkspaceTitleSource[] = ["title", "branch"];
 const TRAILING_CHOICES: readonly SidebarTrailingChoice[] = ["diff", "timestamp"];
 
 const GROUPING_LABEL_KEYS: Record<SidebarGroupMode, string> = {
   project: "sidebar.display.grouping.project",
   status: "sidebar.display.grouping.status",
+  none: "sidebar.display.grouping.none",
 };
 
 const TITLE_SOURCE_LABEL_KEYS: Record<WorkspaceTitleSource, string> = {
@@ -199,6 +213,34 @@ export function SidebarDisplayPreferencesMenu(): ReactElement {
             selectedValue={preferences.grouping}
             onSelect={preferences.setGrouping}
             testIDPrefix="sidebar-grouping"
+          />
+        ),
+      },
+      {
+        id: "sorting",
+        title: t("sidebar.display.sorting.label"),
+        content: (
+          <OptionList
+            values={SORT_MODES}
+            icons={SORT_ICONS}
+            labelKeys={SORT_LABEL_KEYS}
+            selectedValue={preferences.sorting}
+            onSelect={preferences.setSorting}
+            testIDPrefix="sidebar-sorting"
+          />
+        ),
+      },
+      {
+        id: "groupSorting",
+        title: t("sidebar.display.sorting.groupLabel"),
+        content: (
+          <OptionList
+            values={SORT_MODES}
+            icons={SORT_ICONS}
+            labelKeys={SORT_LABEL_KEYS}
+            selectedValue={preferences.groupSorting}
+            onSelect={preferences.setGroupSorting}
+            testIDPrefix="sidebar-group-sorting"
           />
         ),
       },
@@ -316,7 +358,23 @@ export function SidebarDisplayPreferencesMenu(): ReactElement {
           >
             {t("sidebar.display.grouping.label")}
           </MenuSubTrigger>
-          {preferences.grouping === "project" ? (
+          <MenuSubTrigger
+            id="sorting"
+            value={t(SORT_LABEL_KEYS[preferences.sorting])}
+            testID="sidebar-display-sorting"
+          >
+            {t("sidebar.display.sorting.label")}
+          </MenuSubTrigger>
+          {preferences.grouping !== "none" ? (
+            <MenuSubTrigger
+              id="groupSorting"
+              value={t(SORT_LABEL_KEYS[preferences.groupSorting])}
+              testID="sidebar-display-group-sorting"
+            >
+              {t("sidebar.display.sorting.groupLabel")}
+            </MenuSubTrigger>
+          ) : null}
+          {preferences.grouping === "project" && preferences.sorting === "default" ? (
             <MenuSubTrigger
               id="sort"
               value={

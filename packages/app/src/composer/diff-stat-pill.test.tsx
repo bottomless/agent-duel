@@ -13,6 +13,7 @@ const WORKSPACE_ID = "workspace";
 const workspace: WorkspaceDescriptor = {
   createdAt: null,
   lastUserMessageAt: null,
+  activityAt: null,
   id: WORKSPACE_ID,
   projectId: "project",
   projectDisplayName: "Project",

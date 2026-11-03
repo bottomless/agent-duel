@@ -1,6 +1,9 @@
 import type { Command } from "commander";
 import type { CommandOptions, ListResult, OutputSchema } from "../../output/index.js";
 import type { ProviderSnapshotEntry } from "@getpaseo/protocol/agent-types";
+import { AGENT_PROVIDER_DEFINITIONS } from "@getpaseo/protocol/provider-manifest";
+import { readDaemonInstance } from "@getpaseo/server/daemon-control";
+import { readPersistedConfig, resolveConfigFromPersisted } from "@getpaseo/server/configuration";
 import { connectToDaemon } from "../../utils/client.js";
 
 export interface ProviderListItem {
@@ -10,6 +13,23 @@ export interface ProviderListItem {
   enabled: "Enabled" | "Disabled";
   defaultMode: string;
   modes: string;
+}
+
+/** Derive provider list from the manifest and the local config's `enabled` overrides */
+export function getStaticProviders(
+  providerOverrides: Record<string, { enabled?: boolean }> | undefined,
+): ProviderListItem[] {
+  return AGENT_PROVIDER_DEFINITIONS.map((def) => ({
+    provider: def.id,
+    label: def.label,
+    status: "available",
+    enabled:
+      (providerOverrides?.[def.id]?.enabled ?? def.enabledByDefault ?? true)
+        ? "Enabled"
+        : "Disabled",
+    defaultMode: def.defaultModeId ?? "-",
+    modes: def.modes.length > 0 ? def.modes.map((m) => m.label).join(", ") : "-",
+  }));
 }
 
 /** Schema for provider ls output */
@@ -44,7 +64,20 @@ export async function runLsCommand(
   options: ProviderLsOptions,
   _command: Command,
 ): Promise<ProviderLsResult> {
-  const client = await connectToDaemon({ target: options.daemonTarget });
+  const target = options.daemonTarget;
+  if (target.kind === "instance" && !(await readDaemonInstance(target.home))) {
+    const config = resolveConfigFromPersisted(
+      target.home,
+      readPersistedConfig(target.home, { defaultsIfMissing: true }),
+      { env: {} },
+    );
+    return {
+      type: "list",
+      data: getStaticProviders(config.providerOverrides),
+      schema: providerLsSchema,
+    };
+  }
+  const client = await connectToDaemon({ target });
 
   try {
     const snapshot = await client.getProvidersSnapshot();

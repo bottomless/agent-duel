@@ -382,6 +382,12 @@ export class ProviderSnapshotManager {
     return this.pluginProviders.definitions()[provider]?.requiresConfiguration === true;
   }
 
+  listEnabledProviderIds(): AgentProvider[] {
+    return Object.entries(this.generation.definitions)
+      .filter(([, definition]) => definition.enabled)
+      .map(([provider]) => provider);
+  }
+
   getProviderLabel(provider: AgentProvider): string {
     return this.generation.definitions[provider]?.label ?? provider;
   }

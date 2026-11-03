@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import express from "express";
 import type { Logger } from "pino";
+import { clientHeaders } from "./config.js";
 import { ACCOUNT_SESSION_REJECTED_MESSAGE } from "@getpaseo/protocol/accounts/schemas";
 import {
   confirmArenaSessionRejection,
@@ -107,21 +108,31 @@ function sendFailure(res: express.Response, path: string, error: unknown): void 
   sendUnavailable(res, path);
 }
 
-function forwardedHeaders(req: express.Request, token: string): Record<string, string> {
-  return {
+// Keep-alive marks cache pings; compaction marks steps the control plane can ask to summarize.
+const forwardedRequestHeaders = [
+  "x-arena-assignment-id",
+  "x-arena-scope-id",
+  "x-arena-generation-id",
+  "x-arena-keep-alive",
+  "x-arena-compaction",
+];
+
+function forwardedHeaders(
+  req: express.Request,
+  token: string,
+  appVersion: string,
+): Record<string, string> {
+  const headers: Record<string, string> = {
     Accept: req.header("accept") ?? "application/json",
     Authorization: `Bearer ${token}`,
     "Content-Type": "application/json",
-    ...(req.header("x-arena-assignment-id")
-      ? { "X-Arena-Assignment-ID": req.header("x-arena-assignment-id")! }
-      : {}),
-    ...(req.header("x-arena-scope-id")
-      ? { "X-Arena-Scope-ID": req.header("x-arena-scope-id")! }
-      : {}),
-    ...(req.header("x-arena-generation-id")
-      ? { "X-Arena-Generation-ID": req.header("x-arena-generation-id")! }
-      : {}),
+    ...clientHeaders(appVersion),
   };
+  for (const name of forwardedRequestHeaders) {
+    const value = req.header(name);
+    if (value) headers[name] = value;
+  }
+  return headers;
 }
 
 // The engine waits on a contestant request with this body until the session is replaced, instead
@@ -190,13 +201,14 @@ async function forward(
   runtimeToken: string,
   credentials: RuntimeCredentials,
   signal: AbortSignal,
+  appVersion: string,
 ): Promise<Response | null> {
   const body = Uint8Array.from(req.body as Buffer).buffer;
   const attempt = async (session: RuntimeCredentials) => {
     const answered = await execute(`${session.controlPlaneUrl}${req.path}`, {
       signal,
       method: "POST",
-      headers: forwardedHeaders(req, session.token),
+      headers: forwardedHeaders(req, session.token, appVersion),
       body,
     });
     return answered.status === 401
@@ -218,6 +230,7 @@ async function forward(
 
 export function createArenaRuntimeRouter(options: {
   readonly logger: Pick<Logger, "warn">;
+  readonly appVersion: string;
   readonly fetchImpl?: Fetch;
 }): express.Router {
   const router = express.Router();
@@ -261,16 +274,19 @@ export function createArenaRuntimeRouter(options: {
         token,
         credentials,
         disconnected.signal,
+        options.appVersion,
       );
       if (!upstream) return;
       res.status(upstream.status);
       // x-arena-heartbeat-ms tells the engine the stream carries heartbeats it can time out on.
+      // x-arena-keep-alive tells it the control plane took a ping; without it the engine stops pinging.
       for (const name of [
         "content-type",
         "cache-control",
         "x-request-id",
         "retry-after",
         "x-arena-heartbeat-ms",
+        "x-arena-keep-alive",
       ]) {
         const value = upstream.headers.get(name);
         if (value) res.setHeader(name, value);

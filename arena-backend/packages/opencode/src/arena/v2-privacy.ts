@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { paymentMessage } from "@agent-duel/arena-service/request-error"
+import { requestTooLargeMessage, paymentMessage } from "@agent-duel/arena-service/request-error"
 import { REDACTED_THINKING } from "@agent-duel/arena-service/reasoning"
 import { ARENA_OFFLINE_MESSAGE } from "@/session/retry"
 
@@ -53,24 +53,18 @@ function safeError(value: unknown) {
   const data = record(value) && record(value.data) ? value.data : undefined
   const statusCode = data && typeof data.statusCode === "number" ? data.statusCode : undefined
   const responseBody = data && typeof data.responseBody === "string" ? data.responseBody : undefined
-  const message =
-    statusCode === 402
-      ? (paymentMessage(statusCode, responseBody) ?? "The agent could not complete this run.")
-      : (() => {
-          const lower = text.toLowerCase()
-          if (lower.includes("offline") || lower.includes("network") || lower.includes("connection refused")) {
-            return ARENA_OFFLINE_MESSAGE
-          }
-          if (
-            lower.includes("payment") ||
-            lower.includes("billing") ||
-            lower.includes("credit") ||
-            lower.includes("quota")
-          ) {
-            return paymentMessage(402, undefined) ?? "The agent could not complete this run."
-          }
-          return "The agent could not complete this run."
-        })()
+  const message = (() => {
+    if (text === requestTooLargeMessage || data?.message === requestTooLargeMessage) return requestTooLargeMessage
+    if (statusCode === 402) return paymentMessage(statusCode, responseBody) ?? "The agent could not complete this run."
+    const lower = text.toLowerCase()
+    if (lower.includes("offline") || lower.includes("network") || lower.includes("connection refused")) {
+      return ARENA_OFFLINE_MESSAGE
+    }
+    if (lower.includes("payment") || lower.includes("billing") || lower.includes("credit") || lower.includes("quota")) {
+      return paymentMessage(402, undefined) ?? "The agent could not complete this run."
+    }
+    return "The agent could not complete this run."
+  })()
   const original = text || (data && typeof data.message === "string" ? data.message : "")
   if (original && original !== message && reportHidden) {
     reportHidden({

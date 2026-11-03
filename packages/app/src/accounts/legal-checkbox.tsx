@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, type Ref } from "react";
 import { Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { useMutation } from "@tanstack/react-query";
@@ -11,6 +11,8 @@ interface LegalCheckboxProps {
   checked: boolean;
   onChange: (checked: boolean) => void;
   disabled?: boolean;
+  error?: string | null;
+  ref?: Ref<View>;
 }
 
 export function LegalCheckbox({
@@ -18,6 +20,8 @@ export function LegalCheckbox({
   checked,
   onChange,
   disabled = false,
+  error = null,
+  ref,
 }: LegalCheckboxProps) {
   const openDocument = useMutation({ mutationFn: openExternalUrl });
   const openTerms = useCallback(
@@ -30,11 +34,15 @@ export function LegalCheckbox({
   );
   const toggle = useCallback(() => onChange(!checked), [onChange, checked]);
   const accessibilityState = useMemo(() => ({ checked, disabled }), [checked, disabled]);
-  const boxStyle = useMemo(() => [styles.box, checked && styles.checked], [checked]);
+  const boxStyle = useMemo(
+    () => [styles.box, error !== null && styles.invalid, checked && styles.checked],
+    [checked, error],
+  );
   return (
     <View style={styles.container}>
       <View style={styles.row}>
         <PressHighlight
+          ref={ref}
           accessibilityRole="checkbox"
           accessibilityLabel="I agree to the Terms of Service and acknowledge the Privacy Policy"
           accessibilityState={accessibilityState}
@@ -59,6 +67,11 @@ export function LegalCheckbox({
           .
         </Text>
       </View>
+      {error !== null ? (
+        <Text accessibilityRole="alert" style={styles.error} testID="legal-checkbox-error">
+          {error}
+        </Text>
+      ) : null}
       {openDocument.isPending ? <Text style={styles.status}>Opening document…</Text> : null}
       {openDocument.isError ? (
         <Text accessibilityRole="alert" style={styles.error}>
@@ -77,11 +90,12 @@ const styles = StyleSheet.create((theme) => ({
     width: 20,
     height: 20,
     borderWidth: 1,
-    borderColor: theme.colors.border,
+    borderColor: theme.colors.foreground,
     borderRadius: theme.borderRadius.sm,
     justifyContent: "center",
     alignItems: "center",
   },
+  invalid: { borderColor: theme.colors.destructive },
   checked: { backgroundColor: theme.colors.foreground, borderColor: theme.colors.foreground },
   check: { color: theme.colors.surface0, fontSize: theme.fontSize.base },
   label: {

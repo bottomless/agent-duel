@@ -5,6 +5,7 @@ import { createPluginAgentSnapshot, createPluginWorkspaceSnapshot } from "./snap
 const workspace: WorkspaceDescriptor = {
   createdAt: null,
   lastUserMessageAt: null,
+  activityAt: null,
   id: "workspace-1",
   projectId: "project-1",
   projectDisplayName: "Paseo",

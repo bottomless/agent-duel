@@ -30,9 +30,10 @@ import { encodeImages } from "@/utils/encode-images";
 import type { WorkspaceFileOpenRequest } from "@/workspace/file-open";
 import { shouldAutoFocusWorkspaceDraftComposer } from "@/screens/workspace/workspace-draft-pane-focus";
 import {
+  isReadyForPendingAutoSubmit,
   isStartingArenaBattle,
+  resolveDraftCreateFeatureValues,
   shouldAllowEmptyDraftText,
-  resolveDraftFeatureValues,
 } from "@/composer/draft/workspace-tab-core";
 import type { AgentCapabilityFlags } from "@getpaseo/protocol/agent-types";
 import type { AgentSnapshotPayload } from "@getpaseo/protocol/messages";
@@ -84,6 +85,7 @@ import {
 import { openWorkspaceSidePanelTab } from "@/workspace/side-panel-command";
 import { noticeAccountSessionRejection } from "@/accounts/session-rejected";
 import { neutralBattleStartError } from "@/arena/battle-start-error";
+import { forgetLastWorkspaceSelection } from "@/stores/navigation-active-workspace-store";
 
 const EMPTY_PENDING_PERMISSIONS = new Map();
 const DRAFT_CAPABILITIES: AgentCapabilityFlags = {
@@ -239,6 +241,8 @@ function failedFirstSendDeps(input: {
       }),
     saveNewChatDraft: (draft) =>
       useDraftStore.getState().saveDraftInput({ draftKey: buildNewWorkspaceDraftKey(), draft }),
+    forgetWorkspace: (serverId, workspaceId) =>
+      forgetLastWorkspaceSelection({ serverId, workspaceId }),
     navigate: (route) => router.replace(route),
     showError: input.showError,
     retryMessage: input.retryMessage,
@@ -502,9 +506,9 @@ export function WorkspaceDraftAgentTab({
         workspaceId: workspaceFields?.id ?? null,
         hostDisconnectedMessage: t("workspace.terminal.hostDisconnected"),
         arenaPreferenceKey,
-        featureValues: resolveDraftFeatureValues({
-          pending: pendingAutoSubmit?.featureValues,
-          composer: composerState.featureValues,
+        featureValues: resolveDraftCreateFeatureValues({
+          submitted: pendingAutoSubmit?.featureValues,
+          draft: composerState.featureValues,
         }),
         createdPreferenceKey: (agentId) => arenaAgentPreferenceKey(serverId, agentId),
         handOffStartedBattle: (agentId, snapshot) => {
@@ -559,16 +563,15 @@ export function WorkspaceDraftAgentTab({
       },
     },
   });
-  const isReadyForPendingAutoSubmit = Boolean(
-    pendingAutoSubmit &&
-    draftInput.isHydrated &&
-    draftWorkingDirectory &&
-    client &&
-    !composerState.isModelLoading,
-  );
+  const isReadyForAutoSubmit = isReadyForPendingAutoSubmit({
+    hasPendingSubmission: pendingAutoSubmit !== null,
+    isHydrated: draftInput.isHydrated,
+    workingDirectory: draftWorkingDirectory,
+    hasClient: client !== null,
+  });
   const autoSubmitKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!isReadyForPendingAutoSubmit) {
+    if (!isReadyForAutoSubmit) {
       return;
     }
     const submitKey = `${serverId}:${workspaceId}:${draftId}`;
@@ -625,7 +628,7 @@ export function WorkspaceDraftAgentTab({
     draftId,
     handleCreateFromInput,
     initialCreateAttempt,
-    isReadyForPendingAutoSubmit,
+    isReadyForAutoSubmit,
     client,
     serverId,
     setDraftAttachments,
@@ -785,8 +788,9 @@ const styles = StyleSheet.create((theme) => ({
   draftBattleListPadding: {
     flex: 1,
     paddingTop: STREAM_CONTENT_TOP_INSET,
+    // The web stream's gutter, so the battle does not shift when the stream takes over.
     paddingHorizontal: {
-      xs: theme.spacing[3],
+      xs: theme.spacing[2],
       md: theme.spacing[4],
     },
   },

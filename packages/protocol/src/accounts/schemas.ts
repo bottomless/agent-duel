@@ -61,6 +61,11 @@ export const authMethodsResponseSchema = z.object({
   enabled: z.boolean(),
   methods: z.array(signInMethodSchema),
   legal: legalDocumentsSchema.nullable(),
+  /**
+   * The control plane's verdict on this build's version: below its minimum or on its blocklist.
+   * Absent from a control plane that predates the check and from a daemon without accounts.
+   */
+  updateRequired: z.boolean().optional(),
 });
 export type AuthMethodsResponse = z.infer<typeof authMethodsResponseSchema>;
 

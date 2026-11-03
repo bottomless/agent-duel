@@ -1678,7 +1678,10 @@ const AgentStreamSection = memo(function AgentStreamSection({
   );
   const arenaSession = useArenaSessionQuery(serverId, agentId ?? "");
   const arenaStatusError = useArenaStatusError(serverId, agentId, arenaSession.error);
-  const arenaPartSource = useMemo(() => ({ serverId, agentId: agent.id }), [agent.id, serverId]);
+  const arenaPartSource = useMemo(
+    () => ({ serverId, agentId: agent.id, workspaceRoot: agent.cwd, onOpenWorkspaceFile, toast }),
+    [agent.id, agent.cwd, serverId, onOpenWorkspaceFile, toast],
+  );
   const startingBattle = useStartingArenaBattle(serverId, agentId ?? "");
   // The collapsed summary arrives in the same frame the panes leave in.
   // A battle that has been sent counts as on screen from the moment it is sent.
@@ -1865,7 +1868,13 @@ const AgentStreamSection = memo(function AgentStreamSection({
             <>
               {chatCallouts}
               {filesRecoveryBanner}
-              {queuedBattlePreview}
+            </>
+          )}
+          {/* A battle queued during the apply waits below the open one. Once sent, it stays
+              queued until the start answers, while the starting battle already shows its prompt. */}
+          {startingBattle ? null : queuedBattlePreview}
+          {activeBattle ? null : (
+            <>
               {feedbackBattle && !queuedBattlePreview ? (
                 <ChatFeedbackCard
                   key={`battle-feedback-${feedbackBattle.id}`}
@@ -1890,6 +1899,7 @@ const AgentStreamSection = memo(function AgentStreamSection({
       latestBattleSummary,
       queuedBattlePreview,
       singleAgentRating,
+      startingBattle,
       workspaceId,
     ],
   );

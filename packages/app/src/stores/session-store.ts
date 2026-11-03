@@ -129,6 +129,7 @@ export interface WorkspaceDescriptor {
   status: WorkspaceDescriptorPayload["status"];
   arenaActivity?: WorkspaceDescriptorPayload["arenaActivity"];
   statusEnteredAt: Date | null;
+  activityAt: string | null;
   archivingAt: string | null;
   diffStat: { additions: number; deletions: number } | null;
   scripts: WorkspaceDescriptorPayload["scripts"];
@@ -146,6 +147,7 @@ export function normalizeWorkspaceDescriptor(
     typeof statusEnteredAtRaw === "string" && statusEnteredAtRaw.length > 0
       ? new Date(statusEnteredAtRaw)
       : null;
+  const activityAt = normalizeWorkspaceActivityAt(payload.activityAt);
   return {
     // COMPAT(workspaceSortTimes): added in v0.13.0, remove after 2027-04-22.
     createdAt: payload.createdAt ? new Date(payload.createdAt) : null,
@@ -176,6 +178,7 @@ export function normalizeWorkspaceDescriptor(
     status: payload.status,
     arenaActivity: payload.arenaActivity,
     statusEnteredAt,
+    activityAt,
     archivingAt: payload.archivingAt ?? null,
     diffStat: payload.diffStat ?? null,
     scripts: (payload.scripts ?? []).map((s) => Object.assign({}, s)),
@@ -184,6 +187,11 @@ export function normalizeWorkspaceDescriptor(
     forge: payload.forge,
     project: payload.project,
   };
+}
+
+function normalizeWorkspaceActivityAt(value: string | null): string | null {
+  if (value === null) return null;
+  return Number.isFinite(Date.parse(value)) ? value : null;
 }
 
 export interface ProjectDescriptor {

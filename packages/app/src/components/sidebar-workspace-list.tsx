@@ -11,6 +11,7 @@ import {
 } from "react-native";
 import {
   memo,
+  Fragment,
   useCallback,
   useMemo,
   useState,
@@ -210,6 +211,7 @@ function selectionForSelectedWorkspace(
 
 interface SidebarWorkspaceListProps {
   workspaceGroups: SidebarWorkspaceGroup[];
+  flatWorkspaces: SidebarWorkspaceEntry[];
   /** What `useProjectIcons` is asked for, straight from the projection. See `SidebarProjection`. */
   projectIconTargets: SidebarProjectIconTarget[];
   pinnedGroups: PinnedSidebarGroups;
@@ -1916,6 +1918,7 @@ const MemoProjectBlock = memo(ProjectBlock, areProjectBlockPropsEqual);
 
 export function SidebarWorkspaceList({
   workspaceGroups,
+  flatWorkspaces,
   projectIconTargets,
   pinnedGroups,
   projects,
@@ -1986,6 +1989,7 @@ export function SidebarWorkspaceList({
     groupMode !== "project" ? (
       <SidebarGroupedModeList
         workspaceGroups={workspaceGroups}
+        flatWorkspaces={flatWorkspaces}
         pinnedGroups={pinnedGroups}
         workspaceEntriesByKey={workspaceEntriesByKey}
         projectIconByProjectViewKey={projectIconByProjectViewKey}
@@ -2035,6 +2039,7 @@ export function SidebarWorkspaceList({
  */
 function SidebarGroupedModeList({
   workspaceGroups,
+  flatWorkspaces,
   pinnedGroups,
   workspaceEntriesByKey,
   projectIconByProjectViewKey,
@@ -2049,6 +2054,7 @@ function SidebarGroupedModeList({
   dragGestureHostActive,
 }: {
   workspaceGroups: SidebarWorkspaceGroup[];
+  flatWorkspaces: SidebarWorkspaceEntry[];
   pinnedGroups: PinnedSidebarGroups;
   workspaceEntriesByKey: ReadonlyMap<string, SidebarWorkspaceEntry>;
   projectIconByProjectViewKey: ReadonlyMap<string, string | null>;
@@ -2075,6 +2081,7 @@ function SidebarGroupedModeList({
   return (
     <SidebarStatusWorkspaceList
       groups={workspaceGroups}
+      flatWorkspaces={flatWorkspaces}
       pinnedWorkspaces={pinnedWorkspaces}
       projectIconByProjectViewKey={projectIconByProjectViewKey}
       shortcutIndexByWorkspaceKey={_projectShortcutIndex}
@@ -2115,6 +2122,7 @@ function ProjectModeList({
 }: Omit<
   SidebarWorkspaceListProps,
   | "workspaceGroups"
+  | "flatWorkspaces"
   | "projectIconTargets"
   | "groupMode"
   | "hasProjectsBeforeFilter"
@@ -2142,7 +2150,11 @@ function ProjectModeList({
     (state) => state.togglePinnedCollapsed,
   );
 
-  const manualSort = useSidebarViewStore((state) => state.workspaceSort === "manual");
+  const manualSort = useSidebarViewStore(
+    (state) => state.workspaceSort === "manual" && state.sortMode === "default",
+  );
+  const canReorderProjects = useSidebarViewStore((state) => state.groupSortMode === "default");
+  const canReorderPins = useSidebarViewStore((state) => state.sortMode === "default");
   const getWorkspaceOrder = useSidebarOrderStore((state) => state.getWorkspaceOrder);
   const setWorkspaceOrder = useSidebarOrderStore((state) => state.setWorkspaceOrder);
   const getProjectOrder = useSidebarOrderStore((state) => state.getProjectOrder);
@@ -2367,7 +2379,12 @@ function ProjectModeList({
       drag,
       isActive,
       dragHandleProps,
-    }: DraggableRenderItemInfo<SidebarWorkspacePlacement>) => {
+    }: {
+      item: SidebarWorkspacePlacement;
+      drag?: () => void;
+      isActive?: boolean;
+      dragHandleProps?: DraggableListDragHandleProps;
+    }) => {
       return (
         <MemoWorkspaceRowItem
           workspace={workspace}
@@ -2405,25 +2422,31 @@ function ProjectModeList({
     ],
   );
 
+  const projectList = canReorderProjects ? (
+    <DraggableList
+      testID="sidebar-project-list"
+      data={unpinnedProjects}
+      keyExtractor={projectViewKeyExtractor}
+      renderItem={renderProject}
+      onDragEnd={handleProjectDragEnd}
+      extraData={activeWorkspaceSelectionKey(activeWorkspaceSelection)}
+      scrollEnabled={false}
+      useDragHandle
+      nestable={platformIsNative}
+      simultaneousGestureRef={parentGestureRef}
+      gestureHostPresented={dragGestureHostActive}
+      containerStyle={styles.projectListContainer}
+    />
+  ) : (
+    <View testID="sidebar-project-list" style={styles.projectListContainer}>
+      {unpinnedProjects.map((project) =>
+        renderProjectBlock(project, { drag: noop, isDragging: false }),
+      )}
+    </View>
+  );
+
   const projectBody =
-    projects.length === 0 ? (
-      <SidebarProjectEmptyState onAddProject={onAddProject} />
-    ) : (
-      <DraggableList
-        testID="sidebar-project-list"
-        data={unpinnedProjects}
-        keyExtractor={projectViewKeyExtractor}
-        renderItem={renderProject}
-        onDragEnd={handleProjectDragEnd}
-        extraData={activeWorkspaceSelectionKey(activeWorkspaceSelection)}
-        scrollEnabled={false}
-        useDragHandle
-        nestable={platformIsNative}
-        simultaneousGestureRef={parentGestureRef}
-        gestureHostPresented={dragGestureHostActive}
-        containerStyle={styles.projectListContainer}
-      />
-    );
+    projects.length === 0 ? <SidebarProjectEmptyState onAddProject={onAddProject} /> : projectList;
 
   const content = (
     <>
@@ -2437,20 +2460,30 @@ function ProjectModeList({
           />
           {pinnedCollapsed ? null : (
             <>
-              <DraggableList
-                testID="sidebar-pinned-list"
-                data={visiblePinnedChats}
-                keyExtractor={workspaceKeyExtractor}
-                renderItem={renderPinnedChat}
-                onDragEnd={onPinnedWorkspaceReorder}
-                extraData={activeWorkspaceSelectionKey(activeWorkspaceSelection)}
-                scrollEnabled={false}
-                useDragHandle
-                nestable={platformIsNative}
-                simultaneousGestureRef={parentGestureRef}
-                gestureHostPresented={dragGestureHostActive}
-                containerStyle={styles.workspaceListContainer}
-              />
+              {canReorderPins ? (
+                <DraggableList
+                  testID="sidebar-pinned-list"
+                  data={visiblePinnedChats}
+                  keyExtractor={workspaceKeyExtractor}
+                  renderItem={renderPinnedChat}
+                  onDragEnd={onPinnedWorkspaceReorder}
+                  extraData={activeWorkspaceSelectionKey(activeWorkspaceSelection)}
+                  scrollEnabled={false}
+                  useDragHandle
+                  nestable={platformIsNative}
+                  simultaneousGestureRef={parentGestureRef}
+                  gestureHostPresented={dragGestureHostActive}
+                  containerStyle={styles.workspaceListContainer}
+                />
+              ) : (
+                <View testID="sidebar-pinned-list" style={styles.workspaceListContainer}>
+                  {visiblePinnedChats.map((workspace) => (
+                    <Fragment key={workspace.workspaceKey}>
+                      {renderPinnedChat({ item: workspace })}
+                    </Fragment>
+                  ))}
+                </View>
+              )}
               {canTogglePinnedChats ? (
                 <SidebarGroupToggleRow
                   expanded={pinnedChatsExpanded}
@@ -2816,3 +2849,5 @@ const styles = StyleSheet.create((theme) => ({
     backgroundColor: theme.colors.surface2,
   },
 }));
+
+function noop(): void {}

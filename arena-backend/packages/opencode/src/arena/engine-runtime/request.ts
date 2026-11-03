@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto"
+import { COMPACTION_HEADER, COMPACTION_OFFER } from "@agent-duel/arena-service/request-budget"
+import { readCompactionRequired, requestTooLargeMessage } from "@agent-duel/arena-service/request-error"
 
 export type RequestClassification = "generation" | "compaction" | "utility"
 
@@ -14,8 +16,10 @@ export function requestHeaders(input: {
   readonly parentSessionID?: string
   readonly rootSessionID?: string
   readonly requestID?: string
+  readonly arenaCompaction?: boolean
 }) {
   return {
+    ...(input.kind === "primary" && input.arenaCompaction ? { [COMPACTION_HEADER]: COMPACTION_OFFER } : {}),
     "x-session-affinity": input.sessionID,
     "X-Session-Id": input.sessionID,
     "x-arena-session-id": input.sessionID,
@@ -91,7 +95,7 @@ export function promptCacheKey(sessionID: string) {
   return /^ses_[0-9a-f]{64}$/.test(sessionID) ? sessionID.slice(4) : sessionID
 }
 
-/** Arena's provider-neutral preflight ceiling, below either model catalog window. */
+/** Fallback for a control plane that does not answer with a model-specific compaction refusal. */
 export const REQUEST_TOKEN_LIMIT = 272_000
 
 const MEDIA_TOKENS = 4_000
@@ -153,6 +157,41 @@ export function requestTokenEstimate(request: unknown) {
 
 export function requestNeedsCompaction(request: unknown) {
   return requestTokenEstimate(request) >= REQUEST_TOKEN_LIMIT
+}
+
+/** A first request and the request immediately after a checkpoint have no older exchange to shrink. */
+export function canCompactHistory(
+  messages: readonly { readonly type: string; readonly status?: string; readonly finish?: string }[],
+) {
+  const last = messages.findLast(
+    (message) =>
+      (message.type === "assistant" && message.finish !== undefined) ||
+      (message.type === "compaction" && message.status === "completed"),
+  )
+  return last?.type === "assistant"
+}
+
+/** Translate only the control plane's neutral refusal into Core's native overflow recovery signal. */
+export async function compactionResponse(
+  response: Response,
+  request: Request,
+  kind: "primary" | "compaction" | "title" | "generate",
+) {
+  if (response.status !== 413 || !readCompactionRequired(await response.clone().text())) return response
+  const compact =
+    kind === "compaction" || (kind === "primary" && request.headers.get(COMPACTION_HEADER) === COMPACTION_OFFER)
+  return Response.json(
+    {
+      error: {
+        message: requestTooLargeMessage,
+        // Core recognizes this provider error code before publishing a failed step. An irreducible
+        // request keeps a payload refusal, so it cannot start another paid summary.
+        code: compact ? "context_length_exceeded" : "arena_irreducible_input",
+        type: "arena_compaction_required",
+      },
+    },
+    { status: 413 },
+  )
 }
 
 export * as ArenaEngineRequest from "./request.js"

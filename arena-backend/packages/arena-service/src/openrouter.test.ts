@@ -65,9 +65,20 @@ function openrouter(options: Partial<ArenaServiceOptions> = {}) {
 function fakeDb(input: {
   readonly assignmentSets: (filter: Record<string, unknown>) => readonly unknown[]
   readonly recordMetrics?: (document: Record<string, unknown>) => void
+  readonly calibration?: Map<string, Record<string, unknown>>
 }) {
+  const calibration = input.calibration ?? new Map<string, Record<string, unknown>>()
   return {
     collection: (name: string) => {
+      if (name === "arenaRequestCalibration") {
+        return {
+          findOne: async (filter: { _id: string }) => calibration.get(filter._id) ?? null,
+          replaceOne: async (filter: { _id: string }, document: Record<string, unknown>) => {
+            calibration.set(filter._id, document)
+            return { acknowledged: true, matchedCount: 0, modifiedCount: 0 }
+          },
+        }
+      }
       if (name === "arenaAssignmentSets") {
         return {
           find: (filter: Record<string, unknown>) => ({
@@ -89,6 +100,242 @@ function fakeDb(input: {
 }
 
 describe("OpenRouter proxy", () => {
+  test.each([
+    {
+      route: "chat/completions",
+      input: { messages: [{ role: "user", content: "x".repeat(20_000) }], max_tokens: 9_999 },
+    },
+    {
+      route: "responses",
+      input: {
+        input: [{ role: "user", content: [{ type: "input_text", text: "x".repeat(20_000) }] }],
+        max_output_tokens: 9_999,
+      },
+    },
+  ])("preflights $route against private endpoint context and output limits", async ({ route, input }) => {
+    let model = {
+      ...pool[0],
+      limits: { context: 4_000, output: 500 },
+    }
+    let contacted = 0
+    const db = fakeDb({
+      assignmentSets: () => [
+        { userId: "user-1", scopeID: "budget", assignments: [{ assignmentID: "opaque-id", model }] },
+      ],
+    })
+    const proxy = openrouter({
+      db: async () => db,
+      fetch: async () => {
+        contacted++
+        return Response.json({ choices: [] })
+      },
+    })
+    const invoke = () =>
+      proxy(
+        new Request(`https://control.test/api/openrouter/api/v1/${route}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Arena-Assignment-ID": "opaque-id",
+            "X-Arena-Scope-ID": "budget",
+          },
+          body: JSON.stringify({ model: "contestant", ...input }),
+        }),
+      )
+
+    const narrow = await invoke()
+    expect(narrow.status).toBe(413)
+    expect(await narrow.json()).toEqual({
+      error: { message: "Arena request needs compaction", type: "arena_compaction_required" },
+    })
+    expect(contacted).toBe(0)
+
+    model = { ...pool[0], limits: { context: 100_000, output: 500 } }
+    const large = await invoke()
+    expect(large.status).toBe(200)
+    expect(contacted).toBe(1)
+  })
+
+  test("counts instructions, tools, response format and media allowance before contacting the provider", async () => {
+    let contacted = false
+    const db = fakeDb({
+      assignmentSets: () => [
+        {
+          userId: "user-1",
+          scopeID: "full-request",
+          assignments: [
+            { assignmentID: "opaque-id", model: { ...pool[0], limits: { context: 20_000, output: 2_000 } } },
+          ],
+        },
+      ],
+    })
+    const proxy = openrouter({
+      db: async () => db,
+      fetch: async () => {
+        contacted = true
+        return Response.json({ choices: [] })
+      },
+    })
+    const response = await proxy(
+      new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Arena-Assignment-ID": "opaque-id",
+          "X-Arena-Scope-ID": "full-request",
+        },
+        body: JSON.stringify({
+          model: "contestant",
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: "x".repeat(60_000) },
+                { type: "image_url", image_url: { url: "A".repeat(2_000_000) } },
+              ],
+            },
+          ],
+          instructions: "system".repeat(4_000),
+          tools: [{ type: "function", function: { name: "read", description: "tool".repeat(4_000), parameters: {} } }],
+          response_format: { type: "json_schema", json_schema: { name: "answer", schema: {} } },
+        }),
+      }),
+    )
+    expect(response.status).toBe(413)
+    expect(await response.json()).toEqual({
+      error: { message: "Arena request needs compaction", type: "arena_compaction_required" },
+    })
+    expect(contacted).toBe(false)
+  })
+
+  test("compacts only a request the engine can compact at the model's level", async () => {
+    let contacted = 0
+    const db = fakeDb({
+      assignmentSets: () => [
+        {
+          userId: "user-1",
+          scopeID: "level",
+          assignments: [
+            {
+              assignmentID: "opaque-id",
+              model: { ...pool[0], limits: { context: 100_000, output: 1_000, compactAt: 10_000 } },
+            },
+          ],
+        },
+      ],
+    })
+    const proxy = openrouter({
+      db: async () => db,
+      fetch: async () => {
+        contacted++
+        return Response.json({ choices: [] })
+      },
+    })
+    const invoke = (compaction?: string) =>
+      proxy(
+        new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Arena-Assignment-ID": "opaque-id",
+            "X-Arena-Scope-ID": "level",
+            ...(compaction ? { "X-Arena-Compaction": compaction } : {}),
+          },
+          // About 20k estimated tokens: above the level, far below the endpoint.
+          body: JSON.stringify({ model: "contestant", messages: [{ role: "user", content: "x".repeat(80_000) }] }),
+        }),
+      )
+
+    const auto = await invoke("auto")
+    expect(auto.status).toBe(413)
+    expect(await auto.json()).toEqual({
+      error: { message: "Arena request needs compaction", type: "arena_compaction_required" },
+    })
+    expect(contacted).toBe(0)
+    // A summary, a request the engine cannot shrink, and an engine that predates the level all go through.
+    expect((await invoke("summary")).status).toBe(200)
+    expect((await invoke()).status).toBe(200)
+    expect((await invoke("unknown")).status).toBe(200)
+    expect(contacted).toBe(3)
+  })
+
+  test("scales the estimate by the input the provider measured for the assignment's last call", async () => {
+    const calibration = new Map<string, Record<string, unknown>>()
+    let promptTokens = 0
+    const db = fakeDb({
+      assignmentSets: () => [
+        {
+          userId: "user-1",
+          scopeID: "calibrated",
+          assignments: [
+            {
+              assignmentID: "opaque-id",
+              model: { ...pool[0], limits: { context: 100_000, output: 1_000, compactAt: 10_000 } },
+            },
+          ],
+        },
+      ],
+      calibration,
+    })
+    const proxy = openrouter({
+      db: async () => db,
+      fetch: async () =>
+        Response.json({ choices: [{ message: { content: "ok" } }], usage: { prompt_tokens: promptTokens } }),
+    })
+    const invoke = (chars: number) =>
+      proxy(
+        new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Arena-Assignment-ID": "opaque-id",
+            "X-Arena-Scope-ID": "calibrated",
+            "X-Arena-Compaction": "auto",
+          },
+          body: JSON.stringify({ model: "contestant", messages: [{ role: "user", content: "x".repeat(chars) }] }),
+        }),
+      )
+
+    // About 8k estimated tokens: below the level while nothing has been measured.
+    promptTokens = 6_000
+    expect((await invoke(16_000)).status).toBe(200)
+    const [first] = [...calibration.values()]
+    expect(first).toMatchObject({ assignmentID: "opaque-id", promptTokens: 6_000 })
+    expect(first?.estimate).toBeGreaterThan(4_000)
+    expect(first?.estimate).toBeLessThan(4_100)
+    // That call measured 1.5 tokens per estimated token, so the same 8k is now 12k: above the level.
+    expect((await invoke(32_000)).status).toBe(413)
+    // A tokenizer that counts fewer tokens than the estimate moves the level the other way.
+    promptTokens = 2_000
+    expect((await invoke(16_000)).status).toBe(200)
+    expect((await invoke(36_000)).status).toBe(200)
+  })
+
+  test("sanitizes recognized provider context overflow refusals", async () => {
+    const db = fakeDb({
+      assignmentSets: () => [
+        { userId: "user-1", scopeID: "overflow", assignments: [{ assignmentID: "opaque-id", model: pool[0] }] },
+      ],
+    })
+    const proxy = openrouter({
+      db: async () => db,
+      fetch: async () =>
+        Response.json({ error: { code: "context_length_exceeded", message: "private model 999999" } }, { status: 400 }),
+    })
+    const response = await proxy(
+      new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Arena-Assignment-ID": "opaque-id",
+          "X-Arena-SCOPE-ID": "overflow",
+        },
+        body: JSON.stringify({ model: "contestant", messages: [] }),
+      }),
+    )
+    expect(response.status).toBe(413)
+  })
+
   test.each(["done", "eof", "unterminated-eof"])(
     "flushes buffered reasoning at %s without a finish event",
     async (ending) => {
@@ -396,6 +643,7 @@ describe("OpenRouter proxy", () => {
             displayName: "Hidden Model",
             slug: "provider/hidden-model",
             canonicalSlug: "provider/hidden-model-version",
+            contextWindow: 1_000_000,
             routing: { sort: "throughput", max_price: { prompt: 2, completion: 6 } },
           },
         },
@@ -450,7 +698,7 @@ describe("OpenRouter proxy", () => {
       model: "provider/hidden-model",
       messages: [],
       stream: false,
-      max_tokens: 999_999,
+      max_tokens: 32_000,
       reasoning: { effort: "high" },
       provider: { sort: "throughput", max_price: { prompt: 2, completion: 6 } },
       session_id: "opaque-id",
@@ -637,7 +885,13 @@ describe("OpenRouter proxy", () => {
           assignments: [
             {
               assignmentID: "opaque-id",
-              model: { displayName: "Hidden Model", slug, canonicalSlug: slug, routing: { sort: "throughput" } },
+              model: {
+                displayName: "Hidden Model",
+                slug,
+                canonicalSlug: slug,
+                contextWindow: 1_000_000,
+                routing: { sort: "throughput" },
+              },
             },
           ],
         },
@@ -744,6 +998,161 @@ describe("OpenRouter proxy", () => {
     expect(upstreamBodies[0]).toMatchObject({ session_id: "opaque-id", prompt_cache_key: "opaque-id" })
     expect(recorded).toHaveLength(1)
     expect(recorded[0]).toMatchObject({ provider: "Private Provider", finishReason: "stop" })
+  })
+
+  test("forwards a keep-alive ping only for Claude, and answers every model the same way", async () => {
+    const claude = {
+      displayName: "Hidden Model",
+      slug: "anthropic/hidden-model",
+      canonicalSlug: "anthropic/hidden-model",
+      routing: { sort: "throughput" },
+    }
+    const upstreamBodies: Record<string, unknown>[] = []
+    const recorded: Record<string, unknown>[] = []
+    const info = spyOn(console, "info").mockImplementation(() => {})
+    const db = fakeDb({
+      assignmentSets: () => [
+        {
+          userId: "user-1",
+          scopeID: "turn-1",
+          assignments: [
+            { assignmentID: "claude-side", model: claude },
+            { assignmentID: "other-side", model: pool[0] },
+          ],
+        },
+      ],
+      recordMetrics: (document) => recorded.push(document),
+    })
+    const proxy = openrouter({
+      db: async () => db,
+      fetch: async (_input, init) => {
+        upstreamBodies.push(JSON.parse(new TextDecoder().decode(init?.body as ArrayBuffer)) as Record<string, unknown>)
+        return new Response(
+          `data: ${JSON.stringify({
+            provider: "Private Provider",
+            choices: [{ delta: { content: "o" }, finish_reason: "length" }],
+            usage: { prompt_tokens: 20_000, completion_tokens: 1, prompt_tokens_details: { cached_tokens: 19_990 } },
+          })}\n\ndata: [DONE]\n\n`,
+          { headers: { "content-type": "text/event-stream" } },
+        )
+      },
+    })
+    const tools = [{ type: "function", function: { name: "read", parameters: { type: "object" } } }]
+    const ping = (assignmentID: string, route = "chat/completions") =>
+      proxy(
+        new Request(`https://control.test/api/openrouter/api/v1/${route}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Arena-Assignment-ID": assignmentID,
+            "X-Arena-Scope-ID": "turn-1",
+            "X-Arena-Keep-Alive": "1",
+          },
+          body: JSON.stringify({
+            model: "contestant",
+            messages: [{ role: "user", content: "hi" }],
+            tools,
+            stream: true,
+            max_tokens: 1,
+            max_completion_tokens: 32_000,
+          }),
+        }),
+      )
+
+    try {
+      const answers = [await ping("claude-side"), await ping("other-side"), await ping("claude-side", "responses")]
+      for (const answer of answers) {
+        expect(answer.status).toBe(204)
+        expect(answer.headers.get("X-Arena-Keep-Alive")).toBe("1")
+        expect(await answer.text()).toBe("")
+      }
+      // Only the Claude ping on the route Claude sides use reaches OpenRouter, with the fields of a real call.
+      expect(upstreamBodies).toHaveLength(1)
+      expect(upstreamBodies[0]).toMatchObject({
+        model: claude.slug,
+        max_tokens: 1,
+        cache_control: { type: "ephemeral" },
+        session_id: "claude-side",
+        prompt_cache_key: "claude-side",
+        reasoning: { effort: "high" },
+        messages: [{ role: "user", content: "hi" }],
+      })
+      expect(upstreamBodies[0]).not.toHaveProperty("max_completion_tokens")
+      expect(recorded).toEqual([])
+      expect(info.mock.calls.at(-1)?.[1]).toBe(
+        JSON.stringify({
+          provider: "Private Provider",
+          promptTokens: 20_000,
+          cacheReadTokens: 19_990,
+          cacheWriteTokens: 0,
+        }),
+      )
+    } finally {
+      info.mockRestore()
+    }
+  })
+
+  test("tries a failed Claude ping once more, and answers the same way when both fail", async () => {
+    const claude = {
+      displayName: "Hidden Model",
+      slug: "anthropic/hidden-model",
+      canonicalSlug: "anthropic/hidden-model",
+      routing: { sort: "throughput" },
+    }
+    const db = fakeDb({
+      assignmentSets: () => [
+        { userId: "user-1", scopeID: "turn-1", assignments: [{ assignmentID: "claude-side", model: claude }] },
+      ],
+    })
+    const upstream: (() => Response)[] = [
+      () => new Response("overloaded", { status: 529 }),
+      () => new Response(`data: ${JSON.stringify({ usage: { prompt_tokens: 10 } })}\n\ndata: [DONE]\n\n`),
+      () => {
+        throw new TypeError("fetch failed")
+      },
+      () => {
+        throw new TypeError("fetch failed")
+      },
+    ]
+    let sent = 0
+    const proxy = openrouter({
+      db: async () => db,
+      fetch: async () => upstream[sent++]!(),
+    })
+    const ping = () =>
+      proxy(
+        new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Arena-Assignment-ID": "claude-side",
+            "X-Arena-Scope-ID": "turn-1",
+            "X-Arena-Keep-Alive": "1",
+          },
+          body: JSON.stringify({ model: "contestant", messages: [{ role: "user", content: "hi" }], stream: true }),
+        }),
+      )
+    const info = spyOn(console, "info").mockImplementation(() => {})
+    const warn = spyOn(console, "warn").mockImplementation(() => {})
+
+    try {
+      const recovered = await ping()
+      expect(sent).toBe(2)
+      const failed = await ping()
+      expect(sent).toBe(4)
+      for (const answer of [recovered, failed]) {
+        expect(answer.status).toBe(204)
+        expect(answer.headers.get("X-Arena-Keep-Alive")).toBe("1")
+      }
+      expect(warn.mock.calls.map((call) => call[1])).toEqual([
+        JSON.stringify({ status: 529 }),
+        JSON.stringify({ status: "unsent" }),
+        JSON.stringify({ status: "unsent" }),
+      ])
+    } finally {
+      info.mockRestore()
+      warn.mockRestore()
+    }
   })
 
   test("keeps a single-agent chat on one opaque key across its messages", async () => {
@@ -900,6 +1309,7 @@ describe("OpenRouter proxy", () => {
                 displayName: "Hidden Model",
                 slug: "provider/hidden-model",
                 canonicalSlug: "provider/hidden-model",
+                contextWindow: 1_000_000,
                 routing: { require_parameters: true },
               },
             },
@@ -1002,6 +1412,7 @@ describe("OpenRouter proxy", () => {
                     displayName: "GPT Luna 5.6 Xhigh",
                     slug: "openai/gpt-5.6-luna",
                     canonicalSlug: "openai/gpt-5.6-luna",
+                    contextWindow: 1_050_000,
                     routing: { sort: "throughput" },
                   },
                 },
@@ -1045,6 +1456,7 @@ describe("OpenRouter proxy", () => {
             displayName: "Hidden Model",
             slug: "provider/hidden-model",
             canonicalSlug: "provider/hidden-model-version",
+            contextWindow: 1_000_000,
             routing: { sort: "throughput" },
           },
         },
@@ -1087,6 +1499,7 @@ describe("OpenRouter proxy", () => {
             displayName: "Hidden Model",
             slug: "provider/hidden-model",
             canonicalSlug: "provider/hidden-model-version",
+            contextWindow: 1_000_000,
             routing: { sort: "throughput" },
           },
         },
@@ -1137,6 +1550,7 @@ describe("OpenRouter proxy", () => {
             displayName: "Hidden Model",
             slug: "provider/hidden-model",
             canonicalSlug: "provider/hidden-model-version",
+            contextWindow: 1_000_000,
             routing: { sort: "throughput" },
           },
         },
@@ -1210,6 +1624,7 @@ describe("OpenRouter proxy", () => {
             displayName: "Hidden Model",
             slug: "provider/hidden-model",
             canonicalSlug: "provider/hidden-model-version",
+            contextWindow: 1_000_000,
             routing: { sort: "throughput" },
           },
         },
@@ -1258,7 +1673,13 @@ describe("OpenRouter proxy", () => {
       assignments: [
         {
           assignmentID: "opaque-id",
-          model: { displayName: "Hidden Model", slug: "provider/hidden-model", canonicalSlug: "x", routing: {} },
+          model: {
+            displayName: "Hidden Model",
+            slug: "provider/hidden-model",
+            canonicalSlug: "x",
+            contextWindow: 1_000_000,
+            routing: {},
+          },
         },
       ],
     }
@@ -1332,6 +1753,7 @@ describe("OpenRouter proxy", () => {
             displayName: "Hidden Model",
             slug: "provider/hidden-model",
             canonicalSlug: "provider/hidden-model-version",
+            contextWindow: 1_000_000,
             routing: { sort: "throughput" },
           },
         },
@@ -1368,6 +1790,7 @@ describe("OpenRouter proxy", () => {
             displayName: "Hidden Model",
             slug: "provider/hidden-model",
             canonicalSlug: "provider/hidden-model-version",
+            contextWindow: 1_000_000,
             routing: { sort: "throughput" },
           },
         },
@@ -1414,6 +1837,7 @@ describe("OpenRouter proxy", () => {
             displayName: "Hidden Model",
             slug: "provider/hidden-model",
             canonicalSlug: "provider/hidden-model-version",
+            contextWindow: 1_000_000,
             routing: { sort: "throughput" },
           },
         },

@@ -937,7 +937,11 @@ export const ptBR: TranslationResources = {
         started: "Iniciada",
         completed: "Concluída",
         cancelled: "Cancelada",
+
+        reopened: "Reaberta",
       },
+
+      tasksProgressCurrent: "{{completed}}/{{total}} tarefas · {{task}}",
     },
     turnFooter: {
       endedAt: "{{duration}}, terminou às {{time}}",
@@ -1551,6 +1555,14 @@ export const ptBR: TranslationResources = {
           loadError: "Falha ao carregar commits",
           empty: "Ainda não há commits",
         },
+
+        showTreeView: "Mostrar árvore de pastas",
+        showFlatView: "Mostrar lista plana de arquivos",
+        collapseAll: "Recolher todos os arquivos",
+        expandAll: "Expandir todos os arquivos",
+        emptyHiddenWhitespace: "Nenhuma alteração visível após ocultar espaços em branco",
+        emptyUncommitted: "Nenhuma alteração sem commit",
+        emptyAgainstBase: "Nenhuma alteração vs {{baseRef}}",
       },
       openInEditor: {
         open: "Abrir",
@@ -1755,6 +1767,13 @@ export const ptBR: TranslationResources = {
         project: "Projeto",
         status: "Status",
         labels: "Etiquetas",
+        none: "Nenhum",
+      },
+      sorting: {
+        groupLabel: "Ordem dos grupos",
+        label: "Ordenar",
+        default: "Padrão",
+        lastChat: "Último chat",
       },
       titleSource: {
         label: "Título",
@@ -1946,6 +1965,8 @@ export const ptBR: TranslationResources = {
       branch: "Branch",
       baseNotApplicable: "Não aplicável",
       host: "Host",
+
+      base: "Base",
     },
     titlePlaceholder: "Título (opcional)",
     errors: {
@@ -2184,6 +2205,14 @@ export const ptBR: TranslationResources = {
         statusFailed: "Não foi possível verificar o status de instalação da CLI.",
         installFailed: "Não foi possível instalar a CLI do Agent Duel.",
       },
+
+      skills: {
+        statusFailed: "Não foi possível verificar o status das skills de orquestração.",
+        installFailed: "Não foi possível instalar as skills de orquestração.",
+        updateFailed: "Não foi possível atualizar as skills de orquestração.",
+        uninstallFailed: "Não foi possível desinstalar as skills de orquestração.",
+        saveSelectionFailed: "Não foi possível salvar a seleção de skills de orquestração.",
+      },
     },
   },
   rootError: {
@@ -2392,6 +2421,8 @@ export const ptBR: TranslationResources = {
     archiveTooltip: "Arquivar subagente",
     archiveFinishedAction: "Arquivar subagentes concluídos",
     archiveFinishedRetry: "Tentar novamente ({{failed}}/{{total}})",
+
+    archiveFinishedTooltip: "Arquivar concluídos",
   },
   panels: {
     draft: {
@@ -2446,6 +2477,8 @@ export const ptBR: TranslationResources = {
         reload: "Recarregar",
         reloadTitle: "Recarregar do disco?",
         reloadMessage: "Suas alterações locais serão perdidas.",
+
+        checkFailedTitle: "Não foi possível verificar o arquivo no disco",
       },
     },
     changes: {
@@ -2517,6 +2550,32 @@ export const ptBR: TranslationResources = {
   },
   sidebarCallout: {
     dismiss: "Dispensar",
+  },
+  leaderboard: {
+    title: "Meu ranking",
+    refresh: "Atualizar",
+    refreshing: "Atualizando...",
+    retry: "Tentar novamente",
+    connect: "Entre e conecte-se para ver seu ranking",
+    loading: "Calculando seu ranking...",
+    error: "Não foi possível carregar seu ranking",
+    unlock: "Seu ranking é liberado com {{minimum}} votos válidos",
+    progress: "Você tem {{count}} votos válidos · faltam {{remaining}}",
+    eligible: "Batalhas com erros de um competidor e com subagentes em versões afetadas não contam",
+    filters: "Falhas de execução excluídas · Subagentes filtrados por commit",
+    summary: "{{count}} votos válidos · {{earlyVotes}} · Atualizado em {{date}}",
+    excludeEarlyVotes: "Excluir votos antecipados",
+    earlyIncluded: "Votos antecipados incluídos",
+    earlyExcluded: "Votos antecipados excluídos",
+    disconnected:
+      "Alguns grupos de modelos ainda não têm comparações em comum. As pontuações entre esses grupos dependem da distribuição a priori.",
+    noModels: "Modelos ativos aparecem com 4 votos válidos cada",
+    chartLabel:
+      "Pontuações dos seus modelos com intervalos de credibilidade de 95%, velocidades medianas de inferência e número de votos",
+    votes: "Votos",
+    axis: "Pontuação Bradley–Terry (escala Elo)",
+    medianSpeed: "Mediana de {{speed}} tokens/s",
+    noSpeed: "Velocidade indisponível",
   },
   feedback: {
     sidebarAction: "Enviar feedback",
@@ -2761,6 +2820,8 @@ export const ptBR: TranslationResources = {
       modelHint: "Somente este modelo é usado. Se ele falhar, o Agent Duel não tenta outro modelo",
       docs: "Documentação",
       saveError: "Não foi possível atualizar a geração de metadados",
+
+      fallbackHint: "Se ele não estiver disponível, o Agent Duel usa outro modelo disponível",
     },
     storage: {
       title: "Ambientes de batalha",
@@ -2849,6 +2910,8 @@ export const ptBR: TranslationResources = {
           overview: "Resumo",
           detailed: "Detalhes completos",
         },
+
+        accessibilityLabel: "Selecionar exibição de chamadas de ferramentas ({{value}})",
       },
       language: {
         label: "Idioma",
@@ -3053,6 +3116,39 @@ export const ptBR: TranslationResources = {
         install: "Instalar",
         installing: "Instalando...",
         installed: "Instalado",
+
+        update: "Atualizar",
+        working: "Trabalhando...",
+        remove: "Remover",
+        uninstall: "Desinstalar",
+        save: "Salvar",
+        saving: "Salvando...",
+      },
+
+      skills: {
+        title: "Skills de orquestração",
+        description: "Ensine seus agentes a orquestrar pela CLI",
+        updateAvailable: "Atualização disponível",
+        updateTitle: "Atualizar Agent Duel skills?",
+        updateFallback: "Sincronize as skills incluídas com sua máquina.",
+        uninstallTitle: "Desinstalar Agent Duel skills?",
+        uninstallMessage:
+          "Remove todas as skills de orquestração do Agent Duel de ~/.agents, ~/.claude e ~/.codex.",
+        choose: "Escolher skills",
+        chooseAll: "Todas as skills",
+        chooseAllHint:
+          "Mantenha instaladas todas as skills incluídas, inclusive as adicionadas depois.",
+        chooseList: "Skills incluídas",
+        chooseEmpty: "Esta versão não inclui skills.",
+        removeTitle: "Remover as skills desmarcadas?",
+        removeMessage:
+          "{{skills}} serão excluídas de ~/.agents, ~/.claude e ~/.codex. Tudo o que você adicionou dentro dessas pastas de skills também é excluído.",
+        saveFailed: "Não foi possível salvar sua seleção de skills.",
+      },
+      operations: {
+        add: "Adicionar skill",
+        update: "Atualizar skill",
+        delete: "Excluir skill",
       },
     },
     permissions: {

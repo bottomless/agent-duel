@@ -4,9 +4,16 @@ import type { AgentTimelineRow } from "../agent/agent-timeline-store-types.js";
 import type { AgentStreamEvent } from "../agent/agent-sdk-types.js";
 import type { ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
 
+interface Running {
+  key: string;
+  index: number;
+  promise: Promise<void>;
+  abort: AbortController;
+}
+
 interface Hydration {
   completed?: { key: string; index: number };
-  running?: { key: string; promise: Promise<void> };
+  running?: Running;
 }
 
 // The active agent is shared across windows and released on close. Window-local
@@ -16,7 +23,8 @@ const agents = new WeakMap<object, Hydration>();
 export async function hydrateArenaWinner(
   owner: object,
   snapshot: ArenaSnapshot,
-  hydrate: () => Promise<void>,
+  hydrate: (signal: AbortSignal) => Promise<void>,
+  supersedeAfterMs: number,
 ): Promise<void> {
   if (snapshot.chat.status !== "ready") return;
   const applied = snapshot.history.reduce<(typeof snapshot.history)[number] | undefined>(
@@ -41,24 +49,53 @@ export async function hydrateArenaWinner(
     agents.set(owner, state);
   }
   while (state.running) {
-    if (state.running.key === key) return state.running.promise;
-    // A failed earlier winner must not prevent a newer canonical version from loading.
-    await state.running.promise.catch(() => {});
+    const running = state.running;
+    if (running.key === key) return running.promise;
+    if (applied.index < running.index) {
+      // An older winner never takes over from a newer one; its caller bounds its own wait.
+      await running.promise.catch(() => {});
+      continue;
+    }
+    // A failed earlier winner must not prevent a newer canonical version from loading, and one
+    // that never settles must not hold it: the newer history contains the older winner too.
+    const settled = await settlesWithin(running.promise, supersedeAfterMs);
+    if (!settled && state.running === running) {
+      running.abort.abort();
+      state.running = undefined;
+    }
   }
   if (state.completed?.key === key || (state.completed && state.completed.index > applied.index))
     return;
   const current = state;
+  const abort = new AbortController();
   const promise = Promise.resolve()
-    .then(hydrate)
+    .then(() => hydrate(abort.signal))
     .then(() => {
-      current.completed = { key, index: applied.index };
+      if (!abort.signal.aborted) current.completed = { key, index: applied.index };
       return undefined;
     })
     .finally(() => {
-      current.running = undefined;
+      if (current.running?.abort === abort) current.running = undefined;
     });
-  current.running = { key, promise };
+  current.running = { key, index: applied.index, promise, abort };
   return promise;
+}
+
+async function settlesWithin(promise: Promise<void>, ms: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise.then(
+        () => true,
+        () => true,
+      ),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export function isArenaTimelinePrefix(

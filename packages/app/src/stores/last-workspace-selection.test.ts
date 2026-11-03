@@ -36,7 +36,45 @@ class DelayedWorkspaceSelectionStorage implements LastWorkspaceSelectionStorage 
   }
 }
 
+class MemoryWorkspaceSelectionStorage implements LastWorkspaceSelectionStorage {
+  saved: string | null = null;
+
+  async read(): Promise<string | null> {
+    return this.saved;
+  }
+
+  async write(value: string): Promise<void> {
+    this.saved = value;
+  }
+
+  async clear(): Promise<void> {
+    this.saved = null;
+  }
+}
+
 describe("last workspace selection", () => {
+  it("still clears malformed persisted selections", async () => {
+    const storage = new MemoryWorkspaceSelectionStorage();
+    storage.saved = JSON.stringify({ serverId: "server-1", workspaceId: "" });
+    const store = createLastWorkspaceSelectionStore(storage);
+    await store.hydrate();
+    expect(store.getSelection()).toBeNull();
+    expect(storage.saved).toBeNull();
+  });
+
+  it("does not restore a forgotten workspace when hydration finishes late", async () => {
+    const storage = new DelayedWorkspaceSelectionStorage();
+    const store = createLastWorkspaceSelectionStore(storage);
+    const hydration = store.hydrate();
+    const selection = { serverId: "server-1", workspaceId: "empty" };
+    store.remember(selection);
+    store.forget(selection);
+    storage.finishHydrationWith(selection);
+    await hydration;
+    expect(store.getSelection()).toBeNull();
+    expect(storage.getSavedSelection()).toBeNull();
+  });
+
   it("hydrates the saved workspace selection", async () => {
     const storage = new DelayedWorkspaceSelectionStorage();
     const store = createLastWorkspaceSelectionStore(storage);
@@ -69,5 +107,38 @@ describe("last workspace selection", () => {
       serverId: "server-new",
       workspaceId: "workspace-new",
     });
+  });
+
+  it("forgets a workspace for the next launch too", async () => {
+    const storage = new MemoryWorkspaceSelectionStorage();
+    const store = createLastWorkspaceSelectionStore(storage);
+    await store.hydrate();
+    store.remember({ serverId: "server-1", workspaceId: "workspace-empty" });
+
+    store.forget({ serverId: "server-1", workspaceId: "workspace-empty" });
+    await Promise.resolve();
+
+    expect(store.getSelection()).toBeNull();
+    const relaunched = createLastWorkspaceSelectionStore(storage);
+    await relaunched.hydrate();
+    expect(relaunched.getSelection()).toBeNull();
+  });
+
+  it("keeps the remembered workspace when asked to forget another one", async () => {
+    const storage = new MemoryWorkspaceSelectionStorage();
+    const store = createLastWorkspaceSelectionStore(storage);
+    await store.hydrate();
+    store.remember({ serverId: "server-1", workspaceId: "workspace-current" });
+
+    store.forget({ serverId: "server-1", workspaceId: "workspace-empty" });
+    await Promise.resolve();
+
+    expect(store.getSelection()).toEqual({
+      serverId: "server-1",
+      workspaceId: "workspace-current",
+    });
+    expect(storage.saved).toBe(
+      JSON.stringify({ serverId: "server-1", workspaceId: "workspace-current" }),
+    );
   });
 });

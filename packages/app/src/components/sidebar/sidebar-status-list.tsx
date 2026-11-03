@@ -1,5 +1,6 @@
 import {
   memo,
+  Fragment,
   useCallback,
   useMemo,
   useState,
@@ -70,6 +71,7 @@ import {
   useSidebarWorkspaceTrailing,
   type SidebarWorkspaceTrailing,
 } from "@/components/sidebar/workspace-trailing";
+import { useSidebarViewStore } from "@/stores/sidebar-view-store";
 import { useSidebarCollapsedSectionsStore } from "@/stores/sidebar-collapsed-sections-store";
 import {
   SidebarWorkspaceContextMenu,
@@ -79,7 +81,7 @@ import { SidebarSectionHeader } from "@/components/sidebar/sidebar-section-heade
 import { SidebarGroupToggleRow } from "@/components/sidebar/sidebar-group-toggle-row";
 import { useLimitedSidebarGroup } from "@/components/sidebar/use-limited-sidebar-group";
 import type { ToggleSidebarWorkspacePin } from "@/hooks/use-sidebar-workspace-pin";
-import { DraggableList, type DraggableRenderItemInfo } from "@/components/draggable-list";
+import { DraggableList } from "@/components/draggable-list";
 import type { DraggableListDragHandleProps } from "@/components/draggable-list.types";
 import { useLongPressDragInteraction } from "@/components/sidebar/use-long-press-drag-interaction";
 
@@ -116,6 +118,7 @@ function statusWorkspaceKeyExtractor(workspace: SidebarWorkspaceEntry): string {
 
 interface StatusWorkspaceListProps {
   groups: SidebarWorkspaceGroup[];
+  flatWorkspaces: SidebarWorkspaceEntry[];
   pinnedWorkspaces: SidebarWorkspaceEntry[];
   projectIconByProjectViewKey: ReadonlyMap<string, string | null>;
   shortcutIndexByWorkspaceKey: Map<string, number>;
@@ -133,6 +136,7 @@ interface StatusWorkspaceListProps {
 
 export function SidebarStatusWorkspaceList({
   groups,
+  flatWorkspaces,
   pinnedWorkspaces,
   projectIconByProjectViewKey,
   shortcutIndexByWorkspaceKey,
@@ -147,6 +151,7 @@ export function SidebarStatusWorkspaceList({
   dragGestureHostActive,
 }: StatusWorkspaceListProps) {
   const { t } = useTranslation();
+  const canReorderPins = useSidebarViewStore((state) => state.sortMode === "default");
   const collapsedWorkspaceGroupKeys = useSidebarCollapsedSectionsStore(
     (state) => state.collapsedWorkspaceGroupKeys,
   );
@@ -170,7 +175,12 @@ export function SidebarStatusWorkspaceList({
       drag,
       isActive,
       dragHandleProps,
-    }: DraggableRenderItemInfo<SidebarWorkspaceEntry>) => (
+    }: {
+      item: SidebarWorkspaceEntry;
+      drag?: () => void;
+      isActive?: boolean;
+      dragHandleProps?: DraggableListDragHandleProps;
+    }) => (
       <StatusWorkspaceRow
         workspace={workspace}
         {...buildStatusRowProjectPresentation({
@@ -209,18 +219,30 @@ export function SidebarStatusWorkspaceList({
           />
           {pinnedCollapsed ? null : (
             <>
-              <DraggableList
-                testID="sidebar-pinned-list"
-                data={visiblePinnedWorkspaces}
-                keyExtractor={statusWorkspaceKeyExtractor}
-                renderItem={renderPinnedWorkspace}
-                onDragEnd={onPinnedWorkspaceReorder}
-                scrollEnabled={false}
-                useDragHandle
-                nestable={platformIsNative}
-                simultaneousGestureRef={parentGestureRef}
-                gestureHostPresented={dragGestureHostActive}
-              />
+              {canReorderPins ? (
+                <DraggableList
+                  testID="sidebar-pinned-list"
+                  data={visiblePinnedWorkspaces}
+                  keyExtractor={statusWorkspaceKeyExtractor}
+                  renderItem={renderPinnedWorkspace}
+                  onDragEnd={onPinnedWorkspaceReorder}
+                  scrollEnabled={false}
+                  useDragHandle
+                  nestable={platformIsNative}
+                  simultaneousGestureRef={parentGestureRef}
+                  gestureHostPresented={dragGestureHostActive}
+                />
+              ) : (
+                <View testID="sidebar-pinned-list">
+                  {visiblePinnedWorkspaces.map((workspace) => (
+                    <Fragment key={workspace.workspaceKey}>
+                      {renderPinnedWorkspace({
+                        item: workspace,
+                      })}
+                    </Fragment>
+                  ))}
+                </View>
+              )}
               {canTogglePinnedWorkspaces ? (
                 <SidebarGroupToggleRow
                   expanded={pinnedWorkspacesExpanded}
@@ -236,16 +258,33 @@ export function SidebarStatusWorkspaceList({
       {sidebarFilterEmpty ? (
         <SidebarFilterEmptyState />
       ) : (
-        <StatusGroupList
-          groups={groups}
-          collapsedWorkspaceGroupKeys={collapsedWorkspaceGroupKeys}
-          projectIconByProjectViewKey={projectIconByProjectViewKey}
-          shortcutIndex={statusShortcutIndex}
-          showShortcutBadges={showShortcutBadges}
-          onWorkspacePress={onWorkspacePress}
-          supportsPinningByServerId={supportsPinningByServerId}
-          onToggleWorkspacePin={onToggleWorkspacePin}
-        />
+        <>
+          <View testID="sidebar-flat-chat-list">
+            {flatWorkspaces.map((workspace) => (
+              <StatusWorkspaceRow
+                key={workspace.workspaceKey}
+                workspace={workspace}
+                {...buildStatusRowProjectPresentation({ workspace, projectIconByProjectViewKey })}
+                inStatusGroup={false}
+                shortcutNumber={statusShortcutIndex.get(workspace.workspaceKey) ?? null}
+                showShortcutBadge={showShortcutBadges}
+                canPin={supportsPinningByServerId.get(workspace.serverId) === true}
+                onToggleWorkspacePin={onToggleWorkspacePin}
+                onWorkspacePress={onWorkspacePress}
+              />
+            ))}
+          </View>
+          <StatusGroupList
+            groups={groups}
+            collapsedWorkspaceGroupKeys={collapsedWorkspaceGroupKeys}
+            projectIconByProjectViewKey={projectIconByProjectViewKey}
+            shortcutIndex={statusShortcutIndex}
+            showShortcutBadges={showShortcutBadges}
+            onWorkspacePress={onWorkspacePress}
+            supportsPinningByServerId={supportsPinningByServerId}
+            onToggleWorkspacePin={onToggleWorkspacePin}
+          />
+        </>
       )}
     </>
   );

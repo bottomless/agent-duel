@@ -16,7 +16,17 @@ import { tmpDirectory } from "../contestant"
 import { ArenaEngineAssignment, type ArenaAssignmentRegistry } from "./assignment"
 import { ArenaEngineModels, CONTESTANT_IDENTITY, PROVIDER_ID, modelReference } from "./models"
 import { OUTPUT_TOKEN_LIMIT } from "../model-profile"
-import { classification, promptCacheKey, requestHeaders, requestNeedsCompaction, sessionRequestIDs } from "./request"
+import {
+  canCompactHistory,
+  compactionResponse,
+  classification,
+  promptCacheKey,
+  requestHeaders,
+  requestNeedsCompaction,
+  sessionRequestIDs,
+} from "./request"
+import { COMPACTION_HEADER, COMPACTION_OFFER } from "@agent-duel/arena-service/request-budget"
+import { ArenaPorts } from "../ports"
 import { ArenaEngineSandbox, previewEnvironment } from "./sandbox"
 import type { ToolExecutionGate } from "./gate"
 import { getArenaAutoAccept } from "./auto-accept"
@@ -331,12 +341,27 @@ function install(context: Context, options: InstalledOptions) {
     )
 
     yield* context.session.hook(
+      "compaction",
+      (event) =>
+        Effect.sync(() => {
+          if (arenaModel(event.model)) event.preservePendingInput = true
+        }),
+      { providerID: String(PROVIDER_ID) },
+    )
+
+    yield* context.session.hook(
       "model.request",
       (event) =>
         ensureAssignment(context, options, String(event.sessionID)).pipe(
           Effect.andThen(
-            context.session.get({ sessionID: event.sessionID }).pipe(
-              Effect.map((session) => {
+            Effect.all({
+              session: context.session.get({ sessionID: event.sessionID }),
+              history:
+                event.kind === "primary"
+                  ? context.session.context({ sessionID: event.sessionID }).pipe(Effect.orElseSucceed(() => []))
+                  : Effect.succeed([]),
+            }).pipe(
+              Effect.map(({ session, history }) => {
                 const assignment = options.assignments?.assignments.get(String(event.sessionID))
                 event.headers = {
                   ...event.headers,
@@ -346,6 +371,7 @@ function install(context: Context, options: InstalledOptions) {
                     parentSessionID: session.parentID,
                     rootSessionID: assignment?.rootSessionID,
                     requestID: sessionRequestIDs.next(String(event.sessionID), event.kind),
+                    arenaCompaction: canCompactHistory(history),
                   }),
                 }
               }),
@@ -361,7 +387,20 @@ function install(context: Context, options: InstalledOptions) {
       (event) =>
         Effect.sync(() => {
           if (!arenaSession(options, String(event.sessionID)) || event.kind !== "primary") return
-          if (requestNeedsCompaction(event.request)) event.decision = "compact"
+          if (
+            event.request.http?.headers?.[COMPACTION_HEADER] === COMPACTION_OFFER &&
+            requestNeedsCompaction(event.request)
+          )
+            event.decision = "compact"
+        }),
+      { providerID: String(PROVIDER_ID) },
+    )
+
+    yield* context.session.hook(
+      "http.response",
+      (event) =>
+        Effect.promise(async () => {
+          event.response = await compactionResponse(event.response, event.request, event.kind)
         }),
       { providerID: String(PROVIDER_ID) },
     )
@@ -527,11 +566,20 @@ function install(context: Context, options: InstalledOptions) {
       editor.update("shell", (tool) => {
         const execute = tool.execute
         tool.execute = (input, call) => {
-          if (options.assignments?.assignments.get(String(call.sessionID))?.telemetry) return execute(input, call)
           const params = input as { readonly command?: unknown; readonly workdir?: unknown }
           if (typeof params.command !== "string") return execute(input, call)
           const command = params.command
           return Effect.gen(function* () {
+            const sessionID = String(call.sessionID)
+            if (arenaSession(options, sessionID)) {
+              // A failed lookup refuses nothing, matching the legacy shell policy.
+              const refusal = yield* Effect.tryPromise(async () => {
+                const environment = await ArenaPorts.environment(await ArenaRuntime.store(), sessionID)
+                return environment ? ArenaPorts.violation(environment, command) : undefined
+              }).pipe(Effect.orElseSucceed(() => undefined))
+              if (refusal) return yield* new Tool.Error({ message: refusal })
+            }
+            if (options.assignments.assignments.get(sessionID)?.telemetry) return yield* execute(input, call)
             const { directory, project } = context.location
             const cwd = path.resolve(directory, typeof params.workdir === "string" ? params.workdir : ".")
             const resources = yield* Effect.promise(() =>

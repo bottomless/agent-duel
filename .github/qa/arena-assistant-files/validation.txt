@@ -1,0 +1,255 @@
+Arena assistant files QA — 2026-10-29
+
+Base: 413490abf (0.4.0-beta.15). macOS Electron development stack and Chromium QA harness.
+[AI] Replayed the existing collapsed/expanded local PNGs with explicit Markdown image links in an isolated archived battle; both images rendered. Opened Agent A notes.txt:2 and observed its own worktree's file at line 2. Screenshot: desktop.png.
+The original saved reply contained captions only, so this is a reconstructed reply using the saved images, not a fresh model-generated battle. Production data was not modified.
+[automated] The regression uses a real isolated daemon, Arena archive store, browser, file RPCs, and separate Git worktrees. It covers relative and file:// images, missing-image errors, explicit and inline-code file links, line targets, and reload.
+[automated] The same regression fails with run-thread.tsx restored from the base commit: ./preview.png is treated as https://./preview.png and Image a never becomes visible. The fixed renderer was restored after that run.
+[automated] The legacy JSDOM renderer suite fails before test collection with Unexpected token 'typeof' on both the fixed and original renderer; no legacy unit pass is claimed.
+Not tested: fresh provider inference, voting this synthetic replay, packaged release, Windows, Linux, or performance profiling.
+
+Raw command output follows. Checkout and temporary home paths are redacted; ANSI styling and trailing spaces are removed.
+
+$ Fixed renderer: npm run test:e2e --workspace @getpaseo/app -- e2e/browser/arena-assistant-files.spec.ts --workers=1
+
+> @getpaseo/app@0.4.0-beta.15 test:e2e
+> playwright test --project=browser e2e/browser/arena-assistant-files.spec.ts --workers=1
+
+[metro] Starting project at <checkout>/packages/app
+[metro] Using src/app as the root directory for Expo Router.
+[metro] Experimental Expo Autolinking module resolver is enabled.
+[metro] React Compiler enabled
+[metro] Starting Metro Bundler
+[metro] Waiting on http://localhost:64835
+[metro] Logs for your project will appear below.
+[metro] Web packages/app/index.ts ▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░ 89.0% (4132/4402)
+[metro] Web Bundled 3286ms packages/app/index.ts (4942 modules)
+[e2e] Metro warmed on port 64835
+
+Running 1 test using 1 worker
+
+(node:87139) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:87139) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[e2e] Worker 0 daemon started on port 64917, home: <isolated-paseo-home>
+Preparing worktree (detached HEAD 272bd80)
+Preparing worktree (detached HEAD 272bd80)
+[metro] Web packages/app/index.ts ░░░░░░░░░░░░░░░░  0.0% (0/1)
+[metro] Web Bundled 402ms packages/app/index.ts (1 module)
+[metro] Web packages/app/src/attachments/web/indexeddb-attachment-store.ts ░░░░░░░░░░░░░░░░  0.0% (0/1)
+[metro]  LOG  [web] Logs will appear in the browser console
+[metro] Web Bundled 95ms packages/app/src/attachments/web/indexeddb-attachment-store.ts (1 module)
+[metro] Web packages/app/index.ts ░░░░░░░░░░░░░░░░  0.0% (0/1)
+[metro] Web Bundled 268ms packages/app/index.ts (1 module)
+[metro] Web Bundled 9ms packages/app/src/attachments/web/indexeddb-attachment-store.ts (1 module)
+[metro]  LOG  [web] Logs will appear in the browser console
+  ✓  1 [browser] › e2e/browser/arena-assistant-files.spec.ts:19:5 › Arena replies resolve images and file links inside each contestant worktree (26.0s)
+[e2e] Worker 0 daemon stopped
+[e2e] Metro stopped
+
+  1 passed (49.4s)
+
+$ Original renderer: same targeted Playwright command
+
+> @getpaseo/app@0.4.0-beta.15 test:e2e
+> playwright test --project=browser e2e/browser/arena-assistant-files.spec.ts --workers=1
+
+[metro] Starting project at <checkout>/packages/app
+[metro] Using src/app as the root directory for Expo Router.
+[metro] Experimental Expo Autolinking module resolver is enabled.
+[metro] React Compiler enabled
+[metro] Starting Metro Bundler
+[metro] Waiting on http://localhost:50409
+[metro] Logs for your project will appear below.
+[metro] Web packages/app/index.ts ░░░░░░░░░░░░░░░░  0.0% (0/1)
+[metro] Web packages/app/index.ts ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░ 96.5% (4724/4808)
+[metro] Web Bundled 4470ms packages/app/index.ts (4941 modules)
+[e2e] Metro warmed on port 50409
+
+Running 1 test using 1 worker
+
+(node:44763) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:44763) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[e2e] Worker 0 daemon started on port 50548, home: <isolated-paseo-home>
+Preparing worktree (detached HEAD 949ba5b)
+Preparing worktree (detached HEAD 949ba5b)
+[metro] Web packages/app/index.ts ░░░░░░░░░░░░░░░░  0.0% (0/1)
+[metro] Web Bundled 278ms packages/app/index.ts (1 module)
+[metro]  LOG  [web] Logs will appear in the browser console
+[metro] Web Bundled 95ms packages/app/src/attachments/web/indexeddb-attachment-store.ts (1 module)
+[e2e] Worker 0 daemon stopped
+  ✘  1 [browser] › e2e/browser/arena-assistant-files.spec.ts:19:5 › Arena replies resolve images and file links inside each contestant worktree (51.6s)
+[e2e] Metro stopped
+
+
+  1) [browser] › e2e/browser/arena-assistant-files.spec.ts:19:5 › Arena replies resolve images and file links inside each contestant worktree
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: getByRole('img', { name: 'Image a' }).first()
+    Expected: visible
+    Timeout: 30000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" with timeout 30000ms
+      - waiting for getByRole('img', { name: 'Image a' }).first()
+        - locator resolved to <img alt="Image a" draggable="false" src="https://./preview.png" class="css-accessibilityImage-9pa8cd"/>
+        - unexpected value "hidden"
+
+
+       at ../support/helpers/assistant-images.ts:127
+
+      125 | ): Promise<void> {
+      126 |   const rendered = page.getByRole("img", { name: image.alt }).first();
+    > 127 |   await expect(rendered).toBeVisible({ timeout: 30_000 });
+          |                          ^
+      128 |   await expect
+      129 |     .poll(async () =>
+      130 |       rendered.evaluate((element) => {
+        at expectAssistantImageRendered (<checkout>/packages/app/e2e/support/helpers/assistant-images.ts:127:26)
+        at <checkout>/packages/app/e2e/browser/arena-assistant-files.spec.ts:42:41
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results/arena-assistant-files-Aren-194b4-de-each-contestant-worktree-browser/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #2: browser-console (text/plain) ────────────────────────────────────────────────────
+    [console:info] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold
+    [console:log] Running application "main" with appParams:
+     {rootTag: #root, hydrate: undefined}
+    Development-level warnings: ON.
+    Performance optimizations: OFF.
+    [co...
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #3: video (video/webm) ──────────────────────────────────────────────────────────────
+    test-results/arena-assistant-files-Aren-194b4-de-each-contestant-worktree-browser/video.webm
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results/arena-assistant-files-Aren-194b4-de-each-contestant-worktree-browser/error-context.md
+
+    attachment #5: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/arena-assistant-files-Aren-194b4-de-each-contestant-worktree-browser/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/arena-assistant-files-Aren-194b4-de-each-contestant-worktree-browser/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    [browser] › e2e/browser/arena-assistant-files.spec.ts:19:5 › Arena replies resolve images and file links inside each contestant worktree
+npm error Lifecycle script `test:e2e` failed with error:
+npm error code 1
+npm error path <checkout>/packages/app
+npm error workspace @getpaseo/app@0.4.0-beta.15
+npm error location <checkout>/packages/app
+npm error command failed
+npm error command sh -c playwright test --project=browser e2e/browser/arena-assistant-files.spec.ts --workers=1
+
+$ Legacy renderer unit: npx vitest run src/arena/run-thread-render.test.tsx --bail=1 (packages/app)
+
+ RUN  v4.1.7 <checkout>/packages/app
+
+ ❯ |unit| src/arena/run-thread-render.test.tsx (0 test)
+
+⎯⎯⎯⎯⎯⎯ Failed Suites 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |unit| src/arena/run-thread-render.test.tsx [ src/arena/run-thread-render.test.tsx ]
+SyntaxError: Unexpected token 'typeof'
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  no tests
+   Start at  17:36:08
+   Duration  6.76s (transform 3.94s, setup 71ms, import 0ms, tests 0ms, environment 846ms)
+
+
+$ Original renderer legacy unit: same targeted Vitest command
+
+ RUN  v4.1.7 <checkout>/packages/app
+
+ ❯ |unit| src/arena/run-thread-render.test.tsx (0 test)
+
+⎯⎯⎯⎯⎯⎯ Failed Suites 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |unit| src/arena/run-thread-render.test.tsx [ src/arena/run-thread-render.test.tsx ]
+SyntaxError: Unexpected token 'typeof'
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  no tests
+   Start at  17:37:25
+   Duration  4.84s (transform 2.50s, setup 62ms, import 0ms, tests 0ms, environment 815ms)
+
+
+$ npm run typecheck
+
+> paseo@0.4.0-beta.15 typecheck
+> npm run typecheck --workspaces --if-present
+
+
+> @getpaseo/expo-two-way-audio@0.4.0-beta.15 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/highlight@0.4.0-beta.15 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/protocol@0.4.0-beta.15 pretypecheck
+> npm run generate:validators
+
+
+> @getpaseo/protocol@0.4.0-beta.15 generate:validators
+> node scripts/generate-validation-aot.mjs
+
+generated src/generated/validation/ws-outbound.aot.ts from codegen/ws-outbound.compile.ts (WSOutboundMessageSchema)
+
+> @getpaseo/protocol@0.4.0-beta.15 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/client@0.4.0-beta.15 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/server@0.4.0-beta.15 typecheck
+> tsgo -p tsconfig.server.typecheck.json --noEmit
+
+
+> @getpaseo/app@0.4.0-beta.15 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/relay@0.4.0-beta.15 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/desktop@0.4.0-beta.15 typecheck
+> tsgo --noEmit -p tsconfig.json
+
+
+> @getpaseo/cli@0.4.0-beta.15 typecheck
+> tsgo --noEmit
+
+
+$ npm run lint
+
+> paseo@0.4.0-beta.15 lint
+> oxlint --disable-nested-config
+
+Found 0 warnings and 0 errors.
+Finished in 909ms on 3529 files with 177 rules using 18 threads.
+
+$ npm run format
+
+> paseo@0.4.0-beta.15 format
+> oxfmt .
+
+Finished in 2667ms on 3679 files using 18 threads.

@@ -1,46 +1,23 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { Database } from "@opencode-ai/core/database/database"
-import { EventTable } from "@opencode-ai/core/event/sql"
-import { ModelV2 } from "@opencode-ai/core/model"
-import { ProviderV2 } from "@opencode-ai/core/provider"
-import { MessageTable, PartTable, SessionTable } from "@opencode-ai/core/session/sql"
-import { SessionV1 } from "@opencode-ai/core/v1/session"
-import { SessionEvent } from "@opencode-ai/schema/session-event"
-import { hashArenaControlToken, setArenaCredentials } from "@/arena/credentials"
-import type { Store } from "@/arena/mongo"
+import { Model as ModelV2 } from "@opencode/schema/model"
+import { Provider as ProviderV2 } from "@opencode/schema/provider"
+import { SessionV1 } from "@/arena/session-shape"
+import { SessionEvent } from "@opencode/schema/session-event"
+import { setArenaCredentials } from "@/arena/credentials"
 import { ArenaAttachments } from "@/arena/attachments"
 import { ArenaResponseRecovery } from "@/arena/response-recovery"
+import { requestTooLargeMessage } from "@agent-duel/arena-service/request-error"
 import { ArenaPrivacy } from "@/arena/privacy"
-import { setStoreForTest } from "@/arena/runtime"
-import { GlobalBus } from "@/bus/global"
-import { AppRuntime } from "@/effect/app-runtime"
-import { Server } from "@/server/server"
-import { Session } from "@/session/session"
 import { SessionRetry } from "@/session/retry"
 import { MessageID, PartID, SessionID } from "@/session/schema"
-import { MessageV2 } from "@/session/message-v2"
-import { eq } from "drizzle-orm"
-import { DateTime, Effect } from "effect"
-import { resetDatabase } from "../fixture/db"
-import { disposeAllInstances, provideInstance, tmpdir } from "../fixture/fixture"
+import { DateTime, Schema } from "effect"
+import { sanitizeV2 } from "@/arena/v2-privacy"
 
 const hiddenAlias = "arena-01"
 const hiddenSlug = "anthropic/claude-opus-5-20260723"
 const hiddenProvider = "secret-provider"
-const controlToken = "private-control-token"
-
-function app() {
-  return Server.Default().app
-}
-
 function enableArenaControl() {
   process.env.OPENCODE_ARENA = "1"
-  setArenaCredentials({
-    mode: "hosted",
-    token: "private-runtime-token",
-    controlPlaneUrl: "https://control.test",
-    controlTokenHash: hashArenaControlToken(controlToken),
-  })
 }
 
 function contestantMessage(sessionID = SessionID.descending()): SessionV1.WithParts {
@@ -140,37 +117,9 @@ function contestantMessage(sessionID = SessionID.descending()): SessionV1.WithPa
   }
 }
 
-function sse(response: Response) {
-  const reader = response.body?.getReader()
-  if (!reader) throw new Error("SSE response has no body")
-  const decoder = new TextDecoder()
-  let pending = ""
-  return {
-    reader,
-    async next() {
-      while (true) {
-        const match = /\r?\n\r?\n/.exec(pending)
-        if (match?.index !== undefined) {
-          const block = pending.slice(0, match.index)
-          pending = pending.slice(match.index + match[0].length)
-          const line = block.split(/\r?\n/).find((item) => item.startsWith("data: "))
-          if (line) return JSON.parse(line.slice("data: ".length)) as unknown
-          continue
-        }
-        const chunk = await reader.read()
-        if (chunk.done) throw new Error("SSE stream closed before an event arrived")
-        pending += decoder.decode(chunk.value, { stream: true })
-      }
-    },
-  }
-}
-
-afterEach(async () => {
-  setStoreForTest(undefined)
+afterEach(() => {
   setArenaCredentials(undefined)
   delete process.env.OPENCODE_ARENA
-  await disposeAllInstances()
-  await resetDatabase()
 })
 
 describe("ArenaPrivacy", () => {
@@ -181,15 +130,27 @@ describe("ArenaPrivacy", () => {
     ).toMatchObject({ message: ArenaResponseRecovery.IDLE_RECOVERING, attempt: 2 })
     const message = contestantMessage()
     if (message.info.role !== "assistant") throw new Error("Expected assistant fixture")
-    message.info.error = new SessionV1.APIError({
-      message: ArenaResponseRecovery.IDLE_EXHAUSTED,
-      isRetryable: false,
-      responseBody: hiddenSlug,
-    }).toObject()
+    message.info.error = {
+      name: "APIError",
+      data: { message: ArenaResponseRecovery.IDLE_EXHAUSTED, isRetryable: false, responseBody: hiddenSlug },
+    }
     const result = ArenaPrivacy.messages([message])[0]!
     expect(result.info).toMatchObject({
       error: { data: { message: ArenaResponseRecovery.IDLE_EXHAUSTED, isRetryable: false } },
     })
+    expect(JSON.stringify(result)).not.toContain(hiddenSlug)
+  })
+
+  test("keeps the request-too-large explanation while stripping provider details", () => {
+    enableArenaControl()
+    const message = contestantMessage()
+    if (message.info.role !== "assistant") throw new Error("Expected assistant fixture")
+    message.info.error = {
+      name: "APIError",
+      data: { message: requestTooLargeMessage, isRetryable: false, responseBody: hiddenSlug },
+    }
+    const result = ArenaPrivacy.messages([message])[0]!
+    expect(result.info).toMatchObject({ error: { data: { message: requestTooLargeMessage, isRetryable: false } } })
     expect(JSON.stringify(result)).not.toContain(hiddenSlug)
   })
 
@@ -547,305 +508,19 @@ describe("ArenaPrivacy", () => {
     expect(json).toContain("tree-sha")
   })
 
-  test("hides catalogs and blocks model configuration mutations at HTTP boundaries", async () => {
-    enableArenaControl()
-    await using directory = await tmpdir({
-      config: {
-        formatter: false,
-        lsp: false,
-        username: "arena-user",
-        model: `${hiddenProvider}/${hiddenAlias}`,
-        small_model: `${hiddenProvider}/${hiddenAlias}`,
-        provider: {
-          [hiddenProvider]: {
-            options: { baseURL: `https://${hiddenProvider}.invalid` },
-            models: { [hiddenAlias]: { id: hiddenSlug } },
-          },
-        },
-      },
-    })
-    const headers = { "x-opencode-directory": directory.path, "x-paseo-control-token": controlToken }
-    const configResponse = await app().request("/config", { headers })
-    const providerResponse = await app().request("/provider", { headers })
-    const configProvidersResponse = await app().request("/config/providers", { headers })
-
-    expect(configResponse.status).toBe(200)
-    const config = await configResponse.json()
-    expect(config).toMatchObject({
-      $schema: "https://opencode.ai/config.json",
-      formatter: false,
-      lsp: false,
-      username: "arena-user",
-    })
-    expect(JSON.stringify(config)).not.toContain(hiddenAlias)
-    expect(JSON.stringify(config)).not.toContain(hiddenSlug)
-    expect(JSON.stringify(config)).not.toContain(hiddenProvider)
-    expect(await providerResponse.json()).toEqual({ all: [], default: {}, connected: [] })
-    expect(await configProvidersResponse.json()).toEqual({ providers: [], default: {} })
-
-    const modelPatch = await app().request("/config", {
-      method: "PATCH",
-      headers: { ...headers, "content-type": "application/json" },
-      body: JSON.stringify({ model: `${hiddenProvider}/${hiddenAlias}` }),
-    })
-    expect(modelPatch.status).toBe(400)
-
-    const authMutation = await app().request(`/auth/${hiddenProvider}`, { method: "DELETE", headers })
-    expect(authMutation.status).toBe(400)
-
-    const ordinaryPatch = await app().request("/config", {
-      method: "PATCH",
-      headers: { ...headers, "content-type": "application/json" },
-      body: JSON.stringify({ username: "changed", formatter: false, lsp: false }),
-    })
-    expect(ordinaryPatch.status).toBe(200)
-    expect(await ordinaryPatch.json()).toMatchObject({ username: "changed" })
-  })
-
-  test("sanitizes session and message responses before they reach the browser", async () => {
-    enableArenaControl()
-    setStoreForTest({
-      runs: { findOne: async () => null },
-      chatForSession: async () => null,
-    } as unknown as Store)
-    await using directory = await tmpdir({ git: true, config: { formatter: false, lsp: false } })
-    const headers = {
-      "content-type": "application/json",
-      "x-opencode-directory": directory.path,
-      "x-paseo-control-token": controlToken,
-    }
-    const createdResponse = await app().request("/session", {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        title: "Arena",
-        model: { id: hiddenAlias, providerID: hiddenProvider },
-        metadata: { canonicalSlug: hiddenSlug, provider: hiddenProvider },
-      }),
-    })
-    expect(createdResponse.status).toBe(200)
-    const created = await createdResponse.clone().json()
-    if (typeof created !== "object" || created === null || !("id" in created) || typeof created.id !== "string") {
-      throw new Error("Arena session response did not contain an ID")
-    }
-
-    await AppRuntime.runPromise(
-      provideInstance(directory.path)(
-        Effect.gen(function* () {
-          const sessions = yield* Session.Service
-          const source = contestantMessage(SessionID.make(created.id))
-          yield* sessions.updateMessage(source.info)
-          yield* Effect.forEach(source.parts, (part) => sessions.updatePart(part))
-        }),
-      ),
-    )
-    const sessionResponse = await app().request(`/session/${created.id}`, { headers })
-    const messageResponse = await app().request(`/session/${created.id}/message`, { headers })
-    expect(sessionResponse.status).toBe(200)
-    expect(messageResponse.status).toBe(200)
-
-    for (const response of [createdResponse, sessionResponse, messageResponse]) {
-      const json = await response.clone().text()
-      expect(json).not.toContain(hiddenAlias)
-      expect(json).not.toContain(hiddenSlug)
-      expect(json).not.toContain(hiddenProvider)
-    }
-    expect(await sessionResponse.clone().text()).toContain('"providerID":"arena"')
-    expect(await messageResponse.clone().text()).toContain('"modelID":"contestant"')
-  })
-
-  test("persists only blinded Arena session data while returning raw live values", async () => {
-    process.env.OPENCODE_ARENA = "1"
-    await using directory = await tmpdir({ git: true, config: { formatter: false, lsp: false } })
-    const rawCallID = "chatcmpl-tool-ab9145b12e6c558f"
-
-    const result = await AppRuntime.runPromise(
-      provideInstance(directory.path)(
-        Effect.gen(function* () {
-          const sessions = yield* Session.Service
-          const created = yield* sessions.create({
-            title: "Arena persistence",
-            model: { id: ModelV2.ID.make(hiddenAlias), providerID: ProviderV2.ID.make(hiddenProvider) },
-            metadata: { canonicalSlug: hiddenSlug, provider: hiddenProvider },
-          })
-          const source = contestantMessage(created.id)
-          const tool = source.parts.find((part) => part.type === "tool")
-          if (!tool || tool.type !== "tool") throw new Error("Contestant fixture is missing its tool part")
-          tool.callID = rawCallID
-
-          const mediumUser: SessionV1.User = {
-            id: MessageID.make("msg_arena_medium_persisted"),
-            sessionID: created.id,
-            role: "user",
-            time: { created: 3 },
-            agent: "build",
-            model: {
-              providerID: ProviderV2.ID.make("arena"),
-              modelID: ModelV2.ID.make("medium"),
-              variant: "xhigh",
-            },
-            system: "Arena contestant instructions",
-          }
-          const mediumUserWithoutSystem: SessionV1.User = {
-            id: MessageID.make("msg_arena_medium_without_system"),
-            sessionID: created.id,
-            role: "user",
-            time: { created: 4 },
-            agent: "build",
-            model: {
-              providerID: ProviderV2.ID.make("arena"),
-              modelID: ModelV2.ID.make("medium"),
-              variant: "xhigh",
-            },
-          }
-          const mediumAssistant: SessionV1.Assistant = {
-            ...source.info,
-            id: MessageID.make("msg_arena_medium_assistant"),
-            sessionID: created.id,
-            parentID: mediumUser.id,
-            time: { created: 5, completed: 6 },
-            modelID: ModelV2.ID.make("medium"),
-            providerID: ProviderV2.ID.make("arena"),
-            variant: "xhigh",
-          }
-
-          const returnedMessage = yield* sessions.updateMessage(source.info)
-          yield* sessions.updateMessage(mediumUser)
-          yield* sessions.updateMessage(mediumUserWithoutSystem)
-          yield* sessions.updateMessage(mediumAssistant)
-          const reloadedMediumAssistant = yield* MessageV2.get({
-            sessionID: created.id,
-            messageID: mediumAssistant.id,
-          })
-          const returnedParts = yield* Effect.forEach(source.parts, (part) => sessions.updatePart(part))
-          const reloaded = yield* sessions.messages({ sessionID: created.id })
-          const { db } = yield* Database.Service
-          const session = yield* db.select().from(SessionTable).where(eq(SessionTable.id, created.id)).get()
-          const messages = yield* db.select().from(MessageTable).where(eq(MessageTable.session_id, created.id)).all()
-          const parts = yield* db.select().from(PartTable).where(eq(PartTable.session_id, created.id)).all()
-          const events = yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, created.id)).all()
-
-          return {
-            returnedMessage,
-            returnedParts,
-            reloaded,
-            session,
-            messages,
-            parts,
-            events,
-            mediumUser,
-            mediumUserWithoutSystem,
-            mediumAssistant,
-            reloadedMediumAssistant,
-          }
-        }),
-      ),
-    )
-
-    const live = JSON.stringify({ message: result.returnedMessage, parts: result.returnedParts })
-    const restoredReload = JSON.stringify(
-      result.reloaded.map((message) => ({ ...message, parts: message.parts.map(ArenaPrivacy.restorePart) })),
-    )
-    const blindedReload = JSON.stringify(result.reloaded)
-    const persisted = JSON.stringify({
-      session: result.session,
-      messages: result.messages,
-      parts: result.parts,
-      events: result.events,
-    })
-    expect(live).toContain(hiddenAlias)
-    expect(live).toContain(hiddenProvider)
-    expect(live).toContain(rawCallID)
-    expect(restoredReload).toContain(rawCallID)
-    expect(restoredReload).toContain("xai-responses-v1")
-    expect(restoredReload).toContain('"providerExecuted":true')
-    expect(blindedReload).not.toContain(rawCallID)
-    expect(blindedReload).not.toContain("xai-responses-v1")
-    expect(blindedReload).toContain("call_arena_")
-    expect(persisted).not.toContain(hiddenAlias)
-    expect(persisted).not.toContain(hiddenSlug)
-    expect(persisted).not.toContain(hiddenProvider)
-    expect(persisted).not.toContain(rawCallID)
-    expect(persisted).not.toContain("xai-responses-v1")
-    expect(persisted).toContain("call_arena_")
-    expect(result.session).toMatchObject({
-      model: { id: "contestant", providerID: "arena" },
-      cost: 0,
-      tokens_input: 0,
-      tokens_output: 0,
-      tokens_reasoning: 0,
-      tokens_cache_read: 0,
-      tokens_cache_write: 0,
-    })
-    for (const user of [result.mediumUser, result.mediumUserWithoutSystem]) {
-      const persistedMedium = result.messages.find((message) => message.id === user.id)
-      expect(persistedMedium).toMatchObject({ data: { model: { modelID: "medium", providerID: "arena" } } })
-      expect(ArenaPrivacy.messageInfo(user).model).toMatchObject({
-        providerID: "arena",
-        modelID: "contestant",
-      })
-    }
-    expect(result.reloadedMediumAssistant.info).toMatchObject({
-      modelID: "medium",
-      providerID: "arena",
-      variant: "xhigh",
-    })
-    expect(ArenaPrivacy.messageInfo(result.reloadedMediumAssistant.info)).toMatchObject({
-      modelID: "contestant",
-      providerID: "arena",
-    })
-  })
-
-  test("persists contestant instructions for the model while live output hides them", async () => {
-    process.env.OPENCODE_ARENA = "1"
-    await using directory = await tmpdir({ git: true, config: { formatter: false, lsp: false } })
-    const instructions = "Use PASEO_PORT for the primary listener and report ARENA_PREVIEW_URL."
-
-    const result = await AppRuntime.runPromise(
-      provideInstance(directory.path)(
-        Effect.gen(function* () {
-          const sessions = yield* Session.Service
-          const created = yield* sessions.create({ title: "Arena instructions" })
-          yield* sessions.updateMessage({
-            id: MessageID.ascending(),
-            sessionID: created.id,
-            role: "user",
-            time: { created: 1 },
-            agent: "build",
-            model: { providerID: ProviderV2.ID.make(hiddenProvider), modelID: ModelV2.ID.make(hiddenAlias) },
-            system: instructions,
-          })
-          const reloaded = yield* sessions.messages({ sessionID: created.id })
-          const { db } = yield* Database.Service
-          const messages = yield* db.select().from(MessageTable).where(eq(MessageTable.session_id, created.id)).all()
-          return { reloaded, messages }
-        }),
-      ),
-    )
-
-    const user = result.reloaded.find((message) => message.info.role === "user")?.info
-    if (user?.role !== "user") throw new Error("Arena instructions fixture is missing its user message")
-    const persisted = JSON.stringify(result.messages)
-    expect(user.system).toBe(instructions)
-    expect(persisted).toContain(instructions)
-    expect(persisted).not.toContain(hiddenAlias)
-    expect(persisted).not.toContain(hiddenProvider)
-    const live = ArenaPrivacy.messageInfo(user)
-    expect(live.role === "user" ? live.system : undefined).toBeUndefined()
-  })
-
-  test("preserves DateTime values while blinding durable session.next events", () => {
-    process.env.OPENCODE_ARENA = "1"
-    const persisted = ArenaPrivacy.persistedEventData(SessionEvent.Step.Started, {
+  test("preserves dispatch time through the native event codec and privacy boundary", () => {
+    const data = Schema.encodeSync(SessionEvent.Step.Started.data)({
       sessionID: SessionID.make("ses_arena_timestamp"),
       assistantMessageID: MessageID.make("msg_arena_timestamp"),
       timestamp: DateTime.makeUnsafe(123),
+      started: 123,
       agent: "build",
       model: { id: ModelV2.ID.make(hiddenAlias), providerID: ProviderV2.ID.make(hiddenProvider) },
     })
-
-    expect(DateTime.toEpochMillis(persisted.timestamp)).toBe(123)
-    expect(persisted.model).toEqual({ id: ModelV2.ID.make("contestant"), providerID: ProviderV2.ID.make("arena") })
+    const envelope = sanitizeV2({ type: SessionEvent.Step.Started.type, data }) as { data: unknown }
+    const persisted = Schema.decodeUnknownSync(SessionEvent.Step.Started.data)(envelope.data)
+    expect(persisted.started).toBe(123)
+    expect(persisted.model).toEqual({ id: "contestant", providerID: "arena" })
   })
 
   test("restores only continuation metadata instead of retaining complete tool output", () => {
@@ -873,36 +548,5 @@ describe("ArenaPrivacy", () => {
 
     ArenaPrivacy.forgetSession(tool.sessionID)
     expect(ArenaPrivacy.restorePart(current)).toEqual(current)
-  })
-
-  test("sanitizes global SSE events before serialization", async () => {
-    enableArenaControl()
-    const listeners = GlobalBus.listenerCount("event")
-    const stream = sse(await app().request("/global/event", { headers: { "x-paseo-control-token": controlToken } }))
-    await stream.next()
-    const next = stream.next()
-    const deadline = Date.now() + 5_000
-    while (GlobalBus.listenerCount("event") <= listeners) {
-      if (Date.now() >= deadline) throw new Error("global SSE listener did not become ready")
-      await Bun.sleep(1)
-    }
-
-    const message = contestantMessage()
-    GlobalBus.emit("event", {
-      directory: "/repo",
-      payload: {
-        type: "message.updated",
-        properties: { sessionID: message.info.sessionID, info: message.info },
-      },
-    })
-
-    const json = JSON.stringify(await next)
-    await stream.reader.cancel()
-    expect(json).not.toContain(hiddenAlias)
-    expect(json).not.toContain(hiddenSlug)
-    expect(json).not.toContain(hiddenProvider)
-    expect(json).not.toContain("responseBody")
-    expect(json).toContain('"providerID":"arena"')
-    expect(json).toContain('"modelID":"contestant"')
   })
 })

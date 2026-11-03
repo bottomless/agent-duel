@@ -1,6 +1,6 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { generateKeyPairSync, sign } from "node:crypto";
+import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import express, { type Router } from "express";
 import pino from "pino";
@@ -177,6 +177,7 @@ beforeEach(() => {
   service = createAccountsService({
     config,
     logger: pino({ enabled: false }),
+    appVersion: "0.4.0-beta.14",
     backend: backend as unknown as AccountsBackend,
     shutdownArena: async () => {
       shutdownCalls += 1;
@@ -212,7 +213,20 @@ function issueRuntimeCapability(): HostedArenaCredentials {
 }
 
 function arenaCredentials(token: string) {
-  return { mode: "hosted", token, controlPlaneUrl: config.controlPlaneUrl };
+  return {
+    mode: "hosted",
+    researchAccountID: verifySessionToken(token, keys.publicKey)!.user.id,
+    researchPartition: createHash("sha256")
+      .update(
+        JSON.stringify([
+          config.controlPlaneUrl,
+          verifySessionToken(token, keys.publicKey)!.user.id,
+        ]),
+      )
+      .digest("hex"),
+    token,
+    controlPlaneUrl: config.controlPlaneUrl,
+  };
 }
 
 describe("account routes", () => {

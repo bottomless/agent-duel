@@ -19,6 +19,7 @@ export const researchCollections = [
   "singleAgentRatings",
   "artifacts",
   "images",
+  "chunks",
 ] as const
 
 const collectionSchema = z.enum(researchCollections)
@@ -46,6 +47,10 @@ export class ResearchPayloadError extends Error {
 }
 
 function researchDocument(collection: ResearchCollection, document: Readonly<Record<string, unknown>>) {
+  if ("$researchChunks" in document) {
+    return chunkManifestSchema.parse(document)
+  }
+  if (collection === "chunks") return chunkSchema.parse(document)
   const result = { ...document }
   // The backend authenticates the envelope; local ownership is not an assertion
   // about which account may write a server-side record.
@@ -85,6 +90,12 @@ export function projectResearchMutation(mutation: ResearchMutation): ResearchRec
   const collection = collectionSchema.safeParse(mutation.collection)
   if (!collection.success) return undefined
   const document = mutation.document
+  // Reply resets delete local archives before writing their replacement. Keep the last cloud copy
+  // until the new revision (and all its chunks) has been acknowledged.
+  const archiveReset =
+    document === null &&
+    (collection.data === "sessionArchives" || (collection.data === "artifacts" && mutation.id.endsWith("|transcript")))
+  if (archiveReset) return undefined
   const excludedArtifact =
     collection.data === "artifacts" && document !== null && document.kind !== "transcript" && document.kind !== "patch"
   if (excludedArtifact) return undefined
@@ -191,6 +202,76 @@ export function projectResearchRecords(mutation: ResearchMutation): ResearchReco
   if (images) return images
   const record = projectResearchMutation(mutation)
   return record ? [record] : []
+}
+
+const hashSchema = z.string().regex(/^[a-f0-9]{64}$/)
+const chunkSchema = z.object({ data: z.string(), dataEncoding: z.literal("base64") }).strict()
+const chunkManifestSchema = z
+  .object({
+    $researchChunks: z
+      .object({
+        version: z.literal(1),
+        sha256: hashSchema,
+        byteLength: z.number().int().positive(),
+        ids: z.array(hashSchema).min(1),
+      })
+      .strict(),
+  })
+  .strict()
+const CHUNK_BYTES = 1024 * 1024
+
+/** A large document is published only after every content-addressed chunk ahead of it is stored. */
+export function researchWireRecords(record: ResearchRecord): ResearchRecord[] {
+  if (Buffer.byteLength(JSON.stringify(record)) <= MAX_RESEARCH_RECORD_BYTES) return [record]
+  const bytes = Buffer.from(JSON.stringify(record.document))
+  const chunks: ResearchRecord[] = []
+  const ids: string[] = []
+  for (let offset = 0; offset < bytes.length; offset += CHUNK_BYTES) {
+    const part = bytes.subarray(offset, offset + CHUNK_BYTES)
+    const id = createHash("sha256").update(part).digest("hex")
+    ids.push(id)
+    chunks.push({
+      collection: "chunks",
+      id,
+      revision: 1,
+      document: { data: part.toString("base64"), dataEncoding: "base64" },
+    })
+  }
+  const manifest: ResearchRecord = {
+    ...record,
+    document: {
+      $researchChunks: {
+        version: 1,
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+        byteLength: bytes.length,
+        ids,
+      },
+    },
+  }
+  if (Buffer.byteLength(JSON.stringify(manifest)) > MAX_RESEARCH_RECORD_BYTES)
+    throw new ResearchPayloadError("Research chunk manifest is too large")
+  return [...chunks, manifest]
+}
+
+/** Readers must resolve chunks in the same authenticated account/source scope as the snapshot. */
+export async function resolveResearchDocument(
+  document: Record<string, unknown> | null,
+  readChunk: (id: string) => Promise<Record<string, unknown> | null>,
+): Promise<Record<string, unknown> | null> {
+  if (document === null || !("$researchChunks" in document)) return document
+  const manifest = chunkManifestSchema.parse(document).$researchChunks
+  const parts: Buffer[] = []
+  for (const id of manifest.ids) {
+    const chunk = chunkSchema.parse(await readChunk(id))
+    const part = Buffer.from(chunk.data, "base64")
+    if (createHash("sha256").update(part).digest("hex") !== id)
+      throw new ResearchPayloadError("Research chunk checksum mismatch")
+    parts.push(part)
+  }
+  const bytes = Buffer.concat(parts)
+  if (bytes.length !== manifest.byteLength || createHash("sha256").update(bytes).digest("hex") !== manifest.sha256)
+    throw new ResearchPayloadError("Research document checksum mismatch")
+  return documentSchema.parse(JSON.parse(bytes.toString("utf8")))
 }
 
 export function encodeResearchBatch(batch: ResearchBatch) {

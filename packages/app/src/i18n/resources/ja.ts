@@ -929,7 +929,11 @@ export const ja: TranslationResources = {
         started: "開始",
         completed: "完了",
         cancelled: "キャンセル",
+
+        reopened: "再開",
       },
+
+      tasksProgressCurrent: "{{completed}}/{{total}}タスク · {{task}}",
     },
     turnFooter: {
       endedAt: "{{duration}}、終了 {{time}}",
@@ -1533,6 +1537,14 @@ export const ja: TranslationResources = {
           loadError: "コミットの読み込みに失敗しました",
           empty: "コミットはまだありません",
         },
+
+        showTreeView: "フォルダツリーを表示",
+        showFlatView: "フラットなファイル一覧を表示",
+        collapseAll: "すべて折りたたむ",
+        expandAll: "すべて展開",
+        emptyHiddenWhitespace: "空白を非表示にすると変更は表示されません",
+        emptyUncommitted: "未コミットの変更なし",
+        emptyAgainstBase: "{{baseRef}}との差分なし",
       },
       openInEditor: {
         open: "開く",
@@ -1734,6 +1746,13 @@ export const ja: TranslationResources = {
         project: "プロジェクト",
         status: "ステータス",
         labels: "ラベル",
+        none: "なし",
+      },
+      sorting: {
+        groupLabel: "グループの並び順",
+        label: "並び順",
+        default: "デフォルト",
+        lastChat: "最新のチャット",
       },
       titleSource: {
         label: "タイトル",
@@ -1926,6 +1945,8 @@ export const ja: TranslationResources = {
       branch: "ブランチ",
       baseNotApplicable: "該当なし",
       host: "ホスト",
+
+      base: "ベース",
     },
     titlePlaceholder: "タイトル（任意）",
     errors: {
@@ -2161,6 +2182,14 @@ export const ja: TranslationResources = {
         statusFailed: "CLIのインストール状態を確認できません。",
         installFailed: "Agent Duel CLIをインストールできません。",
       },
+
+      skills: {
+        statusFailed: "オーケストレーションスキルのステータスを確認できません。",
+        installFailed: "オーケストレーションスキルをインストールできません。",
+        updateFailed: "オーケストレーションスキルを更新できません。",
+        uninstallFailed: "オーケストレーションスキルをアンインストールできません。",
+        saveSelectionFailed: "オーケストレーションスキルの選択を保存できません。",
+      },
     },
   },
   rootError: {
@@ -2369,6 +2398,8 @@ export const ja: TranslationResources = {
     archiveTooltip: "サブエージェントをアーカイブ",
     archiveFinishedAction: "完了したサブエージェントをアーカイブ",
     archiveFinishedRetry: "再試行 ({{failed}}/{{total}})",
+
+    archiveFinishedTooltip: "完了した項目をアーカイブ",
   },
   panels: {
     draft: {
@@ -2423,6 +2454,8 @@ export const ja: TranslationResources = {
         reload: "再読み込み",
         reloadTitle: "ディスクから再読み込みしますか？",
         reloadMessage: "ローカルの変更は失われます。",
+
+        checkFailedTitle: "ディスク上のファイルを確認できませんでした",
       },
     },
     changes: {
@@ -2495,6 +2528,32 @@ export const ja: TranslationResources = {
   },
   sidebarCallout: {
     dismiss: "閉じる",
+  },
+  leaderboard: {
+    title: "マイランキング",
+    refresh: "更新",
+    refreshing: "更新中...",
+    retry: "再試行",
+    connect: "ランキングを見るにはサインインして接続してください",
+    loading: "ランキングを計算中...",
+    error: "ランキングを読み込めませんでした",
+    unlock: "有効な投票が {{minimum}} 件になるとランキングが表示されます",
+    progress: "有効な投票 {{count}} 件 · あと {{remaining}} 件",
+    eligible:
+      "対戦者のエラーがあったバトルと、影響を受けたビルドでサブエージェントを使ったバトルは数えません",
+    filters: "実行失敗を除外 · サブエージェントはコミットで除外",
+    summary: "有効な投票 {{count}} 件 · {{earlyVotes}} · {{date}} に更新",
+    excludeEarlyVotes: "早期投票を除外",
+    earlyIncluded: "早期投票を含む",
+    earlyExcluded: "早期投票を除外済み",
+    disconnected:
+      "一部のモデルグループ間にはまだ共通の比較がありません。それらのグループ間のレーティングは事前分布に依存します。",
+    noModels: "稼働中のモデルは、それぞれ有効な投票が 4 件になると表示されます",
+    chartLabel: "95% 信用区間、推論速度の中央値、投票数を含むモデルのレーティング",
+    votes: "投票",
+    axis: "Bradley–Terry レーティング（Elo スケール）",
+    medianSpeed: "中央値 {{speed}} tokens/s",
+    noSpeed: "速度不明",
   },
   feedback: {
     sidebarAction: "フィードバックを送信",
@@ -2738,6 +2797,8 @@ export const ja: TranslationResources = {
       modelHint: "このモデルのみを使用します。失敗しても、Agent Duel は別のモデルを試しません",
       docs: "ドキュメント",
       saveError: "メタデータ生成を更新できません",
+
+      fallbackHint: "利用できない場合、Agent Duel は別の利用可能なモデルを使用します",
     },
     storage: {
       title: "バトル環境",
@@ -2823,6 +2884,8 @@ export const ja: TranslationResources = {
           overview: "要約",
           detailed: "すべての詳細",
         },
+
+        accessibilityLabel: "ツール呼び出しの表示を選択（{{value}}）",
       },
       language: {
         label: "言語",
@@ -3027,6 +3090,39 @@ export const ja: TranslationResources = {
         install: "インストール",
         installing: "インストール中...",
         installed: "インストール済み",
+
+        update: "更新",
+        working: "処理中...",
+        remove: "削除",
+        uninstall: "アンインストール",
+        save: "保存",
+        saving: "保存中...",
+      },
+
+      skills: {
+        title: "オーケストレーションスキル",
+        description: "エージェントがCLI経由でオーケストレーションできるようにします。",
+        updateAvailable: "更新が利用可能",
+        updateTitle: "Agent Duelスキルを更新しますか？",
+        updateFallback: "バンドルされたスキルをマシンに同期します。",
+        uninstallTitle: "Agent Duelスキルをアンインストールしますか？",
+        uninstallMessage:
+          "~/.agents、~/.claude、~/.codexからすべてのAgent Duelオーケストレーションスキルを削除します。",
+        choose: "スキルを選択",
+        chooseAll: "すべてのスキル",
+        chooseAllHint:
+          "後から追加されるものも含め、バンドルされたスキルをすべてインストールしたままにします。",
+        chooseList: "バンドルされたスキル",
+        chooseEmpty: "このビルドにはスキルが含まれていません。",
+        removeTitle: "選択を外したスキルを削除しますか？",
+        removeMessage:
+          "{{skills}} を ~/.agents、~/.claude、~/.codex から削除します。それらのスキルフォルダー内に追加したものもすべて削除されます。",
+        saveFailed: "スキルの選択を保存できませんでした。",
+      },
+      operations: {
+        add: "スキルを追加",
+        update: "スキルを更新",
+        delete: "スキルを削除",
       },
     },
     permissions: {

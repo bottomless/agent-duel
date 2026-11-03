@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { Database, type SQLQueryBindings } from "bun:sqlite"
+import { z } from "zod"
 import { compileFilter, fieldExpression } from "./sqlite-query"
 import type { CreateIndexesOptions, IndexSpecification } from "mongodb"
 import type {
@@ -17,8 +18,13 @@ import type {
   ArenaWriteResult,
 } from "@agent-duel/arena-service/collection"
 import { Store } from "./mongo"
+import { ResearchQueue } from "./research-queue"
+import { encode, decode } from "./local-value"
 
-const marker = "__arena_value_type"
+const documentRecordSchema = z.object({ _id: z.string() }).passthrough()
+interface ResearchBackfillOptions {
+  retryUnavailable?: boolean
+}
 const blindedTelemetryPrivacyKey = "privacy.blinded-generation-telemetry"
 const blindedTelemetryPendingKey = "privacy.blinded-generation-telemetry-pending"
 const blindedTelemetryPrivacyVersion = "4"
@@ -44,27 +50,6 @@ function identifier(value: string) {
 
 export class ArenaDuplicateError extends Error {
   readonly code = "ARENA_DUPLICATE"
-}
-
-function encode(value: unknown): unknown {
-  if (value instanceof Date) return { [marker]: "date", value: value.toISOString() }
-  if (value instanceof Uint8Array) return { [marker]: "bytes", value: Buffer.from(value).toString("base64") }
-  if (Array.isArray(value)) return value.map(encode)
-  if (value && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, encode(child)]))
-  }
-  return value
-}
-
-function decode(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(decode)
-  if (value && typeof value === "object") {
-    const record = value as Record<string, unknown>
-    if (record[marker] === "date" && typeof record.value === "string") return new Date(record.value)
-    if (record[marker] === "bytes" && typeof record.value === "string") return Buffer.from(record.value, "base64")
-    return Object.fromEntries(Object.entries(record).map(([key, child]) => [key, decode(child)]))
-  }
-  return value
 }
 
 function clone<T>(value: T): T {
@@ -97,9 +82,7 @@ function equal(left: unknown, right: unknown): boolean {
 
 function documents(database: Database, collection: string) {
   return database
-    .query<{ id: string; document: string }, [string]>(
-      "SELECT id, document FROM arena_documents WHERE collection = ?",
-    )
+    .query<{ id: string; document: string }, [string]>("SELECT id, document FROM arena_documents WHERE collection = ?")
     .all(collection)
     .map((row) => ({ id: row.id, document: decode(JSON.parse(row.document)) as Record<string, unknown> }))
 }
@@ -470,6 +453,7 @@ class LocalCursor<T extends ArenaRecord> implements ArenaCursor<T> {
 
 class LocalDatabase implements ArenaDb, ArenaClient {
   readonly sourceID: string
+  readonly researchQueue: ResearchQueue | undefined
   readonly artifactsRoot: string
   private readonly collections = new Map<string, ArenaCollection<ArenaRecord>>()
   private pendingMutations?: ArenaMutation[]
@@ -480,7 +464,9 @@ class LocalDatabase implements ArenaDb, ArenaClient {
     readonly directory: string,
     private readonly onMutation?: (mutation: ArenaMutation) => void | Promise<void>,
     private readonly onClose?: () => void | Promise<void>,
+    private readonly researchPartition?: string,
   ) {
+    this.researchQueue = researchPartition ? new ResearchQueue(database, researchPartition) : undefined
     database.query("INSERT OR IGNORE INTO arena_metadata (key, value) VALUES ('sourceID', ?)").run(randomUUID())
     database.query("INSERT OR IGNORE INTO arena_metadata (key, value) VALUES ('revision', '0')").run()
     const row = database.query<{ value: string }, []>("SELECT value FROM arena_metadata WHERE key = 'sourceID'").get()
@@ -529,20 +515,18 @@ class LocalDatabase implements ArenaDb, ArenaClient {
     const order = ordering.length ? ` ORDER BY ${ordering.join(", ")}` : ""
     const limit = options.limit === undefined ? -1 : options.limit
     const rows = this.database
-      .query<
-        { document: string },
-        SQLQueryBindings[]
-      >(`SELECT document FROM arena_documents WHERE collection = ? AND ${predicate.sql}${order} LIMIT ? OFFSET ?`)
+      .query<{ document: string }, SQLQueryBindings[]>(
+        `SELECT document FROM arena_documents WHERE collection = ? AND ${predicate.sql}${order} LIMIT ? OFFSET ?`,
+      )
       .all(...parameters, limit, options.offset ?? 0)
     return rows.map((row) => decode(JSON.parse(row.document)) as ArenaRecord)
   }
 
   row(name: string, id: string) {
     const result = this.database
-      .query<
-        { document: string },
-        [string, string]
-      >("SELECT document FROM arena_documents WHERE collection = ?1 AND id = ?2")
+      .query<{ document: string }, [string, string]>(
+        "SELECT document FROM arena_documents WHERE collection = ?1 AND id = ?2",
+      )
       .get(name, id)
     return result?.document ? (decode(JSON.parse(result.document)) as ArenaRecord) : undefined
   }
@@ -574,6 +558,7 @@ class LocalDatabase implements ArenaDb, ArenaClient {
       revision: Number(row.value),
       document: document ? (clone(document) as Record<string, unknown>) : null,
     }
+    this.researchQueue?.enqueue(mutation)
     if (this.pendingMutations) {
       this.pendingMutations.push(mutation)
       return
@@ -630,9 +615,132 @@ class LocalDatabase implements ArenaDb, ArenaClient {
     result.data = bytes
     return result as T
   }
+  /** Copy only this verified account's recoverable archives into the durable upload queue. */
+  async backfillResearch(accountID: string, signal: AbortSignal, options: ResearchBackfillOptions = {}) {
+    if (!this.researchQueue || !this.researchPartition) return true
+    const partition = this.researchPartition
+    this.database.run(`CREATE TABLE IF NOT EXISTS arena_research_backfill (
+      sequence INTEGER PRIMARY KEY AUTOINCREMENT, partition TEXT NOT NULL,
+      collection TEXT NOT NULL, record_id TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+      UNIQUE(partition, collection, record_id))`)
+    const columns = this.database.query<{ name: string }, []>("PRAGMA table_info(arena_research_backfill)").all()
+    if (!columns.some((column) => column.name === "attempts"))
+      this.database.run("ALTER TABLE arena_research_backfill ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0")
+    this.database.run(`CREATE TABLE IF NOT EXISTS arena_research_backfill_unavailable (
+      partition TEXT NOT NULL, collection TEXT NOT NULL, record_id TEXT NOT NULL,
+      PRIMARY KEY(partition, collection, record_id))`)
+    if (options.retryUnavailable)
+      this.database.transaction(() => {
+        this.database
+          .query(`INSERT OR IGNORE INTO arena_research_backfill (partition, collection, record_id)
+        SELECT partition, collection, record_id FROM arena_research_backfill_unavailable WHERE partition = ?`)
+          .run(partition)
+        this.database.query("DELETE FROM arena_research_backfill_unavailable WHERE partition = ?").run(partition)
+      })()
+    const marker = `research.backfill.v1.${partition}`
+    const chats = "SELECT id FROM arena_documents WHERE collection = 'chats' AND json_extract(document, '$.userId') = ?"
+    const turns = `SELECT id FROM arena_documents WHERE collection = 'turns' AND json_extract(document, '$.chatID') IN (${chats})`
+    const runs = `SELECT id FROM arena_documents WHERE collection = 'runs' AND json_extract(document, '$.turnID') IN (${turns})`
+    const scopes = new Map([
+      ["chats", "json_extract(document, '$.userId') = ?"],
+      ["turns", `json_extract(document, '$.chatID') IN (${chats})`],
+      ["runs", `json_extract(document, '$.turnID') IN (${turns})`],
+      [
+        "artifacts",
+        `json_extract(document, '$.runID') IN (${runs}) AND json_extract(document, '$.kind') IN ('transcript', 'image') AND COALESCE(json_extract(document, '$.truncated'), 0) = 0`,
+      ],
+      [
+        "sessionArchives",
+        `json_extract(document, '$.runID') IN (${runs}) AND COALESCE(json_extract(document, '$.truncated'), 0) = 0`,
+      ],
+    ])
+    this.database.transaction(() => {
+      if (this.database.query("SELECT value FROM arena_metadata WHERE key = ?").get(marker)) return
+      for (const [collection, scope] of scopes) {
+        this.database
+          .query(`INSERT OR IGNORE INTO arena_research_backfill (partition, collection, record_id)
+          SELECT ?, collection, id FROM arena_documents WHERE collection = ? AND ${scope} ORDER BY id`)
+          .run(partition, collection, accountID)
+      }
+      this.database.query("INSERT INTO arena_metadata (key, value) VALUES (?, 'seeded')").run(marker)
+    })()
+    let sequence = 0
+    for (;;) {
+      if (signal.aborted) return false
+      const job = this.database
+        .query<{ sequence: number; collection: string; recordID: string }, [string, number]>(
+          "SELECT sequence, collection, record_id AS recordID FROM arena_research_backfill WHERE partition = ? AND sequence > ? ORDER BY sequence LIMIT 1",
+        )
+        .get(partition, sequence)
+      if (!job) break
+      sequence = job.sequence
+      const scope = scopes.get(job.collection)
+      if (!scope) throw new Error("Unknown research backfill collection")
+      const row = this.database
+        .query<{ document: string }, [string, string, string]>(
+          `SELECT document FROM arena_documents WHERE collection = ? AND id = ? AND ${scope}`,
+        )
+        .get(job.collection, job.recordID, accountID)
+      // A removed or reassigned record is no longer eligible for this account's backfill.
+      if (!row) {
+        this.database
+          .query("DELETE FROM arena_research_backfill WHERE partition = ? AND sequence = ?")
+          .run(partition, job.sequence)
+        continue
+      }
+      const stored = documentRecordSchema.parse(decode(JSON.parse(row.document)))
+      let document: Record<string, unknown>
+      try {
+        document = job.collection === "artifacts" ? await this.hydrate(stored) : stored
+      } catch {
+        this.database.transaction(() => {
+          this.database
+            .query("UPDATE arena_research_backfill SET attempts = attempts + 1 WHERE partition = ? AND sequence = ?")
+            .run(partition, job.sequence)
+          this.database
+            .query(`INSERT OR IGNORE INTO arena_research_backfill_unavailable (partition, collection, record_id)
+            SELECT partition, collection, record_id FROM arena_research_backfill
+            WHERE partition = ? AND sequence = ? AND attempts >= 3`)
+            .run(partition, job.sequence)
+          this.database
+            .query("DELETE FROM arena_research_backfill WHERE partition = ? AND sequence = ? AND attempts >= 3")
+            .run(partition, job.sequence)
+        })()
+        console.warn(
+          "[arena-research] Backfill artifact unavailable; parked after three attempts until the next start",
+          {
+            collection: job.collection,
+            id: job.recordID,
+          },
+        )
+        continue
+      }
+      this.run(() => {
+        const current = this.database
+          .query<{ document: string }, [string, string, string]>(
+            `SELECT document FROM arena_documents WHERE collection = ? AND id = ? AND ${scope}`,
+          )
+          .get(job.collection, job.recordID, accountID)
+        if (current?.document !== row.document) return
+        const pending = this.database
+          .query("SELECT 1 FROM arena_research_backfill WHERE partition = ? AND sequence = ?")
+          .get(partition, job.sequence)
+        if (!pending) return
+        // Allocating a fresh revision and enqueueing it share the local transaction. A crash
+        // leaves either the backfill work item or its fully materialized upload records.
+        this.mutation(job.collection, job.recordID, document)
+        this.database
+          .query("DELETE FROM arena_research_backfill WHERE partition = ? AND sequence = ?")
+          .run(partition, job.sequence)
+      })
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    }
+    return !this.database.query("SELECT 1 FROM arena_research_backfill WHERE partition = ? LIMIT 1").get(partition)
+  }
+
   async close() {
-    this.database.close()
     await this.onClose?.()
+    this.database.close()
   }
 }
 
@@ -807,13 +915,18 @@ class LocalCollection<T extends ArenaRecord> implements ArenaCollection<T> {
 
 export type LocalStoreConfiguration = {
   readonly directory: string
+  readonly researchPartition?: string
   readonly onMutation?: (mutation: ArenaMutation) => void | Promise<void>
   readonly onClose?: () => void | Promise<void>
 }
 
-export async function connectLocalStore(
-  input: LocalStoreConfiguration,
-): Promise<Store & { readonly sourceID: string }> {
+export async function connectLocalStore(input: LocalStoreConfiguration): Promise<
+  Store & {
+    readonly sourceID: string
+    readonly researchQueue: ResearchQueue | undefined
+    backfillResearch: (accountID: string, signal: AbortSignal, options?: ResearchBackfillOptions) => Promise<boolean>
+  }
+> {
   await mkdir(input.directory, { recursive: true })
   const database = new Database(path.join(input.directory, "arena.sqlite"))
   database.run("PRAGMA journal_mode = WAL")
@@ -841,8 +954,13 @@ export async function connectLocalStore(
   }
   await scrubLegacyBlindedTelemetry(database)
   await reclaimArtifactFilesIfPending(database, path.join(input.directory, "artifacts", "sha256"))
-  const local = new LocalDatabase(database, input.directory, input.onMutation, input.onClose)
-  const store = Object.assign(new Store(local, local), { sourceID: local.sourceID })
+  const local = new LocalDatabase(database, input.directory, input.onMutation, input.onClose, input.researchPartition)
+  const store = Object.assign(new Store(local, local), {
+    sourceID: local.sourceID,
+    researchQueue: local.researchQueue,
+    backfillResearch: (accountID: string, signal: AbortSignal, options?: ResearchBackfillOptions) =>
+      local.backfillResearch(accountID, signal, options),
+  })
   try {
     await store.initialize()
   } catch (error) {

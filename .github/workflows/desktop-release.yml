@@ -91,6 +91,28 @@ jobs:
           npm run format:check
           npm run lint
 
+      - name: Add an xcrun wrapper that retries stapler
+        run: |
+          # stapler fetches the ticket from Apple's CloudKit, and that connection sometimes drops
+          # (exit 68, "The network connection was lost"). This xcrun goes first on PATH, so stapler retries
+          # that exit both in electron-builder's build step and in the verify step. The staple retry in
+          # @electron/notarize 2.5.0 never fires: it rejects without calling promise-retry's retry callback.
+          bin="$RUNNER_TEMP/xcrun-retry"
+          mkdir -p "$bin"
+          cat > "$bin/xcrun" <<'SH'
+          #!/bin/bash
+          [[ $1 == stapler ]] || exec /usr/bin/xcrun "$@"
+          for attempt in 1 2 3; do
+            /usr/bin/xcrun "$@" && exit 0
+            status=$?
+            if [[ $status -ne 68 || $attempt -eq 3 ]]; then exit "$status"; fi
+            echo "stapler $2 lost the connection to Apple (attempt $attempt of 3), retrying in $((attempt * 20)) s" >&2
+            sleep $((attempt * 20))
+          done
+          SH
+          chmod +x "$bin/xcrun"
+          echo "$bin" >> "$GITHUB_PATH"
+
       - name: Build, sign, and notarize Apple Silicon app
         env:
           NODE_OPTIONS: --max-old-space-size=4096

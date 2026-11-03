@@ -5,6 +5,7 @@ import {
   Text,
   View,
   useWindowDimensions,
+  type LayoutChangeEvent,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
 } from "react-native";
@@ -30,9 +31,15 @@ import { arenaSizeErrorOr, isArenaSizeError } from "./chat-too-large";
 import { ArenaRunTaskFooter } from "./task-progress-card";
 import { openArenaWorktreeChanges } from "./explorer-selection";
 import { ARENA_RUN_META_HEIGHT, ArenaRunMeta } from "./run-meta";
+import {
+  ArenaMessageAnchorProvider,
+  ArenaPauseFollowProvider,
+  ArenaRunTurnsMenu,
+} from "./run-turns";
 import type { ArenaTurnAction } from "./use-arena-session";
 import { useArenaBattleActions } from "./use-battle-actions";
 import { arenaChangesRows } from "./changes-rows";
+import { ArenaBattleOutcome } from "./battle-summary";
 import { BattleReview } from "./battle-review";
 import { useArenaReviewTelemetry } from "./review-telemetry";
 import { isStoppedByEarlyPick } from "./battle-result";
@@ -67,6 +74,8 @@ type ArenaPaneView = ArenaSide | "both";
 // characters of readable content at the default interface size.
 const STACKED_PANES_BREAKPOINT = 520;
 
+// Room above a message the turns menu scrolls to, so it does not sit against the pane header.
+const JUMP_TO_MESSAGE_INSET = 12;
 const ThemedMaximize2 = withUnistyles(Maximize2);
 const ThemedMinimize2 = withUnistyles(Minimize2);
 const foregroundColorMapping = (theme: Theme) => ({ color: theme.colors.foreground });
@@ -182,6 +191,14 @@ function BattlePane({
   const userScrollActiveRef = useRef(false);
   const [awayFromLatest, setAwayFromLatest] = useState(false);
   const contentHeightRef = useRef(0);
+  const scrollOffsetRef = useRef(0);
+  const viewportHeightRef = useRef(0);
+  const threadAreaRef = useRef<View>(null);
+  const messageAnchorsRef = useRef(new Map<string, View>());
+  const registerMessageAnchor = useCallback((messageId: string, node: View | null) => {
+    if (node) messageAnchorsRef.current.set(messageId, node);
+    else messageAnchorsRef.current.delete(messageId);
+  }, []);
 
   const scrollToLatest = useCallback(() => {
     if (!autoScrollEnabledRef.current) return;
@@ -194,12 +211,33 @@ function BattlePane({
     setAwayFromLatest(false);
     scrollToLatest();
   }, [run?.id, scrollToLatest]);
+  // Content or a pane that resizes while following is paused does not scroll, so no scroll event
+  // says where the reader now is. Closing history again can leave them at the bottom.
+  const resyncPausedFollow = useCallback(() => {
+    if (autoScrollEnabledRef.current) return;
+    const distanceFromBottom =
+      contentHeightRef.current - viewportHeightRef.current - scrollOffsetRef.current;
+    const atLatest = distanceFromBottom <= 24;
+    autoScrollEnabledRef.current = atLatest;
+    setAwayFromLatest(!atLatest);
+  }, []);
   const handleContentSizeChange = useCallback(
     (_width: number, height: number) => {
       contentHeightRef.current = height;
-      scrollToLatest();
+      if (autoScrollEnabledRef.current) scrollToLatest();
+      else resyncPausedFollow();
     },
-    [scrollToLatest],
+    [resyncPausedFollow, scrollToLatest],
+  );
+  const pauseFollow = useCallback(() => {
+    autoScrollEnabledRef.current = false;
+  }, []);
+  const handleThreadLayout = useCallback(
+    (event: LayoutChangeEvent) => {
+      viewportHeightRef.current = event.nativeEvent.layout.height;
+      resyncPausedFollow();
+    },
+    [resyncPausedFollow],
   );
   const handleScrollBeginDrag = useCallback(() => {
     userScrollActiveRef.current = true;
@@ -210,6 +248,8 @@ function BattlePane({
   const handleScroll = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
       const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+      scrollOffsetRef.current = contentOffset.y;
+      viewportHeightRef.current = layoutMeasurement.height;
       const contentChangedBeforeCallback = contentSize.height !== contentHeightRef.current;
       if (
         contentChangedBeforeCallback &&
@@ -236,6 +276,28 @@ function BattlePane({
     setAwayFromLatest(false);
     scrollToLatest();
   }, [scrollToLatest]);
+  // Scrolls the thread so the message sits just below its top, and stops following the latest
+  // output. A null message is the turn's prompt, which shows above both panes rather than in the
+  // thread, so the first turn starts at the top of the thread.
+  const jumpToMessage = useCallback((messageId: string | null) => {
+    const scrollTo = (y: number) => {
+      autoScrollEnabledRef.current = false;
+      setAwayFromLatest(true);
+      threadScrollRef.current?.scrollTo({ y: Math.max(0, y), animated: true });
+    };
+    if (messageId === null) {
+      scrollTo(0);
+      return;
+    }
+    const anchor = messageAnchorsRef.current.get(messageId);
+    const threadArea = threadAreaRef.current;
+    if (!anchor || !threadArea) return;
+    threadArea.measureInWindow((_areaX, areaY) => {
+      anchor.measureInWindow((_x, y) => {
+        scrollTo(scrollOffsetRef.current + y - areaY - JUMP_TO_MESSAGE_INSET);
+      });
+    });
+  }, []);
   const handleQuestionResponse = useCallback(
     (question: ArenaPendingQuestion, response: AgentPermissionResponse) => {
       if (run) onQuestionResponse(run, question, response);
@@ -249,16 +311,19 @@ function BattlePane({
     [onPermissionResponse, run],
   );
   // The pane height follows the window, so it is an inline pixel value rather than a
-  // registered style (docs/unistyles.md, dynamic pixel styles on web).
+  // registered style (docs/unistyles.md, dynamic pixel styles on web). A settled run folds its
+  // work above the answer, so its pane shrinks to fit: at the resting height the answer would
+  // sit high in an empty pane, out of view when the chat follows the review below it.
+  const settled = runIsFinal(run);
   const paneStyle = useMemo(
     () => [
       styles.pane,
       hidden && styles.paneHidden,
       stacked && styles.paneStacked,
       showDivider && (stacked ? styles.paneStackedDivider : styles.paneDivider),
-      inlineUnistylesStyle({ height: maxHeight }),
+      inlineUnistylesStyle(settled ? { maxHeight } : { height: maxHeight }),
     ],
-    [hidden, maxHeight, showDivider, stacked],
+    [hidden, maxHeight, settled, showDivider, stacked],
   );
   // The run exists from the moment its session is forked, which is before the worktrees are
   // ready and well before its prompt is dispatched. Treating that as started swaps the pane to
@@ -290,9 +355,14 @@ function BattlePane({
     <View style={paneStyle} testID={`arena-pane-${side}`}>
       <View style={styles.paneHeader}>
         <View style={styles.paneHeading}>
-          <Text style={styles.agentName}>
-            {t("arena.agent")} {side.toUpperCase()}
-          </Text>
+          <View style={styles.agentNameRow}>
+            <Text style={styles.agentName}>
+              {t("arena.agent")} {side.toUpperCase()}
+            </Text>
+            {dispatched ? (
+              <ArenaRunTurnsMenu run={dispatched} side={side} onJumpToMessage={jumpToMessage} />
+            ) : null}
+          </View>
           {dispatched ? (
             <ArenaRunMeta
               run={dispatched}
@@ -335,7 +405,11 @@ function BattlePane({
       <View style={styles.paneBody} testID={`arena-pane-body-${side}`}>
         {/* The jump button anchors to the thread, not the pane body, so it stays clear of the task
             footer and services strip below the thread. */}
-        <View style={[styles.threadArea, run?.runState === "pending" && styles.runningThreadArea]}>
+        <View
+          ref={threadAreaRef}
+          collapsable={false}
+          style={[styles.threadArea, run?.runState === "pending" && styles.runningThreadArea]}
+        >
           <ScrollView
             ref={threadScrollRef}
             style={styles.threadScroll}
@@ -346,19 +420,24 @@ function BattlePane({
             onScrollBeginDrag={handleScrollBeginDrag}
             onScrollEndDrag={handleScrollEndDrag}
             onContentSizeChange={handleContentSizeChange}
+            onLayout={handleThreadLayout}
             testID={`arena-thread-${side}`}
           >
             {dispatched ? (
-              <ArenaRunThread
-                run={dispatched}
-                stoppedByEarlyPick={stoppedByEarlyPick}
-                queuedSteers={queuedSteers}
-                retry={retry}
-                respondingQuestionId={respondingQuestionId}
-                respondingPermissionId={respondingPermissionId}
-                onQuestionResponse={handleQuestionResponse}
-                onPermissionResponse={handlePermissionResponse}
-              />
+              <ArenaMessageAnchorProvider value={registerMessageAnchor}>
+                <ArenaPauseFollowProvider value={pauseFollow}>
+                  <ArenaRunThread
+                    run={dispatched}
+                    stoppedByEarlyPick={stoppedByEarlyPick}
+                    queuedSteers={queuedSteers}
+                    retry={retry}
+                    respondingQuestionId={respondingQuestionId}
+                    respondingPermissionId={respondingPermissionId}
+                    onQuestionResponse={handleQuestionResponse}
+                    onPermissionResponse={handlePermissionResponse}
+                  />
+                </ArenaPauseFollowProvider>
+              </ArenaMessageAnchorProvider>
             ) : null}
           </ScrollView>
           {awayFromLatest ? (
@@ -493,6 +572,10 @@ function BattleJudging({
       retryingDiff={diffQuery.isFetching}
     />
   );
+}
+
+function runIsFinal(run: ArenaRun | undefined): boolean {
+  return run !== undefined && run.runState !== "pending";
 }
 
 function runsAreFinal(runA: ArenaRun | undefined, runB: ArenaRun | undefined): boolean {
@@ -828,6 +911,13 @@ export function ArenaBattleView({
               />
             </View>
           ) : null}
+          <View accessible accessibilityLiveRegion="polite">
+            {turn.resolution ? (
+              <View style={styles.reviewSection}>
+                <ArenaBattleOutcome item={turn} />
+              </View>
+            ) : null}
+          </View>
         </BattleCard>
       ) : null}
       {resolving ? (
@@ -939,6 +1029,11 @@ const styles = StyleSheet.create((theme) => ({
     alignItems: "center",
     gap: theme.spacing[1],
     flexShrink: 0,
+  },
+  agentNameRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[2],
   },
   // The contestants are the headline of the card, so their names are the largest type on it.
   agentName: {

@@ -24,6 +24,7 @@ import {
   ProviderSnapshotManager,
   type ProviderSnapshot,
   resolveSnapshotCwd,
+  type ProviderSnapshotManagerOptions,
 } from "./provider-snapshot-manager.js";
 import { OpenCodeAgentClient } from "./providers/opencode-agent.js";
 
@@ -92,6 +93,18 @@ function createExtraClient(
   } satisfies AgentClient;
 }
 
+// The manifest disables the local CLI agents in Agent Duel; these tests use them as sample
+// providers, so they start enabled unless a test overrides that.
+const LOCAL_AGENT_PROVIDERS = ["claude", "codex", "copilot", "pi"] as const;
+
+function createManager(options: ProviderSnapshotManagerOptions): ProviderSnapshotManager {
+  const providerOverrides = { ...options.providerOverrides };
+  for (const provider of LOCAL_AGENT_PROVIDERS) {
+    providerOverrides[provider] = { enabled: true, ...options.providerOverrides?.[provider] };
+  }
+  return new ProviderSnapshotManager({ ...options, providerOverrides });
+}
+
 async function withEnv(key: string, value: string, run: () => Promise<void>): Promise<void> {
   const previous = process.env[key];
   process.env[key] = value;
@@ -142,9 +155,24 @@ async function runTestCatalogActivities(
 }
 
 describe("ProviderSnapshotManager public surface", () => {
+  test("listEnabledProviderIds leaves out disabled providers", () => {
+    const defaults = new ProviderSnapshotManager({ logger: createTestLogger() });
+    const withCodex = new ProviderSnapshotManager({
+      logger: createTestLogger(),
+      providerOverrides: { codex: { enabled: true } },
+    });
+    try {
+      expect(defaults.listEnabledProviderIds()).toEqual(["opencode"]);
+      expect(withCodex.listEnabledProviderIds()).toEqual(["codex", "opencode"]);
+    } finally {
+      defaults.destroy();
+      withCodex.destroy();
+    }
+  });
+
   test("publishes one model per provider identity and retains the first definition", async () => {
     const first = { provider: "codex", id: "shared", label: "First", isDefault: true };
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       extraClients: {
         codex: createExtraClient("codex", {
@@ -171,7 +199,7 @@ describe("ProviderSnapshotManager public surface", () => {
   });
 
   test("normalizes plugin model catalogs at the same publication boundary", async () => {
-    const manager = new ProviderSnapshotManager({ logger: createTestLogger() });
+    const manager = createManager({ logger: createTestLogger() });
     manager.replacePluginProviders([
       {
         id: "catalog-plugin",
@@ -225,7 +253,7 @@ describe("ProviderSnapshotManager public surface", () => {
         throw new Error("not opened by this test");
       },
     };
-    const manager = new ProviderSnapshotManager({ logger: createTestLogger() });
+    const manager = createManager({ logger: createTestLogger() });
 
     try {
       manager.replacePluginProviders([registration]);
@@ -247,7 +275,7 @@ describe("ProviderSnapshotManager public surface", () => {
       thinkingOptions: [{ id: "xhigh", label: "Extra high" }],
     };
     const modes = [{ id: "auto-review", label: "Auto review" }];
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       extraClients: {
         codex: createExtraClient("codex", {
@@ -265,7 +293,7 @@ describe("ProviderSnapshotManager public surface", () => {
   });
 
   test("reports an unregistered provider through the current snapshot API", async () => {
-    const manager = new ProviderSnapshotManager({ logger: createTestLogger() });
+    const manager = createManager({ logger: createTestLogger() });
     try {
       await expect(manager.getProvider({ provider: "not-installed", wait: true })).rejects.toThrow(
         "Provider not-installed is not configured",
@@ -276,7 +304,7 @@ describe("ProviderSnapshotManager public surface", () => {
   });
 
   test("listRegisteredProviderIds includes the built-in providers", () => {
-    const manager = new ProviderSnapshotManager({ logger: createTestLogger() });
+    const manager = createManager({ logger: createTestLogger() });
     try {
       const ids = manager.listRegisteredProviderIds();
       expect(ids).toEqual(
@@ -288,7 +316,7 @@ describe("ProviderSnapshotManager public surface", () => {
   });
 
   test("hasProvider reflects the built-in set and providerOverrides additions", () => {
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       providerOverrides: {
         "zai-claude": { extends: "claude", label: "ZAI", enabled: true },
@@ -304,7 +332,7 @@ describe("ProviderSnapshotManager public surface", () => {
   });
 
   test("getProviderLabel returns the override label when provided", () => {
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       providerOverrides: {
         "qwen-codex": { extends: "codex", label: "Qwen Code", enabled: true },
@@ -319,7 +347,7 @@ describe("ProviderSnapshotManager public surface", () => {
   });
 
   test("getSnapshot returns loading entries for built-in providers before warmup", () => {
-    const manager = new ProviderSnapshotManager({ logger: createTestLogger() });
+    const manager = createManager({ logger: createTestLogger() });
     try {
       const snapshot = manager.getSnapshot("/tmp/project").records.map(({ entry }) => entry);
       const claude = snapshot.find((entry) => entry.provider === "claude");
@@ -339,7 +367,7 @@ describe("ProviderSnapshotManager public surface", () => {
       models: [] as AgentModelDefinition[],
       modes: [] as AgentMode[],
     }));
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       providerOverrides: {
         claude: { enabled: false },
@@ -365,7 +393,7 @@ describe("ProviderSnapshotManager public surface", () => {
 
   test("extraClients with isAvailable=false routes to unavailable without fetching", async () => {
     const isAvailable = vi.fn().mockResolvedValue(false);
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       providerOverrides: {
         claude: { enabled: false },
@@ -402,7 +430,7 @@ describe("ProviderSnapshotManager public surface", () => {
       ] as AgentModelDefinition[],
       modes: [] as AgentMode[],
     }));
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       extraClients: {
         codex: createExtraClient("codex", { isAvailable, fetchCatalog }),
@@ -429,7 +457,7 @@ describe("ProviderSnapshotManager public surface", () => {
   });
 
   test("ready snapshots publish the catalog's capability-aware default mode", async () => {
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       extraClients: {
         codex: createExtraClient("codex", {
@@ -480,7 +508,7 @@ describe("ProviderSnapshotManager public surface", () => {
       ] as AgentModelDefinition[],
       modes: [] as AgentMode[],
     }));
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       extraClients: {
         codex: createExtraClient("codex", {
@@ -509,7 +537,7 @@ describe("ProviderSnapshotManager public surface", () => {
   test("refreshTimeoutMs option overrides the default and yields a timeout error", async () => {
     // never-resolving isAvailable forces the timeout path
     const isAvailable = vi.fn(waitUntilAborted);
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       refreshTimeoutMs: 1,
       providerOverrides: {
@@ -535,7 +563,7 @@ describe("ProviderSnapshotManager public surface", () => {
   });
 
   test("setRefreshTimeoutMs changes the deadline for future refreshes", async () => {
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       refreshTimeoutMs: 60_000,
       providerOverrides: {
@@ -565,7 +593,7 @@ describe("ProviderSnapshotManager public surface", () => {
   test("defaults provider refreshes to a two-minute deadline", async () => {
     vi.useFakeTimers();
     let recovered = false;
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       providerOverrides: {
         claude: { enabled: false },
@@ -609,7 +637,7 @@ describe("ProviderSnapshotManager public surface", () => {
 
   test("one refresh timeout covers availability and catalog discovery", async () => {
     vi.useFakeTimers();
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       refreshTimeoutMs: 100,
       extraClients: {
@@ -663,7 +691,7 @@ describe("ProviderSnapshotManager public surface", () => {
         return { models: [], modes: [] };
       },
     );
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       refreshTimeoutMs: 100,
       extraClients: {
@@ -707,7 +735,7 @@ describe("ProviderSnapshotManager public surface", () => {
           once: true,
         });
       });
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       refreshTimeoutMs: 100,
       extraClients: {
@@ -760,7 +788,7 @@ describe("ProviderSnapshotManager public surface", () => {
   test("PASEO_PROVIDER_REFRESH_TIMEOUT_MS env var is honored when no option is given", async () => {
     vi.stubEnv("PASEO_PROVIDER_REFRESH_TIMEOUT_MS", "1");
     const isAvailable = vi.fn(waitUntilAborted);
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       providerOverrides: {
         claude: { enabled: false },
@@ -787,7 +815,7 @@ describe("ProviderSnapshotManager public surface", () => {
   test("PASEO_PROVIDER_REFRESH_TIMEOUT_MS env var is ignored when option is provided", async () => {
     vi.stubEnv("PASEO_PROVIDER_REFRESH_TIMEOUT_MS", "1");
     const isAvailable = vi.fn(waitUntilAborted);
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       refreshTimeoutMs: 5,
       providerOverrides: {
@@ -814,7 +842,7 @@ describe("ProviderSnapshotManager public surface", () => {
   });
 
   test("listProviders returns an entry per registered provider", async () => {
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       providerOverrides: {
         claude: { enabled: false },
@@ -838,7 +866,7 @@ describe("ProviderSnapshotManager public surface", () => {
   });
 
   test("getProvider throws when the provider is not configured", async () => {
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       providerOverrides: { codex: { enabled: false } },
     });
@@ -856,7 +884,7 @@ describe("ProviderSnapshotManager public surface", () => {
   });
 
   test("listModels rejects when the provider is disabled", async () => {
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       providerOverrides: { codex: { enabled: false } },
     });
@@ -885,7 +913,7 @@ describe("ProviderSnapshotManager public surface", () => {
         modes: [],
       }),
     });
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       extraClients: { codex: client },
     });
@@ -902,7 +930,7 @@ describe("ProviderSnapshotManager public surface", () => {
   });
 
   test("listModes rejects when the provider is disabled", async () => {
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       providerOverrides: { codex: { enabled: false } },
     });
@@ -916,7 +944,7 @@ describe("ProviderSnapshotManager public surface", () => {
   });
 
   test("resolveDefaultModel returns the requested model verbatim when provided", async () => {
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       providerOverrides: { codex: { enabled: false } },
     });
@@ -933,7 +961,7 @@ describe("ProviderSnapshotManager public surface", () => {
   });
 
   test("resolveDefaultModel returns undefined when the provider is disabled and no override is given", async () => {
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       providerOverrides: { codex: { enabled: false } },
     });
@@ -948,7 +976,7 @@ describe("ProviderSnapshotManager public surface", () => {
   test("getProviderDiagnostic returns the diagnostic from the injected client and appends snapshot models/status", async () => {
     const getDiagnostic = vi.fn(async () => ({ diagnostic: "codex is ready" }));
     const client = createExtraClient("codex", { getDiagnostic });
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       extraClients: { codex: client },
     });
@@ -977,7 +1005,7 @@ describe("ProviderSnapshotManager public surface", () => {
       isAvailable: async () => true,
       fetchCatalog,
     });
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       extraClients: { codex: client },
     });
@@ -993,7 +1021,7 @@ describe("ProviderSnapshotManager public surface", () => {
   });
 
   test("getProviderDiagnostic falls back to a default message when the client has no getDiagnostic and appends snapshot models/status", async () => {
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       extraClients: { codex: createExtraClient("codex") },
     });
@@ -1009,7 +1037,7 @@ describe("ProviderSnapshotManager public surface", () => {
   });
 
   test("getProviderDiagnostic materializes the client and proceeds for an unmaterialized configured provider", async () => {
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       isDev: true,
       extraClients: {},
@@ -1025,7 +1053,7 @@ describe("ProviderSnapshotManager public surface", () => {
   });
 
   test("getProviderDiagnostic turns provider diagnostic failures into diagnostic text", async () => {
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       extraClients: {
         codex: createExtraClient("codex", {
@@ -1053,7 +1081,7 @@ describe("ProviderSnapshotManager public surface", () => {
   test("getProviderDiagnostic starts provider diagnostics before waiting for snapshot refresh", async () => {
     vi.useFakeTimers();
     let diagnosticStarted = false;
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       refreshTimeoutMs: TEST_REFRESH_TIMEOUT_MS,
       extraClients: {
@@ -1099,7 +1127,7 @@ describe("ProviderSnapshotManager public surface", () => {
     vi.useFakeTimers();
     let diagnosticStarted = false;
     let snapshotStarted = false;
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       refreshTimeoutMs: TEST_REFRESH_TIMEOUT_MS,
       extraClients: {
@@ -1140,7 +1168,7 @@ describe("ProviderSnapshotManager public surface", () => {
 
   test("getProviderDiagnostic reports provider diagnostic timeout while preserving snapshot details", async () => {
     vi.useFakeTimers();
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       refreshTimeoutMs: TEST_REFRESH_TIMEOUT_MS,
       extraClients: {
@@ -1173,7 +1201,7 @@ describe("ProviderSnapshotManager public surface", () => {
   test("getProviderDiagnostic reports a stuck catalog refresh inside the diagnostic", async () => {
     await withEnv("PASEO_ENABLE_MOCK_SLOW", "true", async () => {
       vi.useFakeTimers();
-      const manager = new ProviderSnapshotManager({
+      const manager = createManager({
         logger: createTestLogger(),
         isDev: true,
         refreshTimeoutMs: TEST_REFRESH_TIMEOUT_MS,
@@ -1197,7 +1225,7 @@ describe("ProviderSnapshotManager public surface", () => {
   });
 
   test("getProviderDiagnostic returns an error diagnostic for an unknown provider", async () => {
-    const manager = new ProviderSnapshotManager({ logger: createTestLogger() });
+    const manager = createManager({ logger: createTestLogger() });
     try {
       await expect(manager.getProviderDiagnostic("unknown-provider" as AgentProvider)).resolves
         .toMatchInlineSnapshot(`
@@ -1215,7 +1243,7 @@ describe("ProviderSnapshotManager public surface", () => {
   test("getAgentManagerProviderState exposes extraClients verbatim", () => {
     const codexClient = createExtraClient("codex");
     const claudeClient = createExtraClient("claude");
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       providerOverrides: { opencode: { enabled: false }, copilot: { enabled: false } },
       extraClients: { codex: codexClient, claude: claudeClient },
@@ -1239,7 +1267,7 @@ describe("ProviderSnapshotManager public surface", () => {
     const parentModes: AgentMode[] = [
       { id: "parent-unattended", label: "Parent", isUnattended: true },
     ];
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       providerOverrides: {
         copilot: { enabled: false },
@@ -1317,7 +1345,7 @@ describe("ProviderSnapshotManager public surface", () => {
   test("resolveCreateConfig passes explicit unattended intent to provider policy", async () => {
     const resolverInputs: ResolveAgentCreateConfigInput[] = [];
     const modes: AgentMode[] = [{ id: "worker", label: "Worker", isUnattended: true }];
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       providerOverrides: {
         claude: { enabled: false },
@@ -1376,7 +1404,7 @@ describe("ProviderSnapshotManager public surface", () => {
       { id: "base", label: "Base" },
       { id: "orchestrator", label: "Orchestrator" },
     ];
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       providerOverrides: {
         claude: { enabled: false },
@@ -1429,7 +1457,7 @@ describe("ProviderSnapshotManager public surface", () => {
 
 describe("ProviderSnapshotManager applyMutableProviderConfig", () => {
   test("adds a derived provider and includes it in subsequent reads", async () => {
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       providerOverrides: {
         claude: { enabled: false },
@@ -1461,7 +1489,7 @@ describe("ProviderSnapshotManager applyMutableProviderConfig", () => {
   });
 
   test("removes startup provider overrides from the live registry", () => {
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       providerOverrides: {
         "zai-claude": { extends: "claude", label: "ZAI", enabled: true },
@@ -1489,7 +1517,7 @@ describe("ProviderSnapshotManager applyMutableProviderConfig", () => {
   });
 
   test("drops disabled built-in providers from clients while preserving providerDefinitions", () => {
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       providerOverrides: {
         claude: { enabled: true },
@@ -1515,7 +1543,7 @@ describe("ProviderSnapshotManager applyMutableProviderConfig", () => {
   });
 
   test("fires a change event on every primed snapshot cwd after applyMutableProviderConfig", () => {
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       providerOverrides: {
         claude: { enabled: false },
@@ -1572,7 +1600,7 @@ describe("ProviderSnapshotManager applyMutableProviderConfig", () => {
       pi: { enabled: false },
       omp: { enabled: false },
     };
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       providerOverrides: config,
       runtimeSettings: {
@@ -1623,7 +1651,7 @@ describe("ProviderSnapshotManager applyMutableProviderConfig", () => {
       pi: { enabled: false },
       omp: { enabled: false },
     };
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       providerOverrides: config,
       extraClients: {
@@ -1677,7 +1705,7 @@ describe("ProviderSnapshotManager applyMutableProviderConfig", () => {
       pi: { enabled: false },
       omp: { enabled: false },
     };
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       providerOverrides: config,
     });
@@ -1715,7 +1743,7 @@ describe("ProviderSnapshotManager applyMutableProviderConfig", () => {
   });
 
   test("preparation leaves installed reads untouched and commit installs all target memberships before notification", () => {
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       providerOverrides: PUBLICATION_PROVIDERS,
       extraClients: { codex: createExtraClient("codex") },
@@ -1772,7 +1800,7 @@ describe("ProviderSnapshotManager applyMutableProviderConfig", () => {
   test("subscriber failures cannot change discovery results, roll back commits or starve another listener", async () => {
     const logs: string[] = [];
     const logger = pino({ level: "warn" }, { write: (line) => logs.push(line) });
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger,
       providerOverrides: PUBLICATION_PROVIDERS,
       extraClients: { codex: createExtraClient("codex", { isAvailable: async () => true }) },
@@ -1819,7 +1847,7 @@ describe("ProviderSnapshotManager lifecycle", () => {
       opencode: { enabled: false },
       pi: { enabled: false },
     });
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       providerOverrides: providerConfig("Initial"),
     });
@@ -1863,7 +1891,7 @@ describe("ProviderSnapshotManager lifecycle", () => {
   });
 
   test("on/off attaches and detaches change listeners", () => {
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       providerOverrides: {
         claude: { enabled: false },
@@ -1890,7 +1918,7 @@ describe("ProviderSnapshotManager lifecycle", () => {
   });
 
   test("destroy clears snapshots and prevents further change emissions", () => {
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       providerOverrides: {
         claude: { enabled: false },
@@ -1923,7 +1951,7 @@ describe("ProviderSnapshotManager cwd routing", () => {
     });
     const requests: FetchCatalogOptions[] = [];
     let availabilityProbes = 0;
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       extraClients: {
         codex: createExtraClient("codex", {
@@ -1977,7 +2005,7 @@ describe("ProviderSnapshotManager cwd routing", () => {
     async (provider) => {
       const requests: FetchCatalogOptions[] = [];
       let available = false;
-      const manager = new ProviderSnapshotManager({
+      const manager = createManager({
         logger: createTestLogger(),
         providerOverrides: {
           "custom-codex": { extends: "codex", label: "Custom Codex", enabled: true },
@@ -2039,7 +2067,7 @@ describe("ProviderSnapshotManager cwd routing", () => {
       models: [] as AgentModelDefinition[],
       modes: [] as AgentMode[],
     }));
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       extraClients: {
         codex: createExtraClient("codex", {
@@ -2062,7 +2090,7 @@ describe("ProviderSnapshotManager cwd routing", () => {
       models: [] as AgentModelDefinition[],
       modes: [] as AgentMode[],
     }));
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       extraClients: {
         pi: createExtraClient("pi", {
@@ -2089,7 +2117,7 @@ describe("ProviderSnapshotManager cwd routing", () => {
   });
 
   test("different cwd keys produce independent snapshots", () => {
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       providerOverrides: {
         claude: { enabled: false },
@@ -2116,7 +2144,7 @@ describe("ProviderSnapshotManager cwd routing", () => {
   });
 
   test("getSnapshot called with no cwd resolves to the global snapshot key", () => {
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       providerOverrides: {
         claude: { enabled: false },
@@ -2197,7 +2225,7 @@ describe("ProviderSnapshotManager cwd routing", () => {
           };
         },
       };
-      const manager = new ProviderSnapshotManager({
+      const manager = createManager({
         logger: createTestLogger(),
         providerOverrides: {
           codex: { enabled: false },
@@ -2301,7 +2329,7 @@ describe("ProviderSnapshotManager cwd routing", () => {
         };
       },
     };
-    const manager = new ProviderSnapshotManager({ logger: createTestLogger() });
+    const manager = createManager({ logger: createTestLogger() });
     try {
       const state = manager.replacePluginProviders([registration]);
       expect(state.clients[registration.id]?.provider).toBe(registration.id);
@@ -2368,7 +2396,7 @@ describe("provider-owned catalogue identity", () => {
           };
         },
       });
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       providerOverrides: {
         ...disabledProviders,
@@ -2429,7 +2457,7 @@ describe("provider-owned catalogue identity", () => {
       started = finish;
     });
     let calls = 0;
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       providerOverrides: { ...disabledProviders, codex: { enabled: true } },
       extraClients: {
@@ -2480,7 +2508,7 @@ describe("provider-owned catalogue identity", () => {
   test("key lookup failure detaches a view from its previous shared catalogue", async () => {
     let broken = false;
     let calls = 0;
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       providerOverrides: { ...disabledProviders, codex: { enabled: true } },
       extraClients: {
@@ -2538,7 +2566,7 @@ test("late key resolution cannot restore an old identity and concurrent readers 
   let keyCalls = 0;
   let probes = 0;
   const targets: FetchCatalogOptions[] = [];
-  const manager = new ProviderSnapshotManager({
+  const manager = createManager({
     logger: createTestLogger(),
     extraClients: {
       codex: createExtraClient("codex", {
@@ -2608,7 +2636,7 @@ test("settings refresh starts independent workspace discoveries together and sha
   const started: string[] = [];
   let sharedFetches = 0;
   const cwds = [resolveSnapshotCwd("/refresh-a"), resolveSnapshotCwd("/refresh-b")];
-  const manager = new ProviderSnapshotManager({
+  const manager = createManager({
     logger: createTestLogger(),
     extraClients: {
       pi: createExtraClient("pi", {
@@ -2666,7 +2694,7 @@ test("bounds each provider across workspaces without blocking another provider",
   const started = new Set<string>();
   const updated = new Set<string>();
   const cwds = Array.from({ length: 16 }, (_, index) => resolveSnapshotCwd(`/bounded-${index}`));
-  const manager = new ProviderSnapshotManager({
+  const manager = createManager({
     logger: createTestLogger(),
     extraClients: {
       codex: createExtraClient("codex", {
@@ -2741,7 +2769,7 @@ test.each(["configuration", "shutdown", "destroy"])(
     const calls: string[] = [];
     let keys = 0;
     const cwds = Array.from({ length: 5 }, (_, index) => resolveSnapshotCwd(`/queued-${index}`));
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       providerOverrides: { ...PUBLICATION_PROVIDERS, pi: { enabled: true, label: "Initial" } },
       extraClients: {
@@ -2816,7 +2844,7 @@ test("settings invalidation discards pending discovery even when the provider re
     started = finish;
   });
   let calls = 0;
-  const manager = new ProviderSnapshotManager({
+  const manager = createManager({
     logger: createTestLogger(),
     extraClients: {
       codex: createExtraClient("codex", {
@@ -2884,7 +2912,7 @@ test("an unchanged provider publishes a pending key failure after an unrelated c
     pi: { enabled: false },
     omp: { enabled: false },
   };
-  const manager = new ProviderSnapshotManager({
+  const manager = createManager({
     logger: createTestLogger(),
     providerOverrides: config,
     extraClients: {
@@ -2928,7 +2956,7 @@ test("a concurrent cached read cannot swallow a force refresh while its key is r
   });
   let keyCalls = 0;
   let calls = 0;
-  const manager = new ProviderSnapshotManager({
+  const manager = createManager({
     logger: createTestLogger(),
     extraClients: {
       codex: createExtraClient("codex", {
@@ -2980,7 +3008,7 @@ test.each(["workspace", "settings"])(
       started = finish;
     });
     let calls = 0;
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       providerOverrides: PUBLICATION_PROVIDERS,
       extraClients: {
@@ -3047,7 +3075,7 @@ test("publication detaches provider-retained arrays, thinking options and nested
       metadata: { nested: { label: "original" } },
     },
   ];
-  const manager = new ProviderSnapshotManager({
+  const manager = createManager({
     logger: createTestLogger(),
     extraClients: {
       codex: createExtraClient("codex", {
@@ -3076,7 +3104,7 @@ test("publication detaches provider-retained arrays, thinking options and nested
 
 test("snapshot records share provider results across targets while retaining target-specific catalogues", async () => {
   const calls = { codex: 0, opencode: 0 };
-  const manager = new ProviderSnapshotManager({
+  const manager = createManager({
     logger: createTestLogger(),
     extraClients: Object.fromEntries(
       (["codex", "opencode"] as const).map((provider) => [
@@ -3131,7 +3159,7 @@ test("result identity covers content, metadata and status while unchanged refres
     metadata: { revision: 1 },
   };
   let available = true;
-  const manager = new ProviderSnapshotManager({
+  const manager = createManager({
     logger: createTestLogger(),
     extraClients: {
       codex: createExtraClient("codex", {
@@ -3178,7 +3206,7 @@ const PUBLICATION_PROVIDERS = Object.fromEntries(
 );
 
 test("reads retain the target snapshot and cold binding publishes only the resolved transition", async () => {
-  const manager = new ProviderSnapshotManager({
+  const manager = createManager({
     logger: createTestLogger(),
     providerOverrides: PUBLICATION_PROVIDERS,
     extraClients: { codex: createExtraClient("codex", { isAvailable: async () => true }) },
@@ -3200,7 +3228,7 @@ test("reads retain the target snapshot and cold binding publishes only the resol
 
 test("identical key failures and unavailable results complete without duplicate transitions", async () => {
   let keyFails = true;
-  const manager = new ProviderSnapshotManager({
+  const manager = createManager({
     logger: createTestLogger(),
     providerOverrides: PUBLICATION_PROVIDERS,
     extraClients: {
@@ -3235,7 +3263,7 @@ test("identical key failures and unavailable results complete without duplicate 
 
 test("shared result publication installs every target before notifying the first subscriber", async () => {
   let label = "before";
-  const manager = new ProviderSnapshotManager({
+  const manager = createManager({
     logger: createTestLogger(),
     providerOverrides: PUBLICATION_PROVIDERS,
     extraClients: {
@@ -3306,7 +3334,7 @@ test("plugin runtime replacement invalidates only changed registrations and comm
   }
   const first = registration("first-plugin", "first");
   const second = registration("second-plugin", "second");
-  const manager = new ProviderSnapshotManager({
+  const manager = createManager({
     logger: createTestLogger(),
     providerOverrides: PUBLICATION_PROVIDERS,
     extraClients: {
@@ -3375,7 +3403,7 @@ test("plugin runtime replacement invalidates only changed registrations and comm
 test("binding a settled catalogue publishes once and rebinding an equal settled result publishes nothing", async () => {
   let key = "first";
   let probes = 0;
-  const manager = new ProviderSnapshotManager({
+  const manager = createManager({
     logger: createTestLogger(),
     providerOverrides: PUBLICATION_PROVIDERS,
     extraClients: {
@@ -3454,7 +3482,7 @@ describe("plugin provider overrides and launch", () => {
 
   test("reports plugin status diagnostics without connecting", async () => {
     const { registration, launches } = provider();
-    const manager = new ProviderSnapshotManager({ logger: createTestLogger() });
+    const manager = createManager({ logger: createTestLogger() });
     try {
       manager.replacePluginProviders([registration]);
       expect(await manager.getProvider({ provider: registration.id, wait: true })).toMatchObject({
@@ -3472,7 +3500,7 @@ describe("plugin provider overrides and launch", () => {
 
   test("applies plugin overrides and refreshes the resolved launch on config edits", async () => {
     const { registration, launches } = provider();
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger: createTestLogger(),
       providerOverrides: {
         [registration.id]: {
@@ -3546,7 +3574,7 @@ describe("plugin provider overrides and launch", () => {
         },
       },
     );
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger,
       providerOverrides: {
         [registration.id]: { command: [process.execPath], env: { PLUGIN_LOGIN: "yes" } },
@@ -3578,7 +3606,7 @@ describe("plugin provider overrides and launch", () => {
         },
       },
     );
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger,
       providerOverrides: { "typo-provider": { enabled: false } },
     });
@@ -3608,7 +3636,7 @@ describe("plugin provider overrides and launch", () => {
         },
       },
     );
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger,
       providerOverrides: {
         "typo-provider": { enabled: false },
@@ -3646,7 +3674,7 @@ describe("plugin provider overrides and launch", () => {
         },
       },
     );
-    const manager = new ProviderSnapshotManager({
+    const manager = createManager({
       logger,
       providerOverrides: {
         [registration.id]: {
@@ -3706,7 +3734,7 @@ test("model overrides preserve negotiated plugin capabilities and connection shu
       };
     },
   };
-  const manager = new ProviderSnapshotManager({
+  const manager = createManager({
     logger: createTestLogger(),
     providerOverrides: {
       [registration.id]: { models: [{ id: "configured", label: "Configured" }] },
@@ -3734,7 +3762,7 @@ test("new Arena chats retry an old engine-start error without replacing a health
       modes: [],
     };
   });
-  const manager = new ProviderSnapshotManager({
+  const manager = createManager({
     logger: createTestLogger(),
     extraClients: {
       opencode: createExtraClient("opencode", { isAvailable: async () => true, fetchCatalog }),

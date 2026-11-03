@@ -18,7 +18,7 @@ import type { StreamOptions } from "@opencode/ai/route"
 import type { SessionCompactionResult } from "@opencode/plugin/effect/session"
 import type { SessionError } from "@opencode/schema/session-error"
 import { makeLocationNode } from "@opencode/util/effect/app-node"
-import { Context, Effect, Layer, Result, Stream } from "effect"
+import { Context, Effect, Layer, Result, Schema, Stream } from "effect"
 import { Agent } from "../agent.js"
 import { Bus } from "../bus.js"
 import { Database } from "../database/database.js"
@@ -29,12 +29,12 @@ import { Token } from "../util/token.js"
 import type { SessionContext } from "./context.js"
 import { SessionEvent } from "./event.js"
 import { SessionHistory } from "./history.js"
-import type { SessionMessage } from "./message.js"
+import { SessionMessage } from "./message.js"
 import { SessionModelRequest } from "./model-request.js"
 import { SessionProviderContext } from "./provider-context.js"
 import { SessionRunnerModel } from "./runner/model.js"
 import { SessionRunnerRetry } from "./runner/retry.js"
-import { toLLMMessages } from "./runner/to-llm-message.js"
+import { RETAINED_INPUT, toLLMMessages } from "./runner/to-llm-message.js"
 import { contentFilterError, toSessionError } from "./to-session-error.js"
 import { SessionUsage } from "./usage.js"
 
@@ -275,14 +275,27 @@ export const layer = Layer.effect(
       keep: number,
     ): Effect.fn.Return<Result, Failure> {
       const context = trigger.context
-      const split = splitConversation(context.messages, keep)
+      let split = splitConversation(context.messages, keep)
       if (!split) return yield* Effect.fail(NOTHING_TO_COMPACT)
 
       const previous = previousCompaction(context.messages)
       const prompt = buildPrompt(previous !== undefined, previous?.summary.includes(LEGACY_HEADING) ?? false)
       const headings = SUMMARY_TEMPLATE.split("\n").filter((line) => line.startsWith("##"))
       const filled = (text: string) => text.split("\n").some((line) => headings.includes(line.trim()))
-      const prepared = yield* prepare(context, split.older, budget)
+      let prepared = yield* prepare(context, split.older, budget)
+      const lastAssistant = context.messages.findLastIndex((message) => message.type === "assistant")
+      const pending = prepared.event.preservePendingInput
+        ? context.messages.slice(lastAssistant + 1).filter((message) => message.type === "user")
+        : []
+      if (pending.length) {
+        const ids = new Set(pending.map((message) => message.id))
+        split = splitConversation(
+          context.messages.filter((message) => !ids.has(message.id)),
+          keep,
+        )
+        if (!split) return yield* Effect.fail(NOTHING_TO_COMPACT)
+        prepared = yield* prepare(context, split.older, budget)
+      }
 
       // Hooks saw the request without the summary prompt, so it is appended here. A reply that ignores the
       // template gets one reminder before it counts as a failure.
@@ -312,7 +325,12 @@ export const layer = Layer.effect(
         })
 
       const overhead = Token.estimate(prompt) + Token.estimate(NUDGE)
-      return yield* deliver(trigger, prepared, split.recent, budget - overhead, send)
+      const result = yield* deliver(trigger, prepared, split.recent, budget - overhead, send)
+      if (!pending.length) return result
+      // Store values, not row references: checkpoints must survive forks and the original rows
+      // falling outside history. The ordinary user codec preserves attachments and skills.
+      const retained = Schema.encodeSync(Schema.Array(SessionMessage.User))(pending)
+      return { ...result, metadata: { ...result.metadata, [RETAINED_INPUT]: retained } }
     })
 
     /**

@@ -32,7 +32,7 @@ export function hasSidebarWorkspaceTrailing({
   trailing: SidebarWorkspaceTrailing;
 }): boolean {
   if (trailing === "diff") return workspace.diffStat !== null;
-  if (trailing === "timestamp") return workspace.statusEnteredAt !== null;
+  if (trailing === "timestamp") return workspace.activityAt !== null;
   return false;
 }
 
@@ -48,8 +48,8 @@ export function SidebarWorkspaceTrailingContent({
       <DiffStat additions={workspace.diffStat.additions} deletions={workspace.diffStat.deletions} />
     );
   }
-  if (trailing === "timestamp" && workspace.statusEnteredAt) {
-    return <WorkspaceTimestamp enteredAt={workspace.statusEnteredAt} />;
+  if (trailing === "timestamp" && workspace.activityAt) {
+    return <WorkspaceTimestamp activityAt={workspace.activityAt} />;
   }
   return null;
 }
@@ -59,8 +59,8 @@ export function SidebarWorkspaceTrailingContent({
  * re-renders the component that owns it — keeping that component down to a single `<Text>` is
  * what stops a minute tick from reaching the row, the list, or the diff stat next door.
  */
-function WorkspaceTimestamp({ enteredAt }: { enteredAt: Date }) {
-  const label = useCompactTimeAgo(enteredAt);
+function WorkspaceTimestamp({ activityAt }: { activityAt: string }) {
+  const label = useCompactTimeAgo(new Date(activityAt));
   return (
     <Text style={styles.timestamp} numberOfLines={1} testID="sidebar-workspace-timestamp">
       {label}

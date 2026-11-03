@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:tes
 import type { MongoClient } from "mongodb"
 import type { Caller } from "./context"
 import { connectMongoDb, type MongoDb } from "./mongo"
-import type { ModelPool } from "./pool"
+import { DEFAULT_MODEL_OUTPUT_LIMIT, type ModelPool } from "./pool"
 import { createArenaService, type ArenaService, type ArenaServiceOptions } from "./service"
 import { utilityModels } from "./utility-model"
 
@@ -241,6 +241,11 @@ describe("Arena service", () => {
         require_parameters: true,
         max_price: { prompt: 2.1, completion: 6.6 },
       },
+      // One cache key per contestant keeps its provider cache warm across steps.
+      prompt_cache_key: "assignment-a",
+      session_id: "assignment-a",
+      // A request without an output cap gets the private one, so the provider cannot pick a larger default.
+      max_tokens: DEFAULT_MODEL_OUTPUT_LIMIT,
       stream_options: { include_usage: true },
     })
     expect(routed.headers.get("x-openrouter-provider")).toBeNull()

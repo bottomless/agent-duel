@@ -1,8 +1,23 @@
 import { execFile as nodeExecFile } from "child_process"
 import { createHash, randomUUID } from "crypto"
 import { constants, createReadStream } from "fs"
-import { copyFile, cp, lstat, lutimes, mkdir, readdir, readlink, realpath, rm, symlink, writeFile } from "fs/promises"
-import { dirname, isAbsolute, join, relative, resolve, sep } from "path"
+import {
+  access,
+  chmod,
+  copyFile,
+  cp,
+  lstat,
+  lutimes,
+  mkdir,
+  readdir,
+  readlink,
+  realpath,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from "fs/promises"
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "path"
 import { promisify } from "util"
 import { cloneFile, cloneTree, type CloneMethod, type CloneOptions, type CopyMethod } from "@/util/copy-tree"
 import { discardTree, TRASH_DIRNAME } from "@/util/discard-tree"
@@ -17,7 +32,7 @@ import {
   type CopyOmissionReason,
   type ResolvedArenaCopyPolicy,
 } from "./copy-policy"
-import { IGNORED_PATHS_COMMAND } from "./warm"
+import { ALL_IGNORED_PATHS_COMMAND, IGNORED_PATHS_COMMAND, withEmptyIgnoredFolders } from "./warm"
 
 const execFile = promisify(nodeExecFile)
 
@@ -255,6 +270,26 @@ function entryType(stats: Stats): CopyManifestEntry["type"] {
   return "special"
 }
 
+/** Whether this process can read a file, or list a directory and look up what is in it. */
+async function openable(path: string, type: CopyManifestEntry["type"]) {
+  const mode = type === "directory" ? constants.R_OK | constants.X_OK : constants.R_OK
+  return await access(path, mode).then(
+    () => true,
+    () => false,
+  )
+}
+
+/**
+ * `undefined` for an entry refused for permissions, which trying again does not change: a
+ * root-owned file a `sudo` run left, or a folder a container wrote as another user. Anything
+ * else is thrown again.
+ */
+function unlessRefused(cause: unknown): undefined {
+  const code = (cause as NodeJS.ErrnoException | null)?.code
+  if (code === "EACCES" || code === "EPERM") return undefined
+  throw cause
+}
+
 function pathInside(root: string, candidate: string) {
   const value = relative(root, candidate)
   return value === "" || (value !== ".." && !value.startsWith(`..${sep}`) && !isAbsolute(value))
@@ -287,13 +322,36 @@ export function parseIgnoredRoots(output: string): string[] {
 
 /** Ignored roots with directory collapsing determined by ignore rules, not public siblings. */
 export async function listIgnoredRoots(directory: string): Promise<string[]> {
-  const result = await execFile("git", [...IGNORED_PATHS_COMMAND, "--", "."], {
-    cwd: directory,
-    maxBuffer: 32 * 1024 * 1024,
-  })
-  const entries = result.stdout.split("\0").filter((entry) => entry.length > 0)
+  const list = (command: readonly string[]) =>
+    execFile("git", [...command, "--", "."], { cwd: directory, maxBuffer: 32 * 1024 * 1024 }).then(
+      (result) => result.stdout,
+    )
+  const listings = await Promise.all([list(IGNORED_PATHS_COMMAND), list(ALL_IGNORED_PATHS_COMMAND)])
+  const allEntries = new Set(listings[1]!.split("\0"))
+  // A container collapsed only by --no-empty-directory owns empty descendants. Keep the whole
+  // container so those folders survive seeding; ordinary containers still use rule-ignored roots.
+  const emptyContainers = new Set(listings[0]!.split("\0").filter((entry) => !allEntries.has(entry)))
+  const entries = await ruleIgnoredEntries(directory, listings.join("\0"), emptyContainers)
+  const allowed = new Set(entries)
+  const [roots, all] = listings.map((output) =>
+    parseIgnoredRoots(
+      output
+        .split("\0")
+        .filter((entry) => allowed.has(entry))
+        .join("\0"),
+    ),
+  )
+  return withEmptyIgnoredFolders(roots!, all!)
+}
+
+async function ruleIgnoredEntries(
+  directory: string,
+  output: string,
+  emptyContainers: ReadonlySet<string>,
+): Promise<string[]> {
+  const entries = output.split("\0").filter((entry) => entry.length > 0)
   const directories = entries.filter((entry) => entry.endsWith("/"))
-  if (directories.length === 0) return parseIgnoredRoots(result.stdout)
+  if (directories.length === 0) return entries
   // --directory can list both conf/ and conf/.env when only the file is ignored. A public
   // sibling prevents that collapse in the checkout, but filtering its sync copy removes it
   // in the contestant. Keep only rule-ignored directories before folding away descendants;
@@ -312,7 +370,7 @@ export async function listIgnoredRoots(directory: string): Promise<string[]> {
     child.stdin?.end(`${directories.map((entry) => `./${entry}`).join("\0")}\0`)
   })
   const ignored = new Set(checked.split("\0").map((entry) => entry.replace(/^\.\//, "")))
-  return parseIgnoredRoots(entries.filter((entry) => !entry.endsWith("/") || ignored.has(entry)).join("\0"))
+  return entries.filter((entry) => !entry.endsWith("/") || ignored.has(entry) || emptyContainers.has(entry))
 }
 
 /**
@@ -483,6 +541,12 @@ export async function createIgnoredContentSnapshot(input: IgnoredContentSnapshot
       entries.push(copied(relativePath, type, 0, "copy", sourceIdentity))
       continue
     }
+    // A root this process cannot open is left out for both contestants alike; one it can open is
+    // copied as far as it can read it (`copyReadable`).
+    if (!(await openable(source, type))) {
+      entries.push(omitted(relativePath, type, "copy_failed", sourceIdentity))
+      continue
+    }
     if (cloneable) {
       entries.push(copied(relativePath, type, type === "file" ? sourceIdentity.size : 0, method, sourceIdentity))
       continue
@@ -519,8 +583,10 @@ export async function createIgnoredContentSnapshot(input: IgnoredContentSnapshot
  * A root's identity is its own inode. For a tree that means a package added or removed
  * changes it and an edit deep inside does not — accepted, because a stale warm pair costs a
  * re-clone measured in seconds, and re-checking the tree would cost the walk the clone
- * exists to avoid. Omissions decided from the path alone still hold; the ones decided from
- * the tree's size cannot be re-checked without walking it and count as changed.
+ * exists to avoid. Omissions decided from the path alone still hold, and a root left out as
+ * unreadable stays so while its own lstat holds, since a chmod or chown moves its ctime. The
+ * ones decided from the tree's size cannot be re-checked without walking it and count as
+ * changed.
  */
 export async function matchesIgnoredContentSnapshot(input: IgnoredContentMatchInput): Promise<boolean> {
   const canonical = await realpath(input.canonical)
@@ -550,6 +616,10 @@ export async function matchesIgnoredContentSnapshot(input: IgnoredContentMatchIn
         continue
       }
       if (reason === "nested_worktree" && nested.has(relativePath)) continue
+      if (reason === "copy_failed" && entry.sourceIdentity) {
+        const stats = await lstat(join(canonical, relativePath)).catch(() => undefined)
+        if (stats && sameIdentity(entry.sourceIdentity, identity(stats))) continue
+      }
       return false
     }
     if (nested.has(relativePath)) return false
@@ -583,6 +653,52 @@ async function discardExisting(target: string, trash: string) {
   await rm(target, { recursive: true, force: true })
 }
 
+/**
+ * Copy what this process can read of a tree whose clone and copy were refused partway. Each
+ * entry it cannot read is left out, and both contestants copy the same checkout this same way,
+ * so both leave out the same entries. With a clone, a directory that clones whole is still one
+ * call; `whole` is false for the root, whose own clone just failed. Returns how many entries
+ * were left out.
+ */
+async function copyReadable(input: {
+  readonly source: string
+  readonly target: string
+  readonly clone: Clone | undefined
+  readonly whole: boolean
+  readonly signal?: AbortSignal
+}): Promise<number> {
+  input.signal?.throwIfAborted()
+  const stats = await lstat(input.source).catch(unlessRefused)
+  if (!stats) return 1
+  if (stats.isSymbolicLink()) {
+    await symlink(await readlink(input.source), input.target)
+    return 0
+  }
+  if (stats.isFile()) {
+    // FICLONE shares blocks where the filesystem can, as the clone of a whole root would.
+    const flags = constants.COPYFILE_EXCL | constants.COPYFILE_FICLONE
+    if (!(await copyFile(input.source, input.target, flags).then(() => true, unlessRefused))) return 1
+    await lutimes(input.target, stats.atime, stats.mtime)
+    return 0
+  }
+  // A socket or FIFO is left out, as one at a root is.
+  if (!stats.isDirectory()) return 1
+  if (input.whole && input.clone && (await input.clone(input.source, input.target, { signal: input.signal }))) {
+    return 0
+  }
+  const names = await readdir(input.source).catch(unlessRefused)
+  if (!names) return 1
+  await mkdir(input.target)
+  let unreadable = 0
+  for (const name of names) {
+    const child = { source: join(input.source, name), target: join(input.target, name) }
+    unreadable += await copyReadable({ ...input, ...child, whole: true })
+  }
+  await chmod(input.target, stats.mode & 0o7777)
+  await lutimes(input.target, stats.atime, stats.mtime)
+  return unreadable
+}
+
 /** Put one recorded root from the checkout at its place in a contestant directory. */
 async function seedEntry(
   source: string,
@@ -603,10 +719,31 @@ async function seedEntry(
     return "copied" as const
   }
   // Staged beside the trash: outside every worktree, so no watch sees the tree being built.
-  if (await clone(source, target, { staging: join(dirname(trash), STAGING_DIRNAME), signal })) {
-    return "cloned" as const
+  const staging = join(dirname(trash), STAGING_DIRNAME)
+  if (await clone(source, target, { staging, signal })) return "cloned" as const
+  if (await cp(source, target, { recursive: true, verbatimSymlinks: true }).then(() => true, unlessRefused)) {
+    return "copied" as const
   }
-  await cp(source, target, { recursive: true, verbatimSymlinks: true })
+  // Something under the root cannot be read. The partial copy goes the way a leftover seed goes,
+  // and the root is copied again without it, staged as a clone is.
+  await discardExisting(target, trash)
+  const readable = { source, clone: entry.method === "copy" ? undefined : clone, whole: false, signal }
+  const staged = join(staging, `${basename(target)}-${randomUUID()}`)
+  await mkdir(staging, { recursive: true })
+  let unreadable = await copyReadable({ ...readable, target: staged }).catch((cause: unknown) => {
+    void rm(staged, { recursive: true, force: true }).catch(() => undefined)
+    throw cause
+  })
+  // A rename across volumes fails, and the copy then goes straight to the target.
+  const moved = await rename(staged, target).then(
+    () => true,
+    () => false,
+  )
+  if (!moved) {
+    await rm(staged, { recursive: true, force: true })
+    unreadable = await copyReadable({ ...readable, target })
+  }
+  console.warn("[arena] left out ignored entries this process cannot read", source, unreadable)
   return "copied" as const
 }
 

@@ -2,7 +2,14 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { closeStore, contestantFetch, recoverOnce, setStoreForTest, store } from "@/arena/runtime"
 import { setArenaCredentials } from "@/arena/credentials"
 import { resolveBuildMetadata } from "@/arena/provenance"
-import { tmpdir } from "../fixture/fixture"
+import { mkdtemp, rm } from "node:fs/promises"
+import { tmpdir as osTmpdir } from "node:os"
+import { join } from "node:path"
+
+async function tmpdir() {
+  const directory = await mkdtemp(join(osTmpdir(), "arena-runtime-test-"))
+  return { path: directory, [Symbol.asyncDispose]: () => rm(directory, { recursive: true, force: true }) }
+}
 
 afterEach(async () => {
   await closeStore()
@@ -76,6 +83,8 @@ describe("ArenaRuntime local persistence", () => {
       })
       setArenaCredentials({
         mode: "hosted",
+        researchPartition: "test-research-partition",
+        researchAccountID: "test-account",
         token: "arena-runtime-test-token",
         controlPlaneUrl: server.url.toString(),
         controlTokenHash: "0".repeat(64),

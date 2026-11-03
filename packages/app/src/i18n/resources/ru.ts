@@ -926,7 +926,11 @@ export const ru: TranslationResources = {
         started: "Начата",
         completed: "Завершена",
         cancelled: "Отменена",
+
+        reopened: "Возобновлена",
       },
+
+      tasksProgressCurrent: "{{completed}}/{{total}} задач · {{task}}",
     },
     turnFooter: {
       endedAt: "{{duration}}, завершено в {{time}}",
@@ -1534,6 +1538,14 @@ export const ru: TranslationResources = {
           loadError: "Не удалось загрузить коммиты",
           empty: "Коммитов пока нет",
         },
+
+        showTreeView: "Показать дерево папок",
+        showFlatView: "Показать плоский список файлов",
+        collapseAll: "Свернуть все файлы",
+        expandAll: "Развернуть все файлы",
+        emptyHiddenWhitespace: "Никаких видимых изменений после скрытия пробелов",
+        emptyUncommitted: "Нет незафиксированных изменений",
+        emptyAgainstBase: "Никаких изменений по сравнению с{{baseRef}}",
       },
       openInEditor: {
         open: "Открыть",
@@ -1735,6 +1747,13 @@ export const ru: TranslationResources = {
         project: "Проект",
         status: "Статус",
         labels: "Метки",
+        none: "Нет",
+      },
+      sorting: {
+        groupLabel: "Порядок групп",
+        label: "Сортировка",
+        default: "По умолчанию",
+        lastChat: "Последний чат",
       },
       titleSource: {
         label: "Заголовок",
@@ -1927,6 +1946,8 @@ export const ru: TranslationResources = {
       branch: "Ветка",
       baseNotApplicable: "Неприменимо",
       host: "Хост",
+
+      base: "База",
     },
     titlePlaceholder: "Заголовок (необязательно)",
     errors: {
@@ -2168,6 +2189,14 @@ export const ru: TranslationResources = {
         statusFailed: "Не удалось проверить состояние установки CLI.",
         installFailed: "Не удалось установить Agent Duel CLI.",
       },
+
+      skills: {
+        statusFailed: "Невозможно проверить статус навыков оркестровки.",
+        installFailed: "Невозможно установить навыки оркестровки.",
+        updateFailed: "Невозможно обновить навыки оркестровки.",
+        uninstallFailed: "Невозможно удалить навыки оркестровки.",
+        saveSelectionFailed: "Не удалось сохранить выбор навыков оркестровки.",
+      },
     },
   },
   rootError: {
@@ -2377,6 +2406,8 @@ export const ru: TranslationResources = {
     archiveTooltip: "Архивировать субагента",
     archiveFinishedAction: "Архивировать завершенные субагенты",
     archiveFinishedRetry: "Повторить ({{failed}}/{{total}})",
+
+    archiveFinishedTooltip: "Архивировать завершенные",
   },
   panels: {
     draft: {
@@ -2432,6 +2463,8 @@ export const ru: TranslationResources = {
         reload: "Перезагрузить",
         reloadTitle: "Перезагрузить с диска?",
         reloadMessage: "Локальные изменения будут потеряны.",
+
+        checkFailedTitle: "Не удалось проверить файл на диске",
       },
     },
     changes: {
@@ -2503,6 +2536,32 @@ export const ru: TranslationResources = {
   },
   sidebarCallout: {
     dismiss: "Закрыть",
+  },
+  leaderboard: {
+    title: "Мой рейтинг",
+    refresh: "Обновить",
+    refreshing: "Обновление...",
+    retry: "Повторить",
+    connect: "Войдите и подключитесь, чтобы увидеть свой рейтинг",
+    loading: "Считаем ваш рейтинг...",
+    error: "Не удалось загрузить ваш рейтинг",
+    unlock: "Рейтинг откроется после {{minimum}} засчитанных голосов",
+    progress: "Засчитано голосов: {{count}} · осталось: {{remaining}}",
+    eligible: "Не засчитываются битвы с ошибками участника и с субагентами в затронутых сборках",
+    filters: "Сбои запуска исключены · Субагенты отфильтрованы по коммиту",
+    summary: "Засчитано голосов: {{count}} · {{earlyVotes}} · Обновлено {{date}}",
+    excludeEarlyVotes: "Исключить ранние голоса",
+    earlyIncluded: "Ранние голоса учтены",
+    earlyExcluded: "Ранние голоса исключены",
+    disconnected:
+      "У некоторых групп моделей пока нет общих сравнений. Рейтинги между этими группами зависят от априорного распределения.",
+    noModels: "Активные модели появляются после 4 засчитанных голосов у каждой",
+    chartLabel:
+      "Рейтинги ваших моделей с 95% доверительными интервалами, медианной скоростью вывода и числом голосов",
+    votes: "Голоса",
+    axis: "Рейтинг Брэдли–Терри (шкала Эло)",
+    medianSpeed: "Медиана {{speed}} токенов/с",
+    noSpeed: "Скорость неизвестна",
   },
   feedback: {
     sidebarAction: "Отправить отзыв",
@@ -2747,6 +2806,8 @@ export const ru: TranslationResources = {
         "Используется только эта модель. Если она не сработает, Agent Duel не будет пробовать другую модель",
       docs: "Документация",
       saveError: "Не удалось обновить настройки генерации метаданных",
+
+      fallbackHint: "Если она недоступна, Agent Duel использует другую доступную модель",
     },
     storage: {
       title: "Окружения битв",
@@ -2835,6 +2896,8 @@ export const ru: TranslationResources = {
           overview: "Сводка",
           detailed: "Все подробности",
         },
+
+        accessibilityLabel: "Выбрать отображение вызовов инструментов ({{value}})",
       },
       language: {
         label: "Язык",
@@ -3040,6 +3103,38 @@ export const ru: TranslationResources = {
         install: "Установить",
         installing: "Установка...",
         installed: "Установлено",
+
+        update: "Обновлять",
+        working: "Работающий...",
+        remove: "Удалить",
+        uninstall: "Удалить",
+        save: "Сохранить",
+        saving: "Сохранение...",
+      },
+
+      skills: {
+        title: "Навыки оркестровки",
+        description: "Научите своих агентов организовывать работу через CLI",
+        updateAvailable: "Доступно обновление",
+        updateTitle: "Обновить навыки Agent Duel?",
+        updateFallback: "Синхронизируйте связанные навыки с вашим компьютером.",
+        uninstallTitle: "Удалить навыки Agent Duel?",
+        uninstallMessage:
+          "Удаляет все навыки оркестровки Agent Duel из ~/.agents, ~/.claude, ~/.codex.",
+        choose: "Выбрать навыки",
+        chooseAll: "Все навыки",
+        chooseAllHint: "Держите установленными все входящие навыки, включая добавленные позже.",
+        chooseList: "Входящие навыки",
+        chooseEmpty: "В этой сборке нет навыков.",
+        removeTitle: "Удалить снятые навыки?",
+        removeMessage:
+          "{{skills}} будут удалены из ~/.agents, ~/.claude и ~/.codex. Всё, что вы добавили внутри этих папок навыков, тоже удаляется.",
+        saveFailed: "Не удалось сохранить выбор навыков.",
+      },
+      operations: {
+        add: "Добавить навык",
+        update: "Обновить навык",
+        delete: "Удалить навык",
       },
     },
     permissions: {

@@ -8,11 +8,14 @@ import {
   environment,
   hostname,
   observe,
+  PORT_RANGE,
   register,
   release,
   releaseTakenBank,
   route,
   routesFor,
+  sequentialAllocator,
+  type PortCursor,
 } from "@/arena/preview"
 import { serviceOwnerID } from "@/arena/services"
 
@@ -183,5 +186,98 @@ describe("ArenaPreview", () => {
     const second = allocatePortBank({ allocator })
     await expect(first).resolves.toEqual({ PASEO_PORT: 43171, PASEO_PORT2: 43172, PASEO_PORT3: 43173 })
     await expect(second).rejects.toThrow("three distinct unreserved ports")
+  })
+
+  describe("sequential allocation", () => {
+    function cursorAt(start: number | undefined) {
+      const writes: number[] = []
+      let next = start
+      const cursor: PortCursor = {
+        read: async () => next,
+        write: async (value) => {
+          next = value
+          writes.push(value)
+        },
+      }
+      return { cursor, writes, next: () => next }
+    }
+    const free = async () => false
+
+    test("hands out ports in order from the stored cursor and moves it past them", async () => {
+      const state = cursorAt(21_000)
+      const first = await allocatePortBank({ allocator: sequentialAllocator(state.cursor, free) })
+      const second = await allocatePortBank({ allocator: sequentialAllocator(state.cursor, free) })
+
+      expect(first).toEqual({ PASEO_PORT: 21_000, PASEO_PORT2: 21_001, PASEO_PORT3: 21_002 })
+      expect(second).toEqual({ PASEO_PORT: 21_003, PASEO_PORT2: 21_004, PASEO_PORT3: 21_005 })
+      expect(state.next()).toBe(21_006)
+    })
+
+    // A released bank holds exactly the numbers an earlier turn's transcript shows.
+    test("never hands a released bank's ports to the next contestant", async () => {
+      const state = cursorAt(21_100)
+      const first = await allocatePreview({
+        directory: "/worktrees/generation-1-a",
+        chatID: "chat",
+        turnIndex: 0,
+        side: "a",
+        allocator: sequentialAllocator(state.cursor, free),
+      })
+      await release("/worktrees/generation-1-a", { ownershipEnded: true })
+      const second = await allocatePreview({
+        directory: "/worktrees/generation-2-a",
+        chatID: "chat",
+        turnIndex: 1,
+        side: "a",
+        allocator: sequentialAllocator(state.cursor, free),
+      })
+
+      const earlier = Object.values(first.portAliases)
+      expect(Object.values(second.portAliases).filter((port) => earlier.includes(port))).toEqual([])
+    })
+
+    test("skips ports another program holds, ports this process holds, and well-known defaults", async () => {
+      register("/worktrees/held", {
+        hostname: "turn1-a--chat.localhost",
+        port: 27_014,
+        portAliases: { PASEO_PORT: 27_014, PASEO_PORT2: 27_020, PASEO_PORT3: 27_021 },
+      })
+      const state = cursorAt(27_013)
+      const bank = await allocatePortBank({
+        allocator: sequentialAllocator(state.cursor, async (port) => port === 27_015),
+      })
+
+      expect(bank).toEqual({ PASEO_PORT: 27_013, PASEO_PORT2: 27_016, PASEO_PORT3: 27_022 })
+    })
+
+    test("wraps to the start of the range", async () => {
+      const state = cursorAt(PORT_RANGE.last - 1)
+      const bank = await allocatePortBank({ allocator: sequentialAllocator(state.cursor, free) })
+
+      expect(bank).toEqual({
+        PASEO_PORT: PORT_RANGE.last - 1,
+        PASEO_PORT2: PORT_RANGE.last,
+        PASEO_PORT3: PORT_RANGE.first,
+      })
+      expect(state.next()).toBe(PORT_RANGE.first + 1)
+    })
+
+    test("starts inside the range when the store has no cursor", async () => {
+      const state = cursorAt(undefined)
+      const bank = await allocatePortBank({ allocator: sequentialAllocator(state.cursor, free) })
+
+      for (const port of Object.values(bank)) {
+        expect(port).toBeGreaterThanOrEqual(PORT_RANGE.first)
+        expect(port).toBeLessThanOrEqual(PORT_RANGE.last)
+      }
+      expect(state.writes).toHaveLength(1)
+    })
+
+    test("fails instead of looping when every port in the range is taken", async () => {
+      const state = cursorAt(PORT_RANGE.first)
+      await expect(
+        allocatePortBank({ allocator: sequentialAllocator(state.cursor, async () => true) }),
+      ).rejects.toThrow("no free port")
+    })
   })
 })

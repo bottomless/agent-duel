@@ -11,8 +11,9 @@ through `packages/server/src/server/agent/providers/opencode/v2/arena.ts`, which
 
 Arena uses OpenCode's V2 session store and runner. Install its routes and engine plugin into the
 same Core service graph as the native `/api` routes. A second graph creates a separate session
-lifetime and can race worktree setup or winner promotion. The Arena `info + parts` transcript is a
-wire projection; fork and graft canonical V2 messages so provider replay state, attachments, and
+lifetime and can race worktree setup or winner promotion. The active engine typecheck excludes
+retained 1.x modules; check their imports separately when merging. Preview integration belongs to
+the V2 engine plugin. The Arena `info + parts` transcript is a wire projection; fork and graft canonical V2 messages so provider replay state, attachments, and
 compaction checkpoints survive a vote.
 
 Arena state is canonical local data. The runtime stores it in SQLite at
@@ -40,19 +41,38 @@ The engine reaches the routes through `arena/backend.ts`, which keeps the contro
 both modes, so no caller branches on the mode. The rest of this doc says "control plane" for the
 routes; in a BYOK build read it as the in-process service.
 
-After local writes, a hosted runtime selects small research snapshots and uploads them in the
-background to the authenticated control plane at `PASEO_CONTROL_PLANE_URL`. Upload failures are
-logged and dropped. There is no persistent upload queue, retry, or backfill, so local history and
-recovery continue when the control plane is unavailable. Account sessions are verified
-locally with the embedded public key, and signing out does not delete local data. A BYOK build
-creates no research uploader.
+A hosted runtime journals research mutations with the local SQLite write, then validates and
+converts them after commit. Conversion or upload failures must not lose canonical local history.
+Pending revisions survive restarts and account changes; partition the queue by verified account and
+hosted destination so a new account cannot upload its predecessor's records. Account sessions are
+verified locally with the embedded public key, and signing out does not delete local data. BYOK
+creates no research queue or uploader.
 
-Research uploads include chats, turns, runs, generation metadata, structured events, comparisons,
-single-agent ratings, session archives, and transcript or patch artifacts. Raw events and per-call
-full request, response, tool-output, and other artifacts stay local. A research request is limited
-to 3 MiB and a record to 2 MiB; oversized records are logged and dropped while the local copy stays
-intact. The control plane still owns authentication, the OpenRouter proxy, and research
-ingestion.
+Temporary upload failures retry with jittered exponential backoff capped at one minute. Split
+HTTP 400, 413 and 422 batches to isolate refused records and retain them, including dependent
+manifests, for hourly recovery. That deadline survives restarts and does not delay new writes.
+The queue has no size-based eviction: an extended outage consumes local disk until uploads succeed.
+It protects committed records against upload failures, not disk exhaustion, disk failure, or manual
+deletion of local state.
+
+The first hosted start backfills the verified account's existing chats, turns, runs, intact
+transcript/image artifacts and archive manifests. Its durable worklist resumes after a restart;
+park artifacts after three unsuccessful reads until the next hosted start or an explicit recovery
+pass. Unowned history is never assigned to the account that happens to sign in. Truncated local
+artifacts cannot be recovered. Backfill must not overwrite a concurrent local edit with an older copy.
+
+Research includes chats, turns, runs, generation metadata, structured events, comparisons,
+single-agent ratings, session archives, and transcript, patch and image artifacts. Raw events and
+per-call full request, response and tool-output artifacts stay local. Requests stay below 3 MiB
+and records below 2 MiB; larger documents use content-addressed chunks and a checksum manifest.
+Research readers use `resolveResearchDocument` from arena-service under the same account and source.
+Deploy the control plane's updated arena-service dependency before shipping this protocol: an old
+server refuses chunks, which the desktop retains for automatic recovery after the server upgrade.
+
+`archiveComplete` means the local archive exists, not that research has uploaded. Reply resets keep
+the previous cloud archive until its replacement arrives. Keep transcript and image archives whole,
+without per-call artifact budgets; a disk error must fail the local write rather than produce an
+empty archive.
 
 Read a `battleMetrics` side's `retries` and `ttftMs` only where they are present in a row of
 `schemaVersion` 9 or later: an older row's `retries: 0` and `ttftMs` (often the title request's)
@@ -60,11 +80,9 @@ mean unknown, and engine recovery rebuilds old rows only on desktops that upgrad
 stored locally (`BattleSideMetrics` in `arena/records.ts`).
 
 Keep inline images in separate content-addressed artifacts and refer to them from archived
-transcripts as `arena-image:sha256:<hash>` (`arena/transcript-artifact.ts`). Otherwise images can
-push a transcript past the 10 MB artifact limit and stop the turn before the vote. Research uploads
-send the transcript before images so a full buffer preserves the text; both sides share one set of
-image records. Deploy the control plane before a desktop build sends a new collection: an unknown
-collection causes the whole upload batch to be refused.
+transcripts as `arena-image:sha256:<hash>` (`arena/transcript-artifact.ts`). This avoids duplicating
+image bytes across transcripts. Research sends the transcript and shared image records through the
+durable queue above.
 
 Keep window payloads bounded (`arena/live.ts`, `arena/transcript.ts`):
 
@@ -126,7 +144,10 @@ delivery synchronized with canonical history replacement. Apply the same boundar
 Grafts arrive without an ordinary provider turn, so migrated winners and surviving replies can
 otherwise replay into history already on screen. Serialize different winners and leave failed
 hydration eligible for retry. A reconnect or another state packet must not rebuild an already
-hydrated winner.
+hydrated winner. Callers waiting for hydration, including the resolve before a send, wait at most
+10 seconds so a stuck hydration cannot block the next battle. Newer winners supersede older
+hydrations, whose late results must be dropped. V2 serializes provider snapshot reads: if one is
+stuck, callers still return after the deadline, but newer hydration waits for that read to settle.
 
 ## What this is for
 
@@ -191,9 +212,11 @@ metadata task.
 Git's `merge-tree --write-tree` compares A and B over the frozen base with
 `merge.conflictStyle=zdiff3` (`compare` in `arena/git.ts`). `diverging` means a real merge conflict;
 `compatible` means both touched the file in different places. Review each side against the frozen
-original with corresponding regions aligned. Keep every change visible, shared additions and
-removals included, even when the results match; label shared changes `Both`. Fold only context
-neither side changed.
+original with corresponding regions aligned. Wrap long lines in both layouts so narrow panes
+keep the full change readable; side-by-side rows stay level across A and B. Keep every change
+visible, shared additions and removals included, even when the results match. Fold only context
+neither side changed. Shared changes keep their screen-reader labels without a separate `Both`
+column.
 
 The comparison has two layouts, **Side by side** and **One column**, shared by the active card and
 archived battles (`inline-file-diff.tsx`). In one column, show A and then B for each region so an
@@ -223,18 +246,27 @@ runtime with contestants. A deadline or metadata limit must fail the comparison 
 presenting partial evidence as a complete result.
 
 While the contestants work, each pane reads its thread with inline activity groups, controlled by
-`toolCallDetailLevel`. The battle is one card
-(`packages/app/src/arena/battle-view.tsx`). Up to `ARENA_MAX_CONTENT_WIDTH`, twice the chat's
-reading column, it runs edge to edge, keeping only its top and bottom borders. On a wider panel
-each pane would outrun the reading column, so the battle is
-a bordered, rounded card centered at that width. `ArenaContentColumn` measures the host
-and decides. Everything in the battle shares the card's width — the two threads and the Changes
+`toolCallDetailLevel`. Once a contestant finishes, fold the work before its final text into one
+collapsed row, such as **Read 1 file · Ran 1 command**, so the pane ends on the answer being judged.
+Opening it restores the updates and work; questions and subagents keep their own rows in place.
+Follow-ups keep completed exchanges folded. Replies share the chat's Markdown renderer, including
+local images and file links. After a vote, the applied side reads those files from the chat's
+workspace; a removed side cannot read its old worktree. Images larger than 25 MiB show as
+unavailable so a reply cannot pull an unbounded file into the window. The battle is one card
+(`packages/app/src/arena/battle-view.tsx`). The chat's reading-width preference controls collapsed
+summaries. An expanded battle keeps its own width limit, twice the default reading column, and runs
+edge to edge below that limit. On wider panels it is a bordered, rounded card centered at that
+width. Everything in the battle shares the card's width — the two threads and the Changes
 review — so the page has two widths: the chat's reading column for the prompt and the
 composer, and the card for the battle. Inside the card, sections separate with
 one top border each, the way rows in a settings card do, and text starts on one rail. A and B each
 occupy half the card, split by a divider; below 520px of available card width, they stack.
-The panes keep a fixed resting height and their threads scroll internally. Scrolling away pauses
-following; reaching the bottom or choosing Jump to latest resumes it. Each agent header has an
+The panes keep a fixed resting height and their threads scroll internally. A finished pane shrinks
+to fit, up to that height, so folding the work does not leave the answer above an empty box while
+the chat follows review below it. Scrolling away pauses following; reaching the bottom or choosing
+Jump to latest resumes it. Opening or closing activity also pauses following in the pane and holds
+the row's position in the chat (`agent-stream/hold-position.ts`), keeping it under the pointer as
+the pane grows or shrinks. Each agent header has an
 expand button beside its worktree control to give that thread the full card width; restore returns
 to the split. Both are
 pane chrome at the ghost `xs` tier, borderless and the same height. Headings have no status
@@ -648,7 +680,34 @@ A branch switch can make a JavaScript diff block both contestants for minutes. S
 patches use native Git with time and output limits; battle review owns its separate comparison.
 
 Every turn receives a fresh port bank. Proxy routes are keyed by turn, side, and service and use
-`.localhost` hostnames; old URLs must never reach a later process.
+`.localhost` hostnames; old URLs must never reach a later process. Allocate banks sequentially from
+20000–29999, below OS ephemeral ranges, skipping occupied ports and well-known defaults
+(`sequentialAllocator` in `arena/preview.ts`). The persistent cursor prevents reuse until wraparound.
+
+The canonical chat keeps the winner's literal ports and preview URLs so the reader sees what
+worked. A contestant's fork retargets them to its own bank (`arena/port-retarget.ts`). Match only
+the producing run's bank, using the winner's canonical message range from `canonicalUserMessageID`
+through `canonicalLastMessageID`; older grafts without the end marker count until the next battle.
+Battle-off messages and conflict-resolution messages outside those ranges stay unchanged. Apply
+replacements in one pass so a new port equal to an old one is not rewritten again.
+
+Answers, reasoning and tool calls share the standalone-number rule. Names, versions and paths stay
+literal, as do user messages, attachments, metadata, IDs, binary data, data URIs, base64, long hex,
+UUIDs and JSON over 2,500 characters. Preserve file content read or written by file tools: an edit
+copied from history must still match disk. Reasoning with metadata stays untouched; Arena saves
+reasoning without that metadata (`arena/privacy.ts`). Shell output follows the common rule even
+when it prints file content, so the prompt tells contestants to reread files before editing them.
+A PID, size or line number equal to a port can change too. A list of port-shaped expressions missed
+real ports in socket tuples, LAN URLs and compound commands; do not reintroduce that allowlist.
+
+User messages, file content and long JSON can still name an earlier round's port. The native Arena
+shell wrapper refuses commands that spell out retired bank ports or preview hostnames, including
+commands from descendants (`arena/ports.ts`). The refusal names this round's ports and preview URLs.
+Only bank ports with a recorded listener retire; a project's own fixed ports remain available.
+A command that reads a retired port is refused too. A port hidden in a script or config file is
+outside this check, and a failed ownership lookup refuses nothing.
+
+Expand `$ARENA_PREVIEW_URL…` in finished answer text for the reader. Leave port variables as written.
 
 The transcript hash is what lets the engine refuse to start when git and the transcript have drifted
 apart independently — the sign that something edited the checkout behind Arena's back.
@@ -996,7 +1055,8 @@ field. Each layer has its own file:
 - **Assignment** (`arena-service/src/assignments.ts`) — in hosted mode the model pool and
   assignment mapping exist only on the server. The desktop cannot derive the private profile from
   an assignment id, and assignment creation accepts no client-directed model exclusion because
-  repeated exclusion draws form an identity oracle.
+  repeated exclusion draws form an identity oracle. Context and output limits stay private too:
+  their numeric combination can identify a contestant.
 - **Request** (`arena-service/src/openrouter.ts`) — the desktop can request only the neutral
   `contestant` model. It sends the assignment id and owning scope id through the daemon's
   capability-gated Arena proxy; the Arena process never receives the account session. The control
@@ -1016,6 +1076,16 @@ field. Each layer has its own file:
   ships. A provider that slows down mid-turn keeps the conversation; OpenRouter leaves it only when
   that provider is unavailable.
   Resolution disables further routing without deleting the assignment.
+- **Keep-alive** (`arena/keep-alive.ts`) — preserve Anthropic's five-minute prompt cache during long
+  tool, permission and child-agent waits by pinging waiting sessions every four minutes, for at most
+  30 minutes. Finished sessions waiting for a user reply get no pings. The engine cannot know which
+  contestant is Claude: the service forwards only `anthropic/` chat completions and returns the same
+  empty 204 for every side, including a refused ping (`arena-service/src/keep-alive.ts`). Pings carry
+  `max_tokens: 1`; zero is ignored by OpenRouter and runs a full answer. Keep them out of transcripts,
+  generation metrics and stream progress. A failed ping gets one retry. Deploy the cloud's updated
+  arena-service before desktop: a proxy without the response header disables pings until restart.
+  The hosted daemon router must allow `x-arena-keep-alive` in both directions; BYOK skips that router
+  and cannot prove the hosted path.
 - **Response** (`arena-service/src/openrouter.ts`) — before bytes return to the desktop, the control
   plane strips model, provider, fingerprint, OpenRouter metadata, and cost, replaces the generation
   id, and collapses upstream failures to a generic error. The local proxy repeats the scrub as a
@@ -1115,7 +1185,8 @@ Use one utility request; increase evidence quality before adding model passes.
   runs failed (`canDiscardBattle`). It is the stopped battle's discard: the control plane records
   `discard`, not a vote, and the checkout is left as it was.
 - **Stop** moves to `awaiting_stop_resolution`, where the choice is discard, keep A, or keep B
-  (`stop` in `arena/service.ts`). Keeping a side when the other had already failed carries the same `voteDiscardedReason`, so metrics do not file it as a win.
+  (`stop` in `arena/service.ts`). Keeping a side when the other had already failed, rather than
+  merely stopped, carries the same `voteDiscardedReason`, so metrics do not file it as a win.
 
 **Applying** (`promoteImpl` in `arena/service.ts`) records the resolution and enters `applying`
 in one compare-and-set. Acknowledge votes, kept sides, and review answers after that durable claim
@@ -1229,6 +1300,12 @@ that assignment kind's decisions, and the first is immutable: a retry returns th
 decision, which the desktop must honor. Write the resolution and revealed names together so no
 unresolved record contains identities. The server retains assignments permanently, so an old
 unresolved battle remains resolvable. Mask failed run text as "Contestant run failed".
+
+A committed `discard` has no side to honour. Every request that meets it must finish that discard
+(`discardCommitted`), including after another window's Retry or reply claimed the turn back to
+`running`. Stop those runs first. The discard also lands in `interrupted_recovery` and
+`finalization_failed`, revealed as an aborted battle would be: the control plane will not accept an
+abort over its committed decision.
 
 `identity.name` is the profile's display name, which the app uses for vendor marks and labels.
 The app receives no names before reveal.
@@ -1428,9 +1505,27 @@ owns that deadline and its recovery budget. Core's own header deadline reports `
 timed out` through HTTP hooks too. When the runtime abandons a request, the daemon's Arena proxy aborts its control-plane
 request too; otherwise the hosted function keeps streaming, and billing, until its own time limit.
 
-A request above the estimated savings threshold triggers compaction. Keep a new user message and
-its attachments intact while summarizing the earlier history. The summary request must be allowed
-to exceed the savings threshold; the provider's context window still applies.
+The control plane owns model-specific compaction limits (`arena-service/src/openrouter.ts`), since
+only it knows the contestant's context window and output cap. `X-Arena-Compaction: auto` marks a
+request whose history can be summarized. The service returns neutral 413 `arena_compaction_required`
+at that profile's savings threshold for marked requests, or at the endpoint's hard context edge for
+any request. Thresholds and limits never cross the boundary: their numbers can identify the model.
+The savings threshold is at most 272K and otherwise 85% of the input room. Its full-body estimate
+uses the assignment's latest measured prompt size; calibration samples expire after 30 days through
+the control plane's TTL index (`request-calibration.ts`).
+
+The native Arena plugin offers compaction to the control plane and translates its neutral 413 into
+Core's checkpoint-and-retry path (`arena/engine-runtime/plugin.ts`). Keep the neutral 272K preflight
+as a fallback for an older control plane. A first request or one still too large after a summary
+ends with the neutral request-too-large explanation instead of repeatedly paying for summaries.
+Automatic compaction must be enabled for Core to create a checkpoint.
+
+Keep a new user message and its attachments intact while summarizing earlier history. First
+messages, the step immediately after a summary, and summary requests must not be marked for savings
+compaction: they have no older history to shrink. A summary may exceed the savings threshold but
+must fit the provider's context window. The V2 runner retains its own checkpoint and shrinking
+summary behavior (`core/src/session/compaction.ts`); the legacy rolling-batch summary path does not
+configure it.
 
 Never replace history with an idle, truncated, or empty compaction summary: a completed checkpoint
 hides earlier history from the next request. Core retains the history on failure

@@ -48,8 +48,6 @@ export async function write(
   const { value, images } = externalizeImages(input.archived)
   const encoded = encode(value)
   const createdAt = new Date()
-  // The transcript goes first. Research uploads artifacts in the order they are stored and drops what
-  // does not fit its buffer, so a run with many images still sends the transcript that names them.
   const transcript = await store.storeArtifact({
     _id: `${input.runID}|transcript`,
     runID: input.runID,

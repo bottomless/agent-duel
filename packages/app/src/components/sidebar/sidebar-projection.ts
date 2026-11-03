@@ -8,8 +8,9 @@ import {
 import type {
   SidebarProjectEntry,
   SidebarWorkspaceEntry,
+  SidebarWorkspacePlacement,
 } from "@/hooks/use-sidebar-workspaces-list";
-import type { SidebarGroupMode } from "@/stores/sidebar-view-store";
+import type { SidebarGroupMode, SidebarSortMode } from "@/stores/sidebar-view-store";
 import {
   resolveSidebarProjectIconTargets,
   type SidebarProjectIconTarget,
@@ -24,6 +25,7 @@ import { statusWorkspaceGroups, type SidebarWorkspaceGroup } from "./sidebar-lab
 export interface SidebarProjection {
   pinnedGroups: PinnedSidebarGroups;
   workspaceGroups: SidebarWorkspaceGroup[];
+  flatWorkspaces: SidebarWorkspaceEntry[];
   /**
    * The project icons this projection needs fetched, keyed by `projectViewKey` — one per project,
    * whatever the mode groups by. It sits here rather than beside `useProjectIcons` in the list
@@ -43,6 +45,8 @@ export interface SidebarProjectionInput {
   workspaceEntriesByKey: ReadonlyMap<string, SidebarWorkspaceEntry>;
   projectNamesByViewKey: Map<string, string>;
   groupMode: SidebarGroupMode;
+  sortMode: SidebarSortMode;
+  groupSortMode: SidebarSortMode;
   pinnedCollapsed: boolean;
   collapsedProjectKeys: ReadonlySet<string>;
   collapsedWorkspaceGroupKeys: ReadonlySet<string>;
@@ -56,6 +60,41 @@ export function buildSidebarProjection(input: SidebarProjectionInput): SidebarPr
     pinnedWorkspaceOrder: input.pinnedWorkspaceOrder,
   });
   const pinnedWorkspaceKeys = new Set(input.pinnedKeys.pinnedWorkspaceKeys);
+  function activityTime(workspace: SidebarWorkspacePlacement): number {
+    const timestamp = input.workspaceEntriesByKey.get(workspace.workspaceKey)?.activityAt;
+    return timestamp ? Date.parse(timestamp) : 0;
+  }
+  function compareActivity(
+    left: SidebarWorkspacePlacement,
+    right: SidebarWorkspacePlacement,
+  ): number {
+    return (
+      activityTime(right) - activityTime(left) ||
+      left.workspaceKey.localeCompare(right.workspaceKey)
+    );
+  }
+  function latestActivity(workspaces: readonly SidebarWorkspacePlacement[]): number {
+    return workspaces.reduce((latest, workspace) => Math.max(latest, activityTime(workspace)), 0);
+  }
+  if (input.sortMode === "lastChat") {
+    pinnedGroups.pinnedChats = [...pinnedGroups.pinnedChats].sort(compareActivity);
+    pinnedGroups.unpinnedProjects = pinnedGroups.unpinnedProjects.map((project) => ({
+      ...project,
+      workspaces: [...project.workspaces].sort(compareActivity),
+    }));
+  }
+  if (input.groupSortMode === "lastChat") {
+    const projectActivity = new Map(
+      pinnedGroups.unpinnedProjects.map((project) => [
+        project.viewKey,
+        latestActivity(project.workspaces),
+      ]),
+    );
+    pinnedGroups.unpinnedProjects = [...pinnedGroups.unpinnedProjects].sort(
+      (left, right) =>
+        (projectActivity.get(right.viewKey) ?? 0) - (projectActivity.get(left.viewKey) ?? 0),
+    );
+  }
   const unpinnedWorkspaces = Array.from(input.workspaceEntriesByKey.values()).filter(
     (workspace) => !pinnedWorkspaceKeys.has(workspace.workspaceKey),
   );
@@ -63,6 +102,14 @@ export function buildSidebarProjection(input: SidebarProjectionInput): SidebarPr
   // two cannot disagree and a new grouping mode is a compile error here rather than a silent
   // fall-through to the project rows.
   const workspaceGroups = buildWorkspaceGroups(input, unpinnedWorkspaces);
+  if (input.sortMode === "lastChat") {
+    for (const group of workspaceGroups) group.rows.sort(compareActivity);
+  }
+  if (input.groupSortMode === "lastChat") {
+    workspaceGroups.sort((left, right) => latestActivity(right.rows) - latestActivity(left.rows));
+  }
+  // Flat chats always follow activity, independently of grouped ordering preferences.
+  const flatWorkspaces = input.groupMode === "none" ? unpinnedWorkspaces.sort(compareActivity) : [];
 
   const sections: SidebarShortcutSection[] = [];
   if (!input.pinnedCollapsed) {
@@ -75,6 +122,8 @@ export function buildSidebarProjection(input: SidebarProjectionInput): SidebarPr
         collapsed: input.collapsedProjectKeys.has(project.viewKey),
       })),
     );
+  } else if (input.groupMode === "none") {
+    sections.push({ workspaces: flatWorkspaces });
   } else {
     sections.push(
       ...workspaceGroups.map((group) => ({
@@ -87,6 +136,7 @@ export function buildSidebarProjection(input: SidebarProjectionInput): SidebarPr
   return {
     pinnedGroups,
     workspaceGroups,
+    flatWorkspaces,
     projectIconTargets: resolveSidebarProjectIconTargets(input.projects),
     shortcutModel: buildSidebarShortcutSections({ sections }),
   };
@@ -98,6 +148,7 @@ function buildWorkspaceGroups(
   unpinnedWorkspaces: SidebarWorkspaceEntry[],
 ): SidebarWorkspaceGroup[] {
   switch (input.groupMode) {
+    case "none":
     case "project":
       return [];
     case "status":

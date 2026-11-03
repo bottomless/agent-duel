@@ -12,7 +12,13 @@ const assignmentSet = {
   assignments: [
     {
       assignmentID: "opaque-id",
-      model: { displayName: "Hidden", slug: "provider/hidden", canonicalSlug: "provider/hidden", routing: {} },
+      model: {
+        displayName: "Hidden",
+        slug: "provider/hidden",
+        canonicalSlug: "provider/hidden",
+        contextWindow: 1_000_000,
+        routing: {},
+      },
     },
   ],
 }

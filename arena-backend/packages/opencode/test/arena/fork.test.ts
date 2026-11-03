@@ -1,388 +1,198 @@
-import { MoveSession } from "@opencode-ai/core/control-plane/move-session"
-import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
-import { LayerNode } from "@opencode-ai/core/effect/layer-node"
-import { FSUtil } from "@opencode-ai/core/fs-util"
-import { ModelV2 } from "@opencode-ai/core/model"
-import { ProviderV2 } from "@opencode-ai/core/provider"
-import { ProjectDirectories } from "@opencode-ai/core/project/directories"
-import { SessionProjector } from "@opencode-ai/core/session/projector"
-import type { SessionV1 } from "@opencode-ai/core/v1/session"
-import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
-import { describe, expect } from "bun:test"
-import { Deferred, Effect, Layer } from "effect"
-import { mkdir } from "fs/promises"
-import path from "path"
-import { Agent } from "@/agent/agent"
-import { forkSessionInto } from "@/arena/fork"
-import { GlobalBus, type GlobalEvent } from "@/bus/global"
-import { EventV2Bridge } from "@/event-v2-bridge"
-import { RuntimeFlags } from "@/effect/runtime-flags"
-import { Format } from "@/format"
-import { Git } from "@/git"
-import { LSP } from "@/lsp/lsp"
-import { InstanceBootstrap } from "@/project/bootstrap"
+import { describe, expect, test } from "bun:test"
+import { Effect, Layer } from "effect"
+import { Project } from "@opencode/schema/project"
+import { SessionV1 } from "@/arena/session-shape"
+import { Session, MoveSessionService, MessageID, PartID, SessionID } from "@/arena/session-runtime"
+import { forkSessionInto, type Input } from "@/arena/fork"
 import { InstanceStore } from "@/project/instance-store"
-import { Project } from "@/project/project"
-import { SessionPrompt } from "@/session/prompt"
-import { Session } from "@/session/session"
-import { MessageID, PartID, type SessionID } from "@/session/schema"
-import { Truncate } from "@/tool/truncate"
-import { Worktree } from "@/worktree"
-import { provideInstance, tmpdirScoped } from "../fixture/fixture"
-import { awaitWithTimeout, testEffect } from "../lib/effect"
 
-const layer = AppNodeBuilder.build(
-  LayerNode.group([
-    Session.node,
-    SessionPrompt.node,
-    SessionProjector.node,
-    MoveSession.node,
-    Worktree.node,
-    InstanceStore.node,
-    Project.node,
-    ProjectDirectories.node,
-    Agent.node,
-    LSP.node,
-    FSUtil.node,
-    EventV2Bridge.node,
-    Format.node,
-    Git.node,
-    Truncate.node,
-    CrossSpawnSpawner.node,
-  ]),
-  [
-    [RuntimeFlags.node, RuntimeFlags.layer({ experimentalWorkspaces: false })],
-    [
-      InstanceBootstrap.node,
-      Layer.succeed(InstanceBootstrap.Service, InstanceBootstrap.Service.of({ run: Effect.void })),
-    ],
-  ],
-)
-
-const it = testEffect(layer)
-const ref = { providerID: ProviderV2.ID.make("test"), modelID: ModelV2.ID.make("test-model") }
-
-const git = Effect.fn("ArenaForkTest.git")(function* (cwd: string, args: string[]) {
-  const service = yield* Git.Service
-  const result = yield* service.run(args, { cwd })
-  if (result.exitCode !== 0) {
-    return yield* Effect.fail(new Error(`git ${args.join(" ")} failed in ${cwd}: ${result.text()}`))
-  }
-  return result.text().trim()
-})
-
-const createDetachedWorktree = Effect.fn("ArenaForkTest.createDetachedWorktree")(function* (name: string, ref: string) {
-  const worktrees = yield* Worktree.Service
-  const ready = yield* Deferred.make<void>()
-  const listener = (event: GlobalEvent) => {
-    if (event.payload.type !== Worktree.Event.Ready.type) return
-    if (event.payload.properties.name !== name) return
-    Deferred.doneUnsafe(ready, Effect.void)
-  }
-  GlobalBus.on("event", listener)
-  const info = yield* worktrees.makeWorktreeInfo({ name, detached: true })
-  yield* worktrees.createFromInfoAt(info, ref)
-  yield* awaitWithTimeout(Deferred.await(ready), `worktree ${name} never became ready`, "10 seconds").pipe(
-    Effect.ensuring(Effect.sync(() => GlobalBus.off("event", listener))),
-  )
-  return info
-})
-
-/** One user turn and one assistant write, every path rooted at `root`. */
-const seedHistory = Effect.fn("ArenaForkTest.seedHistory")(function* (sessionID: SessionID, root: string) {
-  const sessions = yield* Session.Service
-  const file = path.join(root, "src", "index.ts")
-  const user = yield* sessions.updateMessage({
-    id: MessageID.ascending(),
-    sessionID,
-    role: "user",
-    time: { created: Date.now() },
-    agent: "build",
-    model: ref,
-  })
-  yield* sessions.updatePart({
-    id: PartID.ascending(),
-    messageID: user.id,
-    sessionID,
+const sourceID = SessionID.make("ses_source")
+const targetID = SessionID.make("ses_target")
+const sourceMessageID = MessageID.make("msg_01")
+const targetMessageID = MessageID.make("msg_11")
+const boundary = MessageID.make("msg_12")
+const source: SessionV1.SessionInfo = {
+  id: sourceID,
+  projectID: Project.ID.make("project"),
+  slug: "source",
+  directory: "/repo/src",
+  version: "test",
+  title: "Source",
+  agent: "build",
+  model: { providerID: "arena", id: "medium", variant: "high" },
+  permission: [{ permission: "external_directory_write", pattern: "/repo/**", action: "deny" }],
+  time: { created: 0, updated: 0 },
+}
+const info: SessionV1.User = {
+  id: targetMessageID,
+  sessionID: targetID,
+  role: "user",
+  agent: "build",
+  model: { providerID: "arena", modelID: "medium" },
+  time: { created: 0 },
+}
+function text(value: string): SessionV1.TextPart {
+  return {
+    id: PartID.make(targetMessageID as never, 0),
+    messageID: targetMessageID,
+    sessionID: targetID,
     type: "text",
-    text: `rename the export in ${file}; leave ${root}2/notes.txt alone`,
-  })
-  const assistant: SessionV1.Assistant = {
-    id: MessageID.ascending(),
-    sessionID,
-    parentID: user.id,
-    role: "assistant",
-    mode: "build",
-    agent: "build",
-    path: { cwd: root, root },
-    cost: 0,
-    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-    providerID: ref.providerID,
-    modelID: ref.modelID,
-    finish: "stop",
-    time: { created: Date.now(), completed: Date.now() },
+    text: value,
   }
-  yield* sessions.updateMessage(assistant)
-  yield* sessions.updatePart({
-    id: PartID.ascending(),
-    messageID: assistant.id,
-    sessionID,
+}
+function tool(
+  name: string,
+  input: Record<string, unknown>,
+  status: "completed" | "error" = "completed",
+): SessionV1.ToolPart {
+  return {
+    id: PartID.make(targetMessageID as never, 1),
+    messageID: targetMessageID,
+    sessionID: targetID,
     type: "tool",
-    callID: "call-write",
-    tool: "write",
-    state: {
-      status: "completed",
-      input: { filePath: file, content: "export const renamed = 1\n" },
-      output: `Wrote ${file}`,
-      title: file,
-      metadata: {},
-      time: { start: Date.now(), end: Date.now() },
-    },
-  })
-})
-
-function texts(history: readonly SessionV1.WithParts[]) {
-  return history.flatMap((message) => message.parts.flatMap((part) => (part.type === "text" ? [part.text] : [])))
+    tool: name,
+    callID: name,
+    state:
+      status === "completed"
+        ? { status, input, output: "saved output", title: name, metadata: {}, time: { start: 0, end: 1 } }
+        : { status, input, error: "interrupted", metadata: { output: "partial output" }, time: { start: 0, end: 1 } },
+  }
 }
-
-function toolInputs(history: readonly SessionV1.WithParts[]) {
-  return history.flatMap((message) =>
-    message.parts.flatMap((part) =>
-      part.type === "tool" && part.state.status === "completed" ? [part.state.input] : [],
-    ),
-  )
-}
-
-function assistantPaths(history: readonly SessionV1.WithParts[]) {
-  return history.flatMap((message) => (message.info.role === "assistant" ? [message.info.path] : []))
-}
-
-const prepareRepository = Effect.fn("ArenaForkTest.prepareRepository")(function* () {
-  const root = yield* tmpdirScoped({ git: true })
-  yield* Effect.promise(() => mkdir(path.join(root, "src"), { recursive: true }))
-  yield* Effect.promise(() => Bun.write(path.join(root, "src", "index.ts"), "export const original = 1\n"))
-  yield* git(root, ["add", "."])
-  yield* git(root, ["commit", "-m", "fixture base"])
-  const base = yield* git(root, ["rev-parse", "HEAD"])
-  const worktree = yield* createDetachedWorktree("arena-fork", base).pipe(provideInstance(root))
-  yield* Effect.addFinalizer(() =>
-    Worktree.Service.use((service) => service.remove({ directory: worktree.directory })).pipe(
-      provideInstance(root),
-      Effect.ignore,
-    ),
-  )
-  return { root, worktree: worktree.directory }
-})
-
-describe("Arena fork", () => {
-  it.live("moves the copy and points every copied path at the destination", () =>
-    Effect.gen(function* () {
-      const { root, worktree } = yield* prepareRepository()
-      const sessions = yield* Session.Service
-      const source = yield* provideInstance(root)(sessions.create({ title: "source" }))
-      yield* seedHistory(source.id, root).pipe(provideInstance(root))
-      const before = yield* sessions.messages({ sessionID: source.id })
-
-      const forked = yield* forkSessionInto({ sessionID: source.id, destination: worktree })
-
-      expect((yield* sessions.get(forked.id)).directory).toBe(worktree)
-      const copy = yield* sessions.messages({ sessionID: forked.id })
-      expect(texts(copy)).toEqual([
-        `rename the export in ${path.join(worktree, "src", "index.ts")}; leave ${root}2/notes.txt alone`,
-      ])
-      expect(toolInputs(copy)).toEqual([
-        { filePath: path.join(worktree, "src", "index.ts"), content: "export const renamed = 1\n" },
-      ])
-      expect(assistantPaths(copy)).toEqual([{ cwd: worktree, root: worktree }])
-
-      // The source keeps its own paths.
-      expect((yield* sessions.get(source.id)).directory).toBe(root)
-      expect(yield* sessions.messages({ sessionID: source.id })).toEqual(before)
-    }),
-  )
-
-  it.live("keeps battle prompts and tool output while retargeting assistant paths", () =>
-    Effect.gen(function* () {
-      const { root, worktree } = yield* prepareRepository()
-      const sessions = yield* Session.Service
-      const source = yield* provideInstance(root)(sessions.create({ title: "source" }))
-      yield* seedHistory(source.id, root).pipe(provideInstance(root))
-      const history = yield* sessions.messages({ sessionID: source.id })
-      const assistant = history.find((message) => message.info.role === "assistant")
-      if (!assistant) return yield* Effect.fail(new Error("Seeded assistant message missing"))
-      yield* sessions.updatePart({
-        id: PartID.ascending(),
-        messageID: assistant.info.id,
-        sessionID: source.id,
-        type: "text",
-        text: `File: ${path.join(root, "src", "index.ts")}`,
-      })
-
-      const forked = yield* forkSessionInto({ sessionID: source.id, destination: worktree, pathMode: "transcript" })
-      const copy = yield* sessions.messages({ sessionID: forked.id })
-      expect(texts(copy)).toEqual([
-        `rename the export in ${path.join(root, "src", "index.ts")}; leave ${root}2/notes.txt alone`,
-        `File: ${path.join(worktree, "src", "index.ts")}`,
-      ])
-      expect(toolInputs(copy)).toEqual([
-        { filePath: path.join(worktree, "src", "index.ts"), content: "export const renamed = 1\n" },
-      ])
-      const output = copy.flatMap((message) =>
-        message.parts.flatMap((part) =>
-          part.type === "tool" && part.state.status === "completed" ? [part.state.output] : [],
+async function fork(options: Partial<Input> = {}, parts: SessionV1.Part[] = [], empty = false) {
+  const written: SessionV1.Part[] = []
+  const moved: unknown[] = []
+  const created: unknown[] = []
+  const canonical: unknown[] = []
+  const user = {
+    type: "user",
+    id: targetMessageID,
+    text: "Keep /repo/src/index.ts exactly",
+    files: [{ source: { uri: "file:///repo/src/index.ts" } }],
+  }
+  const result = await Effect.runPromise(
+    forkSessionInto({
+      sessionID: sourceID,
+      destination: "/copy",
+      roots: { canonical: "/repo", worktree: "/copy" },
+      ...options,
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          Layer.mock(Session, {
+            get: () => Effect.succeed(source),
+            fork: (input) => {
+              input.onMessageMapping?.(
+                new Map([
+                  [sourceMessageID, targetMessageID],
+                  [MessageID.make("msg_02"), boundary],
+                ]),
+              )
+              return empty
+                ? Effect.fail(new Error("Cannot fork empty session"))
+                : Effect.succeed({ ...source, id: targetID })
+            },
+            create: (input) =>
+              Effect.sync(() => {
+                created.push(input)
+                return { ...source, id: targetID }
+              }),
+            canonicalMessages: () => Effect.succeed([user] as never),
+            updateCanonicalMessage: (input) =>
+              Effect.sync(() => {
+                canonical.push(input.message)
+              }),
+            messages: () => Effect.succeed([{ info, parts }]),
+            updatePart: (part) =>
+              Effect.sync(() => {
+                written.push(part)
+                return part
+              }),
+          }),
+          Layer.mock(MoveSessionService, {
+            moveSession: (input) =>
+              Effect.sync(() => {
+                moved.push(input)
+              }),
+          }),
+          Layer.mock(InstanceStore.Service, { provide: (_input, effect) => effect as never }),
         ),
-      )
-      expect(output).toEqual([`Wrote ${path.join(root, "src", "index.ts")}`])
-    }),
+      ),
+    ),
   )
+  return { result, written, moved, created, canonical }
+}
 
-  it.live("hides older tool output the copy can produce again, keeping it stored and in the source", () =>
-    Effect.gen(function* () {
-      const { root, worktree } = yield* prepareRepository()
-      const sessions = yield* Session.Service
-      const source = yield* provideInstance(root)(sessions.create({ title: "source" }))
-      yield* seedHistory(source.id, root).pipe(provideInstance(root))
-      const seeded = yield* sessions.messages({ sessionID: source.id })
-      const user = seeded.find((message) => message.info.role === "user")
-      const assistant = seeded.find((message) => message.info.role === "assistant")
-      if (!user || !assistant) return yield* Effect.fail(new Error("Seeded messages missing"))
-      const upload = path.join(path.dirname(root), "uploads", "upload-1", "server.log")
-      yield* sessions.updatePart({
-        id: PartID.ascending(),
-        messageID: user.info.id,
-        sessionID: source.id,
-        type: "text",
-        text: ["Uploaded file: server.log", `Path: ${upload}`, "MIME: text/plain", "Size: 12 bytes"].join("\n"),
-      })
-      const calls: ReadonlyArray<
-        readonly [
-          callID: string,
-          tool: string,
-          input: Record<string, unknown>,
-          state: "completed" | "error" | "interrupted",
-        ]
-      > = [
-        ["call-skill", "skill", { name: "review" }, "completed"],
-        ["call-question", "question", { questions: [{ question: "Postgres or SQLite?" }] }, "completed"],
-        ["call-task", "task", { description: "survey", prompt: "survey the API" }, "completed"],
-        ["call-mcp", "github_get_issue", { number: 7 }, "completed"],
-        ["call-upload", "read", { filePath: upload }, "completed"],
-        ["call-upload-shell", "bash", { command: `tail -n 50 ${upload}` }, "completed"],
-        ["call-outside", "grep", { pattern: "TODO", path: path.dirname(root) }, "completed"],
-        ["call-read", "read", { filePath: path.join(root, "src", "index.ts") }, "completed"],
-        ["call-bash", "bash", { command: "bun test" }, "completed"],
-        ["call-failed", "bash", { command: "false" }, "error"],
-        ["call-interrupted", "bash", { command: "bun run dev" }, "interrupted"],
-        ["call-interrupted-question", "question", { questions: [] }, "interrupted"],
-      ]
-      for (const [callID, tool, input, state] of calls) {
-        const time = { start: Date.now(), end: Date.now() }
-        yield* sessions.updatePart({
-          id: PartID.ascending(),
-          messageID: assistant.info.id,
-          sessionID: source.id,
-          type: "tool",
-          callID,
-          tool,
-          state:
-            state === "completed"
-              ? { status: state, input, output: `${callID} output`, title: tool, metadata: {}, time }
-              : {
-                  status: "error",
-                  input,
-                  error: "Tool execution aborted",
-                  ...(state === "interrupted"
-                    ? { metadata: { interrupted: true, output: `${callID} partial output` } }
-                    : {}),
-                  time,
-                },
-        })
-      }
-      // The second turn, whose output stays.
-      yield* seedHistory(source.id, root).pipe(provideInstance(root))
-      const before = yield* sessions.messages({ sessionID: source.id })
-      const boundary = before.findLast((message) => message.info.role === "user")!.info.id
-
-      const forked = yield* forkSessionInto({
-        sessionID: source.id,
-        destination: worktree,
-        pathMode: "transcript",
-        pruneToolOutputBefore: MessageID.make(boundary),
-      })
-
-      const tools = (yield* sessions.messages({ sessionID: forked.id })).flatMap((message) =>
-        message.parts.flatMap((part) => (part.type === "tool" ? [part] : [])),
-      )
-      expect(
-        tools.map((part) => [
-          part.callID,
-          part.state.status === "completed"
-            ? part.state.time.compacted === undefined
-              ? part.state.output
-              : "cleared"
-            : part.state.status === "error"
-              ? (part.state.metadata?.output ?? part.state.error)
-              : part.state.status,
-        ]),
-      ).toEqual([
-        ["call-write", "cleared"],
-        // Only these hold what the copy cannot get again.
-        ["call-skill", "call-skill output"],
-        ["call-question", "call-question output"],
-        ["call-task", "call-task output"],
-        ["call-mcp", "call-mcp output"],
-        ["call-upload", "call-upload output"],
-        ["call-upload-shell", "call-upload-shell output"],
-        ["call-outside", "call-outside output"],
-        ["call-read", "cleared"],
-        ["call-bash", "cleared"],
-        ["call-failed", "Tool execution aborted"],
-        ["call-interrupted", "[Old tool result content cleared]"],
-        ["call-interrupted-question", "call-interrupted-question partial output"],
-        ["call-write", `Wrote ${path.join(root, "src", "index.ts")}`],
-      ])
-      // A cleared output stays stored.
-      expect(tools.flatMap((part) => (part.state.status === "completed" ? [part.state.output] : []))).toEqual([
-        `Wrote ${path.join(root, "src", "index.ts")}`,
-        ...calls.flatMap(([callID, , , state]) => (state === "completed" ? [`${callID} output`] : [])),
-        `Wrote ${path.join(root, "src", "index.ts")}`,
-      ])
-      expect(yield* sessions.messages({ sessionID: source.id })).toEqual(before)
-    }),
-  )
-
-  it.live("maps a session opened in a subdirectory onto the destination's top level", () =>
-    Effect.gen(function* () {
-      const { root, worktree } = yield* prepareRepository()
-      const subdirectory = path.join(root, "src")
-      const sessions = yield* Session.Service
-      const source = yield* provideInstance(subdirectory)(sessions.create({ title: "source" }))
-      yield* seedHistory(source.id, root).pipe(provideInstance(subdirectory))
-
-      const forked = yield* forkSessionInto({ sessionID: source.id, destination: worktree })
-
-      expect((yield* sessions.get(forked.id)).directory).toBe(worktree)
-      const copy = yield* sessions.messages({ sessionID: forked.id })
-      expect(toolInputs(copy)).toEqual([
-        { filePath: path.join(worktree, "src", "index.ts"), content: "export const renamed = 1\n" },
-      ])
-    }),
-  )
-
-  it.live("leaves a same-directory fork where it is", () =>
-    Effect.gen(function* () {
-      const { root } = yield* prepareRepository()
-      const sessions = yield* Session.Service
-      const source = yield* provideInstance(root)(sessions.create({ title: "source" }))
-      yield* seedHistory(source.id, root).pipe(provideInstance(root))
-      const before = yield* sessions.messages({ sessionID: source.id })
-
-      const forked = yield* forkSessionInto({ sessionID: source.id, destination: root })
-
-      expect((yield* sessions.get(forked.id)).directory).toBe(root)
-      const copy = yield* sessions.messages({ sessionID: forked.id })
-      expect(texts(copy)).toEqual(texts(before))
-      expect(toolInputs(copy)).toEqual(toolInputs(before))
-    }),
-  )
+describe("Arena fork on native sessions", () => {
+  test("moves the copy and maps a subdirectory's paths from the repository root", async () => {
+    const result = await fork({}, [tool("read", { filePath: "/repo/src/index.ts" })])
+    expect(result.moved).toEqual([{ sessionID: targetID, directory: "/copy", moveChanges: false }])
+    expect(result.written[0]).toMatchObject({ state: { input: { filePath: "/copy/src/index.ts" } } })
+    expect(result.canonical).toMatchObject([
+      { text: "Keep /repo/src/index.ts exactly", files: [{ source: { uri: "file:///copy/src/index.ts" } }] },
+    ])
+  })
+  test("keeps battle prompts and output while retargeting executable paths", async () => {
+    const result = await fork({ pathMode: "transcript" }, [
+      text("Keep /repo/src/index.ts exactly"),
+      tool("read", { filePath: "/repo/src/index.ts" }),
+    ])
+    expect(result.written[0]).toMatchObject({ text: "Keep /repo/src/index.ts exactly" })
+    expect(result.written[1]).toMatchObject({
+      state: { input: { filePath: "/copy/src/index.ts" }, output: "saved output" },
+    })
+  })
+  test("passes source message IDs to the retargeter", async () => {
+    const seen: unknown[] = []
+    await fork(
+      {
+        part: (part, _info, id) => {
+          seen.push(id)
+          return part
+        },
+      },
+      [text("port 20000")],
+    )
+    expect(seen).toEqual([sourceMessageID])
+  })
+  test("prunes reproducible old output but keeps uploads, outside reads, questions and reports", async () => {
+    const parts = [
+      text("Uploaded file: log\nPath: /uploads/one/log\nMIME: text/plain\nSize: 1 bytes"),
+      tool("read", { filePath: "/repo/src/index.ts" }),
+      tool("read", { filePath: "/uploads/one/log" }),
+      tool("read", { filePath: "/outside/log" }),
+      tool("question", {}),
+      tool("task", {}),
+      tool("skill", {}),
+      tool("github_get_issue", {}),
+      tool("bash", { command: "false" }, "error"),
+    ]
+    const result = await fork({ pruneToolOutputBefore: MessageID.make("msg_02"), pathMode: "transcript" }, parts)
+    expect(result.written[1]).toMatchObject({
+      state: { output: "saved output", time: { compacted: expect.any(Number) } },
+    })
+    for (const part of result.written.slice(2, -1))
+      expect(part).toMatchObject({ state: { output: "saved output", time: { start: 0, end: 1 } } })
+    expect(result.written.at(-1)).toMatchObject({
+      state: { metadata: { output: "[Old tool result content cleared]" } },
+    })
+    expect(parts[1]).toMatchObject({ state: { time: { start: 0, end: 1 } } })
+  })
+  test("leaves a same-directory fork at its source and can defer moving a staged copy", async () => {
+    expect((await fork({ roots: { canonical: "/repo", worktree: "/repo" } })).moved).toEqual([])
+    expect((await fork({ moveSession: false })).moved).toEqual([])
+  })
+  test("an empty source creates a native root with its model and permissions", async () => {
+    const result = await fork({}, [], true)
+    expect(result.created).toEqual([
+      {
+        title: "Source",
+        agent: "build",
+        model: { providerID: "arena", modelID: "medium", variant: "high" },
+        metadata: undefined,
+        permissions: [{ action: "edit", resource: "/repo/**", effect: "deny" }],
+        location: { directory: "/repo/src" },
+      },
+    ])
+    expect(result.result.id).toBe(targetID)
+  })
 })

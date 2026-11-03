@@ -5,6 +5,7 @@ const base: ResolveAccountGateInput = {
   hasEndpoint: true,
   storeHydrated: true,
   methodsPhase: "success",
+  updateRequired: false,
   accountsEnabled: true,
   methods: ["email", "google", "github"],
   hasStoredSession: true,
@@ -72,5 +73,25 @@ describe("resolveAccountGate", () => {
         legalDocumentsAvailable: false,
       }),
     ).toEqual({ kind: "unreachable" });
+  });
+
+  it("asks a refused build to update before sign-in or terms", () => {
+    const refused = { ...base, updateRequired: true };
+    expect(resolveAccountGate(refused)).toEqual({ kind: "update-required" });
+    expect(resolveAccountGate({ ...refused, hasStoredSession: false })).toEqual({
+      kind: "update-required",
+    });
+    expect(resolveAccountGate({ ...refused, hasAcceptedLegalDocuments: false })).toEqual({
+      kind: "update-required",
+    });
+  });
+
+  it("does not ask for an update while the methods check is pending or failed", () => {
+    expect(resolveAccountGate({ ...base, updateRequired: true, methodsPhase: "pending" })).toEqual({
+      kind: "checking",
+    });
+    expect(resolveAccountGate({ ...base, updateRequired: true, methodsPhase: "error" })).toEqual({
+      kind: "signed-in",
+    });
   });
 });

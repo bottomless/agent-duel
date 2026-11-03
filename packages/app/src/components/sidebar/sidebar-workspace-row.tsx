@@ -5,6 +5,7 @@ import { StyleSheet } from "react-native-unistyles";
 import { useMutation } from "@tanstack/react-query";
 import type { SidebarWorkspaceEntry } from "@/hooks/use-sidebar-workspaces-list";
 import { density } from "@/styles/density";
+import { getSidebarRowBackdrop } from "@/components/sidebar/sidebar-row-backdrop";
 import type { SidebarSurfaceBackdrop } from "@/styles/surface-backdrop";
 import type { DraggableListDragHandleProps } from "@/components/draggable-list.types";
 import type { ShortcutKey } from "@/utils/format-shortcut";
@@ -35,7 +36,6 @@ import {
   SidebarWorkspaceTrailingActionSlot,
 } from "@/components/sidebar/sidebar-workspace-row-content";
 import { useOpenKebabMenuVisibility } from "@/components/sidebar/use-open-kebab-menu-visibility";
-import { getSidebarRowBackdrop } from "@/components/sidebar/sidebar-row-backdrop";
 import { selectWorkspaceServiceSummary } from "@/components/sidebar/workspace-meta-row";
 import {
   SidebarWorkspaceTrailingContent,

@@ -77,6 +77,8 @@ describe("bootstrap provider availability", () => {
       staticDir,
       mcpDebug: false,
       agentClients: {},
+      // Codex is off by default in Agent Duel; this test needs it enabled with its binary missing.
+      providerOverrides: { codex: { enabled: true } },
       agentStoragePath,
       relayEnabled: false,
       appBaseUrl: "https://app.paseo.sh",

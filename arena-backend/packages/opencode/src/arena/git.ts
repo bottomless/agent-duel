@@ -24,7 +24,7 @@ import { tmpdir } from "os"
 import { basename, dirname, join, resolve } from "path"
 import { Git } from "@/git"
 import { PRIVATE_REF_PREFIXES } from "@/worktree/layout"
-import { IGNORED_PATHS_COMMAND, parseIgnoredPaths } from "./warm"
+import { ALL_IGNORED_PATHS_COMMAND, IGNORED_PATHS_COMMAND, parseIgnoredPaths, withEmptyIgnoredFolders } from "./warm"
 import { identicalNumberedCopies } from "./sync-conflict-copy"
 import type { RefChange, RefOutcome } from "./ref-types"
 import type { AgentMove, BranchAction, RefNamespace, RefObservation, YourMove } from "./branch-review"
@@ -2933,8 +2933,9 @@ const readWorkingTree = Effect.fn("ArenaGit.readWorkingTree")(function* (
 /** List ignored setup output as collapsed copy roots for the second contestant. */
 export const ignoredPaths = Effect.fn("ArenaGit.ignoredPaths")(function* (directory: string) {
   const git = yield* Git.Service
-  const listed = yield* read(git, directory, "list_ignored", [...IGNORED_PATHS_COMMAND])
-  return parseIgnoredPaths(listed)
+  const roots = parseIgnoredPaths(yield* read(git, directory, "list_ignored", [...IGNORED_PATHS_COMMAND]))
+  const all = parseIgnoredPaths(yield* read(git, directory, "list_ignored_all", [...ALL_IGNORED_PATHS_COMMAND]))
+  return withEmptyIgnoredFolders(roots, all)
 })
 
 export const snapshotBase = Effect.fn("ArenaGit.snapshotBase")(function* (input: SnapshotBaseInput) {

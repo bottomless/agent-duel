@@ -13,16 +13,35 @@ export function shouldAllowEmptyDraftText(input: {
 }
 
 /**
- * The feature values a first send creates its agent with. The new-chat composer the person chose on
- * hands its values over in the pending submission. This tab's own composer learns its values from a
- * feature query that can still be cold when the auto-submit fires, so it only fills what the
- * submission does not name.
+ * Feature values for the agent a draft creates. A message New chat hands over carries the values
+ * its menu showed, so those win. The draft's own features query starts cold in the new workspace
+ * and resolves to nothing until it returns, which created the first chat with Auto Accept off.
  */
-export function resolveDraftFeatureValues(input: {
-  pending: Record<string, unknown> | undefined;
-  composer: Record<string, unknown> | undefined;
+export function resolveDraftCreateFeatureValues(input: {
+  submitted: Record<string, unknown> | undefined;
+  draft: Record<string, unknown> | undefined;
 }): Record<string, unknown> | undefined {
-  return input.pending ? { ...input.composer, ...input.pending } : input.composer;
+  const values = { ...input.draft, ...input.submitted };
+  return Object.keys(values).length > 0 ? values : undefined;
+}
+
+/**
+ * Whether the draft can send the message New chat handed it. The provider model list is not an
+ * input: a draft takes its model from `SINGLE_AGENT_MODELS` in either mode, and that list never
+ * arrives when the provider snapshot fails, which held the send on "Preparing workspaces" forever.
+ */
+export function isReadyForPendingAutoSubmit(input: {
+  hasPendingSubmission: boolean;
+  isHydrated: boolean;
+  workingDirectory: string | null;
+  hasClient: boolean;
+}): boolean {
+  return (
+    input.hasPendingSubmission &&
+    input.isHydrated &&
+    Boolean(input.workingDirectory) &&
+    input.hasClient
+  );
 }
 
 /** Whether the draft has sent a battle and is waiting for the chat that takes it over. */

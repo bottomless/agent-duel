@@ -5,6 +5,7 @@ import {
   arenaRunIsResponding,
   presentArenaWork,
   arenaWorkSummaryLabel,
+  projectArenaActivityRows,
   projectArenaActivitySegments,
   summarizeArenaWork,
   type ArenaWorkSummary,
@@ -470,6 +471,90 @@ describe("projectArenaActivitySegments", () => {
     });
 
     expect(segments.map((segment) => segment.content?.part)).toEqual([firstText, secondText]);
+  });
+});
+
+describe("projectArenaActivityRows", () => {
+  const text = (textValue: string) => ({ type: "text", text: textValue });
+  const segment = (key: string, part: unknown, trailing: unknown[] = []) => ({
+    key,
+    content: part === null ? null : { messageId: "m", partIndex: 0, part },
+    trailing: trailing.map((trailingPart, partIndex) => ({
+      messageId: "m",
+      partIndex: partIndex + 1,
+      part: trailingPart,
+    })),
+  });
+
+  it("folds everything before the final text into one row once the run is done", () => {
+    const first = segment("first", text("First update"), [toolPart("read", { filePath: "a.ts" })]);
+    const second = segment("second", text("Second update"));
+    const final = segment("final", text("Final answer"));
+    const segments = [first, second, final];
+
+    expect(projectArenaActivityRows(segments, "pending").map((row) => row.kind)).toEqual([
+      "segment",
+      "segment",
+      "segment",
+    ]);
+    const rows = projectArenaActivityRows(segments, "complete");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({ kind: "earlier", key: "earlier:first" });
+    expect(rows[0]?.kind === "earlier" ? rows[0].segments : []).toEqual([first, second]);
+    expect(rows[1]).toMatchObject({ kind: "segment", segment: final });
+  });
+
+  it("keeps standalone rows in place and folds the history around them", () => {
+    const before = segment("before", text("Before"));
+    const question = segment("question", toolPart("question", { questions: ["Scope?"] }));
+    const after = segment("after", text("After"));
+    const final = segment("final", text("Final answer"));
+    const rows = projectArenaActivityRows(
+      [before, question, after, final],
+      "complete",
+      (row) => row.key === "question",
+    );
+
+    expect(rows.map((row) => row.kind)).toEqual(["earlier", "segment", "earlier", "segment"]);
+    expect(rows[1]).toMatchObject({ kind: "segment", segment: question });
+    expect(rows[3]).toMatchObject({ kind: "segment", segment: final });
+  });
+
+  it("keeps an exchange a later message followed folded while the run answers it", () => {
+    const first = segment("first", text("First update"), [toolPart("read", { filePath: "a.ts" })]);
+    const answer = segment("answer", text("Answer"));
+
+    const rows = projectArenaActivityRows([first, answer], "pending", undefined, {
+      superseded: true,
+    });
+
+    expect(rows.map((row) => row.kind)).toEqual(["earlier", "segment"]);
+    expect(rows[1]).toMatchObject({ kind: "segment", segment: answer });
+  });
+
+  it("keeps the last update and its work in view when a steer cut the exchange off", () => {
+    const first = segment("first", text("First update"));
+    const last = segment("last", text("Running a command"), [
+      toolPart("bash", { command: "sleep 25" }),
+    ]);
+
+    const rows = projectArenaActivityRows([first, last], "pending", undefined, {
+      superseded: true,
+    });
+
+    expect(rows.map((row) => row.kind)).toEqual(["earlier", "segment"]);
+    expect(rows[1]).toMatchObject({ kind: "segment", segment: last });
+  });
+
+  it("leaves a run with no final text, or only a final text, unfolded", () => {
+    const workOnly = segment("work", null, [toolPart("bash", { command: "npm test" })]);
+    expect(projectArenaActivityRows([workOnly], "error").map((row) => row.kind)).toEqual([
+      "segment",
+    ]);
+    const finalOnly = segment("final", text("Done"));
+    expect(projectArenaActivityRows([finalOnly], "complete")).toEqual([
+      { kind: "segment", key: "final", segment: finalOnly },
+    ]);
   });
 });
 

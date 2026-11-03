@@ -22,6 +22,8 @@ test("receives the account credential without installing it in the process envir
     chunks(
       JSON.stringify({
         mode: "hosted",
+        researchPartition: "test-research-partition",
+        researchAccountID: "test-account",
         token: "test-session",
         controlPlaneUrl: "https://control.test/",
         controlTokenHash,
@@ -30,6 +32,8 @@ test("receives the account credential without installing it in the process envir
   )
   expect(arenaCredentials()).toEqual({
     mode: "hosted",
+    researchPartition: "test-research-partition",
+    researchAccountID: "test-account",
     token: "test-session",
     controlPlaneUrl: "https://control.test",
     controlTokenHash,
@@ -48,7 +52,14 @@ test("receives the user's OpenRouter key without installing it in the process en
   expect(JSON.stringify(process.env)).not.toContain("sk-or-v1-user-key")
 })
 
-const hosted = { mode: "hosted", token: "secret-input", controlPlaneUrl: "https://control.test", controlTokenHash }
+const hosted = {
+  mode: "hosted",
+  researchPartition: "test-research-partition",
+  researchAccountID: "test-account",
+  token: "secret-input",
+  controlPlaneUrl: "https://control.test",
+  controlTokenHash,
+}
 const byok = { mode: "byok", openRouterApiKey: "sk-or-v1-secret-input", controlTokenHash }
 
 test.each([
@@ -73,6 +84,8 @@ test.each([
 ])("rejects invalid startup data without retaining a previous credential", async (text) => {
   setArenaCredentials({
     mode: "hosted",
+    researchPartition: "test-research-partition",
+    researchAccountID: "test-account",
     token: "old-session",
     controlPlaneUrl: "https://control.test",
     controlTokenHash: hashArenaControlToken("old-control-token"),

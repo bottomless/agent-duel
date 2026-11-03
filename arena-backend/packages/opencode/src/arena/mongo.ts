@@ -40,7 +40,11 @@ import type {
   SingleAgentVote,
   TurnDocument,
   ApplyBaseChoice,
+  PortCursorDocument,
 } from "./records"
+import type { PortCursor } from "./preview"
+
+const PORT_CURSOR_ID = "contestant-ports"
 
 export type ArtifactInput = Omit<
   ArtifactDocument,
@@ -190,6 +194,7 @@ export class Store {
   readonly reviewEvents: ArenaCollection<ReviewEventDocument>
   readonly battleMetrics: ArenaCollection<BattleMetricsDocument>
   readonly singleAgentRatings: ArenaCollection<SingleAgentRatingDocument>
+  readonly portCursors: ArenaCollection<PortCursorDocument>
   readonly artifactQueues = new Map<string, Promise<void>>()
 
   constructor(client: ArenaClient, db: ArenaDb | Db) {
@@ -208,6 +213,7 @@ export class Store {
     this.reviewEvents = this.db.collection<ReviewEventDocument>("reviewEvents")
     this.battleMetrics = this.db.collection<BattleMetricsDocument>("battleMetrics")
     this.singleAgentRatings = this.db.collection<SingleAgentRatingDocument>("singleAgentRatings")
+    this.portCursors = this.db.collection<PortCursorDocument>("portCursors")
   }
 
   async initialize() {
@@ -326,6 +332,20 @@ export class Store {
 
   async checkoutEviction(root: string) {
     return this.checkoutEvictions.findOne({ root })
+  }
+
+  /** The cursor `sequentialAllocator` (`preview.ts`) reads, kept across engine restarts. */
+  portCursor(): PortCursor {
+    return {
+      read: async () => (await this.portCursors.findOne({ _id: PORT_CURSOR_ID }))?.next,
+      write: async (next) => {
+        await this.portCursors.replaceOne(
+          { _id: PORT_CURSOR_ID },
+          { _id: PORT_CURSOR_ID, next, updatedAt: new Date() },
+          { upsert: true },
+        )
+      },
+    }
   }
 
   async releaseCheckoutEviction(root: string) {
@@ -1222,7 +1242,8 @@ export class Store {
     readonly appliedSide?: Side
     /** Left out for a discard that names nobody (`identitiesRevealed`). */
     readonly models?: Readonly<Record<Side, string>>
-    readonly expectedState: "awaiting_vote" | "awaiting_stop_resolution"
+    /** A failed state only for a discard the control plane already holds (`discardCommitted`). */
+    readonly expectedState: "awaiting_vote" | "awaiting_stop_resolution" | "finalization_failed" | "interrupted_recovery"
     readonly at: Date
   }) {
     const candidate = await this.turns.findOne({ _id: input.turnID })
@@ -1639,6 +1660,7 @@ export class Store {
     const limited = bound({
       data: input.data,
       runStoredBytes: totals,
+      ...(record ? { artifactLimit: input.data.byteLength, runLimit: input.data.byteLength } : {}),
       // A gzip stream or an image cut short does not decode.
       whole: input.compression === "gzip" || input.kind === "image",
     })

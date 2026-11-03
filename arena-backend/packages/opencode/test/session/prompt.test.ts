@@ -285,6 +285,8 @@ const outputLimitSession = Effect.fn("test.outputLimitSession")(function* () {
   const llm = yield* TestLLMServer
   setArenaCredentials({
     mode: "hosted",
+    researchPartition: "test-research-partition",
+    researchAccountID: "test-account",
     token: "test",
     controlTokenHash: "0".repeat(64),
     controlPlaneUrl: new URL(llm.url).origin,

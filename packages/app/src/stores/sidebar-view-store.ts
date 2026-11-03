@@ -6,13 +6,14 @@ import { z } from "zod";
 import { workspaceLabelKey } from "@getpaseo/protocol/workspace-labels";
 import { createValidatedPersistStorage } from "@/storage/validated-persist-storage";
 
-export type SidebarGroupMode = "project" | "status";
+export type SidebarGroupMode = "project" | "status" | "none";
+export type SidebarSortMode = "default" | "lastChat";
 /** Which list the sidebar shows: the active chats, or the archived ones in their place. */
 export type SidebarListView = "chats" | "archived";
 
 const SIDEBAR_VIEW_STORAGE_KEY = "sidebar-view";
 const LEGACY_SIDEBAR_GROUP_MODE_STORAGE_KEY = "sidebar-group-mode";
-const SIDEBAR_VIEW_STORE_VERSION = 8;
+const SIDEBAR_VIEW_STORE_VERSION = 9;
 
 /**
  * The key standing for "this workspace carries no labels at all".
@@ -50,6 +51,8 @@ function toggleFilterEntry(list: readonly string[], key: string): string[] {
 
 interface SidebarViewStoreState {
   groupMode: SidebarGroupMode;
+  sortMode: SidebarSortMode;
+  groupSortMode: SidebarSortMode;
   workspaceSort: WorkspaceSort;
   showBackground: boolean;
   // Empty means "all hosts". A non-empty list pins the sidebar to those hosts.
@@ -70,6 +73,8 @@ interface SidebarViewStoreState {
   // Not persisted: a relaunch opens on the active chats.
   listView: SidebarListView;
   setGroupMode: (mode: SidebarGroupMode) => void;
+  setSortMode: (mode: SidebarSortMode) => void;
+  setGroupSortMode: (mode: SidebarSortMode) => void;
   setListView: (view: SidebarListView) => void;
   setWorkspaceSort: (sort: WorkspaceSort) => void;
   toggleHostFilter: (serverId: string) => void;
@@ -84,6 +89,8 @@ interface SidebarViewStoreState {
 
 interface SidebarViewPersistedState {
   groupMode: SidebarGroupMode;
+  sortMode: SidebarSortMode;
+  groupSortMode: SidebarSortMode;
   workspaceSort: WorkspaceSort;
   showBackground: boolean;
   hostFilters: string[];
@@ -91,11 +98,13 @@ interface SidebarViewPersistedState {
   labelFilter: SidebarLabelFilter;
 }
 
-const PersistedSidebarGroupModeSchema = z.enum(["project", "status", "label"]);
+const PersistedSidebarGroupModeSchema = z.enum(["project", "status", "none", "label"]);
 const SidebarLabelFilterSchema = z.object({
   labels: z.array(z.string()),
 });
 const SidebarViewPersistedStateSchema = z.strictObject({
+  sortMode: z.enum(["default", "lastChat"]).optional(),
+  groupSortMode: z.enum(["default", "lastChat"]).optional(),
   workspaceSort: z.enum(["manual", "created", "lastPrompt"]).optional(),
   showBackground: z.boolean().optional(),
   groupMode: PersistedSidebarGroupModeSchema.optional(),
@@ -138,6 +147,8 @@ export function migrateSidebarViewState(persistedState: unknown): SidebarViewPer
     return {
       showBackground: false,
       groupMode: "project",
+      sortMode: "lastChat",
+      groupSortMode: "lastChat",
       workspaceSort: "created",
       hostFilters: [],
       projectFilters: [],
@@ -151,6 +162,8 @@ export function migrateSidebarViewState(persistedState: unknown): SidebarViewPer
     return {
       showBackground: false,
       groupMode: legacyGroupMode,
+      sortMode: "lastChat",
+      groupSortMode: "lastChat",
       workspaceSort: "created",
       hostFilters: [],
       projectFilters: [],
@@ -160,7 +173,10 @@ export function migrateSidebarViewState(persistedState: unknown): SidebarViewPer
 
   return {
     showBackground: state.showBackground ?? false,
-    groupMode: state.groupMode === "status" ? "status" : "project",
+    groupMode:
+      state.groupMode === "status" || state.groupMode === "none" ? state.groupMode : "project",
+    sortMode: state.sortMode ?? (state.workspaceSort ? "default" : "lastChat"),
+    groupSortMode: state.groupSortMode ?? "lastChat",
     workspaceSort: state.workspaceSort ?? "created",
     hostFilters: readHostFilters(state),
     projectFilters: state.projectFilters ?? [],
@@ -200,6 +216,8 @@ export const useSidebarViewStore = create<SidebarViewStoreState>()(
     (set) => ({
       showBackground: false,
       groupMode: "project",
+      sortMode: "lastChat",
+      groupSortMode: "lastChat",
       workspaceSort: "created",
       hostFilters: [],
       projectFilters: [],
@@ -207,8 +225,10 @@ export const useSidebarViewStore = create<SidebarViewStoreState>()(
       toggleBackground: () => set((state) => ({ showBackground: !state.showBackground })),
       listView: "chats",
       setGroupMode: (mode) => set({ groupMode: mode }),
+      setSortMode: (mode) => set({ sortMode: mode }),
+      setGroupSortMode: (mode) => set({ groupSortMode: mode }),
       setListView: (view) => set({ listView: view }),
-      setWorkspaceSort: (workspaceSort) => set({ workspaceSort }),
+      setWorkspaceSort: (workspaceSort) => set({ workspaceSort, sortMode: "default" }),
       toggleHostFilter: (serverId) =>
         set((state) => ({ hostFilters: toggleFilterEntry(state.hostFilters, serverId) })),
       clearHostFilters: () => set({ hostFilters: [] }),
@@ -257,6 +277,8 @@ export const useSidebarViewStore = create<SidebarViewStoreState>()(
         showBackground: state.showBackground ?? false,
         groupMode: state.groupMode,
         workspaceSort: state.workspaceSort,
+        sortMode: state.sortMode,
+        groupSortMode: state.groupSortMode,
         hostFilters: state.hostFilters,
         projectFilters: state.projectFilters,
         labelFilter: state.labelFilter,

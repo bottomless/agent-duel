@@ -39,6 +39,7 @@ interface SidebarModel extends SidebarWorkspacesListResult {
   hasProjectsBeforeFilter: boolean;
   groupMode: SidebarGroupMode;
   workspaceGroups: SidebarWorkspaceGroup[];
+  flatWorkspaces: SidebarWorkspaceEntry[];
   projectIconTargets: SidebarProjectIconTarget[];
   pinnedGroups: PinnedSidebarGroups;
   collapsedProjectKeys: ReadonlySet<string>;
@@ -59,6 +60,8 @@ export function SidebarModelProvider({
   const list = useSidebarWorkspacesList({ enabled: active });
   const showBackground = useSidebarViewStore((state) => state.showBackground);
   const groupMode = useSidebarViewStore((state) => state.groupMode);
+  const sortMode = useSidebarViewStore((state) => state.sortMode);
+  const groupSortMode = useSidebarViewStore((state) => state.groupSortMode);
   const labelFilter = useSidebarViewStore((state) => state.labelFilter);
   const projectFilters = useSidebarViewStore((state) => state.projectFilters);
   const reconcileLabelFilter = useSidebarViewStore((state) => state.reconcileLabelFilter);
@@ -98,7 +101,11 @@ export function SidebarModelProvider({
   // anything; the label filter reads `labels`, which only exists on an entry. Hydration opens a
   // live session-store subscription over every workspace on every visible host, so widening this
   // for a filter that does not need it costs a retained-but-inactive sidebar real work.
-  const needsWorkspaceEntries = groupMode !== "project" || hasActiveLabelFilter;
+  const needsWorkspaceEntries =
+    groupMode !== "project" ||
+    hasActiveLabelFilter ||
+    sortMode === "lastChat" ||
+    groupSortMode === "lastChat";
   const workspaceEntriesByKey = useSidebarWorkspaceEntries(
     list.workspacePlacements,
     active !== false || needsWorkspaceEntries,
@@ -156,6 +163,8 @@ export function SidebarModelProvider({
       workspaceEntriesByKey: filteredWorkspaceEntriesByKey,
       projectNamesByViewKey: list.projectNamesByViewKey,
       groupMode,
+      sortMode,
+      groupSortMode,
       pinnedCollapsed,
       collapsedProjectKeys,
       collapsedWorkspaceGroupKeys,
@@ -165,6 +174,8 @@ export function SidebarModelProvider({
       collapsedProjectKeys,
       collapsedWorkspaceGroupKeys,
       groupMode,
+      sortMode,
+      groupSortMode,
       list.projectNamesByViewKey,
       filteredProjects,
       pinnedCollapsed,
@@ -185,6 +196,7 @@ export function SidebarModelProvider({
       workspaceEntriesByKey: filteredWorkspaceEntriesByKey,
       groupMode,
       workspaceGroups: projection.workspaceGroups,
+      flatWorkspaces: projection.flatWorkspaces,
       projectIconTargets: projection.projectIconTargets,
       pinnedGroups: projection.pinnedGroups,
       collapsedProjectKeys,
