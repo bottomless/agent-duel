@@ -42,7 +42,14 @@ export function managedV2ProcessEvents(input: {
       return () => listeners.delete(listener);
     },
     async close() {
+      if (closed) return;
       closed = true;
+      // The manager closes this source before terminating the engine on sign-out.
+      // Retire its connections now; the later process exit cannot reach these listeners.
+      if (!exited) {
+        exited = new Error("OpenCode helper server stopped");
+        for (const listener of listeners) listener({ type: "server-exited", error: exited });
+      }
       listeners.clear();
     },
   };
@@ -52,7 +59,7 @@ export interface V2Connection {
   client: V2Api;
   readonly arena?: { serverUrl: string; controlToken: string };
   release(): Promise<void>;
-  retain(): V2Connection;
+  retain(): V2Connection | null;
   readonly exited: Promise<Error>;
 }
 interface Generation {
@@ -69,6 +76,7 @@ export interface V2RuntimeOptions {
   decorateEnv?: (env: Record<string, string>) => Promise<Record<string, string>>;
   /** Use the daemon-owned Arena process and its control-token transport. */
   serverManager?: OpenCodeServerManagerLike;
+  createClient?: (options: Parameters<typeof OpenCode.make>[0]) => V2Api;
 }
 
 export interface V2RuntimeAcquireOptions {
@@ -150,7 +158,7 @@ export class V2Runtime {
       client: generation.client,
       ...(generation.arena ? { arena: generation.arena } : {}),
       release,
-      retain: () => this.lease(generation, pending),
+      retain: () => (this.generations.has(generation) ? this.lease(generation, pending) : null),
       exited: generation.exited,
     };
   }
@@ -169,6 +177,8 @@ export class V2Runtime {
     void pending.then(
       (generation) =>
         generation.exited.then(() => {
+          // A resumed session must not retain its cached lease to a stopped engine.
+          this.generations.delete(generation);
           if (this.current === pending) this.current = null;
           return undefined;
         }),
@@ -271,7 +281,7 @@ export class V2Runtime {
         // Drain stderr without retaining provider output that may contain credentials.
         process.stderr?.on("data", () => undefined);
       });
-      const client = OpenCode.make({
+      const client = (this.options.createClient ?? OpenCode.make)({
         baseUrl: url,
         headers: {
           Authorization: `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`,
@@ -323,7 +333,7 @@ export class V2Runtime {
       await acquisition.release();
     };
     try {
-      const client = OpenCode.make({
+      const client = (this.options.createClient ?? OpenCode.make)({
         baseUrl: acquisition.server.url,
         headers: { "x-paseo-control-token": acquisition.server.controlToken },
       });

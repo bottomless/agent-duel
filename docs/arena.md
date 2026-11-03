@@ -1383,9 +1383,14 @@ is ready again. A turn startup finds in `creation_failed`, because the previous 
 while ending it, is ended the same way rather than parked for Keep or Discard, which would name the
 pair. `interrupted_recovery` is where a turn lands when the daemon dies mid-battle.
 
-A battle cut off by restart reopens for Resume or Discard (`reopenInterruptedTurn`); quitting the
-app records no decision. A side that had finished keeps its result. A side that was
-working is committed as `interrupted`: its cut-off response is closed the way a stop closes it, so
+A battle already awaiting its vote keeps its prompt, both results and vote controls after an engine
+restart. Reopen the workspace after signing back in; no daemon restart is required. Sign-out and
+account changes [restart the engine](accounts.md#how-the-session-travels), but the
+[local store remains shared across accounts](data-model.md#who-owns-a-battle-record).
+
+A battle still running when the engine stops reopens for Resume or Discard
+(`reopenInterruptedTurn`); quitting the app records no decision. A side that had finished keeps its
+result. A side that was working is committed as `interrupted`: its cut-off response is closed the way a stop closes it, so
 its unfinished tool calls end interrupted and are never run again. The pill then holds only
 **Resume**, its one filled choice, and **Discard** (`canResumeBattle`). Resume (`resumeBattle`)
 claims every interrupted side at once and continues each from its cut-off response. No side resumes
