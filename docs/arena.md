@@ -1507,7 +1507,8 @@ rewriting the rows.
 A run that fails after the budget can be retried by hand. A failed run cannot be chosen or tied, so
 without a retry the voter is left with the other side alone, or with Discard when both failed (see
 [Resolving](#resolving)). When the failure is one the policy above would
-have retried (`errorRetryable`, set in `finalizeSide`), the pane shows **Retry** under its error.
+have retried, or an empty compaction summary, the pane shows **Retry** under its error
+(`errorRetryable`, set in `finalizeSide`).
 Retry continues the same session on the same assignment from its last finished step, adding no
 message (`prompts.loop`), so the battle stays blind. It first removes the run's half answers and the
 notes after them (`abandonedAttempts`), because the new answer starts over and none of them is part
@@ -1566,7 +1567,10 @@ Never replace history with an idle, truncated, or empty compaction summary: a co
 hides earlier history from the next request. Core retains the history on failure
 (`core/src/session/compaction.ts`). Transport failures use its retry policy; an output-limit summary
 fails immediately. A reply missing the required summary headings, including an empty reply, gets
-one reminder before failure.
+one reminder before failure. If the summary is still empty, the pane says “The agent could not
+summarize its context. Retry to continue.” Retry compacts again from the retained history on the
+same assignment, within the manual retry limit above. Each side can recover independently, including
+when both summaries failed; the other side's work and the vote rules stay unchanged.
 
 A connection can also die without closing. On some mobile networks the hosted function finishes the
 response while the desktop never receives another byte or a close, and only the 150-second deadline

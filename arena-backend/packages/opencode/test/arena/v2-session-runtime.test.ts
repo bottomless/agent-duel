@@ -764,6 +764,60 @@ describe("Arena V2 failed contestant run", () => {
     expect(retryable({ type: "aborted", message: "Step interrupted" })).toBe(false)
   })
 
+  it.effect("keeps history when an empty compaction fails before an assistant step", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const { id } = yield* session("empty-compaction")
+      yield* insert(
+        database,
+        id,
+        {
+          id: SessionMessage.ID.make("msg_empty_summary_user"),
+          type: "user",
+          text: "write the file",
+          time: { created: at },
+          files: [{ source: { type: "inline" }, mime: "image/png", data: "aGVsbG8=", name: "task.png" }],
+        },
+        0,
+      )
+      const arena = yield* ArenaSession
+      const history = yield* arena.canonicalMessages(id)
+      resume = () =>
+        Effect.fail(
+          new StepFailedError({
+            error: { type: "compaction.empty-summary", message: "Private provider details" },
+          }),
+        )
+      const answer = yield* (yield* ArenaPrompt).loop({ sessionID: id })
+      expect(answer?.info).toMatchObject({
+        role: "assistant",
+        error: {
+          name: "APIError",
+          data: {
+            isRetryable: true,
+            message: "The agent could not summarize its context. Retry to continue.",
+          },
+        },
+      })
+      if (!answer) throw new Error("failed compaction answer missing")
+      // Retry removes this synthetic answer; it must not remove the real prompt or its image.
+      yield* arena.removeMessage({ sessionID: id, messageID: answer.info.id })
+      expect(yield* arena.canonicalMessages(id)).toEqual(history)
+    }),
+  )
+
+  test("classifies an empty summary by its type rather than the error text", () => {
+    const error = (type: string, message: string) => {
+      const entry = project([failedAssistant("msg_empty_summary_class", at, { type, message })], sessionID)[0]
+      if (entry.info.role !== "assistant" || !entry.info.error) throw new Error("projected error missing")
+      return SessionRetry.retryable(entry.info.error, "arena") !== undefined
+    }
+    expect(error("compaction.empty-summary", "Different diagnostic")).toBe(true)
+    expect(error("unknown", "Compaction produced no summary")).toBe(false)
+    expect(error("compaction.failed", "Compaction summary did not match the required template")).toBe(false)
+    expect(error("compaction.failed", "Compaction summary reached the output token limit")).toBe(false)
+  })
+
   it.effect("offers Retry for a stream that ended unfinished, as 1.x did, but not for malformed output", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service

@@ -4229,8 +4229,8 @@ export const layer: Layer.Layer<
       const runState: RunDocument["runState"] =
         runStateOverride ?? (stopped ? "stopped" : unsettled.length === 0 ? "complete" : "error")
       const runError = unsettled.length ? unsettled.join("\n") : undefined
-      // Only a model request that failed on its own, by the same rule the engine retries it, may be
-      // retried by the voter. Anything else about the run being unsettled would fail again.
+      // The projection also marks empty compaction summaries for manual Retry. Anything else
+      // about the run being unsettled would fail again.
       const errorRetryable =
         runState === "error" &&
         unsettled.length === 1 &&

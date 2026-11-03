@@ -2634,7 +2634,7 @@ describe("SessionRunnerLLM", () => {
               : {
                   status: "failed",
                   error: {
-                    type: "compaction.failed",
+                    type: response === "invalid text" ? "compaction.failed" : "compaction.empty-summary",
                     message:
                       response === "invalid text"
                         ? "Compaction summary did not match the required template"
@@ -2650,6 +2650,56 @@ describe("SessionRunnerLLM", () => {
       )
     }
   }
+
+  scenario("retries an empty automatic compaction and continues the same prompt with its image", function* (s) {
+    s.currentModel = smallWindowModel
+    const hooks = yield* PluginHooks.Service
+    // Arena's compaction hook keeps pending input outside the summary.
+    yield* hooks.register("session", "compaction", (event) =>
+      Effect.sync(() => {
+        event.preservePendingInput = true
+      }),
+    )
+    const image = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+    yield* s.llm.push(TestLLM.textWithUsage("Earlier answer", "empty-history", 59_000))
+    yield* s.runPrompt("Original task")
+    s.requests.length = 0
+    yield* s.llm.push(TestLLM.text("", "empty-summary"), TestLLM.text("", "empty-reminder"))
+    yield* s.session.prompt({
+      sessionID,
+      text: "Continue with this image",
+      files: [{ uri: `data:image/png;base64,${image}`, name: "task.png" }],
+      resume: false,
+    })
+    expect(yield* s.resume.pipe(Effect.flip)).toMatchObject({
+      error: { type: "compaction.empty-summary", message: "Compaction produced no summary" },
+    })
+    const failed = yield* s.messages
+    const original = failed.filter((message) => message.type === "user" || message.type === "assistant")
+    expect(failed.filter((message) => message.type === "compaction")).toMatchObject([
+      { status: "failed", error: { type: "compaction.empty-summary" } },
+    ])
+    expect(s.requests).toHaveLength(2)
+    yield* s.llm.push(
+      TestLLM.text("## Objective\n- Original task", "retry-summary"),
+      TestLLM.text("Continued with the image", "retry-answer"),
+    )
+    // Resume is the Core operation Arena's manual Retry calls; no new prompt is admitted.
+    yield* s.resume
+    expect(s.requests).toHaveLength(4)
+    expect(userTexts(s.requests[2]).join("\n")).toContain("Original task")
+    expect(JSON.stringify(s.requests[3].messages)).toContain("Continue with this image")
+    expect(s.requests[3].messages.at(-1)?.content).toMatchObject([
+      { type: "text", text: "Continue with this image" },
+      { type: "media", filename: "task.png" },
+    ])
+    expect((yield* s.messages).filter((message) => original.some((row) => row.id === message.id))).toEqual(original)
+    expect((yield* s.context).at(-1)).toMatchObject({
+      type: "assistant",
+      finish: "stop",
+      content: [{ type: "text", text: "Continued with the image" }],
+    })
+  })
 
   scenario("restarts compaction drafts after transient failures and unsuccessful finishes", function* (s) {
     yield* s.llm.push(TestLLM.text("Earlier answer", "text-manual-failure-history"))

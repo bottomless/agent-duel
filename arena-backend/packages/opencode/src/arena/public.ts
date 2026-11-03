@@ -429,9 +429,11 @@ export function project(snapshot: BattleSnapshot) {
                     ? ArenaResponseRecovery.IDLE_EXHAUSTED
                     : run.error.includes(requestTooLargeMessage)
                       ? requestTooLargeMessage
-                      : (runPaymentMessage(run.error) ??
-                        (byok ? runAuthMessage(run.error) : undefined) ??
-                        (revealed ? run.error : "Contestant run failed")),
+                      : run.error.includes(ArenaResponseRecovery.COMPACTION_EMPTY)
+                        ? ArenaResponseRecovery.COMPACTION_EMPTY
+                        : (runPaymentMessage(run.error) ??
+                          (byok ? runAuthMessage(run.error) : undefined) ??
+                          (revealed ? run.error : "Contestant run failed")),
               }
             : {}),
         ...(run.startedAt ? { startedAt: run.startedAt } : {}),

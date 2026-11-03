@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test"
+import { afterEach, expect, test } from "bun:test"
 import { GenerationOptions, LLMClient, LLMEvent, LanguageModel, ToolDefinition, type LLMRequest } from "@opencode/ai"
 import { OpenAIChat } from "@opencode/ai/protocols"
 import { Database } from "@opencode/core/database/database"
@@ -15,7 +15,7 @@ import { SessionModelRequest } from "@opencode/core/session/model-request"
 import { PluginHooks } from "@opencode/core/plugin/hooks"
 import { SessionProjector } from "@opencode/core/session/projector"
 import { SessionRunnerModel } from "@opencode/core/session/runner/model"
-import { SessionTable } from "@opencode/core/session/sql"
+import { SessionMessageTable, SessionTable } from "@opencode/core/session/sql"
 import { SessionStore } from "@opencode/core/session/store"
 import { Session } from "@opencode/core/session"
 import { Location } from "@opencode/core/location"
@@ -33,6 +33,10 @@ import { asc, eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 
 let requests: LLMRequest[] = []
+let summaryText = "## Objective\n- manual summary"
+afterEach(() => {
+  summaryText = "## Objective\n- manual summary"
+})
 const model = LanguageModel.make({
   id: "summary-model",
   provider: "test",
@@ -52,7 +56,7 @@ const client = Layer.mock(LLMClient.Service)({
   stream: (request: LLMRequest) => {
     requests.push(request)
     return Stream.make(
-      LLMEvent.textDelta({ id: "summary", text: "## Objective\n- manual summary" }),
+      LLMEvent.textDelta({ id: "summary", text: summaryText }),
       LLMEvent.stepFinish({
         index: 0,
         reason: { normalized: "stop" },
@@ -385,6 +389,82 @@ const recentWithToolOutput = (id: Session.ID, content: SessionMessage.ToolStateC
     const stored = (yield* store.context(id))[0]
     return stored?.type === "compaction" && stored.status === "completed" ? stored.recent : ""
   })
+
+it.effect("empty summaries leave history intact so another compaction can continue", () =>
+  Effect.gen(function* () {
+    requests = []
+    summaryText = " \n\t"
+    const session = yield* insertSession(Session.ID.make("ses_empty_compaction"))
+    const other = yield* insertSession(Session.ID.make("ses_other_contestant"))
+    const database = yield* Database.Service
+    const store = yield* SessionStore.Service
+    const history = SessionMessage.User.make({
+      id: SessionMessage.ID.create(),
+      type: "user",
+      text: "Keep the original task and image",
+      files: [{ source: { type: "inline" }, mime: "image/png", data: "aGVsbG8=", name: "task.png" }],
+      time: { created: DateTime.makeUnsafe(0) },
+    })
+    for (const sessionID of [session.id, other.id]) {
+      const { id: _, type, ...data } = Schema.encodeSync(SessionMessage.User)(history)
+      yield* database.db
+        .insert(SessionMessageTable)
+        .values({
+          id: sessionID === session.id ? history.id : SessionMessage.ID.create(),
+          session_id: sessionID,
+          type,
+          seq: -1,
+          time_created: 0,
+          time_updated: 0,
+          data,
+        })
+        .run()
+        .pipe(Effect.orDie)
+    }
+    const untouched = yield* store.context(other.id)
+    const original = yield* store.context(session.id)
+    expect(yield* compactManually(session, original)).toEqual({
+      status: "failed",
+      error: { type: "compaction.empty-summary", message: "Compaction produced no summary" },
+    })
+    expect(requests).toHaveLength(2)
+    const retained = yield* store.context(session.id)
+    expect(retained.slice(0, -1)).toEqual(original)
+    expect(retained.filter((message) => message.type === "compaction")).toMatchObject([
+      { status: "failed", error: { type: "compaction.empty-summary" } },
+    ])
+    summaryText = "## Objective\n- Keep the original task and image"
+    expect(yield* compactManually(session, retained)).toEqual({ status: "completed" })
+    expect(requests).toHaveLength(3)
+    expect(JSON.stringify(requests[2].messages)).toContain(history.text)
+    expect(yield* store.context(session.id)).toMatchObject([
+      { type: "compaction", status: "completed", summary: summaryText },
+    ])
+    expect((yield* store.messages({ sessionID: session.id })).find((message) => message.id === history.id)).toEqual(
+      history,
+    )
+    expect(yield* store.context(other.id)).toEqual(untouched)
+  }),
+)
+
+it.effect("a nonempty summary without the template remains a different failure", () =>
+  Effect.gen(function* () {
+    requests = []
+    summaryText = "No headings here"
+    const session = yield* insertSession(Session.ID.make("ses_bad_template"))
+    const message = SessionMessage.User.make({
+      id: SessionMessage.ID.create(),
+      type: "user",
+      text: "Original task",
+      time: { created: DateTime.makeUnsafe(0) },
+    })
+    expect(yield* compactManually(session, [message])).toEqual({
+      status: "failed",
+      error: { type: "compaction.failed", message: "Compaction summary did not match the required template" },
+    })
+    expect(requests).toHaveLength(2)
+  }),
+)
 
 it.effect("manual compaction summarizes short context instead of no-op", () =>
   Effect.gen(function* () {
