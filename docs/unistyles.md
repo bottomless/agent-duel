@@ -49,6 +49,8 @@ const ThemedBlur = withUnistyles(BlurView);
 <ThemedBlur tint={theme.colors.surface0} />;
 ```
 
+Fix DOM-prop leaks from themed wrappers at their source; Expo 57 surfaces them in LogBox.
+
 (Mind the `> *` child-selector leak documented further down.)
 
 ### 4. There is no "last resort"

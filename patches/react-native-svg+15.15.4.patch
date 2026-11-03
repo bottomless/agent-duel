@@ -59,3 +59,118 @@ index 0c854d6..7dc2828 100644
    }
    return props.transform as TransformsStyle['transform'];
  }
+diff --git a/node_modules/react-native-svg/src/web/utils/prepare.ts b/node_modules/react-native-svg/src/web/utils/prepare.ts
+--- a/node_modules/react-native-svg/src/web/utils/prepare.ts
++++ b/node_modules/react-native-svg/src/web/utils/prepare.ts
+@@ -36,6 +36,8 @@
+     gradientTransform,
+     patternTransform,
+     onPress,
++    accessibilityElementsHidden,
++    importantForAccessibility,
+     ...rest
+   } = props;
+
+@@ -46,6 +48,7 @@
+     onResponderRelease?: (e: GestureResponderEvent) => void;
+     onResponderTerminate?: (e: GestureResponderEvent) => void;
+     onResponderTerminationRequest?: (e: GestureResponderEvent) => boolean;
++    'aria-hidden'?: boolean;
+     onClick?: (e: GestureResponderEvent) => void;
+     transform?: string;
+     gradientTransform?: string;
+@@ -69,6 +72,11 @@
+       : null),
+     ...rest,
+   };
++
++  // Native hiding props must not reach SVG DOM elements.
++  if (accessibilityElementsHidden || importantForAccessibility === 'no-hide-descendants') {
++    clean['aria-hidden'] = true;
++  }
+
+   if (origin != null) {
+     clean['transform-origin'] = origin.toString().replace(',', ' ');
+diff --git a/node_modules/react-native-svg/lib/module/web/utils/prepare.js b/node_modules/react-native-svg/lib/module/web/utils/prepare.js
+--- a/node_modules/react-native-svg/lib/module/web/utils/prepare.js
++++ b/node_modules/react-native-svg/lib/module/web/utils/prepare.js
+@@ -26,6 +26,8 @@
+     gradientTransform,
+     patternTransform,
+     onPress,
++    accessibilityElementsHidden,
++    importantForAccessibility,
+     ...rest
+   } = props;
+   const clean = {
+@@ -39,6 +41,11 @@
+     } : null),
+     ...rest
+   };
++  // Native hiding props must not reach SVG DOM elements.
++  if (accessibilityElementsHidden || importantForAccessibility === 'no-hide-descendants') {
++    clean['aria-hidden'] = true;
++  }
++
+   if (origin != null) {
+     clean['transform-origin'] = origin.toString().replace(',', ' ');
+   } else if (originX != null || originY != null) {
+diff --git a/node_modules/react-native-svg/lib/commonjs/web/utils/prepare.js b/node_modules/react-native-svg/lib/commonjs/web/utils/prepare.js
+--- a/node_modules/react-native-svg/lib/commonjs/web/utils/prepare.js
++++ b/node_modules/react-native-svg/lib/commonjs/web/utils/prepare.js
+@@ -32,6 +32,8 @@
+     gradientTransform,
+     patternTransform,
+     onPress,
++    accessibilityElementsHidden,
++    importantForAccessibility,
+     ...rest
+   } = props;
+   const clean = {
+@@ -45,6 +47,11 @@
+     } : null),
+     ...rest
+   };
++  // Native hiding props must not reach SVG DOM elements.
++  if (accessibilityElementsHidden || importantForAccessibility === 'no-hide-descendants') {
++    clean['aria-hidden'] = true;
++  }
++
+   if (origin != null) {
+     clean['transform-origin'] = origin.toString().replace(',', ' ');
+   } else if (originX != null || originY != null) {
+diff --git a/node_modules/react-native-svg/src/web/types.ts b/node_modules/react-native-svg/src/web/types.ts
+--- a/node_modules/react-native-svg/src/web/types.ts
++++ b/node_modules/react-native-svg/src/web/types.ts
+@@ -1,4 +1,4 @@
+-import type { ImageProps as RNImageProps } from 'react-native';
++import type { AccessibilityProps, ImageProps as RNImageProps } from 'react-native';
+ import type {
+   NumberArray,
+   NumberProp,
+@@ -11,7 +11,7 @@
+ type LayoutEvent = object;
+ type EdgeInsetsProp = object;
+
+-export interface BaseProps {
++export interface BaseProps extends Pick<AccessibilityProps, 'accessibilityElementsHidden' | 'importantForAccessibility'> {
+   accessible?: boolean;
+   accessibilityLabel?: string;
+   accessibilityHint?: string;
+diff --git a/node_modules/react-native-svg/lib/typescript/web/types.d.ts b/node_modules/react-native-svg/lib/typescript/web/types.d.ts
+--- a/node_modules/react-native-svg/lib/typescript/web/types.d.ts
++++ b/node_modules/react-native-svg/lib/typescript/web/types.d.ts
+@@ -1,11 +1,11 @@
+-import type { ImageProps as RNImageProps } from 'react-native';
++import type { AccessibilityProps, ImageProps as RNImageProps } from 'react-native';
+ import type { NumberArray, NumberProp, TransformProps } from '../lib/extract/types';
+ type BlurEvent = object;
+ type FocusEvent = object;
+ type PressEvent = object;
+ type LayoutEvent = object;
+ type EdgeInsetsProp = object;
+-export interface BaseProps {
++export interface BaseProps extends Pick<AccessibilityProps, 'accessibilityElementsHidden' | 'importantForAccessibility'> {
+     accessible?: boolean;
+     accessibilityLabel?: string;
+     accessibilityHint?: string;
