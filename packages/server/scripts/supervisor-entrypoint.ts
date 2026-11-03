@@ -10,6 +10,7 @@ import {
 } from "../src/server/pid-lock.js";
 import { resolvePaseoHome } from "../src/server/paseo-home.js";
 import { loadPersistedConfig } from "../src/server/persisted-config.js";
+import { recordMarkerExit } from "../src/server/crash-reports/store.js";
 import { runSupervisor } from "./supervisor.js";
 import { resolveSupervisorLogFile } from "./supervisor-log-config.js";
 import { applySherpaLoaderEnv } from "../src/server/speech/providers/local/sherpa/sherpa-runtime-env.js";
@@ -173,6 +174,9 @@ async function main(): Promise<void> {
         })
       : undefined,
     restartOnCrash: true,
+    // A worker killed outright leaves its crash marker behind; the signal is only known here.
+    onWorkerExit: ({ pid, code, signal }) =>
+      recordMarkerExit({ home: paseoHome, name: "daemon", pid, exit: { code, signal } }),
     logFile: supervisorLogFile,
     onWorkerReady: async ({ listen }) => {
       await updatePidLock(paseoHome, { listen }, { ownerPid: process.pid });

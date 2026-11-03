@@ -5,9 +5,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   claimRunningMarker,
   crashReportsDirectory,
+  describeUncleanShutdown,
   pendingCrashReports,
   readLogTail,
   recordCrashReport,
+  recordMarkerExit,
   releaseRunningMarker,
   removeCrashReport,
 } from "./store.js";
@@ -126,6 +128,32 @@ describe("running marker", () => {
     });
 
     expect(previous).toEqual({ pid: 999_999, version: "1", startedAt: "2026-10-25T01:00:00.000Z" });
+  });
+
+  it("carries the signal its supervisor saw into the next run's report", () => {
+    const marker = { pid: 999_999, version: "1", startedAt: "2026-10-25T01:00:00.000Z" };
+    claimRunningMarker({ home, name: "daemon", version: "1" });
+    writeFileSync(path.join(crashReportsDirectory(home), "daemon.running"), JSON.stringify(marker));
+
+    // Another process's marker is left as it is.
+    recordMarkerExit({ home, name: "daemon", pid: 123, exit: { code: 1, signal: null } });
+    recordMarkerExit({
+      home,
+      name: "daemon",
+      pid: 999_999,
+      exit: { code: null, signal: "SIGKILL" },
+    });
+    const previous = claimRunningMarker({
+      home,
+      name: "daemon",
+      version: "2",
+      isAlive: () => false,
+    });
+
+    expect(previous?.exit).toEqual({ code: null, signal: "SIGKILL" });
+    expect(describeUncleanShutdown("The daemon", previous!)).toBe(
+      "The daemon (version 1, process 999999, started 2026-10-25T01:00:00.000Z) was killed by SIGKILL",
+    );
   });
 
   it("returns nothing when the previous run exited or is still running", () => {

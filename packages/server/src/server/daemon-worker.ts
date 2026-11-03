@@ -130,8 +130,11 @@ function startCrashReporting(paseoHome: string): void {
   if (previous) {
     reportCrash({
       process: "daemon",
-      kind: "unclean_shutdown",
+      // The supervisor writes the exit into the marker when it saw this run end.
+      kind: previous.exit ? "exit" : "unclean_shutdown",
       message: describeUncleanShutdown("The daemon", previous),
+      exitCode: previous.exit?.code ?? null,
+      signal: previous.exit?.signal ?? null,
     });
   }
 }

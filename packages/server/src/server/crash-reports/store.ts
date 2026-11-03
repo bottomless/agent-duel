@@ -173,6 +173,10 @@ const runningMarkerSchema = z.object({
   pid: z.number().int().positive(),
   version: z.string().nullable(),
   startedAt: z.iso.datetime(),
+  /** How the process ended, when a supervisor saw it end (`recordMarkerExit`). */
+  exit: z
+    .object({ code: z.number().int().nullable(), signal: z.string().min(1).max(64).nullable() })
+    .optional(),
 });
 export type RunningMarker = z.infer<typeof runningMarkerSchema>;
 
@@ -235,9 +239,34 @@ export function releaseRunningMarker(home: string, name: string): void {
   }
 }
 
+/**
+ * Writes how a process ended into the marker it left behind, so its next run reports the signal or
+ * exit code. A process killed outright cannot say how it ended; the supervisor that started it can.
+ * Synchronous, so it lands before the supervisor starts the next run. A marker that is gone or
+ * belongs to another process means the process exited on its own and reported itself.
+ */
+export function recordMarkerExit(input: {
+  readonly home: string;
+  readonly name: string;
+  readonly pid: number;
+  readonly exit: NonNullable<RunningMarker["exit"]>;
+}): void {
+  const file = markerPath(input.home, input.name);
+  try {
+    const marker = runningMarkerSchema.parse(JSON.parse(readFileSync(file, "utf8")));
+    if (marker.pid !== input.pid) return;
+    writeFileSync(file, JSON.stringify({ ...marker, exit: input.exit }));
+  } catch {
+    // No marker: the process removed it on its way out.
+  }
+}
+
 export function describeUncleanShutdown(label: string, marker: RunningMarker): string {
   const version = marker.version ? `version ${marker.version}, ` : "";
-  return `${label} (${version}process ${marker.pid}, started ${marker.startedAt}) ended without exiting`;
+  const run = `${label} (${version}process ${marker.pid}, started ${marker.startedAt})`;
+  if (marker.exit?.signal) return `${run} was killed by ${marker.exit.signal}`;
+  if (marker.exit) return `${run} ended with exit code ${marker.exit.code}`;
+  return `${run} ended without exiting`;
 }
 
 export function describeError(error: unknown): string {
