@@ -36,6 +36,7 @@ export class ArenaSubscription {
   private offUpdates: (() => void) | undefined;
   private offConnection: (() => void) | undefined;
   private failures = 0;
+  private notBattleRepository = false;
   private error: Error | null = null;
   private readonly waiters = new Set<
     (result: { isError: boolean; data?: ArenaSnapshot }) => void
@@ -69,10 +70,12 @@ export class ArenaSubscription {
       this.ownershipScheduled = false;
       if (this.consumers) {
         if (this.offUpdates) return;
+        this.notBattleRepository = false;
         this.offUpdates = this.client.subscribeArenaUpdates((packet) => {
           if (packet.subscriptionId === this.id) this.receive(packet);
         });
         this.offConnection = this.client.subscribeConnectionStatus((state) => {
+          if (this.notBattleRepository) return;
           if (state.status === "connected") {
             if (!this.id && !this.timer) this.connect();
           } else if (!this.timer) this.recover(new Error(i18n.t("arena.connectionInterrupted")));
@@ -162,6 +165,7 @@ export class ArenaSubscription {
       return;
     }
     const id = globalThis.crypto.randomUUID();
+    this.notBattleRepository = false;
     this.id = id;
     this.baselineTimeout = setTimeout(() => {
       if (this.id === id) this.recover(new Error(i18n.t("arena.snapshotTimeout")));
@@ -192,6 +196,14 @@ export class ArenaSubscription {
     }
     if (packet.frame.kind === "reset") {
       if (this.generation !== null && packet.generation !== this.generation) return;
+      if (packet.frame.code === "not_battle_repository") {
+        this.disconnect();
+        this.notBattleRepository = true;
+        this.failures = 0;
+        this.setError(null);
+        this.waiters.forEach((finish) => finish({ isError: false }));
+        return;
+      }
       if (packet.frame.code === "chat_too_large") {
         // Every reconnect would rebuild the same snapshot and be refused again; Retry still can.
         this.disconnect();

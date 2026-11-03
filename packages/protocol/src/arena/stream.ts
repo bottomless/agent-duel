@@ -30,8 +30,8 @@ export const ArenaStreamFrameSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("reset"),
     reason: z.string(),
-    // The chat's snapshot is past what a window's socket carries; resubscribing cannot help.
-    code: z.literal("chat_too_large").optional(),
+    // These terminal answers need an explicit refresh or battle action before resubscribing.
+    code: z.enum(["chat_too_large", "not_battle_repository"]).optional(),
   }),
 ]);
 export const ArenaStreamTargetSchema = z.discriminatedUnion("kind", [

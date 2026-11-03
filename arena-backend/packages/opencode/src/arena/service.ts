@@ -11064,8 +11064,24 @@ export const layer: Layer.Layer<
         // Initialize a new chat while the HTTP request's instance scope is still open.
         // Cold configuration acquisition cannot outlive that scope in the response body.
         const chat = yield* promise(() => store.chatForSession(rawSessionID))
-        if (!chat) yield* ensureChat(rawSessionID, rawUserID)
-        else {
+        if (!chat) {
+          if (!turnID) {
+            const info = yield* sessions.get(SessionID.make(rawSessionID)).pipe(Effect.mapError(error))
+            const repository = yield* git.run(["rev-parse", "--is-inside-work-tree"], {
+              cwd: info.directory,
+              env: { LC_ALL: "C" },
+            })
+            // Ordinary chats need no Git. Only an absent battle may end its watch quietly;
+            // an existing battle must still report failures if its repository disappears.
+            if (repository.exitCode === 128 && repository.stderr.toString().includes("not a git repository"))
+              return Stream.succeed({
+                kind: "reset",
+                code: "not_battle_repository",
+                reason: "No battle repository",
+              } satisfies ArenaStreamFrame)
+          }
+          yield* ensureChat(rawSessionID, rawUserID)
+        } else {
           yield* claimOwnership(store, chat, rawSessionID, accountID(rawUserID))
           yield* reconcileCanonicalAvailability(store, chat)
           yield* reconcileRewoundTurns(store, chat._id)

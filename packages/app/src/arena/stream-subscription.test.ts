@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { ArenaSnapshotSchema } from "@getpaseo/protocol/arena/rpc-schemas";
-import type { ArenaStreamPacket } from "@getpaseo/protocol/arena/stream";
+import { ArenaStreamPacketSchema, type ArenaStreamPacket } from "@getpaseo/protocol/arena/stream";
 import { ArenaSubscription, type ArenaStreamClient } from "./stream-subscription";
 import { ArenaChatTooLargeError } from "./chat-too-large";
 import { arenaRunStatusLabel } from "./run-stats";
@@ -62,6 +62,94 @@ const baseline = (): ArenaStreamPacket => ({
 });
 
 describe("Arena UI subscription", () => {
+  it("leaves a non-Git chat quiet across retry and reopening, then watches a battle", async () => {
+    vi.useFakeTimers();
+    const client = new Client();
+    const received: unknown[] = [];
+    const stream = new ArenaSubscription(client, "agent", { kind: "current" }, (state) =>
+      received.push(state),
+    );
+    let off = stream.retain();
+    const noRepository = () =>
+      client.emit(
+        ArenaStreamPacketSchema.parse({
+          generation: "no-repository",
+          sequence: 1,
+          frame: {
+            kind: "reset",
+            reason: "No battle repository",
+            code: "not_battle_repository",
+          },
+        }),
+      );
+    try {
+      await Promise.resolve();
+      noRepository();
+      await vi.advanceTimersByTimeAsync(70_000);
+      expect(stream.getError()).toBeNull();
+      expect(client.subscriptions).toHaveLength(1);
+      expect(received).toEqual([]);
+      expect(vi.getTimerCount()).toBe(0);
+      client.isConnected = false;
+      client.connection?.({ status: "disconnected" });
+      await vi.advanceTimersByTimeAsync(70_000);
+      expect(stream.getError()).toBeNull();
+      client.isConnected = true;
+      client.connection?.({ status: "connected" });
+      expect(client.subscriptions).toHaveLength(1);
+
+      const retry = stream.refresh();
+      noRepository();
+      await expect(retry).resolves.toEqual({ isError: false });
+      off();
+      await Promise.resolve();
+      off = stream.retain();
+      await Promise.resolve();
+      noRepository();
+      await vi.advanceTimersByTimeAsync(70_000);
+      expect(stream.getError()).toBeNull();
+      expect(client.subscriptions).toHaveLength(3);
+
+      // Starting a battle initializes Git and resumes the subscription after its mutation.
+      const resume = stream.pause();
+      resume();
+      const battle = snapshot();
+      battle.chat.status = "battle_active";
+      battle.chat.activeTurnID = "turn";
+      battle.turn = {
+        id: "turn",
+        index: 1,
+        state: "running",
+        prompt: "hello",
+        baseSHA: "sha",
+        comparisonState: "pending",
+        canVote: false,
+        canTie: false,
+        canDiscardBattle: false,
+        canResumeBattle: false,
+        canRetryResolution: false,
+        revealed: false,
+        createdAt: "now",
+        updatedAt: "now",
+      };
+      client.emit({ generation: "g", sequence: 1, frame: { kind: "snapshot", snapshot: battle } });
+      expect(received).toHaveLength(1);
+      for (let attempt = 0; attempt < 3; attempt++) {
+        client.emit({
+          generation: "g",
+          sequence: 2,
+          frame: { kind: "reset", reason: "Arena stream disconnected" },
+        });
+        await vi.advanceTimersByTimeAsync(1_000 * 2 ** attempt);
+      }
+      expect(stream.getError()?.message).toBe("Arena stream disconnected");
+    } finally {
+      off();
+      await Promise.resolve();
+      vi.useRealTimers();
+    }
+  });
+
   it("publishes renewed activity and ignores old packets after reconnect and chat return", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-09-25T10:02:00Z"));
