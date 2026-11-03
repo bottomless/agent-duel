@@ -9098,8 +9098,15 @@ export const layer: Layer.Layer<
       )
       // Every chat's, including those released before this was cleaned up after each turn.
       yield* discardSnapshotRepositories(store)
-      // Last: the chats above may have just resolved turns of their own.
-      yield* reconcileBattleMetrics(store)
+      // Last: the chats above may have just resolved turns of their own. Catch-up only, so a failure
+      // is logged rather than failing recovery, which every Arena call waits on.
+      yield* reconcileBattleMetrics(store).pipe(
+        Effect.catchCause((cause) =>
+          Cause.hasInterrupts(cause)
+            ? Effect.failCause(cause)
+            : Effect.logWarning("Arena could not reconcile battle metrics", { cause }),
+        ),
+      )
       if (idleUnloadStarted) return
       idleUnloadStarted = true
       // Wakes every second but passes at most once a minute, or once per threshold when it is shorter.
