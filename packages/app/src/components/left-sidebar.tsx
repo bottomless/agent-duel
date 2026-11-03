@@ -2,7 +2,6 @@ import { router, usePathname } from "expo-router";
 import {
   Archive,
   ArrowLeft,
-  CircleGauge,
   ChartNoAxesCombined,
   FolderPlus,
   GitBranch,
@@ -68,7 +67,7 @@ import type { SidebarProjectIconTarget } from "@/utils/sidebar-project-row-model
 import { type SidebarGroupMode, useSidebarViewStore } from "@/stores/sidebar-view-store";
 import { useKeyboardShortcutsStore } from "@/stores/keyboard-shortcuts-store";
 import { PluginSidebarItem } from "@/plugins/sidebar-items";
-import { builtinSidebarNavLabelKey } from "@/sidebar-nav/model";
+import type { PluginSidebarNavItem } from "@/sidebar-nav/model";
 import { useSidebarNavItems } from "@/sidebar-nav/use-sidebar-nav-items";
 import { usePanelStore } from "@/stores/panel-store";
 import { useWorkspaceLayoutStore } from "@/stores/workspace-layout-store";
@@ -76,12 +75,6 @@ import { useOwnsWindowChromeCorner, WindowChromeSafeArea } from "@/utils/desktop
 import { useCloseAgentListGesture } from "@/mobile-panels/gestures";
 import { MobilePanelOverlay } from "@/mobile-panels/presentation";
 import { buildOpenProjectRoute, buildSettingsRoute } from "@/utils/host-routes";
-import {
-  UsageSidebarItem,
-  UsageSidebarRoot,
-  useHasUsageSummary,
-  useOpenSidebarUsage,
-} from "@/usage";
 import { SidebarAgentListSkeleton } from "./sidebar-agent-list-skeleton";
 import { SidebarCalloutSlot } from "./sidebar-callout-slot";
 import { SidebarWorkspaceList } from "./sidebar-workspace-list";
@@ -131,7 +124,6 @@ interface SidebarLabels {
   settings: string;
   feedback: string;
   leaderboard: string;
-  usage: string;
   closeSidebar: string;
 }
 
@@ -240,7 +232,6 @@ export const LeftSidebar = memo(function LeftSidebar({ active }: { active: boole
       settings: t("sidebar.actions.settings"),
       feedback: t("feedback.sidebarAction"),
       leaderboard: t("leaderboard.title"),
-      usage: t(builtinSidebarNavLabelKey("usage")),
       closeSidebar: t("sidebar.actions.closeSidebar"),
     }),
     [t],
@@ -376,7 +367,7 @@ function IconTooltipContent({
   );
 }
 
-function SidebarFooter({
+export function SidebarFooter({
   handleOpenProject,
   handleHome,
   handleSettings,
@@ -396,69 +387,50 @@ function SidebarFooter({
     settings: string;
     feedback: string;
     leaderboard: string;
-    usage: string;
   };
   onBeforeNavigate?: () => void;
 }) {
   const newAgentKeys = useShortcutKeys("new-agent");
   const settingsKeys = useShortcutKeys("toggle-settings");
 
-  // One line of icons: Add project and Usage, then Home and Settings at the end.
+  // One line of icons: Add project, then Home and Settings at the end.
   return (
-    <UsageSidebarRoot>
-      <View style={styles.footerContainer} testID="sidebar-footer">
-        <SidebarFooterRows
-          onBeforeNavigate={onBeforeNavigate}
-          feedbackLabel={labels.feedback}
-          onFeedback={handleFeedback}
-          leaderboardLabel={labels.leaderboard}
-          onLeaderboard={handleLeaderboard}
+    <View style={styles.footerContainer} testID="sidebar-footer">
+      <SidebarFooterRows
+        onBeforeNavigate={onBeforeNavigate}
+        feedbackLabel={labels.feedback}
+        onFeedback={handleFeedback}
+        leaderboardLabel={labels.leaderboard}
+        onLeaderboard={handleLeaderboard}
+      />
+      <View style={styles.sidebarFooter} testID="sidebar-footer-bottom-line">
+        <FooterIconButton
+          onPress={handleOpenProject}
+          testID="sidebar-add-project"
+          label={labels.addProject}
+          icon={FolderPlus}
+          shortcutKeys={newAgentKeys}
         />
-        <View style={styles.sidebarFooter} testID="sidebar-footer-bottom-line">
-          <FooterIconButton
-            onPress={handleOpenProject}
-            testID="sidebar-add-project"
-            label={labels.addProject}
-            icon={FolderPlus}
-            shortcutKeys={newAgentKeys}
-          />
-          <SidebarUsageIcon label={labels.usage} />
-          <View style={styles.footerSpacer} />
-          <FooterIconButton
-            onPress={handleHome}
-            testID="sidebar-home"
-            label={labels.home}
-            icon={Home}
-          />
-          <FooterIconButton
-            onPress={handleSettings}
-            testID="sidebar-settings"
-            label={labels.settings}
-            icon={Settings}
-            shortcutKeys={settingsKeys}
-          />
-        </View>
+        <View style={styles.footerSpacer} />
+        <FooterIconButton
+          onPress={handleHome}
+          testID="sidebar-home"
+          label={labels.home}
+          icon={Home}
+        />
+        <FooterIconButton
+          onPress={handleSettings}
+          testID="sidebar-settings"
+          label={labels.settings}
+          icon={Settings}
+          shortcutKeys={settingsKeys}
+        />
       </View>
-    </UsageSidebarRoot>
+    </View>
   );
 }
 
-function SidebarUsageIcon({ label }: { label: string }) {
-  const openUsage = useOpenSidebarUsage();
-  return (
-    <FooterIconButton
-      onPress={openUsage}
-      testID="sidebar-usage-icon"
-      label={label}
-      icon={CircleGauge}
-    />
-  );
-}
-
-/**
- * The footer rows: Feedback when this daemon takes it, then the Usage item and plugin rows in the
- * user's `sidebarFooterItems` order. The Usage item is left out while it has no summary to show.
- */
+/** Feedback and leaderboard precede the user's visible plugin footer rows. */
 function SidebarFooterRows({
   onBeforeNavigate,
   feedbackLabel,
@@ -473,10 +445,9 @@ function SidebarFooterRows({
   onLeaderboard: (() => void) | null;
 }) {
   const { items } = useSidebarNavItems("footer");
-  const hasUsageSummary = useHasUsageSummary();
   const rowsRef = useRef<View | null>(null);
   const visibleItems = items.filter(
-    (item) => item.visible && (item.kind === "plugin" || hasUsageSummary),
+    (item): item is PluginSidebarNavItem => item.kind === "plugin" && item.visible,
   );
   if (visibleItems.length === 0 && !onFeedback && !onLeaderboard) return null;
   return (
@@ -502,19 +473,15 @@ function SidebarFooterRows({
             variant="inline"
           />
         ) : null}
-        {visibleItems.map((item) =>
-          item.kind === "plugin" ? (
-            <PluginSidebarItem
-              key={item.key}
-              group={item.group}
-              section="footer"
-              fallbackAnchorRef={rowsRef}
-              onBeforeNavigate={onBeforeNavigate}
-            />
-          ) : (
-            <UsageSidebarItem key={item.key} />
-          ),
-        )}
+        {visibleItems.map((item) => (
+          <PluginSidebarItem
+            key={item.key}
+            group={item.group}
+            section="footer"
+            fallbackAnchorRef={rowsRef}
+            onBeforeNavigate={onBeforeNavigate}
+          />
+        ))}
       </View>
       <SidebarSeparator testID="sidebar-footer-separator" />
     </>
@@ -1101,7 +1068,7 @@ const styles = StyleSheet.create((theme) => ({
   footerSpacer: {
     flex: 1,
   },
-  // Feedback, Usage and plugin rows sit above the footer's icon line, spaced like the header nav
+  // Feedback, leaderboard and plugin rows sit above the footer's icon line, spaced like the header nav
   // rows.
   footerRows: {
     paddingHorizontal: theme.spacing[2],
