@@ -23,7 +23,8 @@ session locations. A second graph creates a separate session lifetime and can ra
 or winner promotion. The active engine typecheck excludes
 retained 1.x modules; check their imports separately when merging. Preview integration belongs to
 the V2 engine plugin. The Arena `info + parts` transcript is a wire projection; fork and graft canonical V2 messages so provider replay state, attachments, and
-compaction checkpoints survive a vote.
+compaction checkpoints survive a vote. Keep canonical history independent of SDK-owned stream
+metadata: a provider can still extend its reasoning state after answer text begins.
 
 Arena state is canonical local data. The runtime stores it in SQLite at
 `$PASEO_HOME/arena/arena.sqlite` and keeps artifact bytes in

@@ -927,7 +927,8 @@ function finishReason(value: LanguageModelV3FinishReason): FinishReason {
 }
 
 function providerMetadata(value: unknown) {
-  return Schema.is(ProviderMetadata)(value) ? value : undefined
+  // Providers can keep updating nested metadata after emitting it. Projection freezes its copy.
+  return Schema.is(ProviderMetadata)(value) ? structuredClone(value) : undefined
 }
 
 function jsonObject(input: Record<string, unknown>) {
