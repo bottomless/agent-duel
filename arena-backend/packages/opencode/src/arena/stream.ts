@@ -5,7 +5,7 @@ import { readRecord, type ArenaLive, type LiveChange, type LiveNotification } fr
 export type Frame =
   | { kind: "snapshot"; snapshot: ArenaSchema.Snapshot }
   | { kind: "changes"; changes: Array<LiveChange | { kind: "state"; snapshot: ArenaSchema.Snapshot }> }
-  | { kind: "reset"; reason: string }
+  | { kind: "reset"; reason: string; code?: "not_battle_repository" }
 
 interface Source {
   live: ArenaLive

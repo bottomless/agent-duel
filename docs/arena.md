@@ -113,10 +113,13 @@ window. The daemon delivers updates only to the subscribing socket; closing a
 window must not close another window's watch.
 
 The daemon supplies the resolved account when opening a stream. A first watch
-can create or claim the chat, so it must preserve the ownership contract in
+can create or claim a Git-backed chat, so it must preserve the ownership contract in
 [data-model.md](data-model.md) without an extra transcript read. Recheck canonical checkout availability when an existing
 chat opens a stream. While blocked, the stream’s existing maintenance timer checks for
 a filesystem repair once a second and publishes recovery without rereading transcripts.
+An ordinary chat in a folder without Git has no battle to watch. Leave it without a battle
+disconnect callout; starting a battle prepares its repository and opens a new watch. An existing
+battle still reports stream failures when its repository becomes unavailable.
 
 Begin with a redacted snapshot, reconciled with events received during the read
 and unfinished token text held in memory. Then apply messages and parts by ID.
