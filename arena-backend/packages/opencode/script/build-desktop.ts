@@ -12,6 +12,7 @@ import { chmodSync, copyFileSync, existsSync, readFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import path from "node:path"
 import type { BunPlugin } from "bun"
+import { desktopProviders } from "./desktop-providers"
 
 const [outfile, rawDefines] = process.argv.slice(2)
 if (!outfile || !rawDefines) throw new Error("usage: build-desktop.ts <outfile> <defines as JSON>")
@@ -151,11 +152,12 @@ const counted = (plugin: BunPlugin): BunPlugin => ({
   },
 })
 
+const providers = desktopProviders()
 const result = await Bun.build({
   entrypoints: [path.resolve(import.meta.dirname, "../src/index.ts")],
   conditions: ["browser"],
   define,
-  plugins: shipped.map((item) => counted(item.plugin)),
+  plugins: [providers.plugin, ...shipped.map((item) => counted(item.plugin))],
   compile: {
     outfile: path.resolve(outfile),
     // A long-lived engine otherwise keeps its peak heap: collect more often and keep it smaller.
@@ -167,6 +169,8 @@ if (!result.success) {
   for (const log of result.logs) console.error(log)
   process.exit(1)
 }
+
+providers.check()
 
 const missed = shipped.filter((item) => loads.get(item.plugin.name) !== 1)
 if (missed.length > 0) {

@@ -5,7 +5,11 @@ repository is the Paseo shell it runs inside.
 
 The engine is `arena-backend/packages/opencode/src/arena/` — a module inside a vendored OpenCode
 fork, isolated from the root npm workspace and installed with Bun. Packaged desktop launches a
-compiled copy; source development launches it from `PASEO_ARENA_BACKEND_ROOT`. The daemon exposes it at `/arena/...`
+compiled copy with Arena's provider SDK pinned to the engine's `package.json` and bundled inside
+the executable. Arena provider initialization must work without npm or a package download; model
+requests still need the network. Check this through the desktop build, since a source runtime can
+resolve installed packages that a compiled Bun executable cannot. Source development launches
+from `PASEO_ARENA_BACKEND_ROOT`. The daemon exposes it at `/arena/...`
 through `packages/server/src/server/agent/providers/opencode/v2/arena.ts`, which the protocol wraps as
 `arena.*` RPCs and `packages/app/src/arena/` renders. Arena's app-wide pages, including
 [My leaderboard](accounts.md#personal-leaderboard), share Expo Router's navigation context.
