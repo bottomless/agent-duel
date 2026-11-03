@@ -1467,10 +1467,14 @@ attachments out of the summary and replay them after it. Disabling automatic com
 request unmarked.
 
 An engine that sends no header gets only the endpoint check, which is what it got from the provider
-before. The engine keeps its own 272K history check (`isOverflow` in `session/compaction.ts`) so
-chats still compact while an older control plane ignores the header; the service's level is never
-above it and counts the whole request, so it fires first. Keep a small endpoint away from desktops
-older than this release: they compact only at their own 272K estimate.
+before. Desktops older than 0.4.0-beta.16 send no header and compact at their own 272K history
+estimate, so keep a small endpoint away from them. The current engine has no Arena level of its
+own: `isOverflow` in `session/compaction.ts` checks its history estimate only against the contestant
+window (`arena/model-profile.ts`). Do not add a level back. The engine's estimate is not calibrated,
+so for a model that counts fewer tokens than the estimate it reaches a fixed level before the
+service does, and the chat compacts early. The estimate also leaves out provider options: they hold
+the sealed reasoning, several encoded copies per step, so counting them let one long reasoning step
+pass the contestant window.
 
 A compaction summary that ends idle, at its output cap, or empty must never become the history. A
 finished summary hides everything before it, so the contestant continues with no memory of its task

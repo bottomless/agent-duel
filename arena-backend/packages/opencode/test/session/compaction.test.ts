@@ -36,6 +36,8 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { ArenaRuntime } from "@/arena/runtime"
 import { ModelIdleError } from "@/arena/model-idle"
 import { contestant, medium } from "@/arena/model-profile"
+import { ProviderTransform } from "@/provider/transform"
+import { DEFAULT_COMPACT_AT } from "@agent-duel/arena-service/pool"
 
 const summary = Layer.succeed(
   SessionSummary.Service,
@@ -500,12 +502,13 @@ describe("session.compaction.isOverflow", () => {
   for (const profile of [contestant, medium]) {
     for (const auto of [true, false]) {
       it.live(
-        `caps Arena ${profile.id} history at 272k estimated tokens with auto=${auto}`,
+        `leaves Arena ${profile.id} compaction to the control plane below the window with auto=${auto}`,
         provideTmpdirInstance(
           () =>
             Effect.gen(function* () {
               const compact = yield* SessionCompaction.Service
               const model = createModel({ context: profile.contextWindow, output: profile.outputLimit })
+              const window = profile.contextWindow - ProviderTransform.maxOutputTokens(model)
               const blinded = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
               const sessionID = SessionID.descending()
               const messageID = MessageID.ascending()
@@ -525,19 +528,23 @@ describe("session.compaction.isOverflow", () => {
               part.text = "x"
               const serialized = JSON.stringify(yield* MessageV2.toModelMessagesEffect(messages, model))
               const overhead = serialized.length - 1
+              const sized = (tokens: number) =>
+                Effect.gen(function* () {
+                  part.text = "x".repeat(tokens * 4 - overhead)
+                  expect(Token.estimate(JSON.stringify(yield* MessageV2.toModelMessagesEffect(messages, model)))).toBe(
+                    tokens,
+                  )
+                  return yield* compact.isOverflow({ tokens: blinded, model, messages })
+                })
               const previous = process.env.OPENCODE_ARENA
               const results = yield* Effect.gen(function* () {
-                delete process.env.OPENCODE_ARENA
-                part.text = "x".repeat(272_000 * 4 - overhead)
-                expect(Token.estimate(JSON.stringify(yield* MessageV2.toModelMessagesEffect(messages, model)))).toBe(
-                  272_000,
-                )
-                const outsideArena = yield* compact.isOverflow({ tokens: blinded, model, messages })
                 process.env.OPENCODE_ARENA = "1"
-                const atLimit = yield* compact.isOverflow({ tokens: blinded, model, messages })
-                part.text = part.text.slice(4)
-                const belowLimit = yield* compact.isOverflow({ tokens: blinded, model, messages })
-                return [outsideArena, belowLimit, atLimit]
+                // The control plane's savings level is not an engine trigger: its level depends on
+                // the hidden model, and an uncalibrated engine estimate would reach it first.
+                const savingsLevel = yield* sized(DEFAULT_COMPACT_AT)
+                const belowWindow = yield* sized(window - 1)
+                const atWindow = yield* sized(window)
+                return [savingsLevel, belowWindow, atWindow]
               }).pipe(
                 Effect.ensuring(
                   Effect.sync(() => {
@@ -614,6 +621,89 @@ describe("session.compaction.isOverflow", () => {
           ),
         )
         expect(arena).toEqual([true, false])
+      }),
+    ),
+  )
+
+  it.live(
+    "leaves sealed Arena reasoning out of the history estimate",
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const compact = yield* SessionCompaction.Service
+        const model = createModel({ context: contestant.contextWindow, output: contestant.outputLimit })
+        const blinded = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+        // The model messages hold this on the reasoning part, the tool call and the tool result:
+        // about 1.05M estimated tokens if counted, against 468K usable.
+        const envelope = "arena_reasoning_v1." + "A".repeat(1_400_000)
+        const metadata = { openrouter: { reasoning_details: [{ type: "reasoning.encrypted", data: envelope }] } }
+        const sessionID = SessionID.descending()
+        const userID = MessageID.ascending()
+        const assistantID = MessageID.ascending()
+        const history: SessionV1.WithParts[] = [
+          {
+            info: { id: userID, sessionID, role: "user", agent: "build", model: ref, time: { created: 1 } },
+            parts: [{ id: PartID.ascending(), sessionID, messageID: userID, type: "text", text: "Run one command" }],
+          },
+          {
+            info: {
+              id: assistantID,
+              sessionID,
+              role: "assistant",
+              mode: "build",
+              agent: "build",
+              parentID: userID,
+              path: { cwd: "/tmp", root: "/tmp" },
+              cost: 0,
+              tokens: blinded,
+              modelID: ref.modelID,
+              providerID: ref.providerID,
+              time: { created: 2 },
+              finish: "end_turn",
+            },
+            parts: [
+              {
+                id: PartID.ascending(),
+                sessionID,
+                messageID: assistantID,
+                type: "reasoning",
+                text: "[Thinking redacted]",
+                metadata,
+                time: { start: 1, end: 2 },
+              },
+              {
+                id: PartID.ascending(),
+                sessionID,
+                messageID: assistantID,
+                type: "tool",
+                callID: "call-1",
+                tool: "bash",
+                metadata,
+                state: {
+                  status: "completed",
+                  input: { command: "echo ok" },
+                  output: "ok",
+                  title: "Bash",
+                  metadata: {},
+                  time: { start: 2, end: 3 },
+                },
+              },
+            ],
+          },
+        ]
+        const previous = process.env.OPENCODE_ARENA
+        process.env.OPENCODE_ARENA = "1"
+        const result = yield* compact.isOverflow({ tokens: blinded, model, messages: history }).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (previous === undefined) delete process.env.OPENCODE_ARENA
+              else process.env.OPENCODE_ARENA = previous
+            }),
+          ),
+        )
+        const sent = JSON.stringify(yield* MessageV2.toModelMessagesEffect(history, model))
+
+        expect(sent.split(envelope)).toHaveLength(4)
+        expect(result).toBe(false)
       }),
     ),
   )
