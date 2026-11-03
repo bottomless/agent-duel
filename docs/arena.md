@@ -7,7 +7,10 @@ The engine is `arena-backend/packages/opencode/src/arena/` — a module inside a
 fork, isolated from the root npm workspace and installed with Bun. Packaged desktop launches a
 compiled copy; source development launches it from `PASEO_ARENA_BACKEND_ROOT`. The daemon exposes it at `/arena/...`
 through `packages/server/src/server/agent/providers/opencode/v2/arena.ts`, which the protocol wraps as
-`arena.*` RPCs and `packages/app/src/arena/` renders.
+`arena.*` RPCs and `packages/app/src/arena/` renders. Arena's app-wide pages, including
+[My leaderboard](accounts.md#personal-leaderboard), share Expo Router's navigation context.
+Import their navigation hooks from `expo-router/react-navigation`: Expo 57 bundles its own
+React Navigation, so the standalone package reads a different context and can crash a routed page.
 
 Arena uses OpenCode's V2 session store and runner. Install its routes and engine plugin into the
 same Core service graph as the native `/api` routes. A second graph creates a separate session

@@ -2,7 +2,7 @@ import { ScrollView, Text, View } from "react-native";
 import { useCallback, useMemo } from "react";
 import { useFetchQuery } from "@/data/query";
 import type { Theme } from "@/styles/theme";
-import { useIsFocused } from "@react-navigation/native";
+import { useIsFocused } from "expo-router/react-navigation";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
 import { useAccountsEndpoint } from "@/accounts/endpoint";
