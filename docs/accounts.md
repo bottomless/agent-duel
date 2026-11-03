@@ -223,7 +223,10 @@ Without a key, Arena refuses to start the same way it does when nobody is signed
 battle starts, the app checks for a key instead of letting that refusal surface: it hands over the
 stored key, or stops with a message that points to Settings. The check never replaces a key the
 daemon already holds; two clients with different keys would otherwise restart Arena under each
-other's battles.
+other's battles. If OpenRouter rejects a configured key with HTTP 401, each failed contestant pane
+reads "OpenRouter rejected your key. Check the key in Settings." The message names no contestant
+or serving provider and includes no upstream text. Hosted builds keep their existing failure
+message because the key belongs to the service.
 
 BYOK battles are blinded the same way, but nothing enforces it; see [Blinding](arena.md#blinding).
 

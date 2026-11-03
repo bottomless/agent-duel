@@ -8,7 +8,37 @@ import {
   readCompactionRequired,
   readNetworkUnavailable,
   readPaymentError,
+  runAuthMessage,
 } from "./request-error"
+
+test("recognizes only a structured rejected-key run error and drops provider text", () => {
+  const error = (statusCode: number) =>
+    `Contestant assistant error: ${JSON.stringify({
+      name: "APIError",
+      data: {
+        statusCode,
+        message: "User not found: private-model at private-provider",
+        responseBody: "private provider response",
+      },
+    })}`
+  expect(runAuthMessage(`Other run failure\n${error(401)}`)).toBe(
+    "OpenRouter rejected your key. Check the key in Settings.",
+  )
+  for (const other of [
+    error(400),
+    error(402),
+    error(429),
+    error(500),
+    "User not found: provider.auth HTTP 401",
+    'Contestant assistant error: {"name":"UnknownError","data":{"statusCode":401}}',
+    'Contestant assistant error: {"name":"APIError","data":{"message":"401"}}',
+    'Contestant assistant error: {"name":"APIError","data":{"statusCode":"401"}}',
+    "Contestant assistant error: invalid JSON",
+    'Contestant assistant error: {"name":"APIError","data":null}',
+  ]) {
+    expect(runAuthMessage(other)).toBeUndefined()
+  }
+})
 
 test("classifies only documented payment limit sources and discards upstream identity", () => {
   for (const [source, code] of [

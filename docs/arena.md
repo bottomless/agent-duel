@@ -1314,7 +1314,9 @@ other decisions, resolve on the control plane before recording the local choice.
 that assignment kind's decisions, and the first is immutable: a retry returns the committed
 decision, which the desktop must honor. Write the resolution and revealed names together so no
 unresolved record contains identities. The server retains assignments permanently, so an old
-unresolved battle remains resolvable. Mask failed run text as "Contestant run failed".
+unresolved battle remains resolvable. Mask failed run text as "Contestant run failed", except for
+approved neutral recovery messages. Rejected user keys have a BYOK-only message; see
+[Bring your own key](accounts.md#bring-your-own-key).
 
 A committed `discard` has no side to honour. Every request that meets it must finish that discard
 (`discardCommitted`), including after another window's Retry or reply claimed the turn back to

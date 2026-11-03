@@ -15,7 +15,8 @@ import { ArenaActiveOperation } from "./operation-tracker"
 import type { BattleSnapshot, HiddenAssignment, RunDocument, SingleAgentRatingDocument } from "./records"
 import { ArenaSchema } from "./schema"
 import { ArenaResponseRecovery } from "./response-recovery"
-import { requestTooLargeMessage, runPaymentMessage } from "@agent-duel/arena-service/request-error"
+import { requestTooLargeMessage, runAuthMessage, runPaymentMessage } from "@agent-duel/arena-service/request-error"
+import { arenaCredentials } from "./credentials"
 
 export type PublicIdentity = {
   readonly name: string
@@ -241,6 +242,7 @@ const ACTIVE_TURN_STATES = new Set([
 export function project(snapshot: BattleSnapshot) {
   const turn = snapshot.turn
   const revealed = identitiesRevealed(turn?.resolution)
+  const byok = arenaCredentials()?.mode === "byok"
   // Progress is stored on the turn, so it can hold a step name from an older or newer build. The
   // snapshot schema accepts only this build's names, and one unknown name would fail the snapshot.
   const operationProgress = turn?.operationProgress?.filter(
@@ -420,16 +422,18 @@ export function project(snapshot: BattleSnapshot) {
         ...(run.runState === "interrupted"
           ? { error: INTERRUPTED_RUN_MESSAGE }
           : run.error
-          ? {
-              error: run.error.includes(ArenaResponseRecovery.EXHAUSTED)
-                ? ArenaResponseRecovery.EXHAUSTED
-                : run.error.includes(ArenaResponseRecovery.IDLE_EXHAUSTED)
-                  ? ArenaResponseRecovery.IDLE_EXHAUSTED
-                  : run.error.includes(requestTooLargeMessage)
-                    ? requestTooLargeMessage
-                    : (runPaymentMessage(run.error) ?? (revealed ? run.error : "Contestant run failed")),
-            }
-          : {}),
+            ? {
+                error: run.error.includes(ArenaResponseRecovery.EXHAUSTED)
+                  ? ArenaResponseRecovery.EXHAUSTED
+                  : run.error.includes(ArenaResponseRecovery.IDLE_EXHAUSTED)
+                    ? ArenaResponseRecovery.IDLE_EXHAUSTED
+                    : run.error.includes(requestTooLargeMessage)
+                      ? requestTooLargeMessage
+                      : (runPaymentMessage(run.error) ??
+                        (byok ? runAuthMessage(run.error) : undefined) ??
+                        (revealed ? run.error : "Contestant run failed")),
+              }
+            : {}),
         ...(run.startedAt ? { startedAt: run.startedAt } : {}),
         ...(run.firstEventAt ? { firstEventAt: run.firstEventAt } : {}),
         ...(run.lastEventAt ? { lastEventAt: run.lastEventAt } : {}),

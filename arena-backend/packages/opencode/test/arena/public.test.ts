@@ -1,6 +1,7 @@
 import { ArenaResponseRecovery } from "@/arena/response-recovery"
 import { requestTooLargeMessage } from "@agent-duel/arena-service/request-error"
-import { describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
+import { setArenaCredentials } from "../../src/arena/credentials"
 import type { ArenaActiveOperation } from "../../src/arena/operation-tracker"
 import { jsonValue, parseSnapshot, project } from "../../src/arena/public"
 import type { BattleSnapshot } from "../../src/arena/records"
@@ -124,6 +125,66 @@ function containsUndefined(value: unknown): boolean {
 }
 
 describe("ArenaPublic", () => {
+  afterEach(() => setArenaCredentials(undefined))
+
+  test.each([false, true])("explains a rejected BYOK key on both sides, revealed=%s", (revealed) => {
+    setArenaCredentials({ mode: "byok", openRouterApiKey: "test-key", controlTokenHash: "test-hash" })
+    const input = snapshot(revealed)
+    const run = input.runs[0]!
+    const runs = (["a", "b"] as const).map((side) => ({
+      ...run,
+      _id: `run-${side}`,
+      side,
+      rootSessionID: `session-${side}`,
+      runState: "error" as const,
+      error: `Contestant assistant error: ${JSON.stringify({
+        name: "APIError",
+        data: {
+          statusCode: 401,
+          message: `User not found: private-provider private-model-${side}`,
+          responseBody: JSON.stringify({ error: { message: `private-provider private-model-${side}` } }),
+        },
+      })}`,
+    }))
+    const output = project({ ...input, runs })
+    expect(output.runs.map((run) => run.error)).toEqual([
+      "OpenRouter rejected your key. Check the key in Settings.",
+      "OpenRouter rejected your key. Check the key in Settings.",
+    ])
+    expect(JSON.stringify(output)).not.toMatch(/private-provider|private-model|User not found/)
+    if (!revealed) expect(output.runs.every((run) => run.identity === undefined)).toBe(true)
+  })
+
+  test.each([false, true])("keeps hosted auth errors unchanged, revealed=%s", (revealed) => {
+    setArenaCredentials({
+      mode: "hosted",
+      token: "test-token",
+      controlPlaneUrl: "https://control-plane.invalid",
+      researchPartition: "test-partition",
+      researchAccountID: "test-account",
+      controlTokenHash: "test-hash",
+    })
+    const input = snapshot(revealed)
+    const error = `Contestant assistant error: ${JSON.stringify({
+      name: "APIError",
+      data: { statusCode: 401, message: "Arena contestant request failed" },
+    })}`
+    input.runs[0]!.runState = "error"
+    input.runs[0]!.error = error
+    expect(project(input).runs[0]?.error).toBe(revealed ? error : "Contestant run failed")
+  })
+
+  test.each([400, 429, 500])("keeps unrelated BYOK failures masked, status=%s", (statusCode) => {
+    setArenaCredentials({ mode: "byok", openRouterApiKey: "test-key", controlTokenHash: "test-hash" })
+    const input = snapshot(false)
+    input.runs[0]!.runState = "error"
+    input.runs[0]!.error = `Contestant assistant error: ${JSON.stringify({
+      name: "APIError",
+      data: { statusCode, message: "private-provider failure" },
+    })}`
+    expect(project(input).runs[0]?.error).toBe("Contestant run failed")
+  })
+
   test("projects active transition operations only for current active turns", () => {
     const input = snapshot(true)
     input.turn!.activeOperations = ["preparing_workspaces", "applying_changes"]

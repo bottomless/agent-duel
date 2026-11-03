@@ -168,3 +168,20 @@ export function runPaymentMessage(error: string) {
     if (payload.data.statusCode === 402) return paymentMessage(402, body)
   }
 }
+
+/** Only a BYOK caller may attribute a rejected key to the user. */
+export function runAuthMessage(error: string) {
+  const prefix = "Contestant assistant error: "
+  for (const line of error.split("\n")) {
+    if (!line.startsWith(prefix)) continue
+    let payload: unknown
+    try {
+      payload = JSON.parse(line.slice(prefix.length))
+    } catch {
+      continue
+    }
+    if (!isRecord(payload) || payload.name !== "APIError" || !isRecord(payload.data)) continue
+    if (payload.data.statusCode === 401) return "OpenRouter rejected your key. Check the key in Settings."
+  }
+  return undefined
+}
