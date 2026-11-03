@@ -18,7 +18,7 @@ import {
   removeSentContextAttachments,
   removeWorkspaceAttachmentsMatching,
 } from "./workspace-cleanup";
-import { useClearReviewDraft } from "@/review/store";
+import { clearSentReviewDraftComments } from "@/review/store";
 
 interface WorkspaceAttachmentBindingInput {
   normalAttachments: UserComposerAttachment[];
@@ -99,7 +99,6 @@ function useWorkspaceAttachmentBinding({
   workspaceAttachments,
   onOpenWorkspaceAttachment,
 }: WorkspaceAttachmentBindingInput): ComposerWorkspaceAttachmentBinding {
-  const clearReviewDraft = useClearReviewDraft();
   const [suppressedKeys, setSuppressedKeys] = useState<readonly string[]>([]);
   const workspaceAttachmentKeys = useMemo(
     () => workspaceAttachments.map(getAttachmentKey),
@@ -143,17 +142,17 @@ function useWorkspaceAttachmentBinding({
     setSuppressedKeys((current) => (current.includes(key) ? current : [...current, key]));
   }, []);
 
-  const clearSentAttachments = useCallback(
-    (attachments: readonly ComposerAttachment[]) => {
-      for (const attachment of attachments) {
-        if (attachment.kind === "review") {
-          clearReviewDraft({ key: attachment.reviewDraftKey });
-        }
+  const clearSentAttachments = useCallback((attachments: readonly ComposerAttachment[]) => {
+    for (const attachment of attachments) {
+      if (attachment.kind === "review") {
+        clearSentReviewDraftComments({
+          key: attachment.reviewDraftKey,
+          comments: attachment.draftComments,
+        });
       }
-      removeSentContextAttachments(attachments);
-    },
-    [clearReviewDraft],
-  );
+    }
+    removeSentContextAttachments(attachments);
+  }, []);
 
   const removeAttachment = useCallback(
     ({ selectedAttachments: current, index }: RemoveWorkspaceAttachmentInput) => {

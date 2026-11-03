@@ -301,7 +301,10 @@ The placeholder names the target
 and the verb (`Steer Agent A`, `Ask both a follow-up before choosing`) and the send button carries
 the verb. If the selected target stops being valid, keep the draft, clear the selection, and
 require another pick instead of rerouting it. Prompts and replies carry attachments (see
-**Attachments** under [A turn](#a-turn)). Steering waits for
+**Attachments** under [A turn](#a-turn)). While a battle is unresolved, send saved inline review
+comments through the composer chip and its Both, A and B targets. Changes offers no direct
+Send feedback action until resolution: a canonical chat send cannot reach the contestants.
+Comments added while a send is pending stay as drafts for the next message. Steering waits for
 the current tool call or response to finish, so until the next model request includes a message,
 show it as queued at the end of that contestant's thread, never as sent: a one-line bubble, a line
 naming its images and files, and under the queue one muted line with what it waits for

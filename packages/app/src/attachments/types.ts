@@ -4,6 +4,7 @@ import type {
   UploadedFileAttachment,
 } from "@getpaseo/protocol/messages";
 import type { PluginResourceComposerAttachment } from "@/plugins/attachments";
+import type { ReviewDraftComment } from "@/review/state";
 
 /**
  * `inline` holds the image itself as a data URL in `storageKey`: an image a replayed message carried,
@@ -107,6 +108,8 @@ export type WorkspaceComposerAttachment =
       kind: "review";
       attachment: Extract<AgentAttachment, { type: "review" }>;
       reviewDraftKey: string;
+      /** Local versions for acknowledgement; only `attachment` goes to the agent. */
+      draftComments: readonly ReviewDraftComment[];
       commentCount: number;
     };
 

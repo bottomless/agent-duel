@@ -259,6 +259,7 @@ describe("buildReviewAttachmentSnapshot", () => {
     expect(snapshot).toEqual({
       kind: "review",
       reviewDraftKey: "review:key",
+      draftComments: [makeComment()],
       commentCount: 1,
       attachment: {
         type: "review",

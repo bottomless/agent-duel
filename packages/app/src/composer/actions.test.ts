@@ -115,6 +115,7 @@ function reviewWorkspaceAttachment(
   return {
     kind: "review",
     reviewDraftKey: `review:${body}`,
+    draftComments: [],
     commentCount: 1,
     attachment,
   };

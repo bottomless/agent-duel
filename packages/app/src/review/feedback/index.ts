@@ -12,6 +12,7 @@ export interface ReviewFeedbackSnapshot {
   attachment: FeedbackAttachment | null;
   recipients: readonly FeedbackRecipient[];
   connected: boolean;
+  hasUnresolvedBattle: boolean;
 }
 export interface ReviewFeedbackPorts {
   read: () => ReviewFeedbackSnapshot;
@@ -29,7 +30,7 @@ export interface ReviewFeedbackState {
   commentCount: number;
   sendableCommentCount: number;
   recipients: readonly FeedbackRecipient[];
-  disabledReason: "no-agents" | "disconnected" | "no-context" | null;
+  disabledReason: "unresolved-battle" | "no-agents" | "disconnected" | "no-context" | null;
   canSend: boolean;
 }
 
@@ -162,7 +163,8 @@ function createFeedbackView(
 
 function deriveState(snapshot: ReviewFeedbackSnapshot, phase: FeedbackPhase): ReviewFeedbackState {
   let disabledReason: ReviewFeedbackState["disabledReason"] = null;
-  if (snapshot.recipients.length === 0) disabledReason = "no-agents";
+  if (snapshot.hasUnresolvedBattle) disabledReason = "unresolved-battle";
+  else if (snapshot.recipients.length === 0) disabledReason = "no-agents";
   else if (!snapshot.connected) disabledReason = "disconnected";
   else if (!snapshot.attachment) disabledReason = "no-context";
   return {
