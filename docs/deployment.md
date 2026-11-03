@@ -1,7 +1,7 @@
 # Deployment
 
-This repository produces one release artifact: the macOS desktop app. The hosted control plane it
-signs in to is deployed from a separate private repository.
+This repository produces one release artifact: the desktop app, for macOS and Linux. The hosted
+control plane it signs in to is deployed from a separate private repository.
 
 The browser renderer is a development and QA surface. Do not deploy
 `packages/app/dist` as a product.

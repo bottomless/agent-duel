@@ -21,6 +21,10 @@ const patchedPackages = [
     patchPrefix: "react-native-gesture-handler+",
   },
   {
+    nodeModulesPath: "node_modules/app-builder-lib",
+    patchPrefix: "app-builder-lib+",
+  },
+  {
     nodeModulesPath: "packages/server/node_modules/@opencode-ai/sdk",
     patchPrefix: "@opencode-ai+sdk+",
     cwd: "packages/server",

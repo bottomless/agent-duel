@@ -16,6 +16,30 @@ npm install
 cd arena-backend && bun install
 ```
 
+### Linux
+
+- Install the runtime packages the [Linux release](desktop-releases.md#in-app-updates) needs;
+  the daemon and engine shell out to `git`, `lsof` and `ps`.
+- Build the x64 AppImage and deb from a clean install:
+
+  ```bash
+  npm ci
+  (cd arena-backend && bun install)
+  npm run build:desktop -- --publish never --linux AppImage deb --x64
+  ```
+
+  `build:desktop` runs `build:app-deps:clean`, the Electron Expo export, and the desktop package
+  build; the packages land in `packages/desktop/release/`. Only x64 is packaged: the engine and its
+  watcher binding are compiled for the host architecture. Control-plane and BYOK settings are the
+  same as for the [macOS build](deployment.md#build-the-macos-desktop-application).
+
+- Set `PASEO_DESKTOP_SMOKE=1` to launch the unpacked app under `xvfb-run` after packing and fail
+  the build if it does not start; install `xvfb` and `xauth` first. The smoke creates a terminal
+  without signing in, so it needs a BYOK build: set `PASEO_BYOK_BUILD=1` too, as CI does (a hosted
+  build fails with "Sign in to use Agent Duel"). The smoke makes `chrome-sandbox`
+  root-owned and setuid with `sudo -n`, so run it where sudo needs no password, such as CI or a
+  container.
+
 ## Running the dev server
 
 ```bash
@@ -90,9 +114,12 @@ nix build .#desktop
 ```
 
 Linux produces the `paseo-desktop` launcher and desktop entry. macOS produces
-`Applications/Paseo.app` plus the `paseo-desktop` launcher. Both use the nixpkgs
+`Applications/Agent Duel.app` plus the `paseo-desktop` launcher. Both use the nixpkgs
 Electron runtime and the checkout's built daemon, client, and renderer rather
 than downloading a published desktop release.
+
+The derivation is inherited from Paseo and builds neither the Arena executable nor the deployment
+configuration, so battles do not run in it. Use `npm run build:desktop` for a working app.
 
 ### PASEO_HOME
 

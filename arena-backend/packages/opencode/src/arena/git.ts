@@ -444,7 +444,7 @@ function battleGitProblem(result: Git.Result, gitOnPath: boolean): string | unde
     }
     // Without the Command Line Tools, macOS's /usr/bin/git is only a stub that points at them.
     if (!gitOnPath || stderr.includes("invalid active developer path")) {
-      return "Battles need Git, and Agent Duel couldn't find it. Install Git, for example with xcode-select --install, then retry."
+      return `Battles need Git, and Agent Duel couldn't find it. Install Git, for example with ${gitInstallHint()}, then retry.`
     }
     // Git is there but failed: its own error says why better than a guess would.
     const detail = stderr.trim().split(/\r?\n/)[0] || `exit code ${result.exitCode}`
@@ -456,7 +456,21 @@ function battleGitProblem(result: Git.Result, gitOnPath: boolean): string | unde
   if (major !== MIN_BATTLE_GIT.major ? major > MIN_BATTLE_GIT.major : minor >= MIN_BATTLE_GIT.minor) return undefined
   // The engine keeps the git it found at startup first on PATH (`preferDirectGit`), so a newly
   // installed git is used only after a restart.
-  return `Battles need Git ${MIN_BATTLE_GIT.major}.${MIN_BATTLE_GIT.minor} or newer, and this computer has Git ${version[1]}. Update Git, for example with brew install git, then quit and reopen Agent Duel.`
+  return `Battles need Git ${MIN_BATTLE_GIT.major}.${MIN_BATTLE_GIT.minor} or newer, and this computer has Git ${version[1]}. Update Git, for example with ${gitUpdateHint()}, then quit and reopen Agent Duel.`
+}
+
+// Linux has no Command Line Tools or Homebrew by default, and no one package manager, so its hint
+// names the two that cover most desktops.
+function gitInstallHint() {
+  if (process.platform === "linux") return "sudo apt install git or sudo dnf install git"
+  return "xcode-select --install"
+}
+
+// Ubuntu 22.04 ships a Git older than 2.39, so on apt systems a plain install is not enough; the
+// git-core PPA carries current Git for Ubuntu.
+function gitUpdateHint() {
+  if (process.platform === "linux") return "sudo add-apt-repository ppa:git-core/ppa && sudo apt install git, or sudo dnf upgrade git"
+  return "brew install git"
 }
 
 // Wrapper commits are transport objects, not user-authored history. A fixed

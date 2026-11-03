@@ -1,3 +1,6 @@
+import { protectConsoleStreams } from "./diagnostics/console-streams.js";
+protectConsoleStreams();
+
 process.emitWarning = (() => {}) as typeof process.emitWarning;
 
 import log from "electron-log/main";
@@ -38,6 +41,7 @@ import {
   buildStandardContextMenuItems,
 } from "./window/window-manager.js";
 import { setupDarwinCompositorWatchdog } from "./window/compositor-watchdog/index.js";
+import { showWindowWhenReady } from "./window/show-when-ready.js";
 import { registerDialogHandlers } from "./features/dialogs.js";
 import { registerNotificationHandlers } from "./features/notifications.js";
 import { registerOpenerHandlers } from "./features/opener.js";
@@ -340,6 +344,9 @@ if (forcedUserDataDir) {
 // AppImage runtimes mount the app from /tmp under the user's UID, so the SUID
 // chrome-sandbox helper we ship in .deb/.rpm cannot work there. Disable the
 // sandbox only in that case; .deb/.rpm keep the sandbox on, matching VS Code.
+// Chromium checks the sandbox before this script runs, so this switch alone is
+// too late; the AppImage's AppRun passes --no-sandbox on the command line
+// (patches/app-builder-lib+26.8.1.patch).
 if (process.platform === "linux" && process.env.APPIMAGE) {
   app.commandLine.appendSwitch("no-sandbox");
 }
@@ -692,11 +699,11 @@ async function createWindow(
     registerBrowserWebviewNavigationGuards(contents);
   });
 
-  mainWindow.once("ready-to-show", () => {
-    if (TEST_APP_NAME) {
-      mainWindow.setTitle(TEST_APP_NAME);
-    }
-    mainWindow.show();
+  if (TEST_APP_NAME) {
+    mainWindow.once("ready-to-show", () => mainWindow.setTitle(TEST_APP_NAME));
+  }
+  showWindowWhenReady(mainWindow, {
+    showOnLoad: process.platform === "linux",
   });
 
   if (!app.isPackaged) {

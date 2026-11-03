@@ -304,6 +304,7 @@ describe("ArenaGit battle git check", () => {
             expect(message).toContain(version.split(" ")[0])
             // The engine keeps the git it started with, so the fix needs a restart, not a retry.
             expect(message).toContain("quit and reopen Agent Duel")
+            expect(message).toContain(process.platform === "linux" ? "ppa:git-core/ppa" : "brew install git")
           }),
         )
       }
@@ -344,6 +345,8 @@ describe("ArenaGit battle git check", () => {
       process.env.PATH = empty.path
       const message = yield* check.pipe(Effect.ensuring(Effect.sync(() => (process.env.PATH = previous))))
       expect(message).toContain("Install Git")
+      // Linux has no Command Line Tools, so the hint names the distro's package manager.
+      expect(message).toContain(process.platform === "linux" ? "sudo apt install git" : "xcode-select --install")
     }),
   )
 })

@@ -512,6 +512,28 @@ export const stopServices = stopOwnedServices
 
 type CommandProcess = ProcessSnapshot & { readonly processStartIdentity: string }
 
+// Without `ps` nothing is listed. Without `lsof` a service stamped with the owner marker is still
+// found and stopped through `ps`, but working directories and ports go unread.
+const MISSING_TOOL_HINTS: Readonly<Record<string, string>> = {
+  lsof: "service ports and working directories cannot be read; install the `lsof` package",
+  ps: "contestant services cannot be captured or stopped; install the `procps` package (`procps-ng` on Fedora and Arch)",
+}
+
+const reportedMissingTools = new Set<string>()
+
+/**
+ * Capture reads the process table through `lsof` and `ps`. macOS always ships both, but a minimal
+ * Linux install can lack either, and then its lookups come back empty with nothing to say why.
+ * Say it once per tool so the log names the fix.
+ */
+export function reportMissingTool(command: string, cause: unknown, warn: (message: string) => void = console.warn) {
+  if ((cause as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") return
+  if (reportedMissingTools.has(command)) return
+  reportedMissingTools.add(command)
+  const hint = MISSING_TOOL_HINTS[command] ?? `install \`${command}\``
+  warn(`[arena-services] \`${command}\` is not on PATH: ${hint}`)
+}
+
 async function commandOutput(command: string, args: readonly string[]) {
   return await new Promise<string>((resolve) => {
     // `ps lstart` is parsed as a fixed 24-character column below. That width only holds in the
@@ -523,7 +545,10 @@ async function commandOutput(command: string, args: readonly string[]) {
     })
     let output = ""
     child.stdout.on("data", (chunk) => { output += String(chunk) })
-    child.once("error", () => resolve(""))
+    child.once("error", (cause) => {
+      reportMissingTool(command, cause)
+      resolve("")
+    })
     child.once("close", () => resolve(output))
   })
 }
