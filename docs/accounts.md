@@ -131,8 +131,9 @@ The daemon password and account session are separate credentials; a remote clien
   key.
 - Every daemon request to the control plane (accounts, the Arena runtime proxy, feedback) carries
   the headers from `clientHeaders` in `packages/server/src/server/accounts/config.ts`: the daemon's
-  package version, OS, OS release, CPU type, timezone, CPU model and core count, and memory in whole
-  gigabytes. Keep it to coarse build and machine facts; never add the computer name, user name,
+  package version, OS, OS release, a readable OS name (`ubuntu 24.04`, `macOS 26.6.2`,
+  `Windows 11 26100`; left out when it cannot be read), CPU type, timezone, CPU model and core
+  count, and memory in whole gigabytes. Keep it to coarse build and machine facts; never add the computer name, user name,
   paths, network addresses or device identifiers. The control plane keeps the latest values on the
   account; the private repository's `scripts/db/app-versions.ts` counts them. Builds before
   0.4.0-beta.14 send none.
