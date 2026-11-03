@@ -2,6 +2,19 @@ import assert from "node:assert/strict";
 import { describe, it } from "vitest";
 import { deriveStreamTurnTiming } from "./turn-time";
 import type { StreamItem } from "@/types/stream";
+import type { ArenaHistoryItem } from "@getpaseo/protocol/arena/rpc-schemas";
+
+const appliedBattle: ArenaHistoryItem = {
+  id: "battle",
+  index: 1,
+  state: "complete",
+  appliedSide: "b",
+  canonicalUserMessageID: "msg_1",
+  canonicalLastMessageID: "msg_3",
+  appliedDurationMs: 93_000,
+  createdAt: "2026-05-15T00:00:00.000Z",
+  updatedAt: "2026-05-15T00:02:00.000Z",
+};
 
 function user(id: string, timestamp: Date): StreamItem {
   return {
@@ -12,7 +25,11 @@ function user(id: string, timestamp: Date): StreamItem {
   };
 }
 
-function assistant(id: string, timestamp: Date, text = id): StreamItem {
+function assistant(
+  id: string,
+  timestamp: Date,
+  text = id,
+): Extract<StreamItem, { kind: "assistant_message" }> {
   return {
     kind: "assistant_message",
     id,
@@ -22,6 +39,32 @@ function assistant(id: string, timestamp: Date, text = id): StreamItem {
 }
 
 describe("deriveStreamTurnTiming", () => {
+  it("uses the applied winner's active time after Retry, across hydration and history reload", () => {
+    const prompt = { ...user("u1", new Date(appliedBattle.createdAt)), messageId: "msg_1" };
+    const answer = {
+      ...assistant("a1", new Date("2026-05-15T00:01:56.000Z")),
+      messageId: "msg_3",
+    };
+    for (const stream of [
+      { tail: [prompt], head: [answer] },
+      { tail: [prompt, answer], head: [] },
+      // A loaded page can omit the prompt.
+      { tail: [answer], head: [] },
+    ]) {
+      const timing = deriveStreamTurnTiming({
+        ...stream,
+        isTurnActive: false,
+        activeTurnStartedAt: null,
+        arenaHistory: [appliedBattle],
+      });
+      assert.deepEqual(timing.byAssistantId.get("a1"), {
+        completedAt: answer.timestamp,
+        durationMs: 93_000,
+      });
+      assert.equal(timing.runningStartedAt, null);
+    }
+  });
+
   it("starts elapsed time from the submitted prompt", () => {
     const submittedAt = new Date("2026-05-15T00:00:00.000Z");
 
@@ -33,6 +76,70 @@ describe("deriveStreamTurnTiming", () => {
     });
 
     assert.equal(timing.runningStartedAt, submittedAt);
+  });
+
+  it("keeps a later single-agent turn's timestamps and running timer", () => {
+    const submittedAt = new Date("2026-05-15T00:05:00.000Z");
+    const completedAt = new Date("2026-05-15T00:05:07.000Z");
+    const tail = [
+      { ...user("winner-prompt", new Date(appliedBattle.createdAt)), messageId: "msg_1" },
+      { ...assistant("winner", new Date("2026-05-15T00:01:56.000Z")), messageId: "msg_3" },
+      { ...user("ordinary-prompt", submittedAt), messageId: "msg_4" },
+    ];
+    const arenaHistory = [appliedBattle];
+    const head = [{ ...assistant("ordinary", completedAt), messageId: "msg_5" }];
+    const active = deriveStreamTurnTiming({
+      tail,
+      head,
+      arenaHistory,
+      isTurnActive: true,
+      activeTurnStartedAt: submittedAt,
+    });
+    assert.equal(active.runningStartedAt, submittedAt);
+    assert.equal(active.byAssistantId.get("winner")?.durationMs, 93_000);
+    assert.equal(active.byAssistantId.has("ordinary"), false);
+    const delta = deriveStreamTurnTiming({
+      tail,
+      head: [{ ...head[0], text: "more" }],
+      arenaHistory,
+      isTurnActive: true,
+      activeTurnStartedAt: submittedAt,
+    });
+    assert.equal(delta.byAssistantId, active.byAssistantId);
+    const completed = deriveStreamTurnTiming({
+      tail,
+      head,
+      arenaHistory,
+      isTurnActive: false,
+      activeTurnStartedAt: null,
+    });
+    assert.deepEqual(completed.byAssistantId.get("ordinary"), { completedAt, durationMs: 7000 });
+    assert.equal(completed.byAssistantId.get("winner")?.durationMs, 93_000);
+  });
+
+  it("updates a late duration and retains timestamp timing when no recorded duration exists", () => {
+    const tail = [
+      { ...user("u1", new Date(appliedBattle.createdAt)), messageId: "msg_1" },
+      { ...assistant("a1", new Date("2026-05-15T00:01:56.000Z")), messageId: "msg_3" },
+    ];
+    const derive = (arenaHistory: ArenaHistoryItem[]) =>
+      deriveStreamTurnTiming({
+        tail,
+        head: [],
+        arenaHistory,
+        isTurnActive: false,
+        activeTurnStartedAt: null,
+      });
+    assert.equal(
+      derive([{ ...appliedBattle, appliedDurationMs: undefined }]).byAssistantId.get("a1")
+        ?.durationMs,
+      116_000,
+    );
+    assert.equal(derive([appliedBattle]).byAssistantId.get("a1")?.durationMs, 93_000);
+    assert.equal(
+      derive([{ ...appliedBattle, appliedDurationMs: 0 }]).byAssistantId.get("a1")?.durationMs,
+      0,
+    );
   });
 
   it("uses the last user message as the running turn start", () => {

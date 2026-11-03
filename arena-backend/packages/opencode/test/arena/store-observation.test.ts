@@ -5,7 +5,7 @@ import { describe, expect, test } from "bun:test"
 import { connectLocalStore } from "@/arena/local-store"
 import type { Store } from "@/arena/mongo"
 import type { ChatDocument, RunDocument, TurnDocument } from "@/arena/records"
-import { project } from "@/arena/public"
+import { jsonValue, parseSnapshot, project } from "@/arena/public"
 
 const now = new Date("2026-09-30T00:00:00Z")
 const assignment = { assignmentID: "assignment", model: "Contestant", requestedReasoning: {}, enforcedReasoning: {} }
@@ -104,6 +104,71 @@ function historyReads(store: Store) {
 }
 
 describe("Arena store observation", () => {
+  test("reloads the applied winner's active duration without the idle gap before Retry", async () =>
+    fixture(async (store, directory) => {
+      await store.createChat(chat("chat"))
+      await store.createTurn({
+        ...turn("chat"),
+        state: "complete",
+        selectedEarly: false,
+        appliedSide: "b",
+        resolution: { kind: "vote", vote: "b", appliedSide: "b" },
+        canonicalUserMessageID: "msg_1",
+        canonicalLastMessageID: "msg_3",
+      })
+      await store.saveRun({ ...run("chat-0"), durationMs: 50_000, runState: "complete" })
+      await store.saveRun({
+        ...run("chat-0"),
+        _id: "chat-0-b",
+        side: "b",
+        rootSessionID: "chat-0-session-b",
+        forkOperationID: "fork-chat-0-b",
+        moveOperationID: "move-chat-0-b",
+        priorDurationMs: 60_000,
+        startedAt: new Date(now.getTime() + 83_000),
+        completedAt: new Date(now.getTime() + 116_000),
+        durationMs: 93_000,
+        runState: "complete",
+      })
+      // A later battle must not replace the earlier winner's duration with its own runs.
+      await store.createTurn(turn("chat", 1))
+      const off = store.onChange(() => {}, "chat")
+      const first = project(await store.snapshot("chat"))
+      expect(first.history[0]?.appliedDurationMs).toBe(93_000)
+      expect(parseSnapshot(jsonValue(first)).history[0]?.appliedDurationMs).toBe(93_000)
+      expect(first.history[1]).not.toHaveProperty("appliedDurationMs")
+      const reopened = await connectLocalStore({ directory })
+      try {
+        expect(project(await reopened.snapshot("chat")).history).toEqual(first.history)
+        await reopened.updateRun("chat-0-b", { retention: "none" })
+        expect(project(await store.snapshot("chat")).history[0]?.appliedDurationMs).toBe(93_000)
+      } finally {
+        await reopened.close()
+        off()
+      }
+    }))
+
+  test("only completed applied turns expose a known duration, including zero", async () =>
+    fixture(async (store) => {
+      await store.createChat(chat("chat"))
+      for (const index of [0, 1, 2, 3]) {
+        await store.createTurn({
+          ...turn("chat", index),
+          state: index === 3 ? "discarded" : "complete",
+          ...(index === 3 ? {} : { appliedSide: "a" }),
+        })
+        await store.saveRun({
+          ...run(`chat-${index}`),
+          durationMs: index === 1 ? null : 0,
+          runState: "complete",
+        })
+      }
+      await store.updateTurn("chat-2", { state: "applying" })
+      const history = project(await store.snapshot("chat")).history
+      expect(history[0]?.appliedDurationMs).toBe(0)
+      for (const index of [1, 2, 3]) expect(history[index]).not.toHaveProperty("appliedDurationMs")
+    }))
+
   test("activity keeps the active turn, latest idle turn and latest applied contribution distinct", async () =>
     fixture(async (store) => {
       await store.createChat({ ...chat("active"), activeTurnID: "active-1", canonicalSessionID: "winner-session" })

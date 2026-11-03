@@ -1940,6 +1940,7 @@ const AgentStreamSection = memo(function AgentStreamSection({
         bottomOverlayTailClearance={bottomOverlayTailClearance}
         bottomOverlayControlClearance={bottomOverlayControlClearance}
         arenaChat={arenaSession.data !== undefined}
+        arenaHistory={arenaSession.data?.history}
       />
     </ArenaPartSourceContext.Provider>
   );

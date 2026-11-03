@@ -1023,7 +1023,9 @@ export type BattleHistoryTurn = Pick<
   | "placement"
   | "createdAt"
   | "updatedAt"
->
+> & {
+  readonly appliedDurationMs?: number
+}
 
 export type BattleSnapshot = {
   readonly chat: ChatDocument

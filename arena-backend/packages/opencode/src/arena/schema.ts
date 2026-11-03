@@ -211,6 +211,7 @@ const HistoryItem = Schema.Struct({
   appliedSide: Schema.optional(Schema.Literals(Side)),
   canonicalUserMessageID: Schema.optional(Schema.String),
   canonicalLastMessageID: Schema.optional(Schema.String),
+  appliedDurationMs: Schema.optional(Schema.Number),
   endedAt: Schema.optional(Schema.String),
   identities: Schema.optional(Identities),
   gitApplication: Schema.optional(GitApplication),

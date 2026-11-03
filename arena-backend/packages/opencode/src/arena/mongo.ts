@@ -90,7 +90,7 @@ const historyProjection = {
   placement: 1,
   createdAt: 1,
   updatedAt: 1,
-} satisfies Record<keyof BattleHistoryTurn, 1>
+} satisfies Record<Exclude<keyof BattleHistoryTurn, "appliedDurationMs">, 1>
 
 type ObservedHistory = {
   subscribers: number
@@ -145,6 +145,21 @@ export class Store {
       .find({ chatID, rewoundAt: { $exists: false } }, { projection: historyProjection })
       .sort({ turnIndex: 1 })
       .toArray()
+      .then(async (rows) => {
+        const applied = rows.filter((turn) => turn.state === "complete" && turn.appliedSide !== undefined)
+        if (applied.length === 0) return rows
+        const runs = await this.runs
+          .find(
+            { turnID: { $in: applied.map((turn) => turn._id) } },
+            { projection: { turnID: 1, side: 1, durationMs: 1 } },
+          )
+          .toArray()
+        const durations = new Map(runs.map((run) => [`${run.turnID}:${run.side}`, run.durationMs]))
+        return rows.map((turn) => {
+          const duration = turn.state === "complete" ? durations.get(`${turn._id}:${turn.appliedSide}`) : undefined
+          return duration == null ? turn : { ...turn, appliedDurationMs: duration }
+        })
+      })
     if (!observed || version === undefined) return pending
     observed.version = version
     observed.rows = undefined

@@ -1,5 +1,6 @@
 import type { StreamItem } from "@/types/stream";
 import { startsNewTurn } from "@/agent-stream/turn-membership";
+import type { ArenaHistoryItem } from "@getpaseo/protocol/arena/rpc-schemas";
 
 export interface TurnTiming {
   completedAt: Date;
@@ -126,11 +127,61 @@ function resolveByAssistantId(
   return byAssistantId;
 }
 
+const appliedBattleTimingCache = new WeakMap<
+  Map<string, TurnTiming>,
+  WeakMap<readonly ArenaHistoryItem[], Map<string, TurnTiming>>
+>();
+
+function applyBattleTiming(
+  byAssistantId: Map<string, TurnTiming>,
+  params: Parameters<typeof deriveStreamTurnTiming>[0],
+): Map<string, TurnTiming> {
+  const history = params.arenaHistory;
+  if (!history?.length) return byAssistantId;
+  let cached = appliedBattleTimingCache.get(byAssistantId);
+  const previous = cached?.get(history);
+  if (previous) return previous;
+  let result = byAssistantId;
+  for (const turn of history) {
+    const first = turn.canonicalUserMessageID;
+    const last = turn.canonicalLastMessageID;
+    const durationMs = turn.appliedDurationMs;
+    if (
+      turn.state !== "complete" ||
+      !turn.appliedSide ||
+      !first ||
+      !last ||
+      durationMs === undefined
+    ) {
+      continue;
+    }
+    const isWinnerAnswer = (item: StreamItem) => {
+      if (item.kind !== "assistant_message") return false;
+      const id = item.messageId ?? item.id;
+      return id >= first && id <= last;
+    };
+    const answer = params.head.findLast(isWinnerAnswer) ?? params.tail.findLast(isWinnerAnswer);
+    if (!answer) continue;
+    const timing = byAssistantId.get(answer.id);
+    // An active canonical turn still belongs to its running timer.
+    if (!timing) continue;
+    if (result === byAssistantId) result = new Map(byAssistantId);
+    result.set(answer.id, { ...timing, durationMs });
+  }
+  if (!cached) {
+    cached = new WeakMap();
+    appliedBattleTimingCache.set(byAssistantId, cached);
+  }
+  cached.set(history, result);
+  return result;
+}
+
 export function deriveStreamTurnTiming(params: {
   isTurnActive: boolean;
   activeTurnStartedAt: Date | null;
   tail: StreamItem[];
   head: StreamItem[];
+  arenaHistory?: readonly ArenaHistoryItem[];
 }): StreamTurnTiming {
   const tail = getTailTurnTiming(params.tail);
   const additions = new Map<string, TurnTiming>();
@@ -139,7 +190,7 @@ export function deriveStreamTurnTiming(params: {
     closeTurn(openTurn, additions);
   }
   return {
-    byAssistantId: resolveByAssistantId(tail, additions),
+    byAssistantId: applyBattleTiming(resolveByAssistantId(tail, additions), params),
     runningStartedAt: params.isTurnActive ? params.activeTurnStartedAt : null,
   };
 }
