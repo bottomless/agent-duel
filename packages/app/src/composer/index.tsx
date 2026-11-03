@@ -48,6 +48,7 @@ import {
   type DraftAgentControlsProps,
 } from "@/composer/agent-controls";
 import { ContextWindowMeter } from "@/components/context-window-meter";
+import { shouldShowComposerContextWindow } from "./context-window";
 import { useImageAttachmentPicker } from "@/hooks/use-image-attachment-picker";
 import { selectAgentTurnPresentation, useSessionStore } from "@/stores/session-store";
 import { useFilePicker } from "@/hooks/use-file-picker";
@@ -245,6 +246,7 @@ function buildAgentStateSelector(serverId: string, agentId: string) {
       contextWindowUsedTokens: agent?.lastUsage?.contextWindowUsedTokens ?? null,
       totalCostUsd: agent?.lastUsage?.totalCostUsd ?? null,
       model: agent?.model ?? null,
+      provider: agent?.provider ?? null,
     };
   };
 }
@@ -1989,9 +1991,17 @@ function ComposerContentImpl({
   );
 
   const contextWindowMeterGlyphSize = isCompactLayout ? ICON_SIZE.md : buttonIconSize;
+  const showContextWindowMeter = shouldShowComposerContextWindow({
+    hasAgent,
+    provider: agentState.provider,
+    model: agentState.model,
+    maxTokens: agentState.contextWindowMaxTokens,
+    usedTokens: agentState.contextWindowUsedTokens,
+    pending: agentState.status === "initializing" || isAgentRunning,
+  });
   const beforeVoiceContent = useMemo(
     () =>
-      hasAgent ? (
+      showContextWindowMeter ? (
         <View style={styles.contextWindowMeterSlot}>
           <ContextWindowMeter
             serverId={serverId}
@@ -2004,7 +2014,7 @@ function ComposerContentImpl({
         </View>
       ) : null,
     [
-      hasAgent,
+      showContextWindowMeter,
       serverId,
       agentId,
       agentState.contextWindowMaxTokens,
