@@ -397,6 +397,87 @@ describe("OpenCode v2 settled replies (round 3)", () => {
     },
   );
 
+  test("concurrent and acknowledged retries forward a permission answer only once", async () => {
+    const harness = new V2Harness();
+    const events: AgentStreamEvent[] = [];
+    const permissions = new SessionPermissions(
+      () => harness.api,
+      "session",
+      { provider: "opencode", cwd: "/tmp/project" },
+      (event) => events.push(event),
+    );
+    harness.api.permission.list = async () => [
+      { id: "approval", sessionID: "session", action: "shell", resources: ["append once"] },
+    ];
+    await permissions.reconcile("session");
+    let release!: () => void;
+    const acknowledged = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const replies: Parameters<V2Api["permission"]["reply"]>[0][] = [];
+    harness.api.permission.reply = async (input) => {
+      replies.push(input);
+      await acknowledged;
+    };
+    const first = permissions.respondToPermission("approval", {
+      behavior: "allow",
+      selectedActionId: "once",
+    });
+    await permissions.respondToPermission("approval", {
+      behavior: "allow",
+      selectedActionId: "always",
+    });
+    expect(permissions.list()).toHaveLength(1);
+    release();
+    await first;
+    await permissions.respondToPermission("approval", { behavior: "deny" });
+    expect(replies).toEqual([{ sessionID: "session", requestID: "approval", decision: "once" }]);
+    expect(permissions.list()).toEqual([]);
+    expect(events.filter((event) => event.type === "permission_resolved")).toEqual([
+      {
+        type: "permission_resolved",
+        provider: "opencode",
+        requestId: "approval",
+        resolution: { behavior: "allow", selectedActionId: "once" },
+      },
+    ]);
+  });
+
+  test("a failed answer keeps the permission pending and permits a successful retry", async () => {
+    const harness = new V2Harness();
+    const events: AgentStreamEvent[] = [];
+    const permissions = new SessionPermissions(
+      () => harness.api,
+      "session",
+      { provider: "opencode", cwd: "/tmp/project" },
+      (event) => events.push(event),
+    );
+    harness.api.permission.list = async () => [
+      { id: "approval", sessionID: "session", action: "shell", resources: ["append once"] },
+    ];
+    await permissions.reconcile("session");
+    harness.api.permission.reply = async () => {
+      throw new Error("connection lost");
+    };
+    await expect(
+      permissions.respondToPermission("approval", { behavior: "allow" }),
+    ).rejects.toThrow("connection lost");
+    expect(permissions.list()).toHaveLength(1);
+    expect(events.map((event) => event.type)).toEqual(["permission_requested"]);
+    const replies: Parameters<V2Api["permission"]["reply"]>[0][] = [];
+    harness.api.permission.reply = async (input) => {
+      replies.push(input);
+    };
+    await permissions.respondToPermission("approval", { behavior: "allow" });
+    await permissions.respondToPermission("approval", { behavior: "allow" });
+    expect(replies).toEqual([{ sessionID: "session", requestID: "approval", decision: "once" }]);
+    expect(permissions.list()).toEqual([]);
+    expect(events.map((event) => event.type)).toEqual([
+      "permission_requested",
+      "permission_resolved",
+    ]);
+  });
+
   test("a stale concurrent list cannot resurrect a settled reply", async () => {
     const harness = new V2Harness();
     const events: AgentStreamEvent[] = [];

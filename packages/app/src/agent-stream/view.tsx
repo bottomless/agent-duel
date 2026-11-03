@@ -30,6 +30,7 @@ import { ArenaContentColumn } from "@/arena/content-column";
 import { arenaTimelineQuestionResult } from "@/arena/question";
 import { ArenaQuestionResultView } from "@/arena/question-result";
 import { useMutation } from "@tanstack/react-query";
+import { pendingPermissionAction, permissionResponseOptions } from "./permission-response";
 import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
 import { Check, ChevronDown, X } from "lucide-react-native";
 import {
@@ -1820,34 +1821,18 @@ function PermissionRequestCard({
     return undefined;
   }, [request]);
 
-  const permissionMutation = useMutation({
-    mutationFn: async (input: {
-      agentId: string;
-      requestId: string;
-      response: AgentPermissionResponse;
-    }) => {
-      if (!client) {
-        throw new Error(t("common.errors.daemonClientUnavailable"));
-      }
-      return client.respondToPermissionAndWait(
-        input.agentId,
-        input.requestId,
-        input.response,
-        15000,
-      );
-    },
-  });
+  const permissionMutation = useMutation(
+    permissionResponseOptions(client, t("common.errors.daemonClientUnavailable")),
+  );
   const {
     reset: resetPermissionMutation,
     mutateAsync: respondToPermission,
     isPending: isResponding,
   } = permissionMutation;
-
-  const [respondingActionId, setRespondingActionId] = useState<string | null>(null);
+  const respondingActionId = pendingPermissionAction(permissionMutation);
 
   useEffect(() => {
     resetPermissionMutation();
-    setRespondingActionId(null);
   }, [permission.request.id, resetPermissionMutation]);
   const handleResponse = useCallback(
     (response: AgentPermissionResponse) => {
@@ -1863,7 +1848,6 @@ function PermissionRequestCard({
   );
   const handleActionPress = useCallback(
     (action: AgentPermissionAction) => {
-      setRespondingActionId(action.id);
       if (action.behavior === "allow") {
         handleResponse({
           behavior: "allow",

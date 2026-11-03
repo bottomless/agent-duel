@@ -336,7 +336,9 @@ status icon, and use the send arrow; retain the target-specific placeholder and 
 status menu: `Auto Accept` or `Ask before tools`. The choice applies to the chat, or to both
 contestants during a battle, and becomes the default for new chats; other chats keep their own. The
 carry-over is intended, so the menu says so. Its descriptions also explain that enabling Auto
-Accept accepts pending requests; explicit deny rules still apply.
+Accept accepts pending requests; explicit deny rules still apply. If an answer loses its connection
+or acknowledgement, answer the same card again without reloading. Retrying an accepted answer
+must not grant or run the tool twice.
 
 `Ask before tools` does not ask about work inside the project: OpenCode's agents allow it. It asks when
 a tool leaves the project through `external_directory`. OpenCode documents ask as its default, but
