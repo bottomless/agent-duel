@@ -1,5 +1,4 @@
-import { Effect, Stream } from "effect"
-import * as Sse from "effect/encoding/Sse"
+import { Effect } from "effect"
 import { HttpServerResponse } from "effect/http"
 import { HttpApiSchema } from "effect/http-api"
 import { HttpApiBuilder } from "effect/http-api"
@@ -7,6 +6,7 @@ import { seedWorktreeIgnoredContent } from "@/arena/copy-snapshot"
 import { forkSessionInto } from "@/arena/fork"
 import { generate as generateMetadata } from "@/arena/metadata"
 import { ArenaService } from "@/arena/service"
+import { encodeArenaStream } from "@/arena/sse"
 import { MessageID, SessionID } from "@/session/schema"
 import { ArenaApi } from "../groups/arena"
 import { ArenaApiError, type ForkSessionPayload } from "../groups/arena"
@@ -51,22 +51,10 @@ export const arenaHandlers = HttpApiBuilder.group(ArenaApi, "arena", (handlers) 
       .handleRaw("stream", (ctx) =>
         map(arena.stream(ctx.params.sessionID, ctx.query.turnID, ctx.query.userID)).pipe(
           Effect.map((stream) =>
-            HttpServerResponse.stream(
-              stream.pipe(
-                Stream.map((frame) => ({
-                  _tag: "Event" as const,
-                  event: "message",
-                  id: undefined,
-                  data: JSON.stringify(frame),
-                })),
-                Stream.pipeThroughChannel(Sse.encode()),
-                Stream.encodeText,
-              ),
-              {
-                contentType: "text/event-stream",
-                headers: { "Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no" },
-              },
-            ),
+            HttpServerResponse.stream(encodeArenaStream(stream), {
+              contentType: "text/event-stream",
+              headers: { "Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no" },
+            }),
           ),
         ),
       )
