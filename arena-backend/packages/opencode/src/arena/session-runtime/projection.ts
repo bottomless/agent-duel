@@ -9,6 +9,7 @@ import { Provider } from "@opencode/schema/provider"
 import { SessionID as WireSessionID } from "@opencode/schema/session-id"
 import * as SessionV1 from "@opencode/schema/v1/session"
 import { DateTime } from "effect"
+import { BATTLE_RESUME_MESSAGE_PREFIX } from "../resume-note"
 import type { ArenaPart, ArenaToolState, ArenaTranscriptEntry, ArenaTranscript } from "./schema"
 
 type CanonicalMessage = SessionMessage.Info
@@ -409,7 +410,9 @@ export function abandonedAttempts(messages: readonly CanonicalMessage[], boundar
 /**
  * The rows of a winner's session that the vote copies into the chat, from `boundary` (its prompt) on,
  * unchanged and in order. Half answers and Core's continuation notes stay, because they are what the
- * winner's model read. Two kinds of row stay out:
+ * winner's model read. These rows stay out:
+ * - The battle Resume reminder, identified by its reserved message ID prefix. It applies only to
+ *   recovering the interrupted contestant, not to later chat turns. Other synthetic rows stay.
  * - `system` rows, which describe the temporary worktree and must never become chat policy. The
  *   canonical runner reads its own instructions after the graft.
  * - `idle` rows with an error, which record a failure from before a Retry. Core does not send `idle`
@@ -418,6 +421,7 @@ export function abandonedAttempts(messages: readonly CanonicalMessage[], boundar
 export function messagesToGraft(messages: readonly CanonicalMessage[], boundary: string): readonly CanonicalMessage[] {
   return messages.filter((message) => {
     if (message.type === "system") return false
+    if (message.type === "synthetic" && message.id.startsWith(BATTLE_RESUME_MESSAGE_PREFIX)) return false
     if (message.type === "idle" && message.error !== undefined) return false
     return String(message.id) >= boundary
   })

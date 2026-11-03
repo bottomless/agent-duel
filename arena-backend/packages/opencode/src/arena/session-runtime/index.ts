@@ -37,6 +37,7 @@ import { CurrentDirectory } from "@/project/instance-context"
 import { getArenaAutoAccept, idleRecovery, setArenaAutoAccept } from "@/arena/engine-runtime"
 import { ArenaResponseRecovery } from "@/arena/response-recovery"
 import { shellRestartInput } from "@/arena/shell-restart"
+import { battleResumeInput } from "@/arena/resume-note"
 import { cancelSessionShells } from "@/arena/engine-runtime/shell"
 import { EXTERNAL_WRITE } from "@/arena/contestant"
 import type {
@@ -151,6 +152,7 @@ export interface CancelOptions {
 export interface PromptInterface {
   readonly prompt: (input: ArenaPromptInput) => Effect.Effect<import("./schema").WithParts | undefined, Error>
   readonly loop: (input: {
+    readonly interruptedBattleID?: string
     readonly stoppedShellIDs?: readonly string[]
     readonly sessionID: SessionSchema.ID
   }) => Effect.Effect<import("./schema").WithParts | undefined, Error>
@@ -788,12 +790,16 @@ const promptLayer: Layer.Layer<
       return yield* answer(sessionID, started, failure)
     })
     const loop = Effect.fn("ArenaSessionPrompt.loop")(function* (
-      input: { readonly sessionID: SessionSchema.ID; readonly stoppedShellIDs?: readonly string[] },
+      input: Parameters<PromptInterface["loop"]>[0],
       /** When this run's work was admitted; a prompt admits it before the loop joins. */
       admittedAt?: number,
     ) {
-      const note = shellRestartInput(input.sessionID, input.stoppedShellIDs)
-      if (note) {
+      const notes = [
+        ...(input.interruptedBattleID ? [battleResumeInput(input.sessionID, input.interruptedBattleID)] : []),
+        shellRestartInput(input.sessionID, input.stoppedShellIDs),
+      ]
+      for (const note of notes) {
+        if (!note) continue
         const messages = yield* sessions.messages({ sessionID: input.sessionID })
         const inbox = yield* sessions.inbox(input.sessionID)
         const exists = [...messages, ...inbox].some((message) => message.id === note.id)

@@ -1052,6 +1052,7 @@ type SideRuntime = {
   readonly turnID: string
   readonly runID: string
   readonly sessionID: SessionID
+  readonly interruptedBattleID?: string
   readonly worktree: Worktree.Info
   readonly assignment: HiddenAssignment
 }
@@ -4615,7 +4616,7 @@ export const layer: Layer.Layer<
               })
             : // A retry adds no message: the loop answers the last user message again, from the
               // last step that finished.
-              prompts.loop({ sessionID: run.sessionID, stoppedShellIDs }),
+              prompts.loop({ sessionID: run.sessionID, stoppedShellIDs, interruptedBattleID: run.interruptedBattleID }),
         ),
       )
       const triedSteers = new Set<string>()
@@ -6441,6 +6442,7 @@ export const layer: Layer.Layer<
       runs: readonly RunDocument[],
       input: {
         readonly comparisonID: string | undefined
+        readonly interruptedBattleID?: string
         readonly prompt: ArenaAttachments.ContestantPrompt | undefined
         readonly agent: string
         readonly reset: (run: RunDocument) => Effect.Effect<RunDocument, Error>
@@ -6477,6 +6479,7 @@ export const layer: Layer.Layer<
                 turnID: run.turnID,
                 runID: run._id,
                 sessionID: SessionID.make(run.rootSessionID),
+                interruptedBattleID: input.interruptedBattleID,
                 worktree: { name: `turn-${turn.turnIndex}-${run.side}`, directory: run.worktree },
                 assignment: run.assignment,
               },
@@ -6695,8 +6698,7 @@ export const layer: Layer.Layer<
 
     /**
      * Resume every side the engine's restart cut off, together; see `canResumeBattle`. Each continues
-     * its session from the response the restart cut off. A stopped shell adds a neutral synthetic
-     * note so the contestant can restart it without changing the user prompt.
+     * its session from the response the restart cut off, with a hidden reminder to check its state.
      */
     const resumeBattle = Effect.fn("Arena.resumeBattle")(function* (turnID: string) {
       const store = yield* available()
@@ -6719,6 +6721,7 @@ export const layer: Layer.Layer<
       }
       yield* resumeSettledRuns(store, turn, chat.repository.root, interrupted, {
         comparisonID: claimed.comparisonID,
+        interruptedBattleID: turn._id,
         prompt: undefined,
         agent: source.agent ?? "build",
         reset: (run) =>

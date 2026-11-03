@@ -40,6 +40,7 @@ import {
   project,
 } from "../../src/arena/session-runtime/projection"
 import { ArenaEngineIdle } from "../../src/arena/engine-runtime/idle"
+import { battleResumeInput } from "../../src/arena/resume-note"
 import { SessionRetry } from "../../src/session/retry"
 import { toLLMMessages } from "@opencode/core/session/runner/to-llm-message"
 import { toSessionError } from "@opencode/core/session/to-session-error"
@@ -1068,6 +1069,151 @@ describe("Arena V2 session status", () => {
     expect(await read(running)).toEqual({ type: "busy" })
     expect(await read(Session.ID.make("ses_arena_stopped"))).toEqual({ type: "idle" })
   })
+})
+
+describe("interrupted battle Resume notice", () => {
+  it.effect("gives both interrupted sides the exact same hidden note before continuing, once per battle", () =>
+    Effect.gen(function* () {
+      const sessions = yield* CoreSession.Service
+      const arena = yield* ArenaSession
+      const prompt = yield* ArenaPrompt
+      const location = Location.Ref.make({ directory: AbsolutePath.make("/arena-resume-note-test") })
+      const a = yield* sessions.create({ location })
+      const b = yield* sessions.create({ location })
+      const note = "The engine restarted. Check the current state before you run a step again."
+      resume = (sessionID) =>
+        Effect.gen(function* () {
+          const inbox = yield* sessions.inbox(sessionID)
+          expect(inbox).toHaveLength(1)
+          expect(inbox[0]).toMatchObject({ type: "synthetic", payload: { text: note } })
+        })
+      yield* prompt.loop({ sessionID: a.id, interruptedBattleID: "turn_interrupted" })
+      yield* prompt.loop({ sessionID: b.id, interruptedBattleID: "turn_interrupted" })
+      yield* prompt.loop({ sessionID: a.id, interruptedBattleID: "turn_interrupted" })
+      yield* prompt.loop({ sessionID: b.id, interruptedBattleID: "turn_interrupted" })
+      resume = () => Effect.void
+      for (const session of [a, b]) {
+        yield* arena.deliverPending(session.id)
+        const history = yield* sessions.messages({ sessionID: session.id })
+        expect(history.map((message) => message.type)).toEqual(["synthetic"])
+        const model = { providerID: Provider.ID.make("arena"), id: Model.ID.make("contestant") }
+        expect(toLLMMessages(history, model).map(({ role, content }) => ({ role, content }))).toEqual([
+          { role: "user", content: [{ type: "text", text: note }] },
+        ])
+        expect((yield* arena.messages({ sessionID: session.id }))[0].parts).toMatchObject([
+          { type: "text", text: note, synthetic: true },
+        ])
+        yield* prompt.loop({ sessionID: session.id, interruptedBattleID: "turn_interrupted" })
+        expect(yield* sessions.inbox(session.id)).toEqual([])
+        expect(yield* sessions.messages({ sessionID: session.id })).toEqual(history)
+      }
+    }),
+  )
+
+  it.effect("drops only the Resume note from the winner's history and keeps other synthetic rows", () =>
+    Effect.gen(function* () {
+      const sessions = yield* CoreSession.Service
+      const arena = yield* ArenaSession
+      const prompt = yield* ArenaPrompt
+      const location = Location.Ref.make({ directory: AbsolutePath.make("/arena-resume-graft-test") })
+      const winner = yield* sessions.create({ location })
+      const canonical = yield* sessions.create({ location })
+      const promptID = SessionMessage.ID.make("msg_0_resume_prompt")
+      yield* seedGraftMessage({
+        sessionID: winner.id,
+        seq: 0,
+        message: { id: promptID, type: "user", text: "Do the task", time: { created: at } },
+      })
+      yield* prompt.loop({
+        sessionID: winner.id,
+        interruptedBattleID: "turn_interrupted",
+        stoppedShellIDs: ["sh_root", "sh_child"],
+      })
+      const notes = [
+        "The engine restarted. Check the current state before you run a step again.",
+        "The engine restarted, and your background shell stopped. Start it again if it is still needed.",
+      ]
+      expect((yield* sessions.inbox(winner.id)).map((message) => message.payload)).toEqual(
+        notes.map((text) => ({ text })),
+      )
+      yield* arena.deliverPending(winner.id)
+      yield* prompt.loop({
+        sessionID: winner.id,
+        interruptedBattleID: "turn_interrupted",
+        stoppedShellIDs: ["sh_child", "sh_root"],
+      })
+      expect(yield* sessions.inbox(winner.id)).toEqual([])
+      const otherNotes = ["Background subagent result: task completed.", notes[0]]
+      for (const [index, text] of otherNotes.entries()) {
+        yield* sessions.synthetic({
+          sessionID: winner.id,
+          id: SessionMessage.ID.make(`msg_other_synthetic_${index}`),
+          text,
+          resume: false,
+        })
+      }
+      yield* arena.deliverPending(winner.id)
+      const source = yield* arena.canonicalMessages(winner.id)
+      const resumeID = battleResumeInput(winner.id, "turn_interrupted").id
+      expect(source.filter((message) => message.id === resumeID)).toHaveLength(1)
+      const retained = messagesToGraft(source, promptID)
+      expect(retained.map((message) => message.id)).toEqual([
+        promptID,
+        source[2].id,
+        SessionMessage.ID.make("msg_other_synthetic_0"),
+        SessionMessage.ID.make("msg_other_synthetic_1"),
+      ])
+      // Identity still excludes the Resume note if its wording changes.
+      expect(
+        messagesToGraft(
+          source.map((message) =>
+            message.type === "synthetic" && message.id === resumeID
+              ? { ...message, text: "A revised Resume reminder." }
+              : message,
+          ),
+          promptID,
+        ),
+      ).toEqual(retained)
+      const graftedNotes = [notes[1], ...otherNotes]
+      for (const [index, message] of retained.entries()) {
+        yield* arena.copyMessage({
+          sourceSessionID: winner.id,
+          sourceMessageID: message.id,
+          targetSessionID: canonical.id,
+          targetMessageID: SessionMessage.ID.make(`msg_resume_graft_${index}`),
+        })
+      }
+      const history = yield* sessions.messages({ sessionID: canonical.id, order: "asc" })
+      expect(history.map((message) => message.type)).toEqual(["user", "synthetic", "synthetic", "synthetic"])
+      expect(history.filter((message) => message.type === "user").map((message) => message.text)).toEqual([
+        "Do the task",
+      ])
+      expect(history.filter((message) => message.type === "synthetic").map((message) => message.text)).toEqual(
+        graftedNotes,
+      )
+      expect(
+        (yield* arena.messages({ sessionID: canonical.id })).slice(1).map((message) => message.parts),
+      ).toMatchObject(graftedNotes.map((text) => [{ type: "text", text, synthetic: true }]))
+    }),
+  )
+
+  it.effect("adds no restart note to ordinary continuation, Retry, steer, or prompt admission", () =>
+    Effect.gen(function* () {
+      const sessions = yield* CoreSession.Service
+      const prompt = yield* ArenaPrompt
+      const location = Location.Ref.make({ directory: AbsolutePath.make("/arena-without-resume-note-test") })
+      const session = yield* sessions.create({ location })
+      // Retry and ordinary continuations both use loop without an interrupted battle ID.
+      yield* prompt.loop({ sessionID: session.id })
+      yield* prompt.loop({ sessionID: session.id })
+      expect(yield* sessions.inbox(session.id)).toEqual([])
+      expect(yield* sessions.messages({ sessionID: session.id })).toEqual([])
+      yield* prompt.steer({ sessionID: session.id, text: "Follow this steer" })
+      yield* prompt.prompt({ sessionID: session.id, text: "A normal send" })
+      expect((yield* sessions.inbox(session.id)).map((message) => message.type)).toEqual(["user", "user"])
+      expect(yield* sessions.messages({ sessionID: session.id })).toEqual([])
+    }),
+  )
 })
 
 describe("shell stop notice on Resume", () => {

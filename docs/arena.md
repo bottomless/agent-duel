@@ -1413,7 +1413,12 @@ its unfinished tool calls end interrupted and are never run again. The pill then
 **Resume**, its one filled choice, and **Discard** (`canResumeBattle`). Resume (`resumeBattle`)
 claims every interrupted side at once and continues each from its cut-off response. No side resumes
 alone, and an interrupted run has no Retry, because a side that started first would get a head start
-on a battle meant to be fair. Until Resume, hide review and refuse every vote, including for a side
+on a battle meant to be fair. Before continuing, each interrupted side gets the same hidden note
+once per battle: “The engine restarted. Check the current state before you run a step again.” A
+finished side gets no note. Exclude this reminder from the winner's canonical history after the
+vote; keep other synthetic messages, including background subagent results and the stopped-shell
+notice below. The reminder cannot guarantee that a contestant will avoid repeating a completed
+command. Until Resume, hide review and refuse every vote, including for a side
 that finished: the other side has not finished. Resume spends no manual retry. Never resume
 automatically at startup: it spends on both contestants before the voter returns, and a quit can
 be intended to stop the work. Two cases still recover as a
