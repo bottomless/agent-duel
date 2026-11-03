@@ -32,6 +32,7 @@ function snapshot() {
       canVote: false,
       canTie: false,
       canDiscardBattle: false,
+      canResumeBattle: false,
       canRetryResolution: false,
       revealed: false,
       createdAt: "2026-08-12T00:00:00.000Z",
@@ -61,6 +62,33 @@ function snapshot() {
 }
 
 describe("Arena RPC schemas", () => {
+  it("carries an applied winner's active duration in history without a run transcript", () => {
+    const input = {
+      ...snapshot(),
+      runs: [],
+      history: [
+        {
+          id: "applied",
+          index: 1,
+          state: "complete",
+          appliedSide: "b",
+          canonicalUserMessageID: "msg_1",
+          canonicalLastMessageID: "msg_3",
+          appliedDurationMs: 93_000,
+          createdAt: "2026-08-12T00:00:00.000Z",
+          updatedAt: "2026-08-12T00:02:00.000Z",
+        },
+      ],
+    };
+    expect(ArenaSnapshotSchema.parse(input).history[0]?.appliedDurationMs).toBe(93_000);
+    expect(
+      ArenaSnapshotSchema.safeParse({
+        ...input,
+        history: [{ ...input.history[0], appliedDurationMs: -1 }],
+      }).success,
+    ).toBe(false);
+  });
+
   it("retains hydrated blind transcripts without requiring revealed identities", () => {
     const parsed = ArenaSnapshotSchema.parse(snapshot());
     expect(parsed.runs[0]?.messages).toHaveLength(1);

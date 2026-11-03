@@ -48,6 +48,7 @@ import { PlanCard } from "@/components/plan-card";
 import type { StreamItem } from "@/types/stream";
 import type { PendingMessageSubmission } from "@/composer/submission/model";
 import type { TurnPresentation } from "@/timeline/turn-liveness";
+import type { ArenaHistoryItem } from "@getpaseo/protocol/arena/rpc-schemas";
 import type { PendingPermission } from "@/types/shared";
 import type {
   AgentCapabilityFlags,
@@ -289,6 +290,7 @@ export interface AgentStreamViewProps {
    * sits beneath it (`orderArenaChat`) and reasoning folds into the work it leads into.
    */
   arenaChat?: boolean;
+  arenaHistory?: readonly ArenaHistoryItem[];
   historyPagination?: {
     hasOlder: boolean;
     isLoadingOlder: boolean;
@@ -443,6 +445,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       bottomOverlayHeight,
       readOnly = false,
       arenaChat,
+      arenaHistory,
       historyPagination,
       findHistory,
     },
@@ -666,6 +669,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
         platform: isWeb ? "web" : "native",
         isMobileBreakpoint: isMobile,
         historyStart: historyWindowStart,
+        arenaHistory,
       });
     }, [
       isMobile,
@@ -674,6 +678,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       presentation.tail,
       effectiveTurnPresentation.startedAt,
       historyWindowStart,
+      arenaHistory,
     ]);
     const streamLayout = useMemo(
       () =>
@@ -1537,6 +1542,7 @@ function collectArenaStreamViewPropDiffs(
   if (left.liveContent !== right.liveContent) reasons.push("liveContent");
   if (left.bottomOverlayHeight !== right.bottomOverlayHeight) reasons.push("bottomOverlayHeight");
   if (left.arenaChat !== right.arenaChat) reasons.push("arenaChat");
+  if (left.arenaHistory !== right.arenaHistory) reasons.push("arenaHistory");
   return reasons;
 }
 

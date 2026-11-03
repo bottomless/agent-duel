@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { deriveStreamTurnTiming, type StreamTurnTiming } from "@/timeline/turn-time";
 import type { StreamItem } from "@/types/stream";
+import type { ArenaHistoryItem } from "@getpaseo/protocol/arena/rpc-schemas";
 import { findMountedWindowStart, getMountedRecentStreamItems } from "./history-window";
 import { getWebPartialVirtualizationThreshold } from "./web-virtualization";
 import { orderHeadForStreamRenderStrategy, orderTailForStreamRenderStrategy } from "./strategy";
@@ -39,6 +40,7 @@ export interface BuildAgentStreamRenderModelInput {
   platform: "web" | "native";
   isMobileBreakpoint: boolean;
   historyStart?: number;
+  arenaHistory?: readonly ArenaHistoryItem[];
 }
 
 const EMPTY_STREAM_ITEMS: StreamItem[] = [];
@@ -186,6 +188,7 @@ export function buildAgentStreamRenderModel(
     activeTurnStartedAt: input.activeTurnStartedAt,
     tail: renderedTail,
     head: input.head,
+    arenaHistory: input.arenaHistory,
   });
 
   return {

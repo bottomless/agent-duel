@@ -1515,7 +1515,9 @@ without a retry the voter is left with the other side alone, or with Discard whe
 have retried, or an empty compaction summary, the pane shows **Retry** under its error
 (`errorRetryable`, set in `finalizeSide`).
 Retry continues the same session on the same assignment from its last finished step, adding no
-message (`prompts.loop`), so the battle stays blind. It first removes the run's half answers and the
+message (`prompts.loop`), so the battle stays blind. The pane and the applied turn's **Worked for**
+footer show the winner's active time across attempts, excluding the wait before Retry.
+Retry first removes the run's half answers and the
 notes after them (`abandonedAttempts`), because the new answer starts over and none of them is part
 of it. A half answer that ran a tool stays, because the tool's work is in the worktree. The other side
 keeps working, and the turn finalizes
