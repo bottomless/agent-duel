@@ -1603,9 +1603,12 @@ not stop startup. This is elapsed time, even if the app was not used.
 Only the default `~/.paseo` home may upgrade the packaged engine's legacy database in
 `~/.local/share/opencode/`. Every other home must keep its engine database inside `PASEO_HOME`,
 including when `OPENCODE_DB` overrides its name. The engine refuses an outside path before opening
-it or cleaning backups. For a dev or second-home stack, set `XDG_DATA_HOME` inside that stack's
-`PASEO_HOME` before its first start. Setting `PASEO_HOME` alone does not isolate OpenCode's database.
-Do not point a dev stack at a packaged database to get its history.
+it or cleaning backups. The repo's dev commands select an owned engine database without extra
+environment; see [Development](development.md#paseo_home) for the default and override paths.
+For a custom second-home launcher, set `OPENCODE_DB` to an absolute path inside that home's
+`PASEO_HOME`, or set `XDG_DATA_HOME` inside it before the first start. Setting `PASEO_HOME` alone
+outside the repo's dev launch path does not isolate OpenCode's database. Do not point a dev stack
+at a packaged database to get its history.
 
 After import, the fence renames the old `session` table to `_arena_v1_session`. A 1.x engine then
 refuses to start with `Database is not empty and has no session table`. Keep the fence. At an

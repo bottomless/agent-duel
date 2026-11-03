@@ -111,11 +111,20 @@ PASEO_DEV_SEED_HOME=/path/to/home npm run dev # seed from a different source hom
 PASEO_DEV_RESET_HOME=1 npm run dev            # clear and reseed the derived worktree home
 ```
 
-When comparing OpenCode versions, also give each stack separate `XDG_DATA_HOME`,
-`XDG_CACHE_HOME`, and `XDG_STATE_HOME` directories. Core's native session database
-lives outside `PASEO_HOME`; a newer engine can migrate it beyond an older engine's
-schema. Verify the running process's open database path before starting battles.
-Keep `XDG_CONFIG_HOME` unchanged when the comparison requires the same user instructions.
+With no `XDG_DATA_HOME` or `OPENCODE_DB` override, the Arena source child uses
+`$PASEO_HOME/opencode-home/opencode.db`. This applies to `npm run dev`,
+`npm run dev:desktop`, and `npm run dev:desktop -- --byok`. No extra environment is needed.
+The checkout starts with separate engine history; it does not import packaged or standalone
+OpenCode sessions. Provider and MCP sign-ins keep their existing paths because XDG is unchanged.
+Packaged desktop paths are unchanged too.
+
+Explicit `XDG_DATA_HOME` and `OPENCODE_DB` values take precedence. Keep the resulting engine
+database inside `PASEO_HOME`; an outside path is refused by the
+[database ownership guard](arena.md#guard-against-an-accidental-1x-build).
+When comparing OpenCode versions, also give each stack separate `XDG_CACHE_HOME` and
+`XDG_STATE_HOME` directories. Keep `XDG_CONFIG_HOME` unchanged when the comparison requires the
+same user instructions. Setting `XDG_DATA_HOME` also separates provider and MCP sign-ins, so
+those credentials must be supplied again for that data home.
 
 ### Daemon endpoints
 

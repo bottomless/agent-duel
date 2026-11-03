@@ -117,6 +117,69 @@ describe("Agent Arena OpenCode launch", () => {
 });
 
 describe("OpenCodeServerManager generations", () => {
+  test("isolates a source dev database without moving provider sign-ins", async () => {
+    installArenaCredentials({ mode: "byok", openRouterApiKey: "sk-or-v1-test" });
+    const home = mkdtempSync(path.join(os.tmpdir(), "arena-dev-home-"));
+    const engineHome = path.join(home, "opencode-home");
+    const { manager, runtime } = createTestManager([4104], {
+      launchKind: "arena-source",
+      baseEnv: { PASEO_HOME: home },
+      opencodeHomeDir: engineHome,
+    });
+    try {
+      const acquisition = await manager.acquireCurrent();
+      const spawn = runtime.spawnCalls[0]!;
+      expect(spawn.options.envOverlay?.OPENCODE_DB).toBe(path.join(engineHome, "opencode.db"));
+      expect(spawn.options.baseEnv?.XDG_DATA_HOME).toBeUndefined();
+      expect(spawn.options.envOverlay).not.toHaveProperty("XDG_DATA_HOME");
+      expect(acquisition.environment).not.toHaveProperty("OPENCODE_DB");
+      await acquisition.release();
+    } finally {
+      await manager.shutdown();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    { launchKind: "arena-source" as const, env: { XDG_DATA_HOME: "/dev-home/data" } },
+    { launchKind: "arena-source" as const, env: { OPENCODE_DB: "/dev-home/engine.db" } },
+    { launchKind: "arena-source" as const, env: { OPENCODE_DB: ":memory:" } },
+    { launchKind: "arena-binary" as const, env: {} },
+    { launchKind: undefined, env: {} },
+  ])("preserves database paths for $launchKind with $env", async ({ launchKind, env }) => {
+    installArenaCredentials({ mode: "byok", openRouterApiKey: "sk-or-v1-test" });
+    const { manager, runtime } = createTestManager([4105], {
+      launchKind,
+      baseEnv: { PASEO_HOME: "/dev-home", ...env },
+    });
+    const acquisition = await manager.acquireCurrent();
+    expect(runtime.spawnCalls[0]!.options.envOverlay).not.toHaveProperty("OPENCODE_DB");
+    expect(acquisition.environment).toMatchObject(env);
+    await acquisition.release();
+  });
+
+  test("can start with a replacement BYOK key after an engine startup failure", async () => {
+    const { manager, runtime } = createTestManager([4106, 4107], {
+      launchKind: "arena-source",
+      autoAnnounce: false,
+    });
+    const byok = createArenaByokService({ restartArena: () => manager.shutdown() });
+    await byok.setKey("sk-or-v1-first");
+    const failed = manager.acquireCurrent();
+    const failure = expect(failed).rejects.toThrow("OpenCode server exited with code 1");
+    await vi.waitFor(() => expect(runtime.launchedPorts).toEqual([4106]));
+    runtime.processForPort(4106).exitNormally(1);
+    await failure;
+
+    await byok.setKey("sk-or-v1-second");
+    const replacement = manager.acquireCurrent();
+    await vi.waitFor(() => expect(runtime.launchedPorts).toEqual([4106, 4107]));
+    runtime.processForPort(4107).announceListening();
+    const acquisition = await replacement;
+    expect(readStdinPayload(runtime, 4107).openRouterApiKey).toBe("sk-or-v1-second");
+    await acquisition.release();
+  });
+
   test("hands Arena credentials and only a control-token verifier through stdin", async () => {
     installArenaCredentials({
       mode: "hosted",
@@ -1105,9 +1168,9 @@ class FakeOpenCodeProcess extends EventEmitter {
     this.stdout.emit("data", Buffer.from("listening on"));
   }
 
-  exitNormally(): void {
-    this.exitCode = 0;
-    this.emit("exit", 0, null);
+  exitNormally(code = 0): void {
+    this.exitCode = code;
+    this.emit("exit", code, null);
   }
 
   exitBySignal(signal: NodeJS.Signals): void {

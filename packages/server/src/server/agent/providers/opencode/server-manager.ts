@@ -786,6 +786,13 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
     environment: Record<string, string>;
     arenaCredentials: ArenaCredentialsSnapshot | null;
   }): ChildProcess {
+    // Source dev homes must not upgrade the packaged database. Keep XDG unchanged so provider
+    // sign-ins (auth.json and mcp-auth.json) still use the developer's existing credentials.
+    const useDevDatabase =
+      input.launchPrefix.kind === "arena-source" &&
+      Boolean(input.environment.PASEO_HOME) &&
+      !input.environment.XDG_DATA_HOME &&
+      input.environment.OPENCODE_DB === undefined;
     try {
       return this.spawnServerProcess(input.launchPrefix.command, input.serverArgs, {
         cwd: input.serverCwd,
@@ -794,6 +801,7 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
         baseEnv: input.environment,
         // Kept out of `environment`, which sessions hand on as their harness environment.
         envOverlay: {
+          ...(useDevDatabase ? { OPENCODE_DB: path.join(input.serverCwd, "opencode.db") } : {}),
           ...(this.getArenaPreviewBaseUrl
             ? { PASEO_ARENA_PREVIEW_BASE_URL: this.getArenaPreviewBaseUrl() ?? undefined }
             : {}),

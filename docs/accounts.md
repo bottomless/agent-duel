@@ -201,9 +201,11 @@ command-line argument, or plaintext file. Contestants run unsandboxed as the sam
    authorizes nothing. The engine still strips `OPENROUTER_API_KEY` from contestant environments,
    and the daemon redacts a key request from its raw-payload error log.
 
-A replaced or cleared key restarts the Arena child the way an account change does, which interrupts
-every running battle, so Settings confirms a replacement or removal. Sending the key the daemon
-already holds changes nothing. The daemon forgets the key when it exits, so the app hands the
+Saving a key keeps the daemon running. A replaced or cleared key restarts the Arena child the way
+an account change does, which interrupts every running battle, so Settings confirms a replacement
+or removal. The first key starts no replacement child, and sending the key the daemon already
+holds changes nothing. A failed engine start still needs its startup error resolved; saving a key
+does not change database paths. The daemon forgets the key when it exits, so the app hands the
 stored key over every time a host comes online, and a restarted daemon receives it alongside the
 requests that reopen the app's chats. Those requests start Arena, and the handover must not stop
 that start, or the reopened chat stays on "Failed to load agent":
