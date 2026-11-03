@@ -1044,8 +1044,17 @@ the session's model, so a fill moves the canonical transcript hash. The guard re
 `message`: the generated client keeps an error body only for a status the route declares, every
 session route declares 400, and a 409 reached the app as a bare `UnexpectedStatus: 409`.
 
-**Finalize** (`finalizeSide` in `arena/service.ts`). Each side settles on its own: terminal state and the actual
-Git state are recorded under the generation's private battle refs, numstat is stored, and
+**Finalize** (`finalizeSide` in `arena/service.ts`). Each side settles on its own. A background shell
+does not delay the final answer or the vote. Its service stays available for Preview under the
+[contestant environment lifetime](#the-canonical-spine-and-contestant-environments). Stop ends
+session-owned shells. Once the side closes, drop its
+background shell notifications; they must not change a reviewed answer or enter the winner's
+history on a later turn. A contestant's foreground shell defaults to two minutes when the timeout
+is omitted or zero. An explicit positive timeout is honored up to a ten-minute hard limit. Use
+`background: true` for a server or a long-running command; timeout results state the applied limit
+and give that advice.
+
+Terminal state and the actual Git state are recorded under the generation's private battle refs, numstat is stored, and
 applicability is set to `applicable` only when the frozen base is an ancestor of the result. A
 companion private ref transports the final index tree. Recording must preserve empty and multiple
 commits, commit-plus-residual state, and the index and dirty working tree; Arena does not add a

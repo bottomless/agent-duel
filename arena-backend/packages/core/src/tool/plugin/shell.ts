@@ -5,7 +5,7 @@ import type { Context } from "@opencode/plugin/effect/plugin"
 import type { SessionHooks } from "@opencode/plugin/effect/session"
 import type { ShellCreateBefore } from "@opencode/plugin/effect/shell"
 import type { Tool } from "@opencode/schema/tool"
-import { Deferred, Effect, Schema, Scope } from "effect"
+import { Context as EffectContext, Deferred, Effect, Schema, Scope } from "effect"
 import { Config } from "../../config.js"
 import { Environment } from "../../environment/index.js"
 import { Job } from "../../job.js"
@@ -22,6 +22,21 @@ import { ShellResult } from "../../shell/result.js"
 
 export const name = "shell"
 export const DEFAULT_TIMEOUT_MS = 2 * 60 * 1_000
+
+/** Hosts may fence background delivery against the lifetime of their own turn. */
+export type NotificationPolicy = <E, R>(deliver: Effect.Effect<void, E, R>) => Effect.Effect<void, E, R>
+export const Notification = EffectContext.Reference<NotificationPolicy>("@opencode/ShellTool/Notification", {
+  defaultValue: (): NotificationPolicy => (deliver) => deliver,
+})
+
+/** Hosts may explain their own shell deadline policy without changing the default advice. */
+export const TimeoutMessage = EffectContext.Reference<(timeout: number) => string>(
+  "@opencode/ShellTool/TimeoutMessage",
+  {
+    defaultValue: () => (timeout) =>
+      `Command exceeded timeout of ${timeout} ms. Retry with a larger timeout if the command is expected to take longer.`,
+  },
+)
 
 const BACKGROUND_INSTRUCTION =
   "You will be notified automatically when the command finishes. The notification will include the command's output. Unless the user explicitly asks otherwise, DO NOT poll for completion, even if you need the final result to continue. Repeatedly sleeping and reading or searching the output file is polling, not useful work. You may read the current output if it lets you do useful work now, but do not repeatedly check it while waiting for the command to finish. Keep working on anything that does not depend on the result. If you have nothing else to do, end your response; you will be resumed automatically when the command finishes."
@@ -161,6 +176,7 @@ export const Plugin = {
         shellID: string,
         command: string,
         settled: Deferred.Deferred<Output>,
+        notify: NotificationPolicy,
       ) {
         const info = (yield* jobs.wait({ id })).info
         if (!info || info.status === "running") return
@@ -170,19 +186,23 @@ export const Plugin = {
           : info.status === "error"
             ? (info.error ?? "Command failed")
             : "Cancelled"
-        yield* sessions.synthetic({
-          ...(info.notificationID ? { id: info.notificationID } : {}),
-          sessionID,
-          description: command,
-          ...ShellResult.notification({
-            jobID: id,
-            shellID,
-            command,
-            state: info.status,
-            text,
-            output,
-          }),
-        })
+        yield* notify(
+          sessions
+            .synthetic({
+              ...(info.notificationID ? { id: info.notificationID } : {}),
+              sessionID,
+              description: command,
+              ...ShellResult.notification({
+                jobID: id,
+                shellID,
+                command,
+                state: info.status,
+                text,
+                output,
+              }),
+            })
+            .pipe(Effect.asVoid),
+        )
         if (info.notificationID) yield* jobs.completeBackground(info.notificationID)
       },
       Effect.forkIn(scope, { startImmediately: true }),
@@ -198,6 +218,8 @@ export const Plugin = {
           output: Output,
           execute: (input, context) =>
             Effect.gen(function* () {
+              const notify = yield* Notification
+              const timeoutMessage = yield* TimeoutMessage
               const timeout = input.background === true ? (input.timeout ?? 0) : (input.timeout ?? DEFAULT_TIMEOUT_MS)
               let finalTimeout = timeout
               const info = yield* shell.create(
@@ -226,9 +248,7 @@ export const Plugin = {
                 const output = ShellResult.output(result)
                 return {
                   ...output,
-                  output: output.timeout
-                    ? `${output.output}\n\nCommand exceeded timeout of ${finalTimeout} ms. Retry with a larger timeout if the command is expected to take longer.`
-                    : output.output,
+                  output: output.timeout ? `${output.output}\n\n${timeoutMessage(finalTimeout)}` : output.output,
                   status: "completed" as const,
                 }
               }).pipe(
@@ -253,7 +273,7 @@ export const Plugin = {
 
               if (input.background === true) {
                 yield* jobs.background(job.id)
-                yield* notifyWhenDone(context.sessionID, job.id, info.id, info.command, settled)
+                yield* notifyWhenDone(context.sessionID, job.id, info.id, info.command, settled, notify)
                 return backgroundResult(info.id, info.file)
               }
 
@@ -262,7 +282,7 @@ export const Plugin = {
                 .pipe(Effect.onInterrupt(() => jobs.cancel(job.id).pipe(Effect.ignore)))
               if (result?.type === "backgrounded") {
                 yield* shell.timeout(info.id, 0)
-                yield* notifyWhenDone(context.sessionID, job.id, info.id, info.command, settled)
+                yield* notifyWhenDone(context.sessionID, job.id, info.id, info.command, settled, notify)
                 return backgroundResult(info.id, info.file)
               }
               if (result?.info.status === "error")

@@ -7,9 +7,11 @@ import {
   MoveSessionService,
   abandonedAttempts,
   messagesToGraft,
+  type CancelOptions,
 } from "./session-runtime"
 import { ARENA_SENT_AT } from "./session-runtime/projection"
 import { KeyedMutex } from "@opencode/core/effect/keyed-mutex"
+import { closeShellTurn, openShellTurn } from "./engine-runtime/shell"
 import { ArenaActivity } from "./activity"
 import { withChildWaitLimit } from "./child-wait"
 import { Stream } from "effect"
@@ -4476,25 +4478,28 @@ export const layer: Layer.Layer<
       result: Exit.Exit<unknown, unknown>,
       tried: Set<string>,
     ) {
-      return yield* steerGates.withLock(run.runID)(
-        Effect.gen(function* () {
-          const current = yield* promise(() => store.turn(run.turnID))
-          if (Exit.isSuccess(result) && current?.state === "running" && !haltingRuns.has(run.runID)) {
-            const status = yield* inDirectory(run.worktree.directory, statuses.get(run.sessionID)).pipe(
-              Effect.catchCause(() => Effect.succeed({ type: "idle" as const })),
-            )
-            if (status.type !== "idle") return true
-            const waiting = yield* inDirectory(
-              run.worktree.directory,
-              sessions.pending({ sessionID: run.sessionID }),
-            ).pipe(Effect.catchCause(() => Effect.succeed([])))
-            const fresh = waiting.filter((entry) => entry.info.role === "user" && !tried.has(entry.info.id))
-            for (const entry of fresh) tried.add(entry.info.id)
-            if (fresh.length > 0) return true
-          }
-          closingRuns.add(run.runID)
-          return false
-        }),
+      return yield* closeShellTurn(
+        run.sessionID,
+        steerGates.withLock(run.runID)(
+          Effect.gen(function* () {
+            const current = yield* promise(() => store.turn(run.turnID))
+            if (Exit.isSuccess(result) && current?.state === "running" && !haltingRuns.has(run.runID)) {
+              const status = yield* inDirectory(run.worktree.directory, statuses.get(run.sessionID)).pipe(
+                Effect.catchCause(() => Effect.succeed({ type: "idle" as const })),
+              )
+              if (status.type !== "idle") return true
+              const waiting = yield* inDirectory(
+                run.worktree.directory,
+                sessions.pending({ sessionID: run.sessionID }),
+              ).pipe(Effect.catchCause(() => Effect.succeed([])))
+              const fresh = waiting.filter((entry) => entry.info.role === "user" && !tried.has(entry.info.id))
+              for (const entry of fresh) tried.add(entry.info.id)
+              if (fresh.length > 0) return true
+            }
+            closingRuns.add(run.runID)
+            return false
+          }),
+        ),
       )
     })
 
@@ -4563,6 +4568,7 @@ export const layer: Layer.Layer<
       if (turn?.state === "stopping" || turn?.state === "early_selected") return Exit.void
       // A new loop for this run opens its turn to steers again.
       closingRuns.delete(run.runID)
+      yield* openShellTurn(run.sessionID)
       const storedRun = yield* promise(() => store.run(run.runID))
       yield* settleAutoAccept(
         storedRun?.autoAccept === true,
@@ -4643,6 +4649,7 @@ export const layer: Layer.Layer<
         // Stop and early vote own cancellation. Let the normal stopped-side path settle instead of
         // reviving a queued message after the battle has left the running state.
         if (current?.state !== "running") break
+        yield* openShellTurn(run.sessionID)
         // Resume even when this result does not look aborted. The cancel leaves the session idle
         // at once, so the steer's own reply can start the next loop first, and this result is then
         // that loop's unfinished message. prompts.loop joins a running loop and returns at once
@@ -4680,7 +4687,9 @@ export const layer: Layer.Layer<
       environmentSettled: Effect.Effect<void> = Effect.void,
       stoppedBySibling: () => boolean = () => false,
     ) {
-      const promptExit = yield* runPrompt(store, run, prompt, agent, preservePromptBoundary)
+      const promptExit = yield* runPrompt(store, run, prompt, agent, preservePromptBoundary).pipe(
+        Effect.ensuring(closeShellTurn(run.sessionID, Effect.succeed(false))),
+      )
       return yield* settlePromptExit(store, turn, run, promptExit, environmentSettled, stoppedBySibling)
     })
 
@@ -4778,17 +4787,22 @@ export const layer: Layer.Layer<
     // A session runner is registered against the instance that dispatched its prompt, which is
     // always the contestant's worktree. Cancelling from any other instance finds no runner and
     // silently does nothing, leaving the contestant running to completion.
-    const cancelRun = Effect.fn("Arena.cancelRun")(function* (directory: string, sessionID: SessionID) {
+    const cancelRun = Effect.fn("Arena.cancelRun")(function* (
+      directory: string,
+      sessionID: SessionID,
+      options?: CancelOptions,
+    ) {
+      yield* closeShellTurn(sessionID, Effect.succeed(false))
       const children = yield* descendants(sessionID)
       // Before the cancel, whose results would wake the parents. Whoever cancels decides what runs
       // next: nothing after Stop and early selection, and the steer's own loop after Send now.
       yield* prompts.holdChildResults([sessionID, ...children])
       yield* Effect.all(
         [
-          inDirectory(directory, prompts.cancel(sessionID)),
+          inDirectory(directory, prompts.cancel(sessionID, options)),
           inDirectory(
             directory,
-            Effect.forEach(children, (id) => prompts.cancel(id), { discard: true }),
+            Effect.forEach(children, (id) => prompts.cancel(id, options), { discard: true }),
           ),
         ],
         { concurrency: 2, discard: true },
@@ -10687,10 +10701,14 @@ export const layer: Layer.Layer<
       yield* promise(() => store.transitionTurn(turn._id, "stopping"))
       environmentCopyStops.get(turn._id)?.abort(new Error("Arena battle was stopped during environment setup"))
       const runs = yield* promise(() => store.runsForTurn(turn._id))
-      const cancel = Effect.forEach(runs, (run) => cancelRun(run.worktree, SessionID.make(run.rootSessionID)), {
-        concurrency: 2,
-        discard: true,
-      })
+      const cancel = Effect.forEach(
+        runs,
+        (run) => cancelRun(run.worktree, SessionID.make(run.rootSessionID), { shells: true }),
+        {
+          concurrency: 2,
+          discard: true,
+        },
+      )
       yield* cancel
       // A stop can win the database transition immediately before prompt fibers
       // enter SessionPrompt. Yield once and cancel again so both sides observe it.
