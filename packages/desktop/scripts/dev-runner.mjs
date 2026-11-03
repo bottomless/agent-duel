@@ -465,13 +465,15 @@ if (!stopping) {
       await waitForPort(debuggerPort);
       const pageDebuggerUrl = await waitForElectronPage(debuggerPort, expoDevUrl);
       const developmentSession = createDevelopmentSession();
-      await waitForElectronRenderer(pageDebuggerUrl, developmentSession);
+      // A cold Metro cache can use a full minute for the bundle alone on a busy machine.
+      await waitForElectronRenderer(pageDebuggerUrl, developmentSession, 180_000);
       console.log(
         `[dev] healthy: daemon ${process.env.PASEO_DAEMON_ENDPOINT}, Metro ${expoDevUrl}, Electron debugger 127.0.0.1:${debuggerPort}`,
       );
     } catch (error) {
       console.error(`[dev] ${error.message}`);
       if (!electronProcess.killed) exitCode = 1;
+      stopDaemonOnExit = true;
       stopAll("SIGTERM");
     }
   }
