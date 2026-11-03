@@ -12,6 +12,10 @@ export const IDLE_TOOL_INTERRUPTED =
   "The model stopped responding while generating this tool call. This call was not executed. Replace it with smaller writes or patches. Do not repeat successful tool calls."
 export const IDLE_CONTINUE =
   "The previous response was cancelled because the model stopped sending output. Continue from the partial response without repeating it. Any unfinished tool call was not executed. Do not repeat the oversized write: use writes or patches of at most 100 lines per call, then continue in further steps. Preserve completed work. Do not repeat successful tool calls. Keep reasoning concise."
+// A response that stalled while it only thought is left out of the request (`MessageV2.hasReply`),
+// so there is no partial response to continue.
+export const IDLE_RESTART =
+  "The previous response was cancelled because the model stopped sending output before it wrote anything. Start the response again. Do not repeat successful tool calls. Keep reasoning concise."
 
 export const MAX_RECOVERIES = 3
 export const RECOVERING = "Continuing after response limit"

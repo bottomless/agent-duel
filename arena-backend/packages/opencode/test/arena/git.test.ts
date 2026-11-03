@@ -2,7 +2,7 @@ import { $ } from "bun"
 import { describe, expect } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
-import { Cause, Effect, Exit } from "effect"
+import { Cause, Effect, Exit, Layer } from "effect"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import {
   applyFastForward,
@@ -253,7 +253,93 @@ for (const scenario of [
   )
 }
 
+/**
+ * Real Git, except that the result snapshot's `add -A` fails as it does when a process the
+ * contestant left running deletes a file between Git listing it and reading it: the file is gone,
+ * and Git reports the one it lost. `failures` is how many snapshot attempts lose a file.
+ */
+const vanishingFileGit = (input: { readonly worktree: string; readonly file: string; readonly failures: number }) =>
+  Effect.gen(function* () {
+    const real = yield* Git.Service
+    const state = { attempts: 0 }
+    const layer = Layer.succeed(
+      Git.Service,
+      Git.Service.of({
+        ...real,
+        run: (args, opts) => {
+          if (args[0] !== "add" || args[1] !== "-A" || opts.cwd !== input.worktree) return real.run(args, opts)
+          state.attempts++
+          if (state.attempts > input.failures) return real.run(args, opts)
+          return Effect.promise(async () => {
+            await fs.writeFile(path.join(input.worktree, input.file), "partial download")
+            await fs.rm(path.join(input.worktree, input.file))
+            const stderr = Buffer.from(`fatal: unable to stat '${input.file}': No such file or directory\n`)
+            return { exitCode: 128, stdout: Buffer.alloc(0), stderr, text: () => "", truncated: false }
+          })
+        },
+      }),
+    )
+    return { layer, state }
+  })
+
 describe("ArenaGit", () => {
+  it.live("finalizes a result whose file a running process deleted while it was staged", () =>
+    Effect.gen(function* () {
+      const canonical = yield* scopedTmpdir({ git: true })
+      const candidate = yield* scopedTmpdir()
+      const frozenHead = (yield* Effect.promise(() => $`git rev-parse HEAD`.cwd(canonical.path).quiet().text())).trim()
+      yield* Effect.promise(() =>
+        $`git worktree add --detach ${candidate.path} ${frozenHead}`.cwd(canonical.path).quiet(),
+      )
+      yield* Effect.addFinalizer(() =>
+        Effect.promise(() =>
+          $`git worktree remove --force ${candidate.path}`.cwd(canonical.path).quiet().nothrow(),
+        ).pipe(Effect.ignore),
+      )
+      yield* Effect.promise(() => fs.writeFile(`${candidate.path}/scraper.py`, "print('scraping')\n"))
+      const git = yield* vanishingFileGit({ worktree: candidate.path, file: "audio.webm", failures: 1 })
+
+      const result = yield* finalize({
+        worktree: candidate.path,
+        baseSHA: frozenHead,
+        permanentRef: "refs/battles/vanished/a",
+      }).pipe(Effect.provide(git.layer))
+
+      expect(git.state.attempts).toBe(2)
+      const files = yield* Effect.promise(() =>
+        $`git ls-tree -r --name-only ${result.finalCommit}`.cwd(canonical.path).quiet().text(),
+      )
+      expect(files.split("\n")).toContain("scraper.py")
+      expect(files.split("\n")).not.toContain("audio.webm")
+    }),
+  )
+
+  it.live("stops retrying a result snapshot whose files keep vanishing", () =>
+    Effect.gen(function* () {
+      const canonical = yield* scopedTmpdir({ git: true })
+      const candidate = yield* scopedTmpdir()
+      const frozenHead = (yield* Effect.promise(() => $`git rev-parse HEAD`.cwd(canonical.path).quiet().text())).trim()
+      yield* Effect.promise(() =>
+        $`git worktree add --detach ${candidate.path} ${frozenHead}`.cwd(canonical.path).quiet(),
+      )
+      yield* Effect.addFinalizer(() =>
+        Effect.promise(() =>
+          $`git worktree remove --force ${candidate.path}`.cwd(canonical.path).quiet().nothrow(),
+        ).pipe(Effect.ignore),
+      )
+      const git = yield* vanishingFileGit({ worktree: candidate.path, file: "audio.webm", failures: Infinity })
+
+      const exit = yield* finalize({
+        worktree: candidate.path,
+        baseSHA: frozenHead,
+        permanentRef: "refs/battles/vanishing/a",
+      }).pipe(Effect.provide(git.layer), Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(git.state.attempts).toBe(3)
+    }),
+  )
+
   it.live("preserves public untracked files newly ignored by the winner", () =>
     Effect.gen(function* () {
       const canonical = yield* scopedTmpdir({ git: true })

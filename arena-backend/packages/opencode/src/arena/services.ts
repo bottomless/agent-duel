@@ -35,6 +35,8 @@ export type ProcessSnapshot = {
    * — and never a service the turn started, however deep in the worktree it stands.
    */
   readonly sessionShell?: boolean
+  /** True for any process with a controlling terminal: a terminal's shell and what runs in it. */
+  readonly terminal?: boolean
   /** A stable process start token (for example, `ps lstart`) used to reject reused PIDs. */
   readonly processStartIdentity?: string
   readonly listeners?: readonly ServiceListener[]
@@ -63,6 +65,7 @@ export type ServiceAdapter = {
     signal: "SIGTERM" | "SIGKILL",
   ) => Promise<void> | void
   readonly stopTerminal?: (terminalID: string) => Promise<void> | void
+  readonly pauseProcessGroup?: (processGroupID: number, signal: "SIGSTOP" | "SIGCONT") => Promise<void> | void
   readonly processGroupAlive?: (processGroupID: number) => Promise<boolean> | boolean
   readonly terminalAlive?: (terminalID: string) => Promise<boolean> | boolean
   /** Re-scan listeners after stopping. A missing method means no listener data is available. */
@@ -510,6 +513,58 @@ function stopRecord(record: CapturedService, status: ServiceStopRecord["status"]
 
 export const stopServices = stopOwnedServices
 
+/**
+ * Pauses the worktree's own process groups and returns them for `resumeProcessGroups`. A dev
+ * server or build watcher the contestant left running can delete a file between Git listing and
+ * reading it, and fails the result snapshot on every attempt while it keeps churning. Paused, it
+ * stays alive, so the voter still opens its preview. A group with a controlling terminal is left
+ * running: stopping a terminal's job hands the terminal back to its shell as a suspended job.
+ * Contestant commands start in their own session, without one. A group that cannot be signalled
+ * keeps running, and the snapshot's own retry is all that covers it.
+ */
+export async function pauseOwnedProcessGroups(
+  worktree: string,
+  adapter: ServiceAdapter = defaultServiceAdapter,
+): Promise<readonly number[]> {
+  const pause = adapter.pauseProcessGroup
+  if (!adapter.listProcesses || !pause) return []
+  const root = path.resolve(worktree)
+  const processes = await resolved(adapter.listProcesses())
+  const withTerminal = new Set(processes.flatMap((item) => (item.terminal ? [item.processGroupID] : [])))
+  const groups = new Set<number>()
+  for (const item of processes) {
+    const group = item.processGroupID
+    if (group === undefined || item.sessionShell || !processBelongsTo(root, item)) continue
+    if (withTerminal.has(group) || groups.has(group)) continue
+    if (adapter.isProtectedProcessGroup && (await resolved(adapter.isProtectedProcessGroup(group)))) continue
+    groups.add(group)
+  }
+  const paused: number[] = []
+  for (const group of groups) {
+    try {
+      await resolved(pause(group, "SIGSTOP"))
+      paused.push(group)
+    } catch {
+      // Left running; see above.
+    }
+  }
+  return paused
+}
+
+/** Resumes the groups `pauseOwnedProcessGroups` paused. A group that has since gone is skipped. */
+export async function resumeProcessGroups(
+  groups: readonly number[],
+  adapter: ServiceAdapter = defaultServiceAdapter,
+): Promise<void> {
+  for (const group of groups) {
+    try {
+      await resolved(adapter.pauseProcessGroup?.(group, "SIGCONT"))
+    } catch {
+      // A group that cannot be resumed is one that no longer exists.
+    }
+  }
+}
+
 type CommandProcess = ProcessSnapshot & { readonly processStartIdentity: string }
 
 async function commandOutput(command: string, args: readonly string[]) {
@@ -613,7 +668,9 @@ async function listRealProcesses(): Promise<readonly CommandProcess[]> {
   // ownership marker lets a service remain discoverable after it changes cwd.
   // The complete process environment is neither logged nor persisted.
   const owners = parseOwnerProcesses(await commandOutput("ps", ["axeww", "-o", "pid=,command="]))
-  const shells = sessionShellPids(parseProcessTerminals(await commandOutput("ps", ["ax", "-o", "pid=,ppid=,tty="])))
+  const terminalRows = parseProcessTerminals(await commandOutput("ps", ["ax", "-o", "pid=,ppid=,tty="]))
+  const shells = sessionShellPids(terminalRows)
+  const withTerminal = new Set(terminalRows.flatMap((row) => (row.tty && row.tty !== NO_TERMINAL ? [row.pid] : [])))
   const cwds = new Map(cwdRows.map((row) => [row.pid, row.cwd] as const))
   const pids = [...new Set([...cwdRows.map((row) => row.pid), ...owners.keys()])].sort((a, b) => a - b)
   if (pids.length === 0) return []
@@ -641,6 +698,7 @@ async function listRealProcesses(): Promise<readonly CommandProcess[]> {
       args: tokens.slice(1),
       ...(owner ?? {}),
       ...(shells.has(pid) ? { sessionShell: true } : {}),
+      ...(withTerminal.has(pid) ? { terminal: true } : {}),
       processStartIdentity: details.start,
     }]
   })
@@ -684,6 +742,10 @@ export const defaultServiceAdapter: ServiceAdapter = {
       // group we may not signal is one we must never report as stopped.
       if ((cause as NodeJS.ErrnoException).code !== "ESRCH") throw cause
     }
+  },
+  pauseProcessGroup: (processGroupID, signal) => {
+    if (process.platform === "win32") return
+    process.kill(-processGroupID, signal)
   },
   processGroupAlive: (processGroupID) => {
     if (process.platform === "win32") return false

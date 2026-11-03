@@ -991,7 +991,11 @@ Git state are recorded under the generation's private battle refs, numstat is st
 applicability is set to `applicable` only when the frozen base is an ancestor of the result. A
 companion private ref transports the final index tree. Recording must preserve empty and multiple
 commits, commit-plus-residual state, and the index and dirty working tree; Arena does not add a
-wrapper commit to the developer-visible history. Untracked dependency and cache folders
+wrapper commit to the developer-visible history. A dev server or build watcher the contestant left
+running is paused (`SIGSTOP`) while the result is read and resumed afterwards: one that keeps
+creating and deleting files fails nearly every `git add`, and killing it would take the preview the
+voter opens. Groups with a controlling terminal keep running, since stopping a terminal's job
+suspends it in its shell (`pauseOwnedProcessGroups` in `arena/services.ts`). Untracked dependency and cache folders
 (`node_modules`, `.venv` and the like, at any depth) are not part of a side's result: the
 contestant's own repository excludes them, because a project that ignores only its root
 `/node_modules` would otherwise count a tool a contestant installed under `qa/` as its change and
@@ -1064,6 +1068,11 @@ field. Each layer has its own file:
   request: a single-agent chat replays the previous message's envelopes under that message's new
   scope, and a running turn loses its sealed reasoning when the key rotates. Cloud instances must
   share that key. BYOK sealing provides no secrecy from the user who owns that key.
+  A reply that only thought, one that stalled or one a model ended without text, therefore reaches
+  the provider as an empty assistant message, and Moonshot rejects the request. Every contestant is
+  `arena/contestant`, so the engine takes another battle's reply for the model's own and keeps its
+  reasoning. `MessageV2.toModelMessages` leaves such a reply out of the request and keeps it in the
+  session, where a stalled one counts towards the idle-recovery limit.
   Runtime-only usage can continue through the transport, but the telemetry copy never persists
   generation request bodies because system prompts and tool
   schemas can fingerprint the provider. It drops per-side token counts, native finish reasons,
@@ -1379,7 +1388,12 @@ request already in flight.
 
 An offline machine spends no retry. When a contestant request cannot reach the network at all (DNS
 fails or there is no route), the daemon's runtime proxy in a hosted build, or the in-process service
-in a BYOK build, answers 503 `arena_network_unavailable`. The contestant then waits with backoff
+in a BYOK build, answers 503 `arena_network_unavailable`. A link that is up but passes no traffic
+counts too: DNS still answers from cache and every request hangs, so treating it as an ordinary
+failure spent each Retry's whole window inside the outage. The hosted proxy reads Node's connect
+timeout after 10 seconds. The BYOK service runs on Bun, which reports the same hang as
+`ConnectionRefused` after 75 seconds, so it settles any unclear failure by opening a connection to
+OpenRouter, not by a DNS lookup. The contestant then waits with backoff
 capped at 10 seconds for as long as the network is gone, shows **Waiting for network**, and the next
 real failure gets a fresh two-minute window. A closed lid is the common case: macOS wakes briefly for
 Power Nap before Wi-Fi reconnects, and the window's monotonic clock stops during sleep, so without
@@ -1479,7 +1493,7 @@ The control plane deploys the replay route as its own function, and the daemon's
 allows it by path.
 
 The contestant sees only a neutral error, so diagnose a deadline from the engine log,
-`~/.local/share/opencode/log/opencode.log` for the packaged app too. Each timeout writes
+`$PASEO_HOME/engine.log`. Each timeout writes
 `arena model response idle` with the last part types the model produced and the proxy's record of
 that stream: when it last received a chunk, ended, started and finished saving the response, and
 closed. A stream that ended but never closed stalled inside the engine, not upstream. Compare it

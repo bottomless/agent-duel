@@ -10,13 +10,14 @@ import { findExecutable } from "../../../../executable-resolution/executable-res
 import { spawnProcess, type SpawnProcessOptions } from "../../../../utils/spawn.js";
 import { terminateWithTreeKill, type ProcessTerminator } from "../../../../utils/tree-kill.js";
 import type { ManagedProcessRegistry } from "../../../managed-processes/managed-processes.js";
+import { reportCrash } from "../../../crash-reports/reporter.js";
 import {
   createProviderEnvSpec,
   resolveProviderLaunch,
   type ProviderLaunchSource,
   type ProviderRuntimeSettings,
 } from "../../provider-launch-config.js";
-import { resolveOpenCodeHomeDir } from "./paths.js";
+import { resolveEngineLogPath, resolveOpenCodeHomeDir } from "./paths.js";
 import {
   isArenaCredentialsCurrent,
   issueArenaLaunchCredentials,
@@ -81,6 +82,8 @@ export interface OpenCodeServerGeneration {
   managedProcessId?: string;
   managedProcessRecord?: Promise<{ id: string } | null>;
   arenaRuntimeToken?: string;
+  /** Set when the daemon stops this server, so its exit is not reported as a crash. */
+  stopping?: boolean;
 }
 
 export type OpenCodePortAllocator = () => Promise<number>;
@@ -641,7 +644,22 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
         failStartup(new Error(buildStartupErrorMessage(headline)));
       });
 
-      serverProcess.on("exit", (code) => {
+      serverProcess.on("exit", (code, signal) => {
+        if (!server.stopping) {
+          // The engine's stderr is in the daemon log; what it was doing is in its own.
+          reportCrash(
+            {
+              process: "engine",
+              kind: "exit",
+              message: started
+                ? "The battle engine exited unexpectedly"
+                : "The battle engine exited before it was ready",
+              exitCode: code,
+              signal,
+            },
+            [resolveEngineLogPath()],
+          );
+        }
         if (server.arenaRuntimeToken) {
           revokeArenaRuntimeCredentials(server.arenaRuntimeToken);
           server.arenaRuntimeToken = undefined;
@@ -726,6 +744,7 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
               : []),
             {
               [OPENCODE_CONTROL_TOKEN_ENV]: input.isArenaLaunch ? undefined : this.controlToken,
+              OPENCODE_LOG_FILE: resolveEngineLogPath(),
             },
           ],
         }),
@@ -778,6 +797,7 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
   }
 
   private async killServer(server: OpenCodeServerGeneration): Promise<void> {
+    server.stopping = true;
     if (server.arenaRuntimeToken) {
       revokeArenaRuntimeCredentials(server.arenaRuntimeToken);
       server.arenaRuntimeToken = undefined;

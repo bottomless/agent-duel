@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import { isNetworkUnavailable } from "./network"
 
-const online = async () => ({ address: "203.0.113.1" })
+const online = async () => undefined
 const offline = async () => {
-  throw Object.assign(new Error("getaddrinfo ENOTFOUND openrouter.ai"), { code: "ENOTFOUND" })
+  throw new Error("Connection timed out")
 }
 
 describe("isNetworkUnavailable", () => {
@@ -14,7 +14,7 @@ describe("isNetworkUnavailable", () => {
     }
   })
 
-  test("settles Bun's ambiguous connection failure by resolving the host", async () => {
+  test("settles Bun's ambiguous connection failure by connecting to the host", async () => {
     const error = Object.assign(new Error("Unable to connect. Is the computer able to access the url?"), {
       code: "ConnectionRefused",
     })
