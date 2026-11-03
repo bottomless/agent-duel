@@ -4,8 +4,12 @@ import {
   accountUserSchema,
   authMethodsResponseSchema,
   currentSessionResponseSchema,
+  sessionMethodSchema,
+  signInMethodSchema,
+  startAnonymousSessionResponseSchema,
   type OpenSignInFlowRequest,
   type AcceptTermsRequest,
+  type StartAnonymousSessionRequest,
 } from "@getpaseo/protocol/accounts/schemas";
 import { clientHeaders } from "./config.js";
 
@@ -20,13 +24,14 @@ export class AccountsRequestError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /** The control plane's machine-readable reason, such as `sign_in_required`. */
+    readonly code?: string,
   ) {
     super(message);
     this.name = "AccountsRequestError";
   }
 }
 
-const signInMethodSchema = z.enum(["email", "google", "github"]);
 const openedFlowSchema = z.object({
   flowId: z.string(),
   secret: z.string(),
@@ -40,12 +45,18 @@ const claimedFlowSchema = z.discriminatedUnion("status", [
     sessionToken: z.string(),
     method: signInMethodSchema,
     user: accountUserSchema,
+    /**
+     * The anonymous account this sign-in merged into an existing one. The daemon moves its local
+     * records to the signed-in account (`adoptAccounts` in the Arena credentials).
+     */
+    mergedFrom: z.string().optional(),
   }),
 ]);
 const okSchema = z.object({ ok: z.literal(true) });
 
 export type AccountUser = z.infer<typeof accountUserSchema>;
 export type SignInMethod = z.infer<typeof signInMethodSchema>;
+export type SessionMethod = z.infer<typeof sessionMethodSchema>;
 export type ClaimedFlow = z.infer<typeof claimedFlowSchema>;
 
 export class AccountsBackend {
@@ -77,15 +88,18 @@ export class AccountsBackend {
       });
       const payload: unknown = await response.json().catch(() => null);
       if (!response.ok) {
+        const body =
+          payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
         const message =
-          payload &&
-          typeof payload === "object" &&
-          "error" in payload &&
-          typeof payload.error === "string"
-            ? payload.error
+          typeof body.error === "string"
+            ? body.error
             : `Accounts request failed with status ${response.status}`;
         if (response.status >= 500) throw new AccountsBackendUnavailableError(new Error(message));
-        throw new AccountsRequestError(response.status, message);
+        throw new AccountsRequestError(
+          response.status,
+          message,
+          typeof body.code === "string" ? body.code : undefined,
+        );
       }
       return schema.parse(payload);
     } catch (error) {
@@ -100,8 +114,13 @@ export class AccountsBackend {
     return this.request("/methods", authMethodsResponseSchema, { method: "GET" });
   }
 
-  openFlow(input: OpenSignInFlowRequest) {
-    return this.request("/flow", openedFlowSchema, { body: input });
+  /** `anonymousToken` is the anonymous session the sign-in upgrades, when there is one. */
+  openFlow(input: OpenSignInFlowRequest, anonymousToken?: string) {
+    return this.request("/flow", openedFlowSchema, { body: input, token: anonymousToken });
+  }
+
+  startAnonymous(input: StartAnonymousSessionRequest) {
+    return this.request("/anonymous", startAnonymousSessionResponseSchema, { body: input });
   }
 
   claimFlow(input: { flowId: string; secret: string }) {

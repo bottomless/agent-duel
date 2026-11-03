@@ -2,7 +2,7 @@ import { ArenaActivity } from "./activity"
 import { Stream } from "effect"
 import { createArenaStream, type Frame as ArenaStreamFrame } from "./stream"
 import { execFile as nodeExecFile } from "child_process"
-import { createHash, randomBytes } from "crypto"
+import { createHash, randomBytes, randomUUID } from "crypto"
 import { realpathSync, type BigIntStats } from "fs"
 import { lstat, mkdir, readdir, readFile, readlink, realpath, rm } from "fs/promises"
 import {
@@ -64,6 +64,7 @@ import {
 import { comparisonTimeline, showedOutput } from "./comparison-timeline"
 import { ArenaContestant, contestantPermissions } from "./contestant"
 import { createBattleAssignments, createSingleAssignment, resolveAssignments } from "./assignment-client"
+import { admitMessage } from "./message-admission"
 import type { BattleAssignmentDecision } from "@agent-duel/arena-service/assignment-decision"
 import { ArenaAttachments } from "./attachments"
 import { forkSessionInto, type ArenaFork } from "./fork"
@@ -2361,6 +2362,8 @@ export const layer: Layer.Layer<
       const owner = yield* promise(() => store.chatForSession(rawSessionID))
       const now = new Date()
       const id = `single-agent|${rawSessionID.length}:${rawSessionID}|${messageID.length}:${messageID}`
+      // The rating's ID is the message's, so a retried message counts once.
+      yield* promise(() => admitMessage(id))
       const selected = yield* promise(() => createSingleAssignment(id, modelSize))
       const rating = (yield* promise(() =>
         store.claimSingleAgentRating({
@@ -5788,6 +5791,9 @@ export const layer: Layer.Layer<
       }
       yield* withGit(requireBattleGit(chat.repository.root)).pipe(Effect.mapError(error))
       const turnID = makeTurnID(chat._id, chat.turnCount)
+      // Before anything is drawn or frozen, so a refused prompt leaves the chat as it was. The turn ID
+      // stays the same until the turn activates, so sending the prompt again counts it once.
+      yield* promise(() => admitMessage(`battle|${turnID}`))
       // The pair is drawn while the base freezes, so the send waits once for both. The draw is
       // account- and turn-scoped and idempotent on the control plane, so a send refused after this
       // point leaves an unused set and nothing else.
@@ -6291,6 +6297,9 @@ export const layer: Layer.Layer<
       if (working.some((run) => interruptingSteers.has(run._id) || discardingSteers.has(run._id))) {
         return yield* Effect.fail(new Error("Arena steer mutation is already in progress"))
       }
+      // Before anything is claimed, so a refused reply leaves both sides untouched. Each reply is a new
+      // message, so it gets a new key.
+      yield* promise(() => admitMessage(`reply|${turn._id}|${randomUUID()}`))
       const finishedSides = finished.map((run) => run.side)
       const claimed =
         finished.length === 0

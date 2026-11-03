@@ -143,13 +143,66 @@ function ProviderButton({ provider, disabled, loading, onPress }: ProviderButton
   );
 }
 
+interface BackToAppProps {
+  disabled: boolean;
+  onPress: (() => void) | undefined;
+}
+
+/** Leaves a sign-in shown over an anonymous session, back to the app it covers. */
+function BackToApp({ disabled, onPress }: BackToAppProps) {
+  if (!onPress) return null;
+  return (
+    <Button
+      variant="ghost"
+      leftIcon={ChevronLeft}
+      disabled={disabled}
+      onPress={onPress}
+      style={styles.backButton}
+      testID="sign-in-back-to-app"
+    >
+      Back
+    </Button>
+  );
+}
+
+/**
+ * `first-run` with no session, `requested` when an anonymous user chose Sign in, `required` when an
+ * anonymous session that has used its messages tried to send.
+ */
+export type SignInScreenVariant = "first-run" | "requested" | "required";
+
+const HEADINGS: Record<SignInScreenVariant, { title: string; subtitle: string }> = {
+  "first-run": {
+    title: "Sign in to Agent Duel",
+    subtitle: "Two blinded agents answer every prompt. You decide which one wins.",
+  },
+  requested: {
+    title: "Sign in to Agent Duel",
+    subtitle: "Your battles so far move to your account.",
+  },
+  required: {
+    title: "Sign in to keep battling",
+    subtitle:
+      "You've used the free prompts on this computer. Your battles so far move to your account.",
+  },
+};
+
 export interface SignInScreenProps {
   endpoint: AccountsEndpoint;
   methods: readonly SignInMethod[];
   documents: LegalDocuments;
+  variant?: SignInScreenVariant;
+  /** Leaves a sign-in shown over an anonymous session. */
+  onBack?: () => void;
 }
 
-export function SignInScreen({ endpoint, methods, documents }: SignInScreenProps) {
+export function SignInScreen({
+  endpoint,
+  methods,
+  documents,
+  variant = "first-run",
+  onBack,
+}: SignInScreenProps) {
   const [accepted, setAccepted] = useState(false);
   const [acceptanceMissing, setAcceptanceMissing] = useState(false);
   const checkboxRef = useRef<View>(null);
@@ -165,6 +218,7 @@ export function SignInScreen({ endpoint, methods, documents }: SignInScreenProps
     [accepted, documents],
   );
   const { state, startEmail, startOAuth, goBack } = useSignIn(endpoint, acceptance);
+  const heading = HEADINGS[variant];
   const [email, setEmail] = useState("");
 
   const emailEnabled = methods.includes("email");
@@ -265,10 +319,8 @@ export function SignInScreen({ endpoint, methods, documents }: SignInScreenProps
       <ScrollView contentContainerStyle={styles.scroll}>
         <View style={styles.panel}>
           <View style={styles.heading}>
-            <Text style={styles.title}>Sign in to Agent Duel</Text>
-            <Text style={styles.subtitle}>
-              Two blinded agents answer every prompt. You decide which one wins.
-            </Text>
+            <Text style={styles.title}>{heading.title}</Text>
+            <Text style={styles.subtitle}>{heading.subtitle}</Text>
           </View>
 
           {methods.length === 0 ? (
@@ -346,6 +398,8 @@ export function SignInScreen({ endpoint, methods, documents }: SignInScreenProps
               {state.message}
             </Text>
           ) : null}
+
+          <BackToApp disabled={busy} onPress={onBack} />
         </View>
       </ScrollView>
     </View>

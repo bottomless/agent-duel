@@ -64,6 +64,7 @@ import {
 } from "@/composer/actions";
 import { useToast } from "@/contexts/toast-context";
 import { recordFeedbackMessageSent } from "@/feedback/prompt-store";
+import { useAnonymousSendGuard } from "@/accounts/sign-in-prompt";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Shortcut } from "@/components/ui/shortcut";
 import { useShortcutKeys } from "@/hooks/use-shortcut-keys";
@@ -1263,8 +1264,11 @@ export function Composer({
     [serverId, setQueuedMessages],
   );
 
+  const { holdForSignIn, sendSettled } = useAnonymousSendGuard();
+
   const queueMessage = useCallback(
     (queuedMessage: string, queuedAttachments: ComposerAttachment[]) => {
+      if (holdForSignIn()) return;
       const result = queueComposerMessage({
         agentId,
         text: queuedMessage,
@@ -1273,6 +1277,7 @@ export function Composer({
         queue: queueWriter,
       });
       if (!result.queued) return;
+      sendSettled();
 
       setUserInput("");
       setSelectedAttachments([]);
@@ -1283,8 +1288,10 @@ export function Composer({
       agentId,
       arenaFollowUp,
       clearSentAttachments,
+      holdForSignIn,
       queueWriter,
       resetSuppression,
+      sendSettled,
       setSelectedAttachments,
       setUserInput,
     ],
@@ -1297,6 +1304,7 @@ export function Composer({
       forceSend?: boolean,
       actionId?: string,
     ) => {
+      if (holdForSignIn()) return;
       const result = await submitAgentInput({
         message: outgoingMessage,
         attachments: outgoingAttachments,
@@ -1328,11 +1336,13 @@ export function Composer({
         setIsProcessing,
         onSubmitError: (error) => {
           console.error("[AgentInput] Failed to send message:", error);
+          sendSettled(error);
         },
         failedToSendMessage: t("composer.errors.failedToSend"),
       });
       if (result === "queued" || result === "submitted") {
         recordFeedbackMessageSent();
+        sendSettled();
       }
       completeSubmit({
         result,
@@ -1345,8 +1355,10 @@ export function Composer({
       clearDraft,
       completeSubmit,
       hasExternalContent,
+      holdForSignIn,
       isAgentRunning,
       queueMessage,
+      sendSettled,
       setSelectedAttachments,
       setUserInput,
       submitBehavior,

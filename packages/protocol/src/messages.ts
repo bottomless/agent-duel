@@ -2345,6 +2345,11 @@ export const ProjectGitInspectRequestSchema = z.object({
   requestId: z.string(),
 });
 
+export const ProjectRecentListRequestSchema = z.object({
+  type: z.literal("project.recent.list.request"),
+  requestId: z.string(),
+});
+
 export const ProjectGitInitializeRequestSchema = z.object({
   type: z.literal("project.git.initialize.request"),
   cwd: z.string(),
@@ -2960,6 +2965,7 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   ProjectCreateDirectoryRequestSchema,
   ProjectGitInspectRequestSchema,
   ProjectGitInitializeRequestSchema,
+  ProjectRecentListRequestSchema,
   WorkspaceGithubSearchRepositoriesRequestSchema,
   ProjectGithubCloneRequestSchema,
   ArchiveWorkspaceRequestSchema,
@@ -3880,6 +3886,26 @@ export const ProjectGitInspectResponseSchema = z.object({
     requestId: z.string(),
     cwd: z.string(),
     state: ProjectGitStateSchema.nullable(),
+    error: z.string().nullable(),
+  }),
+});
+
+/** The tool a recent project was found in (`recent-projects.ts` in the daemon). */
+export const RecentProjectSourceSchema = z.enum(["claude", "codex", "vscode"]);
+
+export const RecentProjectSchema = z.object({
+  /** The git repository root; for a worktree, its main project's. */
+  path: z.string(),
+  name: z.string(),
+  sources: z.array(RecentProjectSourceSchema),
+  lastUsedAt: z.string(),
+});
+
+export const ProjectRecentListResponseSchema = z.object({
+  type: z.literal("project.recent.list.response"),
+  payload: z.object({
+    requestId: z.string(),
+    projects: z.array(RecentProjectSchema),
     error: z.string().nullable(),
   }),
 });
@@ -5799,6 +5825,7 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   ProjectCreateDirectoryResponseSchema,
   ProjectGitInspectResponseSchema,
   ProjectGitInitializeResponseSchema,
+  ProjectRecentListResponseSchema,
   OpenProjectResponseMessageSchema,
   WorkspaceGithubSearchRepositoriesResponseSchema,
   ProjectGithubCloneResponseSchema,
@@ -5985,6 +6012,7 @@ export type ProjectAddResponse = z.infer<typeof ProjectAddResponseSchema>;
 export type ProjectCreateDirectoryResponse = z.infer<typeof ProjectCreateDirectoryResponseSchema>;
 export type ProjectGitInspectResponse = z.infer<typeof ProjectGitInspectResponseSchema>;
 export type ProjectGitInitializeResponse = z.infer<typeof ProjectGitInitializeResponseSchema>;
+export type ProjectRecentListResponse = z.infer<typeof ProjectRecentListResponseSchema>;
 export type ScriptStatusUpdateMessage = z.infer<typeof ScriptStatusUpdateMessageSchema>;
 export type OpenProjectResponseMessage = z.infer<typeof OpenProjectResponseMessageSchema>;
 export type WorkspaceGithubSearchRepositoriesResponse = z.infer<
@@ -6301,6 +6329,9 @@ export type ProjectCreateDirectoryRequest = z.infer<typeof ProjectCreateDirector
 export type ProjectCreateDirectoryErrorCode = z.infer<typeof ProjectCreateDirectoryErrorCodeSchema>;
 export type ProjectGitInspectRequest = z.infer<typeof ProjectGitInspectRequestSchema>;
 export type ProjectGitInitializeRequest = z.infer<typeof ProjectGitInitializeRequestSchema>;
+export type ProjectRecentListRequest = z.infer<typeof ProjectRecentListRequestSchema>;
+export type RecentProject = z.infer<typeof RecentProjectSchema>;
+export type RecentProjectSource = z.infer<typeof RecentProjectSourceSchema>;
 export type ProjectGitState = z.infer<typeof ProjectGitStateSchema>;
 export type WorkspaceGithubSearchRepositoriesRequest = z.infer<
   typeof WorkspaceGithubSearchRepositoriesRequestSchema

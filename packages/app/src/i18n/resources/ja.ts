@@ -979,6 +979,13 @@ export const ja: TranslationResources = {
         all: "すべてのホスト",
       },
     },
+    account: {
+      notSignedIn: "未サインイン",
+      signIn: "サインイン",
+      requiredTitle: "続けるにはサインインしてください",
+      requiredDescription:
+        "このコンピューターの無料プロンプトを使い切りました。チャットはそのまま残ります。",
+    },
     pinned: {
       title: "固定済み",
     },
@@ -1368,6 +1375,14 @@ export const ja: TranslationResources = {
         description: "このデーモンにスマートフォンを接続",
       },
     },
+    recent: {
+      title: "このコンピューターの最近のプロジェクト",
+      loading: "プロジェクトを検索中...",
+      showAll: "すべて表示 ({{count}})",
+      openLabel: "{{name}} でチャットを開始",
+      notFound: "ディレクトリが見つかりません",
+      openFailed: "プロジェクトを追加できません",
+    },
   },
   projectPicker: {
     placeholder: "入力して検索...",
@@ -1745,6 +1760,9 @@ export const ja: TranslationResources = {
       signOut: "サインアウト",
       signOutHint: "Agent Duel を使うには再度サインインが必要です。",
       signOutFailed: "サインアウトできませんでした。もう一度お試しください。",
+      notSignedIn: "未サインイン",
+      notSignedInHint: "サインインすると、バトルがアカウントに保存されます。",
+      signIn: "サインイン",
     },
     editor: {
       title: "エディター",

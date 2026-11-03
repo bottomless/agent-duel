@@ -19,6 +19,7 @@ function enableArena() {
     mode: "hosted",
     researchPartition: "test-research-partition",
     researchAccountID: "test-account",
+    adoptAccounts: [],
     token: "private-runtime-token",
     controlPlaneUrl: "https://control.test",
     controlTokenHash: hashArenaControlToken(controlToken),

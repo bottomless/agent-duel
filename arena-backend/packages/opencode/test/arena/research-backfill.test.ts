@@ -27,6 +27,45 @@ function records(local: LocalStore) {
 }
 
 describe("historical research backfill", () => {
+  test("moves a merged anonymous account's records and pending uploads to the account it joined", async () => {
+    await using dir = await tmpdir()
+    const anonymous = await connectLocalStore({ directory: dir.path, researchPartition: "partition-anonymous" })
+    await anonymous.db.collection("chats").insertOne({ _id: "chat-anonymous", userId: "anonymous" })
+    await anonymous.db.collection("chats").insertOne({ _id: "chat-other", userId: "someone-else" })
+    const pending = anonymous.researchQueue!.count
+    expect(pending).toBeGreaterThan(0)
+    await anonymous.close()
+
+    const adoption = {
+      accountID: "member",
+      accounts: [{ accountID: "anonymous", researchPartition: "partition-anonymous" }],
+    }
+    const member = await connectLocalStore({ directory: dir.path, researchPartition: "partition-member", adoption })
+    try {
+      expect((await member.db.collection("chats").findOne({ _id: "chat-anonymous" }))?.userId).toBe("member")
+      expect((await member.db.collection("chats").findOne({ _id: "chat-other" }))?.userId).toBe("someone-else")
+      expect(member.researchQueue!.count).toBe(pending)
+    } finally {
+      await member.close()
+    }
+    const database = new Database(path.join(dir.path, "arena.sqlite"))
+    try {
+      expect(
+        database.query("SELECT COUNT(*) AS count FROM arena_research_queue WHERE partition = ?").get("partition-anonymous"),
+      ).toEqual({ count: 0 })
+    } finally {
+      database.close()
+    }
+
+    // A restart with the same credentials finds nothing left to move.
+    const again = await connectLocalStore({ directory: dir.path, researchPartition: "partition-member", adoption })
+    try {
+      expect(again.researchQueue!.count).toBe(pending)
+    } finally {
+      await again.close()
+    }
+  })
+
   test("recovers only the signed-in account's complete archives, including images, once per partition", async () => {
     await using dir = await tmpdir()
     const legacy = await connectLocalStore({ directory: dir.path })

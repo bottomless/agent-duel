@@ -1,6 +1,6 @@
 import { createPublicKey, verify, type KeyObject } from "node:crypto";
 import { z } from "zod";
-import type { AccountUser, SignInMethod } from "./backend.js";
+import type { AccountUser, SessionMethod } from "./backend.js";
 
 const ISSUER = "agent-duel-control-plane";
 const AUDIENCE = "agent-duel-desktop";
@@ -9,17 +9,18 @@ const claimsSchema = z.object({
   iss: z.literal(ISSUER),
   aud: z.literal(AUDIENCE),
   sub: z.string(),
-  email: z.string(),
+  // An anonymous session has no email.
+  email: z.string().nullable(),
   name: z.string().nullable(),
   image: z.string().nullable(),
-  method: z.enum(["email", "google", "github"]),
+  method: z.enum(["email", "google", "github", "anonymous"]),
   iat: z.number(),
   exp: z.number(),
 });
 
 export interface VerifiedSessionToken {
   readonly user: AccountUser;
-  readonly method: SignInMethod;
+  readonly method: SessionMethod;
   readonly issuedAt: number;
   readonly expiresAt: number;
 }

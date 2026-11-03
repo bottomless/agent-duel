@@ -178,7 +178,8 @@ export const ForkSessionResult = Schema.Struct({ sessionID: Schema.String })
 export class ArenaApiError extends Schema.ErrorClass<ArenaApiError>("ArenaApiError")(
   {
     name: Schema.Literal("ArenaApiError"),
-    data: Schema.Struct({ message: Schema.String }),
+    // `code` names a refusal the app answers on its own, such as `sign_in_required`.
+    data: Schema.Struct({ message: Schema.String, code: Schema.optional(Schema.String) }),
   },
   { httpApiStatus: 400 },
 ) {}
