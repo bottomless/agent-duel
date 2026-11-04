@@ -112,6 +112,28 @@ export function resolveWindowBounds(
   return { width, height };
 }
 
+/**
+ * Windows at a fractional display scale (168% on a test machine) opens a window a few pixels
+ * larger than asked, about 5x4 at 1200x800, and the larger size is what gets saved on close: the
+ * window grew on every relaunch. Asks again with the overshoot taken off until the window reports
+ * the restored size; at 100% and on macOS the first check already matches.
+ */
+export function settleRestoredWindowSize(
+  win: Pick<BrowserWindow, "getNormalBounds" | "setBounds">,
+  restored: { width: number; height: number },
+): void {
+  const request = { ...win.getNormalBounds(), width: restored.width, height: restored.height };
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const actual = win.getNormalBounds();
+    if (actual.width === restored.width && actual.height === restored.height) {
+      return;
+    }
+    request.width -= actual.width - restored.width;
+    request.height -= actual.height - restored.height;
+    win.setBounds(request);
+  }
+}
+
 function readFiniteOverlayHeight(input: unknown): number | null {
   if (typeof input !== "number" || !Number.isFinite(input)) {
     return null;

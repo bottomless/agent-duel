@@ -31,6 +31,7 @@ import {
   getWindowBackgroundColor,
   resolveSystemWindowTheme,
   resolveWindowBounds,
+  settleRestoredWindowSize,
   setupWindowResizeEvents,
   setupWindowStatePersistence,
   setupDefaultContextMenu,
@@ -646,6 +647,9 @@ async function createWindow(
     app.dock?.setBadge(devWorktreeName);
   }
 
+  if (restoredWindowState && process.platform === "win32") {
+    settleRestoredWindowSize(mainWindow, restoredWindowState);
+  }
   if (restoredWindowState?.isMaximized) {
     mainWindow.maximize();
   }

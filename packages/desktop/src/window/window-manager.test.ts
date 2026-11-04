@@ -12,6 +12,7 @@ import {
   readWindowTheme,
   resolveRuntimeTitleBarOverlayOptions,
   resolveWindowBounds,
+  settleRestoredWindowSize,
 } from "./window-manager";
 
 describe("window-manager", () => {
@@ -218,6 +219,40 @@ describe("window-manager", () => {
         width: 1024,
         height: 720,
       });
+    });
+  });
+
+  describe("settleRestoredWindowSize", () => {
+    // Mimics Windows at 168%: every requested size comes out 5x4 larger.
+    function overshootingWindow(initial: Electron.Rectangle) {
+      let bounds = initial;
+      return {
+        getNormalBounds: () => ({ ...bounds }),
+        setBounds: vi.fn((next: Partial<Electron.Rectangle>) => {
+          bounds = {
+            ...bounds,
+            ...next,
+            width: (next.width ?? bounds.width) + 5,
+            height: (next.height ?? bounds.height) + 4,
+          };
+        }),
+      };
+    }
+
+    it("takes the overshoot off so the restored size stays the same across relaunches", () => {
+      const win = overshootingWindow({ x: 358, y: 214, width: 1205, height: 804 });
+
+      settleRestoredWindowSize(win, { width: 1200, height: 800 });
+
+      expect(win.getNormalBounds()).toEqual({ x: 358, y: 214, width: 1200, height: 800 });
+    });
+
+    it("leaves a window that already has the restored size alone", () => {
+      const win = overshootingWindow({ x: 0, y: 0, width: 1200, height: 800 });
+
+      settleRestoredWindowSize(win, { width: 1200, height: 800 });
+
+      expect(win.setBounds).not.toHaveBeenCalled();
     });
   });
 });
