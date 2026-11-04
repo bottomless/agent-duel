@@ -748,6 +748,30 @@ async function waitForQuestions(
   throw new Error(`Arena runs did not expose ${count} pending questions`)
 }
 
+/**
+ * Contestants that run one command and then, for the given ordinals, ask a question; the rest
+ * answer after the command. Asking after a tool keeps the question in the contestant's own
+ * worktree, as in a battle past its first steps.
+ */
+function askAfterShell(askingOrdinals: ReadonlyArray<number>) {
+  const ordinals = new Map<string, number>()
+  return (input: {
+    readonly model: string
+    readonly messages: ReadonlyArray<{ readonly role?: string; readonly content?: unknown }>
+  }) => {
+    const ordinal = ordinals.get(input.model) ?? ordinals.size + 1
+    ordinals.set(input.model, ordinal)
+    const lastUser = input.messages.findLastIndex((message) => message.role === "user")
+    const results = input.messages.slice(lastUser + 1).filter((message) => message.role === "tool").length
+    const key = `${ordinal}-${results}`
+    if (results === 0) return contestantResponse("contestant", ordinal, "bash", false, "printf ready", key)
+    if (results === 1 && askingOrdinals.includes(ordinal)) {
+      return contestantResponse("contestant", ordinal, "question", false, undefined, key)
+    }
+    return contestantResponse("contestant", ordinal, undefined, false, undefined, key)
+  }
+}
+
 async function waitForSelectableRun(store: Store, turnID: string, side: "a" | "b") {
   const deadline = Date.now() + 20_000
   while (Date.now() < deadline) {
@@ -3080,6 +3104,163 @@ describe("Arena service vertical slice", () => {
     } finally {
       if (previousBuildSHA) process.env.OPENCODE_ARENA_BUILD_SHA = previousBuildSHA
       else delete process.env.OPENCODE_ARENA_BUILD_SHA
+      router.restore()
+    }
+  }, 30_000)
+
+  test("Stop ends a battle whose contestants wait on questions and withdraws the questions", async () => {
+    await using directory = await tmpdir({
+      git: true,
+      config: { formatter: false, lsp: false, watcher: { ignore: [".git"] } },
+    })
+    await $`git add opencode.json`.cwd(directory.path).quiet()
+    await $`git commit -m "test: configure arena question stop fixture"`.cwd(directory.path).quiet()
+    const memory = memoryStore()
+    const router = installOpenRouterStub({ respond: askAfterShell([1, 2]) })
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(memory.store)
+
+    try {
+      const headers = {
+        "content-type": "application/json",
+        "x-opencode-directory": directory.path,
+      }
+      const source = await json<{ id: string }>(
+        await request("/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            title: "Arena question stop",
+            permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          }),
+        }),
+      )
+      const attached = await json<PublicSnapshot>(await request(`/arena/sessions/${source.id}`, { headers }))
+      const admitted = await json<PublicSnapshot>(
+        await request(`/arena/chats/${attached.chat.id}/turns`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "Ask before continuing." }),
+        }),
+      )
+      const turnID = admitted.turn?.id
+      if (!turnID) throw new Error("Arena did not return an admitted question turn")
+      await waitForQuestions(request, headers, turnID, 2)
+
+      await json<PublicSnapshot>(await request(`/arena/turns/${turnID}/stop`, { method: "POST", headers }))
+      await waitForTurn(memory.store, turnID, "awaiting_stop_resolution", 10_000)
+      const stopped = await waitForQuestions(request, headers, turnID, 0)
+      expect(stopped.runs.map((run) => run.runState)).toEqual(["stopped", "stopped"])
+    } finally {
+      router.restore()
+    }
+  }, 30_000)
+
+  test("Stop ends a battle whose contestants wait on permission asks and withdraws the asks", async () => {
+    await using directory = await tmpdir({
+      git: true,
+      config: { formatter: false, lsp: false, watcher: { ignore: [".git"] } },
+    })
+    // The build agent asks before reading `*.env.*`.
+    await writeFile(`${directory.path}/.env.local`, "LOCAL_ENV_READ=1\n")
+    await $`git add opencode.json .env.local`.cwd(directory.path).quiet()
+    await $`git commit -m "test: add a local env file"`.cwd(directory.path).quiet()
+    const memory = memoryStore()
+    const router = installOpenRouterStub({ contestantReads: { 1: [".env.local"], 2: [".env.local"] } })
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(memory.store)
+
+    try {
+      const headers = { "content-type": "application/json", "x-opencode-directory": directory.path }
+      const source = await json<{ id: string }>(
+        await request("/session", { method: "POST", headers, body: JSON.stringify({ title: "Arena ask stop" }) }),
+      )
+      const attached = await json<PublicSnapshot>(await request(`/arena/sessions/${source.id}`, { headers }))
+      const admitted = await json<PublicSnapshot>(
+        await request(`/arena/chats/${attached.chat.id}/turns`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "Check the local settings." }),
+        }),
+      )
+      const turnID = admitted.turn?.id
+      if (!turnID) throw new Error("Arena did not admit the ask battle")
+      const permissionsOf = (snapshot: PublicSnapshot) => snapshot.runs.flatMap((run) => run.permissions ?? [])
+      const deadline = Date.now() + 20_000
+      let asked = 0
+      while (asked < 2 && Date.now() < deadline) {
+        asked = permissionsOf(await json<PublicSnapshot>(await request(`/arena/turns/${turnID}`, { headers }))).length
+        if (asked < 2) await Bun.sleep(20)
+      }
+      expect(asked).toBe(2)
+
+      await json<PublicSnapshot>(await request(`/arena/turns/${turnID}/stop`, { method: "POST", headers }))
+      await waitForTurn(memory.store, turnID, "awaiting_stop_resolution", 10_000)
+      const stopped = await json<PublicSnapshot>(await request(`/arena/turns/${turnID}`, { headers }))
+      expect(permissionsOf(stopped)).toEqual([])
+      expect(stopped.runs.map((run) => run.runState)).toEqual(["stopped", "stopped"])
+    } finally {
+      router.restore()
+    }
+  }, 30_000)
+
+  test("an early pick resolves a battle whose other contestant waits on a question", async () => {
+    await using directory = await tmpdir({
+      git: true,
+      config: { formatter: false, lsp: false, watcher: { ignore: [".git"] } },
+    })
+    await $`git add opencode.json`.cwd(directory.path).quiet()
+    await $`git commit -m "test: configure arena question early pick fixture"`.cwd(directory.path).quiet()
+    const memory = memoryStore()
+    const router = installOpenRouterStub({ respond: askAfterShell([1]) })
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(memory.store)
+
+    try {
+      const headers = {
+        "content-type": "application/json",
+        "x-opencode-directory": directory.path,
+      }
+      const source = await json<{ id: string }>(
+        await request("/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            title: "Arena question early pick",
+            permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          }),
+        }),
+      )
+      const attached = await json<PublicSnapshot>(await request(`/arena/sessions/${source.id}`, { headers }))
+      const admitted = await json<PublicSnapshot>(
+        await request(`/arena/chats/${attached.chat.id}/turns`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "Ask before continuing." }),
+        }),
+      )
+      const turnID = admitted.turn?.id
+      if (!turnID) throw new Error("Arena did not return an admitted question turn")
+      const pending = await waitForQuestions(request, headers, turnID, 1)
+      const asking = pending.runs.find((run) => run.questions?.length)
+      if (!asking) throw new Error("Arena did not expose the pending question")
+      const winner = asking.side === "a" ? "b" : "a"
+      await waitForSelectableRun(memory.store, turnID, winner)
+
+      const picked = await json<PublicSnapshot>(
+        await request(`/arena/turns/${turnID}/vote`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ vote: winner }),
+        }),
+      )
+      expect(picked.turn?.selectedEarly).toBe(true)
+      const completed = await waitForTurn(memory.store, turnID, "complete", 10_000)
+      expect(completed.appliedSide).toBe(winner)
+      const loser = (await memory.store.runsForTurn(turnID)).find((run) => run.side === asking.side)
+      expect(loser?.runState).toBe("stopped")
+      expect(router.calls.size).toBe(2)
+    } finally {
       router.restore()
     }
   }, 30_000)

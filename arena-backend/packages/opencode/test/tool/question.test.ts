@@ -1,6 +1,6 @@
 import { describe, expect } from "bun:test"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
-import { Effect, Fiber, Queue } from "effect"
+import { Effect, Exit, Fiber, Queue } from "effect"
 import { QuestionTool } from "../../src/tool/question"
 import { Question } from "../../src/question"
 import { SessionID, MessageID } from "../../src/session/schema"
@@ -87,6 +87,40 @@ describe("tool.question", () => {
 
       const result = yield* Fiber.join(fiber)
       expect(result.output).toContain(`"What is your favorite animal?"="Dog"`)
+    }),
+  )
+
+  it.instance("withdraws the question when the tool call is aborted", () =>
+    Effect.gen(function* () {
+      const question = yield* Question.Service
+      const events = yield* EventV2Bridge.Service
+      const rejected: string[] = []
+      const off = yield* events.listen((event) => {
+        if (event.type === Question.Event.Rejected.type) {
+          rejected.push((event.data as typeof Question.Event.Rejected.data.Type).requestID)
+        }
+        return Effect.void
+      })
+      yield* Effect.addFinalizer(() => off)
+      const toolInfo = yield* QuestionTool
+      const tool = yield* toolInfo.init()
+      const abort = new AbortController()
+
+      const fiber = yield* tool
+        .execute(
+          {
+            questions: [{ question: "Which caption?", header: "Caption", options: [{ label: "A", description: "A" }] }],
+          },
+          { ...ctx, abort: abort.signal },
+        )
+        .pipe(Effect.forkScoped)
+      const item = yield* pending(question)
+      abort.abort()
+
+      const exit = yield* Fiber.await(fiber).pipe(Effect.timeout("2 seconds"))
+      expect(Exit.hasInterrupts(exit)).toBe(true)
+      expect(yield* question.list()).toEqual([])
+      expect(rejected).toEqual([item.id])
     }),
   )
 

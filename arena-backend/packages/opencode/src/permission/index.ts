@@ -127,11 +127,20 @@ const layer = Layer.effect(
       const deferred = yield* Deferred.make<void, PermissionV1.RejectedError | PermissionV1.CorrectedError>()
       pending.set(id, { info, deferred })
       yield* events.publish(Event.Asked, info)
-      return yield* Effect.ensuring(
-        Deferred.await(deferred),
-        Effect.sync(() => {
-          pending.delete(id)
-        }),
+      return yield* Deferred.await(deferred).pipe(
+        // An ask whose tool call was stopped is withdrawn, so no client keeps a request nobody can answer.
+        Effect.onInterrupt(() =>
+          pending.has(id)
+            ? events
+                .publish(Event.Replied, { sessionID: info.sessionID, requestID: id, reply: "reject" })
+                .pipe(Effect.asVoid)
+            : Effect.void,
+        ),
+        Effect.ensuring(
+          Effect.sync(() => {
+            pending.delete(id)
+          }),
+        ),
       )
     })
 

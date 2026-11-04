@@ -3054,6 +3054,65 @@ unix(
   30_000,
 )
 
+unix(
+  "cancel ends a loop waiting on an unanswered question and withdraws the question",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const questions = yield* Question.Service
+      const chat = yield* sessions.create({
+        title: "Cancelled question",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "ask first" }],
+      })
+      yield* llm.tool("question", {
+        questions: [
+          {
+            question: "Which caption should the recording use?",
+            header: "Caption",
+            options: [{ label: "Toolbar APIs", description: "Name the API surface." }],
+          },
+        ],
+      })
+
+      const run = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+      yield* pollWithTimeout(
+        questions
+          .list()
+          .pipe(Effect.map((pending) => (pending.some((item) => item.sessionID === chat.id) ? true : undefined))),
+        "timed out waiting for the question",
+      )
+      yield* prompt.cancel(chat.id).pipe(
+        Effect.timeoutOrElse({
+          duration: "5 seconds",
+          orElse: () => Effect.die(new Error("cancel waited for the question to be answered")),
+        }),
+      )
+
+      const exit = yield* Fiber.await(run).pipe(
+        Effect.timeoutOrElse({
+          duration: "5 seconds",
+          orElse: () => Effect.die(new Error("the loop did not end after cancel")),
+        }),
+      )
+      expect(Exit.isSuccess(exit)).toBe(true)
+      expect((yield* questions.list()).filter((item) => item.sessionID === chat.id)).toEqual([])
+      if (Exit.isFailure(exit)) return
+      const tool = errorTool(exit.value.parts)
+      expect(tool?.tool).toBe("question")
+    }),
+  { git: true },
+  30_000,
+)
+
 unixNoLLMServer(
   "cancel interrupts loop queued behind shell",
   () =>
