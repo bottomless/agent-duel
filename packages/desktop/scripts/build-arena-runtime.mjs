@@ -28,6 +28,14 @@ export function resolveArenaBuildDefines(env) {
   };
 }
 
+/**
+ * The compiled engine embeds the Bun that built it. Bun's default Windows x64 build needs AVX2, so an
+ * engine built with it would crash at start on CPUs without it; the baseline build runs on any x64.
+ */
+export function resolveArenaCompileTarget(platform, arch) {
+  return platform === "win32" && arch === "x64" ? ["--target=bun-windows-x64-baseline"] : [];
+}
+
 function buildArenaRuntime() {
   const defines = resolveArenaBuildDefines(process.env);
   mkdirSync(outputDir, { recursive: true });
@@ -39,6 +47,7 @@ function buildArenaRuntime() {
       "--conditions=browser",
       // A long-lived engine otherwise keeps its peak heap: collect more often and keep it smaller.
       "--compile-exec-argv=--smol",
+      ...resolveArenaCompileTarget(process.platform, process.arch),
       ...Object.entries(defines).flatMap(([key, value]) => ["--define", `${key}=${value}`]),
       "packages/opencode/src/index.ts",
       "--outfile",
