@@ -36,6 +36,10 @@ const gates = new Map<SessionID, PendingGate>()
 const environments = new Map<SessionID, PendingEnvironment>()
 
 const ENVIRONMENT_INDEPENDENT_TOOLS = new Set(["invalid", "question", "todowrite", "webfetch", "websearch"])
+// Arena lists and answers a contestant's questions in its own instance, which a hosted request can
+// enter only once the base checkout exists. Asked any sooner, a question would land in the host's
+// instance, where nobody sees it.
+const CONTESTANT_INSTANCE_TOOLS = new Set(["question"])
 const READ_ONLY_GIT_COMMANDS = new Set(["diff", "log", "ls-files", "rev-parse", "show", "status"])
 
 function isInside(root: string, candidate: string) {
@@ -155,8 +159,9 @@ export async function canExecuteDuringEnvironmentSetup(environment: PendingEnvir
  * Hold tool execution while an Arena worktree finishes becoming usable.
  *
  * Until `baseReady`, the worktree may not exist at all, so only tools with no filesystem
- * dependency run. After it, the tools `canExecuteDuringEnvironmentSetup` proves independent of
- * the pending ignored content run too, and everything else waits for `release`.
+ * dependency run, apart from a question, which waits for the contestant's instance. After it,
+ * the tools `canExecuteDuringEnvironmentSetup` proves independent of the pending ignored content
+ * run too, and everything else waits for `release`.
  */
 export function gateToolExecution(sessionID: SessionID, environment: PendingEnvironment) {
   if (gates.has(sessionID)) throw new Error(`Tool execution is already gated for ${sessionID}`)
@@ -273,7 +278,8 @@ export function assertToolExecutionUsable(sessionID: SessionID, signal?: AbortSi
 }
 
 async function mayRunNow(gate: PendingGate, execution: ToolExecution) {
-  if (gate.phase === "base") return ENVIRONMENT_INDEPENDENT_TOOLS.has(execution.toolID)
+  if (gate.phase === "base")
+    return ENVIRONMENT_INDEPENDENT_TOOLS.has(execution.toolID) && !CONTESTANT_INSTANCE_TOOLS.has(execution.toolID)
   return await canExecuteDuringEnvironmentSetup(gate.environment, execution)
 }
 

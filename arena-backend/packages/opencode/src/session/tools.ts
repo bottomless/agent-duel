@@ -65,12 +65,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   const toolReady = (ctx: Tool.Context, toolID: string, args: Record<string, unknown>) =>
     Effect.gen(function* () {
       yield* Effect.promise(() => waitForToolExecution(ctx.sessionID, { toolID, args }, ctx.abort))
-      const provide =
-        readyToolExecutionEnvironment(ctx.sessionID)?.provide ??
-        // Arena lists and answers a contestant's questions in its own instance. A hosted request
-        // that asks before its checkout exists would leave the question in the host's, where
-        // nobody sees it, so the question waits for that checkout instead.
-        (toolID === "question" ? toolExecutionProvider(ctx.sessionID) : undefined)
+      const provide = readyToolExecutionEnvironment(ctx.sessionID)?.provide
       if (provide) yield* provide(input.processor.ensureSnapshot())
       // A request hosted elsewhere has no contestant checkout yet: an independent tool takes no
       // baseline, since one taken in the host instance would diff the wrong tree.

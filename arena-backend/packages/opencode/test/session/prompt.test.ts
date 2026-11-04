@@ -349,7 +349,7 @@ it.instance("Arena dispatch and cancellation do not wait for an unprepared workt
 )
 
 it.instance(
-  "Arena asks a hosted request's question in the contestant instance before its checkout is ready",
+  "Arena asks a hosted request's early question in the contestant instance once its checkout exists",
   () =>
     Effect.gen(function* () {
       const { llm } = yield* useServerConfig(providerCfg)
@@ -363,7 +363,6 @@ it.instance(
       })
       const directory = yield* tmpdirScoped()
       const contestant = <A, E, R>(effect: Effect.Effect<A, E, R>) => store.provide({ directory }, effect)
-      // Never marked ready: the model asks while the contestant checkout is still being staged.
       const gate = gateToolExecution(chat.id, { worktree: directory, copiedPaths: [], provide: contestant })
       yield* Effect.addFinalizer(() => Effect.sync(() => gate.dispose()))
 
@@ -385,11 +384,19 @@ it.instance(
       yield* llm.text("done")
 
       const run = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+      // The model asks while the contestant checkout is still being staged.
+      yield* llm.wait(1)
+      yield* Effect.sleep("300 millis")
+      const mine = (pending: ReadonlyArray<Question.Request>) => pending.filter((item) => item.sessionID === chat.id)
+      expect(mine(yield* questions.list())).toEqual([])
+      expect(mine(yield* contestant(questions.list()))).toEqual([])
+
+      gate.baseReady()
       const asked = yield* pollWithTimeout(
-        contestant(questions.list()).pipe(Effect.map((pending) => pending.find((item) => item.sessionID === chat.id))),
+        contestant(questions.list()).pipe(Effect.map((pending) => mine(pending)[0])),
         "the question was not asked in the contestant instance",
       )
-      expect((yield* questions.list()).filter((item) => item.sessionID === chat.id)).toEqual([])
+      expect(mine(yield* questions.list())).toEqual([])
       yield* contestant(questions.reply({ requestID: asked.id, answers: [["Toolbar APIs"]] }))
 
       const exit = yield* Fiber.await(run).pipe(
