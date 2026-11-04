@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { Effect, Layer } from "effect"
+import { Schema } from "effect"
+import { SessionMessage } from "@opencode/schema/session-message"
 import { Project } from "@opencode/schema/project"
 import { SessionV1 } from "@/arena/session-shape"
 import { Session, MoveSessionService, MessageID, PartID, SessionID } from "@/arena/session-runtime"
@@ -58,7 +60,12 @@ function tool(
         : { status, input, error: "interrupted", metadata: { output: "partial output" }, time: { start: 0, end: 1 } },
   }
 }
-async function fork(options: Partial<Input> = {}, parts: SessionV1.Part[] = [], empty = false) {
+async function fork(
+  options: Partial<Input> = {},
+  parts: SessionV1.Part[] = [],
+  empty = false,
+  native?: SessionMessage.Info,
+) {
   const written: SessionV1.Part[] = []
   const moved: unknown[] = []
   const created: unknown[] = []
@@ -96,7 +103,7 @@ async function fork(options: Partial<Input> = {}, parts: SessionV1.Part[] = [], 
                 created.push(input)
                 return { ...source, id: targetID }
               }),
-            canonicalMessages: () => Effect.succeed([user] as never),
+            canonicalMessages: () => Effect.succeed([user, ...(native ? [native] : [])] as never),
             updateCanonicalMessage: (input) =>
               Effect.sync(() => {
                 canonical.push(input.message)
@@ -130,6 +137,39 @@ describe("Arena fork on native sessions", () => {
     expect(result.canonical).toMatchObject([
       { text: "Keep /repo/src/index.ts exactly", files: [{ source: { uri: "file:///copy/src/index.ts" } }] },
     ])
+  })
+  test("new-assignment forks expire sealed provider state, including when roots match", async () => {
+    const native = Schema.decodeUnknownSync(SessionMessage.Assistant)({
+      id: "msg_13",
+      type: "assistant",
+      agent: "build",
+      model: { providerID: "arena", id: "contestant" },
+      time: { created: 0 },
+      content: [
+        {
+          type: "reasoning",
+          text: "[Thinking redacted]",
+          state: { reasoning_details: [{ type: "reasoning.encrypted", data: "arena_reasoning_v1.fixture" }] },
+        },
+        { type: "text", text: "Keep this answer" },
+      ],
+    })
+    const before = JSON.stringify(native)
+    for (const roots of [
+      { canonical: "/repo", worktree: "/copy" },
+      { canonical: "/repo", worktree: "/repo" },
+    ]) {
+      const result = await fork({ expireReasoning: true, roots }, [], false, native)
+      expect(JSON.stringify(result.canonical)).not.toContain("arena_reasoning_v1.")
+      expect(result.canonical[1]).toMatchObject({
+        content: [
+          { type: "reasoning", text: "[Thinking redacted]" },
+          { type: "text", text: "Keep this answer" },
+        ],
+      })
+    }
+    expect(JSON.stringify((await fork({}, [], false, native)).canonical)).toContain("arena_reasoning_v1.")
+    expect(JSON.stringify(native)).toBe(before)
   })
   test("keeps battle prompts and output while retargeting executable paths", async () => {
     const result = await fork({ pathMode: "transcript" }, [

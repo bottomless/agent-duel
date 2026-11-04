@@ -143,6 +143,59 @@ it.effect("compaction truncation does not split surrogate pairs", () =>
   }),
 )
 
+it.effect("compaction omits successful and cut Arena reasoning markers while keeping text and tools in order", () =>
+  Effect.gen(function* () {
+    const session = yield* insertSession(Session.ID.make("ses_arena_reasoning"))
+    const makeUser = (text: string) =>
+      SessionMessage.User.make({
+        id: SessionMessage.ID.create(),
+        type: "user",
+        text,
+        time: { created: DateTime.makeUnsafe(0) },
+      })
+    const makeAssistant = (error?: SessionMessage.Assistant["error"]) =>
+      Schema.decodeUnknownSync(SessionMessage.Assistant)({
+        id: SessionMessage.ID.create(),
+        type: "assistant",
+        agent: Agent.defaultID,
+        model: { providerID: "arena", id: "contestant" },
+        ...(error ? { error } : {}),
+        time: { created: 0, completed: 1 },
+        content: [
+          { type: "text", text: "Half an answer" },
+          {
+            type: "reasoning",
+            text: "[Thinking redacted]",
+            state: { reasoning_details: ["sealed"] },
+            time: { created: 0, ...(error ? {} : { completed: 1 }) },
+          },
+          {
+            type: "tool",
+            id: "call_reasoning",
+            name: "read",
+            state: { status: "completed", input: {}, content: [{ type: "text", text: "result" }] },
+            time: { created: 0, completed: 1 },
+          },
+          { type: "text", text: "[The response was interrupted]" },
+        ],
+      })
+    const messages = [
+      makeUser("Earlier"),
+      makeUser("Current"),
+      makeAssistant({ type: "provider.unknown", message: "cut" }),
+      makeAssistant(),
+    ]
+    expect(yield* compactManually(session, messages)).toEqual({ status: "completed" })
+    const stored = (yield* (yield* SessionStore.Service).context(session.id))[0]
+    if (stored?.type !== "compaction" || stored.status !== "completed") throw new Error("checkpoint missing")
+    expect(stored.recent).not.toContain("[Thinking redacted]")
+    expect(stored.recent).not.toContain("[Assistant reasoning]")
+    expect(stored.recent).toContain(
+      "[Assistant]: Half an answer\n[Assistant tool call]: read({})\n[Tool result]: result\n[Assistant]: [The response was interrupted]",
+    )
+  }),
+)
+
 test("compaction prompt requires the checkpoint headings in order", () => {
   const prompt = SessionCompaction.buildPrompt(false)
   expect(prompt.match(/^#{2,3} .+$/gm)).toEqual([

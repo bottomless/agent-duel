@@ -217,6 +217,7 @@ describe("Arena v2 engine runtime", () => {
       runID: "run",
       rootSessionID: "ses_probe",
       scopeID: "scope",
+      reasoningFromMessageID: "msg_20",
       assignmentID: "assignment",
       telemetry: false,
     } as const
@@ -357,6 +358,39 @@ describe("Arena v2 engine runtime", () => {
         sessionID: "ses_probe",
         model: { providerID: PROVIDER_ID } as Model.Ref,
         system,
+        messages: [
+          Message.make({
+            id: "msg_10",
+            role: "assistant",
+            content: [
+              {
+                type: "reasoning",
+                text: "[Thinking redacted]",
+                providerMetadata: {
+                  openrouter: { reasoning_details: [{ type: "reasoning.encrypted", data: "arena_reasoning_v1.old" }] },
+                },
+              },
+              { type: "text", text: "Earlier answer" },
+            ],
+          }),
+          Message.make({
+            id: "msg_30",
+            role: "assistant",
+            content: [
+              {
+                type: "reasoning",
+                text: "",
+                providerMetadata: {
+                  openrouter: {
+                    reasoning_details: [{ type: "reasoning.encrypted", data: "arena_reasoning_v1.current" }],
+                  },
+                },
+              },
+              { type: "tool-call", id: "call_current", name: "read", input: {} },
+            ],
+          }),
+          Message.make({ id: "msg_31", role: "assistant", content: [{ type: "reasoning", text: "" }] }),
+        ],
         options: {},
       }
       yield* runSessionHooks("context", contextEvent)
@@ -364,6 +398,13 @@ describe("Arena v2 engine runtime", () => {
         { type: "text", text: CONTESTANT_IDENTITY },
         { type: "text", text: "Keep the user instructions." },
       ])
+
+      expect(contextEvent.messages).toHaveLength(2)
+      expect(contextEvent.messages[0].content).toEqual([{ type: "text", text: "Earlier answer" }])
+      expect(JSON.stringify(contextEvent.messages[1])).toContain("arena_reasoning_v1.current")
+      const retriedContext = { ...contextEvent, messages: [...contextEvent.messages] }
+      yield* runSessionHooks("context", retriedContext)
+      expect(retriedContext.messages).toEqual(contextEvent.messages)
 
       const retry = sessionCallbacks.get("retry")?.at(0)
       expect(retry).toBeDefined()
@@ -424,6 +465,7 @@ describe("Arena v2 engine runtime", () => {
         sessionID: "child",
         model: { providerID: PROVIDER_ID } as Model.Ref,
         system: childSystem,
+        messages: [],
         options: {},
       })
       expect(assignments.assignments.has("child")).toBe(true)
