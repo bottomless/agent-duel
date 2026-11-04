@@ -5621,10 +5621,10 @@ describe("OpenCode provider subagent contract", () => {
     await session.close();
 
     expect(openCodeClient.calls.sessionChildren).toEqual([
-      { path: { id: "ses_parent" } },
-      { path: { id: "ses_child_a" } },
-      { path: { id: "ses_child_b" } },
-      { path: { id: "ses_grandchild_a" } },
+      { sessionID: "ses_parent", directory: "/workspace/repo" },
+      { sessionID: "ses_child_a", directory: "/workspace/repo" },
+      { sessionID: "ses_child_b", directory: "/workspace/repo" },
+      { sessionID: "ses_grandchild_a", directory: "/workspace/repo" },
     ]);
     expect(events).toEqual([
       {

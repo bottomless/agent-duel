@@ -3819,20 +3819,6 @@ async function listOpenCodeChildSessions(
   sessionId: string,
   directory: string,
 ): Promise<OpenCodeChildSessionInfo[]> {
-  try {
-    const pathResponse: unknown = await Reflect.apply(client.session.children, client.session, [
-      { path: { id: sessionId } },
-    ]);
-    const pathChildren = readOpenCodeChildSessionInfosFromResponse(pathResponse);
-    if (pathChildren) {
-      return pathChildren;
-    }
-  } catch (error) {
-    if (!(error instanceof Error)) {
-      throw error;
-    }
-  }
-
   const sessionIdResponse = await client.session.children({
     sessionID: sessionId,
     directory,
