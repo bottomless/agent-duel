@@ -48,7 +48,8 @@ export type CaptureState = "complete" | "failed" | "cancelled"
 
 export type CapturedResponse = {
   readonly state: CaptureState
-  readonly status: number
+  /** The upstream status; none when the request never got an answer. */
+  readonly status?: number
   /** The upstream bytes as text, or none when they exceeded `MAX_RESPONSE_BYTES`. */
   readonly body?: string
   readonly bytes: number
@@ -295,12 +296,12 @@ export function generationCapture(db: ArenaDb, input: CaptureInput, now: () => D
       truncated = true
       chunks.length = 0
     },
-    finish(state: CaptureState, status: number) {
+    finish(state: CaptureState, status?: number) {
       if (settled) return writes
       settled = true
       const response: CapturedResponse = {
         state,
-        status,
+        ...(status === undefined ? {} : { status }),
         ...(truncated ? { truncated: true as const } : { body: chunks.join("") }),
         bytes,
         completedAt: now(),
@@ -334,9 +335,11 @@ export async function loadGenerationCapture(
     ...request.components.map((component) => partID(userId, "component", component.sha256)),
   ]
   const stored = new Map(
-    (await parts(db)
-      .find({ _id: { $in: [...new Set(ids)] }, userId })
-      .toArray()).map((part) => [part._id, part]),
+    (
+      await parts(db)
+        .find({ _id: { $in: [...new Set(ids)] }, userId })
+        .toArray()
+    ).map((part) => [part._id, part]),
   )
   const missing: string[] = []
   const media = new Map<string, Buffer>()

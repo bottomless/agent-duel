@@ -20,7 +20,7 @@ import {
   recordCalibration,
   type CalibrationSample,
 } from "./request-calibration"
-import { generationCapture, type CaptureState } from "./generation-capture"
+import { generationCapture, type CaptureState, type GenerationCapture } from "./generation-capture"
 import { createReasoningRedactor } from "./reasoning"
 import {
   HEARTBEAT_HEADER,
@@ -287,8 +287,8 @@ function sanitizeStream(
       stopHeartbeat()
       reasoning.clear()
       void recovery?.fail()
-      void capture?.finish("cancelled")
-      return reader.cancel(reason)
+      // Awaited: a hosted function may stop once the cancel settles.
+      return Promise.all([reader.cancel(reason), capture?.finish("cancelled")]).then(() => undefined)
     },
   })
 }
@@ -561,6 +561,8 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
   if (contentType) headers.set("Content-Type", contentType)
   headers.set("X-OpenRouter-Metadata", "enabled")
 
+  let capture: GenerationCapture | undefined
+  let upstreamStatus: number | undefined
   try {
     let body = request.method === "GET" || request.method === "HEAD" ? undefined : await request.arrayBuffer()
     const assignment = assignmentHeaders(request)
@@ -669,7 +671,7 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
       signal: request.signal,
     })
     // Battles only: a single-agent chat is never compared, so nothing reads its calls.
-    const capture =
+    capture =
       context.captureGenerations && routeAssignment.modelSize === undefined
         ? generationCapture(
             db,
@@ -679,6 +681,7 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
         : undefined
     capture?.request(budget.body)
     const response = await sending
+    upstreamStatus = response.status
     // Awaited so a body that fails to read or parse still gets the 502 below.
     const refusal = {
       userId: caller.id,
@@ -715,9 +718,10 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
       context.streamRecovery && requestedGenerationID
         ? replayRecorder(db, { userId: caller.id, ...assignment, generationID: requestedGenerationID }, context.now)
         : undefined
-    const responseCapture = capture && {
-      record: capture.record,
-      finish: (state: CaptureState) => capture.finish(state, response.status),
+    const started = capture
+    const responseCapture = started && {
+      record: started.record,
+      finish: (state: CaptureState) => started.finish(state, response.status),
     }
     return await sanitizeAssignedResponse(
       response,
@@ -729,6 +733,8 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
       responseCapture,
     )
   } catch (error) {
+    // A rejected fetch, an unreadable body or malformed JSON: close the capture with any text received.
+    await capture?.finish(request.signal.aborted ? "cancelled" : "failed", upstreamStatus)
     if (await context.networkUnavailable?.(error)) return Response.json(networkUnavailableError(), { status: 503 })
     console.error("[arena-service] OpenRouter proxy failed")
     return Response.json({ error: { message: "OpenRouter request failed" } }, { status: 502 })
