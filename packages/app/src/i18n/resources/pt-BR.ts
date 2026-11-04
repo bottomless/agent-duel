@@ -1700,6 +1700,25 @@ export const ptBR: TranslationResources = {
       send: "Enviar",
       successTitle: "Obrigado — isso ajuda.",
     },
+    crashReports: {
+      title: "O Agent Duel parou inesperadamente",
+      subtitle:
+        "Ele pode ter sido forçado a fechar, ficado sem memória, ou seu computador reiniciou. Um relatório nos ajuda a descobrir.",
+      stopped: "{{process}} parou · {{time}}",
+      processes: {
+        app: "O app",
+        window: "Uma janela",
+        daemon: "O daemon",
+        engine: "O motor de batalhas",
+      },
+      messageLabel: "O que aconteceu? (opcional)",
+      messagePlaceholder: "O que você estava fazendo? Seu computador travou ou reiniciou?",
+      contents:
+        "O relatório inclui o final dos logs do app. Nada é enviado a menos que você escolha Enviar relatório.",
+      discard: "Não enviar",
+      send: "Enviar relatório",
+      decisionError: "Não deu certo. Tente novamente.",
+    },
   },
   contextWindow: {
     title: "Janela de contexto",

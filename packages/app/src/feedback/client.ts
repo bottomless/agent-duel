@@ -20,7 +20,10 @@ export class FeedbackRequestError extends Error {
   }
 }
 
-function requestHeaders(endpoint: AccountsEndpoint, sessionToken: string): Record<string, string> {
+export function requestHeaders(
+  endpoint: AccountsEndpoint,
+  sessionToken: string,
+): Record<string, string> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     [SESSION_HEADER]: sessionToken,
@@ -33,7 +36,7 @@ function requestHeaders(endpoint: AccountsEndpoint, sessionToken: string): Recor
   return headers;
 }
 
-async function errorMessage(response: Response) {
+export async function errorMessage(response: Response) {
   const payload: unknown = await response.json().catch(() => null);
   if (
     payload &&

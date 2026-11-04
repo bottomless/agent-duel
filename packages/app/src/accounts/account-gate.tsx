@@ -6,7 +6,9 @@ import {
   type AuthMethodsResponse,
   type LegalDocuments,
 } from "@getpaseo/protocol/accounts/schemas";
+import { getIsElectron } from "@/constants/platform";
 import { useFetchQuery } from "@/data/query";
+import { CrashReportReview } from "@/feedback/crash-report-review";
 import { getHostRuntimeStore } from "@/runtime/host-runtime";
 import { fetchAuthMethods, fetchCurrentSession, type AccountsEndpoint } from "./client";
 import { useAccountsEndpoint } from "./endpoint";
@@ -154,8 +156,16 @@ function AccountGateContent({
   onRetry,
   children,
 }: AccountGateContentProps) {
+  // Crash reports are the desktop app's; the browser harness has none to ask about.
+  const crashReview =
+    gate.kind === "signed-in" && endpoint && session && getIsElectron() ? (
+      <CrashReportReview endpoint={endpoint} sessionToken={session.token} />
+    ) : null;
   const app = (
-    <AccountGateKindContext.Provider value={gate.kind}>{children}</AccountGateKindContext.Provider>
+    <AccountGateKindContext.Provider value={gate.kind}>
+      {children}
+      {crashReview}
+    </AccountGateKindContext.Provider>
   );
   if (!endpoint) {
     return app;

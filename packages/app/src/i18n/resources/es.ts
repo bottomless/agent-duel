@@ -1715,6 +1715,25 @@ export const es: TranslationResources = {
       send: "Enviar",
       successTitle: "Gracias, nos ayuda mucho.",
     },
+    crashReports: {
+      title: "Agent Duel se detuvo inesperadamente",
+      subtitle:
+        "Puede que se forzara su cierre, se quedara sin memoria o que tu equipo se reiniciara. Un informe nos ayuda a averiguarlo.",
+      stopped: "{{process}} se detuvo · {{time}}",
+      processes: {
+        app: "La app",
+        window: "Una ventana",
+        daemon: "El daemon",
+        engine: "El motor de batallas",
+      },
+      messageLabel: "¿Qué pasó? (opcional)",
+      messagePlaceholder: "¿Qué estabas haciendo? ¿Tu equipo se congeló o se reinició?",
+      contents:
+        "El informe incluye el final de los registros de la app. No se envía nada a menos que elijas Enviar informe.",
+      discard: "No enviar",
+      send: "Enviar informe",
+      decisionError: "No funcionó. Inténtalo de nuevo.",
+    },
   },
   contextWindow: {
     title: "ventana contextual",

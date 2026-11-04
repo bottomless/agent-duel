@@ -1680,6 +1680,25 @@ export const ko: TranslationResources = {
       send: "보내기",
       successTitle: "감사합니다. 큰 도움이 됩니다.",
     },
+    crashReports: {
+      title: "Agent Duel이 예기치 않게 중지되었습니다",
+      subtitle:
+        "강제 종료되었거나 메모리가 부족했거나 컴퓨터가 다시 시작되었을 수 있습니다. 보고서가 원인 파악에 도움이 됩니다.",
+      stopped: "{{process}} 중지됨 · {{time}}",
+      processes: {
+        app: "앱",
+        window: "창",
+        daemon: "데몬",
+        engine: "배틀 엔진",
+      },
+      messageLabel: "무슨 일이 있었나요? (선택)",
+      messagePlaceholder: "무엇을 하고 있었나요? 컴퓨터가 멈추거나 다시 시작되었나요?",
+      contents:
+        "보고서에는 앱 로그의 마지막 부분이 포함됩니다. 보고서 보내기를 선택하지 않으면 아무것도 전송되지 않습니다.",
+      discard: "보내지 않기",
+      send: "보고서 보내기",
+      decisionError: "작업에 실패했습니다. 다시 시도하세요.",
+    },
   },
   contextWindow: {
     title: "컨텍스트 윈도우",

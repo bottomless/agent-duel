@@ -1679,6 +1679,25 @@ export const en = {
       send: "Send",
       successTitle: "Thanks — this helps.",
     },
+    crashReports: {
+      title: "Agent Duel stopped unexpectedly",
+      subtitle:
+        "It may have been force quit or run out of memory, or your computer restarted. A report helps us find out.",
+      stopped: "{{process}} stopped · {{time}}",
+      processes: {
+        app: "The app",
+        window: "A window",
+        daemon: "The daemon",
+        engine: "The battle engine",
+      },
+      messageLabel: "What happened? (optional)",
+      messagePlaceholder: "What were you doing? Did your computer freeze or restart?",
+      contents:
+        "The report includes the end of the app's logs. Nothing is sent unless you choose Send report.",
+      discard: "Don't send",
+      send: "Send report",
+      decisionError: "That didn't work. Try again.",
+    },
   },
   contextWindow: {
     title: "Context window",
