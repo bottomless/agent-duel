@@ -66,6 +66,7 @@ import { LOCAL_STATE_DIRNAME, localStatePath, PRIVATE_REF_PREFIXES } from "@/wor
 import { ignoreForFileProviderSync } from "@/util/file-provider-ignore"
 import { isRecord } from "@/util/record"
 import { generate as generateComparison, skip as skipComparison } from "./comparison"
+import { expireCopiedReasoning } from "./reasoning"
 import { canonicalizeTranscriptPaths } from "./canonical-path"
 import {
   arenaTurnEnvironments,
@@ -1522,7 +1523,7 @@ export const layer: Layer.Layer<
       } satisfies ArenaContestant.Sandbox
     }
     const forkInto = (input: ArenaFork.Input) =>
-      forkSessionInto(input).pipe(
+      forkSessionInto({ ...input, expireReasoning: true }).pipe(
         Effect.provideService(Session, sessions),
         Effect.provideService(MoveSessionService, mover),
         Effect.provideService(InstanceStore.Service, instances),
@@ -2453,6 +2454,7 @@ export const layer: Layer.Layer<
           runID: existing._id,
           rootSessionID: rawSessionID,
           scopeID: existing._id,
+          reasoningFromMessageID: existing.messageID,
           assignmentID: existing.assignment.assignmentID,
           ...(existing.modelSize ? { modelSize: existing.modelSize } : { modelSize: "frontier" as const }),
           telemetry: false,
@@ -2479,6 +2481,7 @@ export const layer: Layer.Layer<
         runID: rating._id,
         rootSessionID: rawSessionID,
         scopeID: rating._id,
+        reasoningFromMessageID: rating.messageID,
         assignmentID: rating.assignment.assignmentID,
         ...(rating.modelSize ? { modelSize: rating.modelSize } : { modelSize: "frontier" as const }),
         telemetry: false,
@@ -9542,7 +9545,7 @@ export const layer: Layer.Layer<
           targetMessageID: id,
           transform: (native) =>
             canonicalize(
-              native,
+              expireCopiedReasoning(native),
               native.type === "assistant" ? "assistant" : native.type === "user" ? "user" : undefined,
             ),
         })
@@ -9565,7 +9568,7 @@ export const layer: Layer.Layer<
             targetMessageID: messageID,
             transform: (native) =>
               canonicalize(
-                native,
+                expireCopiedReasoning(native),
                 native.type === "assistant" ? "assistant" : native.type === "user" ? "user" : undefined,
                 { subagent: true },
               ),

@@ -23,6 +23,8 @@ export type Assignment = {
   readonly scopeID: string
   readonly assignmentID: string
   readonly telemetry: boolean
+  /** First prompt in this scope; persisted by the single-agent rating record. */
+  readonly reasoningFromMessageID?: string
   readonly modelSize?: "medium" | "frontier"
 }
 

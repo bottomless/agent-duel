@@ -41,6 +41,7 @@ import {
 } from "../../src/arena/session-runtime/projection"
 import { ArenaEngineIdle } from "../../src/arena/engine-runtime/idle"
 import { battleResumeInput } from "../../src/arena/resume-note"
+import { expireCopiedReasoning } from "../../src/arena/reasoning"
 import { SessionRetry } from "../../src/session/retry"
 import { toLLMMessages } from "@opencode/core/session/runner/to-llm-message"
 import { toSessionError } from "@opencode/core/session/to-session-error"
@@ -387,7 +388,7 @@ describe("Arena V2 native session storage", () => {
     }),
   )
 
-  it.effect("copies a canonical message with provider replay state through the real database", () =>
+  it.effect("grafts canonical cut-stream shape while expiring sealed reasoning through the real database", () =>
     Effect.gen(function* () {
       const sessions = yield* CoreSession.Service
       const location = Location.Ref.make({ directory: AbsolutePath.make("/arena-runtime-test") })
@@ -406,7 +407,10 @@ describe("Arena V2 native session storage", () => {
             type: "tool",
             id: "call_native",
             name: "read",
-            providerState: { provider: "tool-state" },
+            providerState: {
+              provider: "tool-state",
+              reasoning_details: [{ type: "reasoning.encrypted", data: "arena_reasoning_v1.fixture" }],
+            },
             state: {
               status: "completed",
               input: { filePath: "README.md" },
@@ -415,6 +419,14 @@ describe("Arena V2 native session storage", () => {
             },
             time: { created, ran: created, completed: created },
           },
+          {
+            type: "reasoning",
+            text: "[Thinking redacted]",
+            state: { reasoning_details: [{ type: "reasoning.encrypted", data: "arena_reasoning_v1.fixture" }] },
+          },
+          { type: "text", text: "Half an answer" },
+          { type: "text", text: "[The response was interrupted]" },
+          { type: "text", text: "Continuation" },
         ],
         snapshot: { start: undefined, end: undefined, files: ["README.md"] },
         providerState: { responseID: "response-native" },
@@ -442,11 +454,20 @@ describe("Arena V2 native session storage", () => {
         sourceMessageID,
         targetSessionID: target.id,
         targetMessageID,
-        transform: (message) => Effect.succeed({ ...message, metadata: { grafted: true } }),
+        transform: (message) => Effect.succeed({ ...expireCopiedReasoning(message), metadata: { grafted: true } }),
       })
+      expect(JSON.stringify(copied)).not.toContain("arena_reasoning_v1.")
+      expect(JSON.stringify(yield* arena.canonicalMessages(source.id))).toContain("arena_reasoning_v1.")
       expect(copied.id).toBe(targetMessageID)
       expect(copied.type).toBe("assistant")
       if (copied.type !== "assistant") return
+      expect(copied.content.map((part) => (part.type === "tool" ? part.type : part.text))).toEqual([
+        "tool",
+        "[Thinking redacted]",
+        "Half an answer",
+        "[The response was interrupted]",
+        "Continuation",
+      ])
       expect(copied.providerState).toEqual({ responseID: "response-native" })
       expect(copied.snapshot?.files).toEqual(["README.md"])
       expect(copied.content[0]).toMatchObject({

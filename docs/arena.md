@@ -22,9 +22,11 @@ contain Unicode, spaces, and literal percent signs; preserve them across request
 session locations. A second graph creates a separate session lifetime and can race worktree setup
 or winner promotion. The active engine typecheck excludes
 retained 1.x modules; check their imports separately when merging. Preview integration belongs to
-the V2 engine plugin. The Arena `info + parts` transcript is a wire projection; fork and graft canonical V2 messages so provider replay state, attachments, and
-compaction checkpoints survive a vote. Keep canonical history independent of SDK-owned stream
-metadata: a provider can still extend its reasoning state after answer text begins.
+the V2 engine plugin. The Arena `info + parts` transcript is a wire projection; fork and graft
+canonical V2 messages so attachments, compaction checkpoints, and replay state survive a vote,
+subject to the sealed-reasoning boundary under [Blinding](#blinding). Keep canonical history
+independent of SDK-owned stream metadata: a provider can still extend its reasoning state after
+answer text begins.
 
 Arena state is canonical local data. The runtime stores it in SQLite at
 `$PASEO_HOME/arena/arena.sqlite` and keeps artifact bytes in
@@ -1128,9 +1130,19 @@ field. Each layer has its own file:
   blocks on the next request; tool continuation must not see the marker in place of its reasoning.
   Envelopes are authenticated against the account, scope, and assignment using a key derived from the
   service's OpenRouter key. The service drops an envelope that does not open instead of failing the
-  request: a single-agent chat replays the previous message's envelopes under that message's new
-  scope, and a running turn loses its sealed reasoning when the key rotates. Cloud instances must
-  share that key. BYOK sealing provides no secrecy from the user who owns that key.
+  request. Reasoning never carries into a later battle, even if both contestants have the same
+  opaque model ID. New-assignment forks and winner grafts remove expired envelopes from their
+  copies; the source keeps its state for recovery. This changes provider state in the copied rows
+  and the new canonical transcript hash recorded after promotion. Do not migrate existing stored
+  history or strip envelopes when saving a message.
+  Keep envelopes throughout one assignment's tool loop, retries, and Resume after an engine restart.
+  A running turn loses its sealed reasoning when the key rotates; cloud instances must share that
+  key. BYOK sealing provides no secrecy from the user who owns that key.
+  `Thinking redacted` is display text: never turn it into a reply or retain it as reasoning in a
+  compaction checkpoint. Omit reasoning-only assistant requests with no reply or tool call, since
+  Moonshot rejects them. Preserve cut-stream text, interruption notes, and tool order.
+  The small Core vendor patches in `session/runner/to-llm-message.ts` and `session/compaction.ts`
+  enforce those marker rules; keep them when updating the vendor.
   Runtime-only usage can continue through the transport, but the telemetry copy never persists
   generation request bodies because system prompts and tool
   schemas can fingerprint the provider. It drops per-side token counts, native finish reasons,
@@ -1143,8 +1155,8 @@ field. Each layer has its own file:
   records both in the research metrics. Local-store startup
   removes those fields and request/response artifacts from legacy unresolved battles; resolved
   history already exposes the contestants by design.
-- **Session data** (`arena/privacy.ts`, `arena/v2-privacy.ts`) — keep canonical Core history intact
-  for provider replay. Blind the native `/api` JSON and SSE boundary, the Arena recorder, and public
+- **Session data** (`arena/privacy.ts`, `arena/v2-privacy.ts`) — keep each active assignment's
+  canonical Core history intact for provider replay. Blind the native `/api` JSON and SSE boundary, the Arena recorder, and public
   transcript projections. Remove provider state and identity metadata, redact reasoning, zero usage
   and cost, flatten provider errors, and rehash tool-call IDs to `call_arena_<hash>`. Never run the
   native sanitizer over `/arena` responses: resolved battles deliberately reveal identities and
@@ -1366,6 +1378,11 @@ the contestant's identity stays hidden. Previously saved failures must not keep 
 A turn the user stops has an optional rating. The dialog offers Skip, and the next turn replaces
 it. Keep `stoppedAt` on the record so analysis can separate votes on stopped turns from votes on
 finished ones.
+
+Each Battle-off prompt starts a new scope and assignment. Earlier envelopes cannot open, even
+when the selected size stays the same. Filter them from outgoing context before transport; retain
+the canonical rows so the transcript hash stays stable. Follow the sealed-reasoning contract under
+[Blinding](#blinding) within the current scope.
 
 Both sizes use the assignment boundary, and `reconcileNormalTurn` (`arena/service.ts`) folds the
 resulting Git and transcript state back into the canonical spine. A process-local reservation

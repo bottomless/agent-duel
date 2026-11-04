@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 import { mkdir } from "node:fs/promises"
 import path from "node:path"
 import { Context as EffectContext, Effect, Stream } from "effect"
-import type { SystemPart } from "@opencode/ai"
+import type { Message, SystemPart } from "@opencode/ai"
 import { createOpenRouter } from "@openrouter/ai-sdk-provider"
 import { AISDK } from "@opencode/core/aisdk"
 import { ShellTool } from "@opencode/core/tool/plugin/shell"
@@ -12,6 +12,7 @@ import type { Context } from "@opencode/plugin/effect/plugin"
 import type { Model } from "@opencode/schema/model"
 import type { Session } from "@opencode/schema/session"
 import { Tool } from "@opencode/schema/tool"
+import { reasoningContext } from "../reasoning"
 import { ArenaRuntime } from "../runtime"
 import { environment as previewForDirectory } from "../preview"
 import { tmpDirectory } from "../contestant"
@@ -281,8 +282,17 @@ function install(context: Context, options: InstalledOptions) {
       { providerID: String(PROVIDER_ID) },
     )
 
-    const identity = (event: { model: Model.Ref; system: SystemPart[] }) => {
+    const prepareContext = (event: {
+      model: Model.Ref
+      system: SystemPart[]
+      messages: Message[]
+      sessionID: Session.ID
+    }) => {
       if (!arenaModel(event.model)) return
+      event.messages = reasoningContext(
+        event.messages,
+        options.assignments.assignments.get(String(event.sessionID))?.reasoningFromMessageID,
+      )
       // Replace model-family identity text. Native replay remains intact for user and tool
       // messages, while upstream provider branding cannot reach a blinded contestant.
       event.system = event.system.filter(
@@ -298,7 +308,7 @@ function install(context: Context, options: InstalledOptions) {
       "context",
       (event) =>
         ensureAssignment(context, options, String(event.sessionID)).pipe(
-          Effect.andThen(Effect.sync(() => identity(event))),
+          Effect.andThen(Effect.sync(() => prepareContext(event))),
         ),
       {
         providerID: String(PROVIDER_ID),
@@ -308,7 +318,7 @@ function install(context: Context, options: InstalledOptions) {
       "compaction",
       (event) =>
         ensureAssignment(context, options, String(event.sessionID)).pipe(
-          Effect.andThen(Effect.sync(() => identity(event))),
+          Effect.andThen(Effect.sync(() => prepareContext(event))),
         ),
       {
         providerID: String(PROVIDER_ID),
@@ -318,7 +328,7 @@ function install(context: Context, options: InstalledOptions) {
       "generate",
       (event) =>
         ensureAssignment(context, options, String(event.sessionID)).pipe(
-          Effect.andThen(Effect.sync(() => identity(event))),
+          Effect.andThen(Effect.sync(() => prepareContext(event))),
           Effect.andThen(Effect.sync(() => capOutput(event))),
         ),
       {

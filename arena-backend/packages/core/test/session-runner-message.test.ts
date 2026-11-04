@@ -935,6 +935,59 @@ Earlier work
     ])
   })
 
+  test("Arena marker never becomes reply text after an error, cut, model switch, or expired state", () => {
+    const arenaModel = Model.Ref.make({ id: Model.ID.make("contestant"), providerID: Provider.ID.make("arena") })
+    const base = SessionMessage.Assistant.make({
+      id: id("arena-marker"),
+      type: "assistant",
+      agent: build,
+      model: arenaModel,
+      content: [
+        SessionMessage.AssistantReasoning.make({
+          type: "reasoning",
+          text: "[Thinking redacted]",
+          state: { reasoning_details: ["sealed"] },
+        }),
+      ],
+      time: { created, completed: created },
+    })
+    expect(toLLMMessages([{ ...base, error: { type: "provider.unknown", message: "cut" } }], arenaModel)).toEqual([])
+    expect(
+      toLLMMessages(
+        [
+          {
+            ...base,
+            content: [
+              SessionMessage.AssistantReasoning.make({
+                type: "reasoning",
+                text: "[Thinking redacted]",
+                time: { created },
+              }),
+            ],
+          },
+        ],
+        arenaModel,
+      ),
+    ).toEqual([])
+    expect(toLLMMessages([base], { ...arenaModel, id: Model.ID.make("medium") })).toEqual([])
+    expect(
+      toLLMMessages([{ ...base, content: [{ type: "reasoning", text: "[Thinking redacted]" }] }], arenaModel),
+    ).toEqual([])
+    const reply = {
+      ...base,
+      error: { type: "provider.unknown", message: "cut" },
+      content: [...base.content, SessionMessage.AssistantText.make({ type: "text", text: "Keep the half answer" })],
+    }
+    expect(toLLMMessages([reply], arenaModel)[0]?.content).toEqual([
+      { type: "text", text: "Keep the half answer", providerMetadata: undefined },
+    ])
+    expect(toLLMMessages([base], arenaModel)[0]?.content[0]).toMatchObject({
+      type: "reasoning",
+      text: "",
+      providerMetadata: { arena: { reasoning_details: ["sealed"] } },
+    })
+  })
+
   test("lowers failed assistant reasoning to text", () => {
     const messages = toLLMMessages(
       [

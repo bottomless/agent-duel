@@ -152,6 +152,12 @@ const toolResult = (tool: SessionMessage.AssistantTool, providerMetadata: Provid
   }
 }
 
+// Agent Duel vendor patch: the hosted marker is display text, never a fallback reply.
+export const isArenaRedactedReasoning = (text: string, model: Model.Ref) =>
+  model.providerID === "arena" &&
+  text.includes("[Thinking redacted]") &&
+  text.replaceAll("[Thinking redacted]", "").trim() === ""
+
 const assistant = (message: SessionMessage.Assistant, model: Model.Ref, providerMetadataKey: string) => {
   const sameProvider = String(message.model.providerID) === String(model.providerID)
   const sameModel = sameProvider && String(message.model.id) === String(model.id)
@@ -171,18 +177,24 @@ const assistant = (message: SessionMessage.Assistant, model: Model.Ref, provider
         },
       ]
     // Let the destination adapter handle readable reasoning after a model/provider switch.
-    if (item.type === "reasoning")
+    if (item.type === "reasoning") {
+      if (
+        isArenaRedactedReasoning(item.text, message.model) &&
+        (!reuseProviderMetadata || reasoningInterrupted || item.state === undefined)
+      )
+        return []
       return reuseProviderMetadata && !reasoningInterrupted
         ? [
             {
               type: "reasoning",
-              text: item.text,
+              text: isArenaRedactedReasoning(item.text, message.model) ? "" : item.text,
               providerMetadata: providerMetadata(providerMetadataKey, item.state),
             },
           ]
         : item.text.length > 0
           ? [{ type: message.error === undefined && !reasoningInterrupted ? "reasoning" : "text", text: item.text }]
           : []
+    }
     // Call-side metadata is model-scoped proof of generation (Gemini thought
     // signatures, OpenAI encrypted reasoning): only the producing model may
     // replay it.

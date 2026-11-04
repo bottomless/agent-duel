@@ -5,6 +5,7 @@ import type { Permission } from "@opencode/schema/permission"
 import { Git } from "@/git"
 import { InstanceStore } from "@/project/instance-store"
 import { MessageID, MoveSessionService, Session, SessionID } from "./session-runtime"
+import { expireCopiedReasoning } from "./reasoning"
 import { notedUpload } from "./attachments"
 import { localizeEmbeddedPaths, localizeTranscriptPaths } from "./canonical-path"
 
@@ -16,6 +17,8 @@ export interface Roots {
 }
 
 export interface Input {
+  /** New battle assignment; never set for a native same-assignment fork. */
+  readonly expireReasoning?: boolean
   readonly sessionID: SessionID
   /** Absolute directory the copy runs in. */
   readonly destination: string
@@ -126,14 +129,15 @@ export const forkSessionInto = Effect.fn("ArenaFork.forkSessionInto")(function* 
     canonical: yield* topLevel(source.directory),
     worktree: yield* topLevel(input.destination),
   }
-  if (roots.canonical === roots.worktree && !input.part && !pruneBefore) return forked
+  if (roots.canonical === roots.worktree && !input.part && !pruneBefore && !input.expireReasoning) return forked
   if (input.moveSession !== false)
     yield* mover.moveSession({ sessionID: forked.id, directory: input.destination, moveChanges: false })
   // Core Session.fork already copied complete canonical rows.  Localize those rows in place so
-  // provider state, images, compaction metadata, and non-text tool content survive the move.
+  // images, compaction metadata, and non-text tool content survive the move. Sealed reasoning
+  // belongs to the old assignment, even when both models are named arena/contestant.
   const canonicalMessages = yield* sessions.canonicalMessages(forked.id)
   for (const message of canonicalMessages) {
-    const localized = localizeEmbeddedPaths(message, roots)
+    const localized = localizeEmbeddedPaths(input.expireReasoning ? expireCopiedReasoning(message) : message, roots)
     // A user's prompt is input, not generated transcript text.  Keep its exact bytes while
     // still localizing file attachments and any other embedded paths.
     const transformed = message.type === "user" ? { ...localized, text: message.text } : localized
