@@ -103,11 +103,18 @@ const layer = Layer.effect(
       pending.set(id, { info, deferred })
       yield* events.publish(Event.Asked, info)
 
-      return yield* Effect.ensuring(
-        Deferred.await(deferred),
-        Effect.sync(() => {
-          pending.delete(id)
-        }),
+      return yield* Deferred.await(deferred).pipe(
+        // A question whose tool call was stopped is withdrawn, so no client keeps a card nobody can answer.
+        Effect.onInterrupt(() =>
+          pending.has(id)
+            ? events.publish(Event.Rejected, { sessionID: info.sessionID, requestID: id }).pipe(Effect.asVoid)
+            : Effect.void,
+        ),
+        Effect.ensuring(
+          Effect.sync(() => {
+            pending.delete(id)
+          }),
+        ),
       )
     })
 

@@ -107,7 +107,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
           tool: { messageID: input.processor.message.id, callID: options.toolCallId },
           ruleset,
         })
-        .pipe(Effect.orDie),
+        .pipe(Tool.interruptOnAbort(options.abortSignal!), Effect.orDie),
     ...(tmpDirectory ? { tmpDirectory } : {}),
     ...(blockedDirectories.length ? { blockedDirectories } : {}),
   })
