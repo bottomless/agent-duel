@@ -16,8 +16,29 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  preflight:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Only a token that can write sees draft releases. The build jobs only read, so the check runs here,
+    # before an hour of builds. No environment: it reads no secrets, so it fails before anyone approves.
+    permissions:
+      contents: write
+    steps:
+      - name: Refuse a version that already has a release or a draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          if gh release view "v$RELEASE_VERSION" >/dev/null 2>&1; then
+            echo 'Release already exists; use a new version.' >&2
+            exit 1
+          fi
+
   macos:
     if: github.ref == 'refs/heads/main'
+    needs: preflight
     runs-on: macos-15
     timeout-minutes: 90
     environment: desktop-release
@@ -48,7 +69,6 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          GH_TOKEN: ${{ github.token }}
         run: |
           node --input-type=module <<'JS'
           import { execFileSync } from 'node:child_process';
@@ -74,10 +94,6 @@ jobs:
             if (!process.env[name]) throw new Error(`Missing release secret: ${name}`);
           }
           JS
-          if gh release view "v$RELEASE_VERSION" >/dev/null 2>&1; then
-            echo 'Release already exists; use a new version.' >&2
-            exit 1
-          fi
 
       - name: Install npm dependencies
         run: node scripts/npm-retry.mjs ci
@@ -190,6 +206,7 @@ jobs:
 
   windows:
     if: github.ref == 'refs/heads/main'
+    needs: preflight
     runs-on: windows-latest
     timeout-minutes: 90
     environment: desktop-release
