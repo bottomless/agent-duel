@@ -2,7 +2,7 @@ import { spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { loadConfig, resolvePaseoHome, spawnProcess } from "@getpaseo/server";
+import { loadConfig, releaseStoppedMarker, resolvePaseoHome, spawnProcess } from "@getpaseo/server";
 import treeKill from "tree-kill";
 import { tryConnectToDaemon } from "../../utils/client.js";
 
@@ -752,6 +752,10 @@ export async function stopLocalDaemon(
 
   if (lifecycleRequested) {
     removeStalePidFile(state);
+  } else if (!forced) {
+    // The daemon ran no exit handler if the signal ended it outright, as it does on Windows; this
+    // stop was asked for, so its next start must not report it as a crash.
+    releaseStoppedMarker({ home: state.home, name: "daemon" });
   }
 
   return {

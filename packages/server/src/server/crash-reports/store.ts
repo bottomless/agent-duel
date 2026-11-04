@@ -240,6 +240,25 @@ export function releaseRunningMarker(home: string, name: string): void {
 }
 
 /**
+ * Removes the marker of a process that was stopped on purpose and is gone, so its next run does not
+ * report a crash. A stop by signal runs no exit handler on Windows: the signal is TerminateProcess.
+ * A marker whose process is still alive is left alone.
+ */
+export function releaseStoppedMarker(input: {
+  readonly home: string;
+  readonly name: string;
+  readonly isAlive?: (pid: number) => boolean;
+}): void {
+  const file = markerPath(input.home, input.name);
+  try {
+    const marker = runningMarkerSchema.parse(JSON.parse(readFileSync(file, "utf8")));
+    if (!(input.isAlive ?? isProcessAlive)(marker.pid)) rmSync(file, { force: true });
+  } catch {
+    // No marker: the process removed it on its way out.
+  }
+}
+
+/**
  * Writes how a process ended into the marker it left behind, so its next run reports the signal or
  * exit code. A process killed outright cannot say how it ended; the supervisor that started it can.
  * Synchronous, so it lands before the supervisor starts the next run. A marker that is gone or

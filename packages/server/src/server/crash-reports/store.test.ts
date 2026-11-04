@@ -11,6 +11,7 @@ import {
   recordCrashReport,
   recordMarkerExit,
   releaseRunningMarker,
+  releaseStoppedMarker,
   removeCrashReport,
 } from "./store.js";
 
@@ -166,6 +167,24 @@ describe("running marker", () => {
       JSON.stringify({ pid: 999_999, version: "1", startedAt: "2026-10-25T01:00:00.000Z" }),
     );
     expect(claimRunningMarker({ home, name: "app", version: "1", isAlive: () => true })).toBeNull();
+  });
+
+  it("does not report a run that was stopped on purpose", () => {
+    const file = path.join(crashReportsDirectory(home), "daemon.running");
+    claimRunningMarker({ home, name: "daemon", version: "1" });
+    writeFileSync(
+      file,
+      JSON.stringify({ pid: 999_999, version: "1", startedAt: "2026-10-25T01:00:00.000Z" }),
+    );
+
+    // Still running: the stop has not landed yet.
+    releaseStoppedMarker({ home, name: "daemon", isAlive: () => true });
+    expect(readdirSync(crashReportsDirectory(home))).toContain("daemon.running");
+
+    releaseStoppedMarker({ home, name: "daemon", isAlive: () => false });
+    expect(
+      claimRunningMarker({ home, name: "daemon", version: "2", isAlive: () => false }),
+    ).toBeNull();
   });
 
   it("leaves another process's marker in place", () => {
