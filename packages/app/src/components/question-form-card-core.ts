@@ -142,6 +142,29 @@ export function shouldSubmitEmptyOnDismiss(questions: QuestionFormQuestion[]): b
   );
 }
 
+// Keep option labels separate from free text until Arena maps them to OpenCode's answer array.
+export function buildQuestionFormSelections(
+  questions: QuestionFormQuestion[],
+  selections: QuestionSelections,
+  otherTexts: QuestionOtherTexts,
+): Record<string, { selected: string[]; other?: string }> {
+  return Object.fromEntries(
+    questions.map((question, index) => {
+      const other = questionShowsTextInput(question) ? otherTexts[index]?.trim() : undefined;
+      const selected = Array.from(selections[index] ?? []).map(
+        (option) => question.options[option].label,
+      );
+      return [
+        question.header,
+        {
+          selected: other && !question.multiSelect ? [] : selected,
+          ...(other ? { other } : {}),
+        },
+      ];
+    }),
+  );
+}
+
 export function resolveDismissLabel(
   questions: QuestionFormQuestion[],
   fallbackLabel = "Dismiss",

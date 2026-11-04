@@ -26,7 +26,6 @@ import {
   requestIdentity,
   RETRY_MARK_SLACK_MS,
   resolveAssignment,
-  requestNeedsCompaction,
   requestTokenEstimate,
   clearArenaAutoAccept,
   getArenaAutoAccept,
@@ -52,7 +51,9 @@ describe("Arena v2 engine runtime", () => {
       messages: [{ role: "user", content: [{ type: "image", data: "a".repeat(2_000_000) }] }],
     }
     expect(requestTokenEstimate(imageRequest)).toBeLessThan(10_000)
-    expect(requestNeedsCompaction({ messages: [{ role: "user", content: "x".repeat(1_100_000) }] })).toBe(true)
+    expect(requestTokenEstimate({ messages: [{ role: "user", content: "x".repeat(1_100_000) }] })).toBeGreaterThan(
+      272_000,
+    )
   })
 
   it("charges OpenCode 2 image shapes a fixed allowance instead of their base64 size", () => {
@@ -87,7 +88,7 @@ describe("Arena v2 engine runtime", () => {
     const estimate = requestTokenEstimate(request)
     expect(estimate).toBeGreaterThanOrEqual(12_000)
     expect(estimate).toBeLessThan(13_000)
-    expect(requestNeedsCompaction(request)).toBe(false)
+    expect(requestTokenEstimate(request)).toBeLessThan(272_000)
     // The JSON form of the same request, as hooks and logs serialize it.
     const encoded = JSON.parse(JSON.stringify(request))
     expect(JSON.stringify(encoded).length).toBeGreaterThan(5_000_000)
@@ -95,7 +96,7 @@ describe("Arena v2 engine runtime", () => {
     // A stray inline data URI elsewhere still counts as one image.
     expect(requestTokenEstimate({ text: `data:image/png;base64,${base64}` })).toBeLessThan(4_100)
     // Text of the same size still needs compaction.
-    expect(requestNeedsCompaction({ messages: [Message.user(base64)] })).toBe(true)
+    expect(requestTokenEstimate({ messages: [Message.user(base64)] })).toBeGreaterThan(272_000)
   })
 
   it("adds blinded request identity and stable cache lineage headers", () => {

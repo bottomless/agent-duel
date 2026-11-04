@@ -7,6 +7,9 @@ import { Config } from "@opencode/core/config"
 import { Environment } from "@opencode/core/environment/index"
 import { Location } from "@opencode/core/location"
 import { AbsolutePath } from "@opencode/core/schema"
+import { LayerNode } from "@opencode/util/effect/layer-node"
+import { PluginHooks } from "@opencode/core/plugin/hooks"
+import path from "node:path"
 import { Shell } from "@opencode/core/shell"
 import { Workspace } from "@opencode/core/workspace"
 import { Global } from "@opencode/util/global"
@@ -143,5 +146,51 @@ it.live("does not inherit host process.env when creating a shell in a workspace-
       TERM: "xterm-256color",
       OPENCODE_TERMINAL: "1",
     })
+  }),
+)
+
+it.live("a shell hook isolates output, keeps it readable after exit, and removes it explicitly", () =>
+  Effect.gen(function* () {
+    const tmp = yield* tmpdirScoped()
+    yield* Effect.gen(function* () {
+      const shell = yield* Shell.Service
+      const hooks = yield* PluginHooks.Service
+      const global = yield* Global.Service
+      const active = yield* Location.Service
+      const outputs = path.join(tmp.path, "contestant-temp")
+      const registration = yield* hooks.register("shell", "create.before", (event) =>
+        Effect.sync(() => {
+          event.outputDirectory = outputs
+        }),
+      )
+      const info = yield* shell.create({
+        shell: "/bin/sh",
+        command: "printf retained-output",
+        metadata: { sessionID: "side" },
+      })
+      expect(path.dirname(info.file)).toBe(outputs)
+      expect(yield* shell.result(info)).toMatchObject({
+        info: { status: "exited", file: info.file },
+        capture: { output: "retained-output", truncated: false },
+      })
+      expect(yield* Effect.promise(() => Bun.file(info.file).text())).toBe("retained-output")
+      expect(yield* shell.output(info.id)).toMatchObject({ output: "retained-output" })
+      yield* registration.dispose
+      const ordinary = yield* shell.create({ shell: "/bin/sh", command: "printf ordinary" })
+      expect(path.dirname(ordinary.file)).toBe(path.join(global.data, Shell.DIRECTORY, active.project.id))
+      yield* shell.result(ordinary)
+      expect(yield* Effect.promise(() => Bun.file(info.file).text())).toBe("retained-output")
+      yield* shell.remove(info.id)
+      expect(yield* Effect.promise(() => Bun.file(info.file).exists())).toBe(false)
+    }).pipe(
+      Effect.provide(
+        AppNodeBuilder.build(LayerNode.group([Shell.node, PluginHooks.node, Global.node, Location.node]), [
+          Location.node.replace(tempLocationLayer),
+          Global.node.replace(tempGlobalLayer),
+          Config.node.replace(Config.testLayer()),
+          Environment.node.replace(hostEnvironmentLayer),
+        ]),
+      ),
+    )
   }),
 )

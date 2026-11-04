@@ -282,7 +282,6 @@ describe("text that is not a path (round 2, issue 3)", async () => {
     [`awk '{print > "${OUT}/x"}' a.txt`],
     [`awk 'BEGIN {system("touch ${OUT}/x")}'`],
     [`awk '/foo/' ${OUT}/x`],
-    [`git -C ${OUT}/x status`],
     [`git commit -m msg ${OUT}/x`],
     [`sudo sh -c 'echo a > ${OUT}/x'`],
     [`echo "$(echo a > ${OUT}/x)"`],
@@ -641,5 +640,33 @@ describe("round 3: the plugin owns one shell permission check", () => {
     )
     expect(checks).toEqual(expected)
     expect(coreEffects).toEqual(["allow", "deny"])
+  })
+})
+
+describe("fb3 read-only Git outside-project checks", () => {
+  it.each(["log", "status", "rev-parse HEAD", "show HEAD", "diff", "ls-files", "branch --show-current", "remote -v"])(
+    "does not ask for git -C reads: %s",
+    async (command) => {
+      expect(await outside(`git -C ${OUT} ${command}`)).toEqual([])
+    },
+  )
+  it.each([
+    "add file",
+    "commit",
+    "branch new",
+    "remote add name url",
+    "-c a=b log",
+    "--config-env=a=b log",
+    "--exec-path=/outside log",
+    "--git-dir=/outside log",
+    "--work-tree=/outside status",
+    "log --output=/outside/dir/out",
+    "diff --ext-diff",
+    "show --textconv",
+  ])("asks for Git writes: %s", async (command) => {
+    expect(await outside(`git -C ${OUT} ${command}`)).toContain(`${OUT}/*`)
+  })
+  it("asks for a redirected Git result", async () => {
+    expect(await outside(`git -C ${OUT} log > ${OUT}/result`)).toEqual([`${OUT}/*`])
   })
 })

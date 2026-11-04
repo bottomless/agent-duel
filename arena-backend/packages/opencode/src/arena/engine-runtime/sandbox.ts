@@ -2,6 +2,7 @@ import path from "node:path"
 import { realpathSync } from "node:fs"
 import { Permission } from "@opencode/schema/permission"
 import { Global } from "@opencode/util/global"
+import { DIRECTORY as SHELL_OUTPUT } from "@opencode/core/shell"
 
 const GLOB_SUFFIX = path.sep + "*"
 
@@ -49,7 +50,12 @@ function contestantPermissions(source: Permission.Ruleset | undefined, sandbox: 
     { action: "external_directory", resource: "*", effect: "allow" },
     ...sharedTmp().map(deny("edit")),
     ...spellings(tmpRoot()).map(deny("external_directory")),
-    ...sandbox.readOnly.flatMap((directory) => [deny("edit")(directory), deny("external_directory")(directory)]),
+    ...sandbox.readOnly.map(deny("edit")),
+    ...spellings(path.join(Global.Path.data, SHELL_OUTPUT)).flatMap((directory) => [
+      deny("external_directory")(directory),
+      deny("read")(directory),
+      deny("edit")(directory),
+    ]),
     ...sandbox.blocked.map(deny("external_directory")),
     ...sandbox.own.flatMap(reopen),
     ...spellings(sandbox.tmp).reverse().flatMap(reopen),

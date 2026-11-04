@@ -153,14 +153,19 @@ export function arenaQuestionAnswers(
   if (response.behavior !== "allow") return null;
   const rawAnswers = response.updatedInput?.["answers"];
   const answers = asRecord(rawAnswers) ?? {};
+  const selections = asRecord(response.updatedInput?.["answerSelections"]);
   return question.prompts.map((prompt) => {
+    const selection = asRecord(selections?.[prompt.header]);
+    if (
+      selection &&
+      Array.isArray(selection.selected) &&
+      selection.selected.every((label) => typeof label === "string")
+    ) {
+      const other = typeof selection.other === "string" ? selection.other : undefined;
+      return [...selection.selected, ...(other ? [other] : [])];
+    }
     const value = answers[prompt.header];
     if (typeof value !== "string" || value.length === 0) return [];
-    if (!prompt.multiple) return [value];
-    const labels = value.split(", ");
-    const selected = prompt.options
-      .filter((option) => labels.includes(option.label))
-      .map((option) => option.label);
-    return selected.length > 0 ? selected : [value];
+    return [value];
   });
 }

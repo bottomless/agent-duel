@@ -1004,6 +1004,10 @@ side temp directory. File tools and literal shell targets follow the same rule. 
 checkout's `.agent-duel` and other sides' temp directories are closed to reads too. The shared temp directories
 (`/tmp`, `/var/tmp` and the system temp directory) stay readable but not writable. Children inherit
 the side's rules and share its temp directory, even if a child was created before the parent moved.
+Background shell output belongs in that side's `$TMPDIR`, and the tool result names that file.
+The shared shell-output folder is closed to contestants: it can contain the user's commands and
+older battles. Keep side output until the run's sessions are disposed; releasing the run removes
+its temp directory. Winner transcripts retarget those temporary references before release.
 These restrictions apply with either permission mode; a blocked filesystem request returns a denial
 to the model without waiting for a permission card. Battle off keeps its own filesystem permission behavior.
 In both modes, Agent Duel owns session names, session locations, worktree management and model
@@ -1564,10 +1568,11 @@ A stream that ends without a finish reason or `[DONE]` is broken too (`endsRespo
 accepted as a finish, the step has no tool call and the run completes with no answer. Each cut
 spends one of the step's ten retries; request duration does not reduce the count.
 
-Core retries a request with no output from the same starting point. Once output begins, it keeps
-the partial response and asks the model to continue (`CONTINUE_AFTER_INCOMPLETE_STREAM` in
-`core/src/session/runner/llm.ts`), preserving stored tool calls and results so their side effects
-are not replayed. A declined or interrupted tool prevents this automatic continuation
+Core keeps interrupted replies and completed tool results so recovery does not replay their side
+effects (`core/src/session/runner/llm.ts`). An Arena idle timeout with no text or tool call uses
+`IDLE_RESTART`: there is no partial reply to continue. Keep its stored row for recovery accounting.
+A partial reply uses `IDLE_CONTINUE`; other broken streams use Core's continuation prompt.
+A declined or interrupted tool prevents this automatic continuation
 (`core/src/session/runner/step.ts`).
 
 If that side wins, graft its half answers, continuation notes, and completed answer in order
@@ -1626,10 +1631,12 @@ uses the assignment's latest measured prompt size; calibration samples expire af
 the control plane's TTL index (`request-calibration.ts`).
 
 The native Arena plugin offers compaction to the control plane and translates its neutral 413 into
-Core's checkpoint-and-retry path (`arena/engine-runtime/plugin.ts`). Keep the neutral 272K preflight
-as a fallback for an older control plane. A first request or one still too large after a summary
-ends with the neutral request-too-large explanation instead of repeatedly paying for summaries.
-Automatic compaction must be enabled for Core to create a checkpoint.
+Core's checkpoint-and-retry path (`arena/engine-runtime/plugin.ts`). The engine has no separate
+savings threshold or fallback for an older control plane. Sealed provider state is replay metadata,
+not prompt text; counting its duplicated envelopes makes reasoning-heavy chats compact too early.
+Core still checks the contestant's context window. A first request or one still too large after a
+summary ends with the neutral request-too-large explanation instead of repeatedly paying for
+summaries. Automatic compaction must be enabled for Core to create a checkpoint.
 
 Keep a new user message and its attachments intact while summarizing earlier history. First
 messages, the step immediately after a summary, and summary requests must not be marked for savings

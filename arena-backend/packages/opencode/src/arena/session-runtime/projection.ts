@@ -378,7 +378,10 @@ export const CONTINUE_AFTER_INCOMPLETE_STREAM =
   "The previous response was interrupted. Continue from where you left off without repeating completed content."
 
 const continuationNote = (message: CanonicalMessage) =>
-  message.type === "synthetic" && message.text === CONTINUE_AFTER_INCOMPLETE_STREAM
+  message.type === "synthetic" &&
+  [CONTINUE_AFTER_INCOMPLETE_STREAM, ArenaResponseRecovery.IDLE_RESTART, ArenaResponseRecovery.IDLE_CONTINUE].includes(
+    message.text,
+  )
 
 /**
  * A half answer: an assistant whose model request failed (not a stop or steer) before any tool ran.
