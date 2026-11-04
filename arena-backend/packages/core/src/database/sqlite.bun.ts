@@ -151,6 +151,23 @@ const make = (options: Config) =>
     return client
   })
 
+// When several processes open a new file at once, the switch to WAL can fail straight away: with
+// SQLITE_BUSY, which doesn't wait on the busy timeout, or on Windows with SQLITE_IOERR_TRUNCATE while
+// another process has the -shm file open. Retry for up to about a second.
+const walRetryCodes = new Set(["SQLITE_BUSY", "SQLITE_IOERR_TRUNCATE"])
+
+function switchToWal(native: Database) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      native.run("PRAGMA journal_mode = WAL;")
+      return
+    } catch (error) {
+      if (attempt === 50 || !walRetryCodes.has((error as { code?: string }).code ?? "")) throw error
+      Bun.sleepSync(20)
+    }
+  }
+}
+
 const nativeLayer = (config: Config) =>
   Layer.effect(
     Sqlite.Native,
@@ -161,7 +178,8 @@ const nativeLayer = (config: Config) =>
         create: config.create ?? true,
       })
       yield* Effect.addFinalizer(() => Effect.sync(() => native.close()))
-      if (config.disableWAL !== true) native.run("PRAGMA journal_mode = WAL;")
+      native.run("PRAGMA busy_timeout = 5000;")
+      if (config.disableWAL !== true) switchToWal(native)
       return native
     }),
   )
