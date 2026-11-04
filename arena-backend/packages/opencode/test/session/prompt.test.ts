@@ -348,6 +348,69 @@ it.instance("Arena dispatch and cancellation do not wait for an unprepared workt
   }),
 )
 
+it.instance(
+  "Arena asks a hosted request's early question in the contestant instance once its checkout exists",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const questions = yield* Question.Service
+      const store = yield* InstanceStore.Service
+      const chat = yield* sessions.create({
+        title: "Hosted question",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      const directory = yield* tmpdirScoped()
+      const contestant = <A, E, R>(effect: Effect.Effect<A, E, R>) => store.provide({ directory }, effect)
+      const gate = gateToolExecution(chat.id, { worktree: directory, copiedPaths: [], provide: contestant })
+      yield* Effect.addFinalizer(() => Effect.sync(() => gate.dispose()))
+
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "ask first" }],
+      })
+      yield* llm.tool("question", {
+        questions: [
+          {
+            question: "Which caption should the recording use?",
+            header: "Caption",
+            options: [{ label: "Toolbar APIs", description: "Name the API surface." }],
+          },
+        ],
+      })
+      yield* llm.text("done")
+
+      const run = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+      // The model asks while the contestant checkout is still being staged.
+      yield* llm.wait(1)
+      yield* Effect.sleep("300 millis")
+      const mine = (pending: ReadonlyArray<Question.Request>) => pending.filter((item) => item.sessionID === chat.id)
+      expect(mine(yield* questions.list())).toEqual([])
+      expect(mine(yield* contestant(questions.list()))).toEqual([])
+
+      gate.baseReady()
+      const asked = yield* pollWithTimeout(
+        contestant(questions.list()).pipe(Effect.map((pending) => mine(pending)[0])),
+        "the question was not asked in the contestant instance",
+      )
+      expect(mine(yield* questions.list())).toEqual([])
+      yield* contestant(questions.reply({ requestID: asked.id, answers: [["Toolbar APIs"]] }))
+
+      const exit = yield* Fiber.await(run).pipe(
+        Effect.timeoutOrElse({
+          duration: "5 seconds",
+          orElse: () => Effect.die(new Error("the loop did not continue after the answer")),
+        }),
+      )
+      expect(Exit.isSuccess(exit)).toBe(true)
+    }),
+  { git: true },
+  30_000,
+)
+
 const taskEnvironment = Effect.fn("test.taskEnvironment")(function* (sessionID: SessionID, hosted: boolean) {
   const store = yield* InstanceStore.Service
   const directory = hosted ? yield* tmpdirScoped() : (yield* TestInstance).directory
