@@ -1,4 +1,5 @@
 import { completeWorkspaceFork } from "./fork-workspace-recovery.js";
+import { getArenaDatabaseUpgrade } from "./agent/providers/opencode/arena-upgrade.js";
 import type { ArenaActivityService } from "./arena/activity-service.js";
 import type { ArenaByokService } from "./accounts/byok.js";
 import {
@@ -2943,7 +2944,13 @@ export class Session {
         this.emitForSource(
           {
             type: "session.events.set_subscription.response",
-            payload: { requestId: msg.requestId, subscriptionId: owner.responseId },
+            payload: {
+              requestId: msg.requestId,
+              subscriptionId: owner.responseId,
+              ...(msg.events.includes("status.server_info")
+                ? { arenaDatabaseUpgrade: getArenaDatabaseUpgrade() }
+                : {}),
+            },
           },
           source,
         );

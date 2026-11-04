@@ -1,5 +1,9 @@
 import { toStoredAgentRecord } from "./agent/agent-projections.js";
 import {
+  getArenaDatabaseUpgrade,
+  onArenaDatabaseUpgrade,
+} from "./agent/providers/opencode/arena-upgrade.js";
+import {
   WorkspaceCleanupService,
   type WorkspaceParent,
 } from "./workspace-cleanup/workspace-cleanup-service.js";
@@ -798,6 +802,9 @@ export class VoiceAssistantWebSocketServer {
       throw new Error("providerSnapshotManager is required");
     }
     this.providerSnapshotManager = providerSnapshotManager;
+    this.cleanupSubscriptions.push(
+      onArenaDatabaseUpgrade(() => this.broadcastCapabilitiesUpdate()),
+    );
     this.serverCapabilities = buildServerCapabilities({
       readiness: this.speech?.getReadiness() ?? null,
     });
@@ -2123,6 +2130,7 @@ export class VoiceAssistantWebSocketServer {
   private buildServerInfoStatusPayload(session: Session): ServerInfoStatusPayload {
     return {
       status: "server_info",
+      arenaDatabaseUpgrade: getArenaDatabaseUpgrade(),
       protocolVersion: WS_PROTOCOL_VERSION,
       serverId: this.serverId,
       hostname: getHostName(),

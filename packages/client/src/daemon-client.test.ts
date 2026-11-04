@@ -1,3 +1,4 @@
+import type { ArenaDatabaseUpgrade } from "@getpaseo/protocol/arena-upgrade";
 import { afterEach, expect, expectTypeOf, test, vi } from "vitest";
 import { z } from "zod";
 import {
@@ -58,7 +59,7 @@ function createTraceRecorder(): { trace: DaemonClientTrace; records: TraceRecord
   };
 }
 
-function createMockTransport() {
+function createMockTransport(upgradeSnapshot: ArenaDatabaseUpgrade | null = null) {
   const sent: Array<string | Uint8Array | ArrayBuffer> = [];
 
   let onMessage: (data: unknown) => void = () => {};
@@ -76,6 +77,30 @@ function createMockTransport() {
       const frame = JSON.parse(data) as { type?: string };
       if (frame.type === "ping") {
         onMessage(JSON.stringify({ type: "pong" }));
+      }
+      const request = frame as {
+        type?: string;
+        message?: { type: string; requestId: string; subscriptionId?: string };
+      };
+      if (
+        request.message?.type === "session.events.set_subscription.request" ||
+        request.message?.type === "subscription.release.request"
+      ) {
+        const message = request.message;
+        queueMicrotask(() =>
+          onMessage(
+            wrapSessionMessage({
+              type: message.type.replace(".request", ".response"),
+              payload: {
+                requestId: message.requestId,
+                subscriptionId: message.subscriptionId ?? `status-${message.requestId}`,
+                ...(message.type === "session.events.set_subscription.request"
+                  ? { arenaDatabaseUpgrade: upgradeSnapshot }
+                  : {}),
+              },
+            }),
+          ),
+        );
       }
     },
     close: () => {},
@@ -8319,4 +8344,87 @@ test("closes before admission when a protected-capable daemon is reached in lega
   // Only the application hello reached the daemon; the queued command never did.
   expect(daemonReceived).toHaveLength(1);
   expect(JSON.parse(daemonReceived[0] as string)).toMatchObject({ type: "hello" });
+});
+
+test.each(["fetch", "arena", "timeline"] as const)(
+  "pending %s RPC follows upgrade status arriving after dispatch",
+  async (kind) => {
+    useHeartbeatClock();
+    const mock = createMockTransport();
+    const client = new DaemonClient({
+      url: "ws://test",
+      clientId: "upgrade-test",
+      logger: createMockLogger(),
+      reconnect: { enabled: false },
+      transportFactory: () => mock.transport,
+    });
+    clients.push(client);
+    const connected = client.connect();
+    mock.triggerOpen();
+    await connected;
+    const requests = {
+      arena: () => client.arenaResolve("agent-1"),
+      timeline: () => client.fetchAgentTimeline("agent-1"),
+      fetch: () => client.fetchAgent("agent-1"),
+    };
+    const pending = requests[kind]();
+    let settled = false;
+    const outcome = pending.catch((error: unknown) => error);
+    void outcome.then(() => {
+      settled = true;
+      return undefined;
+    });
+    const startedAt = Date.now();
+    await vi.advanceTimersByTimeAsync(10_000);
+    const status = (arenaDatabaseUpgrade: { startedAt: number; deadline: number } | null) =>
+      mock.triggerMessage(
+        wrapSessionMessage({
+          type: "status",
+          payload: { ...client.getLastServerInfoMessage(), arenaDatabaseUpgrade },
+        }),
+      );
+    status({ startedAt, deadline: startedAt + 600_000 });
+    expect(client.getLastServerInfoMessage()?.arenaDatabaseUpgrade).toEqual({
+      startedAt,
+      deadline: startedAt + 600_000,
+    });
+    await vi.advanceTimersByTimeAsync(590_000);
+    if (settled) throw await outcome;
+    expect(settled).toBe(false);
+    status(null);
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await outcome).toBeInstanceOf(DaemonConnectionError);
+  },
+);
+
+test("an upgrade already running between hello and status subscription extends the pending RPC", async () => {
+  useHeartbeatClock();
+  const upgrade = { startedAt: Date.now(), deadline: Date.now() + 600_000 };
+  const mock = createMockTransport(upgrade);
+  const client = new DaemonClient({
+    url: "ws://test",
+    clientId: "snapshot-upgrade",
+    logger: createMockLogger(),
+    reconnect: { enabled: false },
+    transportFactory: () => mock.transport,
+  });
+  clients.push(client);
+  const connected = client.connect();
+  mock.triggerOpen();
+  await connected;
+  expect(client.getLastServerInfoMessage()?.arenaDatabaseUpgrade).toBeNull();
+  const pending = client.fetchAgent("agent-1");
+  const outcome = pending.catch((error: unknown) => error);
+  let settled = false;
+  void outcome.then(() => {
+    settled = true;
+    return undefined;
+  });
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(client.getLastServerInfoMessage()?.arenaDatabaseUpgrade).toEqual(upgrade);
+  expect(settled).toBe(false);
+  await vi.advanceTimersByTimeAsync(600_000);
+  expect(await outcome).toBeInstanceOf(DaemonConnectionError);
 });

@@ -1,26 +1,19 @@
 import { describe, expect, test } from "vitest";
-import { openCodeStartupTimeoutMessage } from "./startup-timeout.js";
+import { hasArenaDatabaseUpgradeLine, openCodeStartupTimeoutMessage } from "./startup-timeout.js";
 
 describe("engine startup timeout", () => {
-  const copying = "[arena-upgrade] Backing up databases before OpenCode 2.0\n";
-  const copied =
-    "[arena-upgrade] Backed up the 1.x databases to /scratch/arena/pre-opencode-2-backup\n";
-
-  test("explains when the limit stopped startup while waiting for a required backup", () => {
-    expect(openCodeStartupTimeoutMessage(true, copying)).toBe(
-      "Arena's pre-upgrade database backup did not report completion within the 30-second engine startup limit. " +
-        "Startup was stopped. A complete backup is required to upgrade; do not skip it.",
-    );
+  test("names the upgrade limit for backup and import", () => {
+    expect(openCodeStartupTimeoutMessage(true)).toContain("10-minute database upgrade limit");
+    expect(openCodeStartupTimeoutMessage(true)).toContain("backup or import");
+    expect(openCodeStartupTimeoutMessage(false)).toBe("OpenCode server startup timeout");
   });
 
-  test("keeps the ordinary timeout after the backup finished", () => {
-    expect(openCodeStartupTimeoutMessage(true, copying + copied)).toBe(
-      "OpenCode server startup timeout",
-    );
-  });
-
-  test("keeps the ordinary timeout when no backup ran or the engine is not Arena", () => {
-    expect(openCodeStartupTimeoutMessage(true, "")).toBe("OpenCode server startup timeout");
-    expect(openCodeStartupTimeoutMessage(false, copying)).toBe("OpenCode server startup timeout");
+  test("accepts only a complete exact backup line", () => {
+    const line = "[arena-upgrade] Backing up databases before OpenCode 2.0";
+    expect(hasArenaDatabaseUpgradeLine(line)).toBe(false);
+    expect(hasArenaDatabaseUpgradeLine(line + "\n")).toBe(true);
+    expect(hasArenaDatabaseUpgradeLine("noise\n" + line + "\r\n")).toBe(true);
+    expect(hasArenaDatabaseUpgradeLine("prefix " + line + "\n")).toBe(false);
+    expect(hasArenaDatabaseUpgradeLine(line + " extra\n")).toBe(false);
   });
 });

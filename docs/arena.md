@@ -1725,10 +1725,11 @@ refuses to start with `Database is not empty and has no session table`. Keep the
 OpenCode update, check migrations against a database without `session`; fresh 2.0 databases lack
 it too.
 
-The backup is inside the daemon's 30-second engine startup limit. If it takes too long, startup
-fails with an explicit message that it was waiting for the backup to report completion. The import
-requires a complete backup. A slower or very large copy can still prevent startup; the timeout
-does not provide a way to skip the backup.
+During the first upgrade, the sidebar says "Upgrading your database. This can take a few
+minutes." Allow up to ten minutes from engine start for backup and import. Ordinary starts keep
+their 30-second limit. If the upgrade exceeds its limit, startup stops; the next start retries
+using the existing backup and import safeguards. The import still requires a complete backup.
+There is no skip or partial-backup resume.
 
 For emergency file recovery from the backup, stop the app **and its daemon** first; quitting alone
 can leave the daemon running when Keep running after quit is on. Set `PASEO_HOME` to the affected

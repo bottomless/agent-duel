@@ -437,6 +437,7 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
           }
           refreshAgentInitializationTimeout({
             key: initKey,
+            serverId,
             agentId,
             setAgentInitializing,
           });
@@ -445,7 +446,12 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
         try {
           const page = await getHostRuntimeStore().fetchAgentTimeline(serverId, agentId, request);
           if (shouldInitialize && getInitDeferred(initKey)) {
-            refreshAgentInitializationTimeout({ key: initKey, agentId, setAgentInitializing });
+            refreshAgentInitializationTimeout({
+              key: initKey,
+              serverId,
+              agentId,
+              setAgentInitializing,
+            });
           }
           return page;
         } catch (error) {
@@ -506,7 +512,11 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
       handler: (message: SessionOutboundMessage) => void,
     ) =>
       feeds.subscribe({
-        snapshot: () => {},
+        snapshot: () => {
+          if (type !== "status") return;
+          const serverInfo = client.getLastServerInfoMessage();
+          if (serverInfo) handler({ type: "status", payload: serverInfo });
+        },
         update: (message) => {
           if (message.type === type) handler(message);
         },

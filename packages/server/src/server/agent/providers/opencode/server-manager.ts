@@ -19,7 +19,12 @@ import {
   type ProviderRuntimeSettings,
 } from "../../provider-launch-config.js";
 import { resolveEngineLogPath, resolveOpenCodeHomeDir } from "./paths.js";
-import { openCodeStartupTimeoutMessage } from "./startup-timeout.js";
+import {
+  openCodeStartupTimeoutMessage,
+  hasArenaDatabaseUpgradeLine,
+  ARENA_DATABASE_UPGRADE_TIMEOUT_MS,
+} from "./startup-timeout.js";
+import { setArenaDatabaseUpgrade } from "./arena-upgrade.js";
 import {
   isArenaCredentialsCurrent,
   issueArenaLaunchCredentials,
@@ -99,6 +104,7 @@ export interface OpenCodeServerGeneration {
   arenaRuntimeToken?: string;
   /** Set when the daemon stops this server, so its exit is not reported as a crash. */
   stopping?: boolean;
+  databaseUpgrade?: boolean;
 }
 
 export type OpenCodePortAllocator = () => Promise<number>;
@@ -372,6 +378,9 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
   }
 
   async acquireDedicated(env: Record<string, string>): Promise<OpenCodeServerAcquisition> {
+    // Dedicated settings must not race the one-time database copy/import.
+    const upgrades = [...this.allServers].filter((server) => server.databaseUpgrade);
+    if (upgrades.length > 0) await Promise.all(upgrades.map((server) => server.ready));
     const server = await this.startServer(env);
     server.retired = true;
     this.retiredServers.add(server);
@@ -452,6 +461,11 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
     if (this.newServerPromise) {
       return this.newServerPromise;
     }
+    const upgrading = [...this.allServers].find((server) => server.databaseUpgrade);
+    if (upgrading) {
+      await upgrading.ready;
+      if (this.currentServer === upgrading) return upgrading;
+    }
 
     this.newServerPromise = Promise.resolve()
       .then(async () => {
@@ -473,6 +487,10 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
     if (this.shutdownPromise) {
       await this.shutdownPromise;
     }
+    const upgrades = [...this.allServers].filter(
+      (server) => server.databaseUpgrade && server !== this.currentServer,
+    );
+    if (upgrades.length > 0) await Promise.all(upgrades.map((server) => server.ready));
     if (this.newServerPromise) {
       return this.newServerPromise;
     }
@@ -586,6 +604,7 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
       environment,
       arenaCredentials,
     });
+    const startedAt = Date.now();
     const managedProcessRecord = this.recordManagedServerProcess({
       process: serverProcess,
       command: launchPrefix.command,
@@ -637,6 +656,7 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
     let settled = false;
     let stderrBuffer = "";
     let stdoutBuffer = "";
+    let upgradeDetected = false;
     const STARTUP_BUFFER_CAP = 8192;
     const appendCapped = (current: string, chunk: string): string => {
       if (current.length >= STARTUP_BUFFER_CAP) {
@@ -660,31 +680,51 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
 
     {
       let timeout: ReturnType<typeof setTimeout>;
+      const finishUpgrade = () => {
+        server.databaseUpgrade = false;
+        setArenaDatabaseUpgrade(server, null);
+      };
       const failStartup = (error: Error) => {
         if (settled) {
           return;
         }
         settled = true;
         clearTimeout(timeout);
+        finishUpgrade();
         rejectListening(error);
       };
-      timeout = setTimeout(() => {
+      const timedOut = () => {
         if (!started) {
           failStartup(
-            new Error(
-              buildStartupErrorMessage(openCodeStartupTimeoutMessage(isArenaLaunch, stdoutBuffer)),
-            ),
+            new Error(buildStartupErrorMessage(openCodeStartupTimeoutMessage(upgradeDetected))),
           );
         }
-      }, OPENCODE_SERVER_STARTUP_TIMEOUT_MS);
+      };
+      timeout = setTimeout(timedOut, OPENCODE_SERVER_STARTUP_TIMEOUT_MS);
 
       serverProcess.stdout?.on("data", (data: Buffer) => {
         const output = data.toString();
-        stdoutBuffer = appendCapped(stdoutBuffer, output);
-        if (output.includes("listening on") && !settled) {
+        stdoutBuffer = isArenaLaunch
+          ? (stdoutBuffer + output).slice(-STARTUP_BUFFER_CAP)
+          : appendCapped(stdoutBuffer, output);
+        if (
+          !settled &&
+          !upgradeDetected &&
+          isArenaLaunch &&
+          hasArenaDatabaseUpgradeLine(stdoutBuffer)
+        ) {
+          upgradeDetected = true;
+          server.databaseUpgrade = true;
+          const deadline = startedAt + ARENA_DATABASE_UPGRADE_TIMEOUT_MS;
+          clearTimeout(timeout);
+          timeout = setTimeout(timedOut, Math.max(0, deadline - Date.now()));
+          setArenaDatabaseUpgrade(server, { startedAt, deadline });
+        }
+        if ((isArenaLaunch ? stdoutBuffer : output).includes("listening on") && !settled) {
           started = true;
           settled = true;
           clearTimeout(timeout);
+          finishUpgrade();
           resolveListening();
         }
       });

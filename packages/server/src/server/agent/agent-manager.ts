@@ -99,7 +99,7 @@ import {
   type ProviderSubagentDescriptor,
   type ProviderSubagentStoreEvent,
 } from "./provider-subagents/store.js";
-import { withTimeout } from "../../utils/promise-timeout.js";
+import { withArenaUpgradeTimeout } from "./providers/opencode/arena-upgrade.js";
 import { extractAttention } from "../persistence-hooks.js";
 
 const RELOAD_SESSION_CLOSE_TIMEOUT_MS = 3_000;
@@ -1168,7 +1168,7 @@ export class AgentManager {
     const providerResults = await Promise.all(
       providerEntries.map(async ([provider, client]) => {
         try {
-          const sessions = await withTimeout(
+          const sessions = await withArenaUpgradeTimeout(
             client.listImportableSessions!({
               limit: options?.limit,
               query: options?.query,
@@ -1176,7 +1176,8 @@ export class AgentManager {
               cwd: options?.cwd,
             }),
             IMPORTABLE_SESSION_LIST_TIMEOUT_MS,
-            `Timed out listing importable sessions for provider '${provider}' after ${IMPORTABLE_SESSION_LIST_TIMEOUT_MS}ms`,
+            `Timed out listing importable sessions for provider '${provider}'`,
+            provider === "opencode",
           );
           return {
             sessions: sessions

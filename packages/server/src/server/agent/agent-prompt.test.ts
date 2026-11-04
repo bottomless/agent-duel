@@ -14,6 +14,7 @@ import { join } from "node:path";
 
 import { createTestLogger } from "../../test-utils/test-logger.js";
 import { AgentManager } from "./agent-manager.js";
+import { setArenaDatabaseUpgrade } from "./providers/opencode/arena-upgrade.js";
 import { waitForAgentRunStartWithTimeout } from "./agent-prompt.js";
 import type {
   AgentClient,
@@ -49,7 +50,7 @@ const RUN_START_TEST_CAPABILITIES = {
  * agent_state) is what the run-start wait observes. `startDelayMs: null` never starts.
  */
 class SlowStartAgentSession implements AgentSession {
-  readonly provider = "codex" as const;
+  readonly provider: "codex" | "opencode";
   readonly capabilities = RUN_START_TEST_CAPABILITIES;
   readonly id = randomUUID();
   private readonly subscribers = new Set<(event: AgentStreamEvent) => void>();
@@ -58,7 +59,12 @@ class SlowStartAgentSession implements AgentSession {
     this.releaseStartTurn = resolve;
   });
 
-  constructor(private readonly startDelayMs: number | null) {}
+  constructor(
+    private readonly startDelayMs: number | null,
+    provider: "codex" | "opencode" = "codex",
+  ) {
+    this.provider = provider;
+  }
 
   async run(): Promise<AgentRunResult> {
     return { sessionId: this.id, finalText: "", timeline: [] };
@@ -129,18 +135,23 @@ class SlowStartAgentSession implements AgentSession {
 }
 
 class SlowStartAgentClient implements AgentClient {
-  readonly provider = "codex" as const;
+  readonly provider: "codex" | "opencode";
   readonly capabilities = RUN_START_TEST_CAPABILITIES;
   readonly sessions: SlowStartAgentSession[] = [];
 
-  constructor(private readonly startDelayMs: number | null) {}
+  constructor(
+    private readonly startDelayMs: number | null,
+    provider: "codex" | "opencode" = "codex",
+  ) {
+    this.provider = provider;
+  }
 
   async isAvailable(): Promise<boolean> {
     return true;
   }
 
   async createSession(): Promise<AgentSession> {
-    const session = new SlowStartAgentSession(this.startDelayMs);
+    const session = new SlowStartAgentSession(this.startDelayMs, this.provider);
     this.sessions.push(session);
     return session;
   }
@@ -158,19 +169,22 @@ class SlowStartAgentClient implements AgentClient {
  * Real AgentManager driving a real agent, so the run-start wait exercises the production
  * run-state and agent_state subscription path rather than a replaced method.
  */
-async function createRunStartScenario(startDelayMs: number | null): Promise<{
+async function createRunStartScenario(
+  startDelayMs: number | null,
+  provider: "codex" | "opencode" = "codex",
+): Promise<{
   agentManager: AgentManager;
   agentId: string;
   startRun: () => Promise<void>;
   cleanup: () => Promise<void>;
 }> {
   const workdir = mkdtempSync(join(tmpdir(), "agent-run-start-budget-"));
-  const client = new SlowStartAgentClient(startDelayMs);
+  const client = new SlowStartAgentClient(startDelayMs, provider);
   const agentManager = new AgentManager({
-    clients: { codex: client },
+    clients: { [provider]: client },
     logger: createTestLogger(),
   });
-  const snapshot = await agentManager.createAgent({ provider: "codex", cwd: workdir }, undefined, {
+  const snapshot = await agentManager.createAgent({ provider, cwd: workdir }, undefined, {
     workspaceId: undefined,
   });
 
@@ -357,3 +371,38 @@ test("a human pasting an agent envelope stays a human message through provider r
     clientMessageId: "human-submission",
   });
 });
+
+test.each(["opencode", "codex"] as const)(
+  "run-start upgrade allowance is scoped to OpenCode: %s",
+  async (provider) => {
+    const scenario = await createRunStartScenario(null, provider);
+    const owner = {};
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      await scenario.startRun();
+      const pending = waitForAgentRunStartWithTimeout(scenario.agentManager, scenario.agentId);
+      const outcome = pending.catch((error: unknown) => error);
+      let settled = false;
+      void outcome.then(() => {
+        settled = true;
+        return undefined;
+      });
+      await vi.advanceTimersByTimeAsync(10_000);
+      setArenaDatabaseUpgrade(owner, { startedAt: 0, deadline: 600_000 });
+      await vi.advanceTimersByTimeAsync(50_000);
+      expect(settled).toBe(provider !== "opencode");
+      if (provider === "opencode") {
+        setArenaDatabaseUpgrade(owner, null);
+        await vi.advanceTimersByTimeAsync(599_999);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+      }
+      expect(await outcome).toBeInstanceOf(Error);
+    } finally {
+      setArenaDatabaseUpgrade(owner, null);
+      vi.useRealTimers();
+      await scenario.cleanup();
+    }
+  },
+);

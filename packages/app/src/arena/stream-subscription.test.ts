@@ -1,3 +1,4 @@
+import type { ArenaDatabaseUpgrade } from "@getpaseo/protocol/arena-upgrade";
 import { describe, expect, it, vi } from "vitest";
 import { ArenaSnapshotSchema } from "@getpaseo/protocol/arena/rpc-schemas";
 import { ArenaStreamPacketSchema, type ArenaStreamPacket } from "@getpaseo/protocol/arena/stream";
@@ -7,6 +8,19 @@ import { arenaRunStatusLabel } from "./run-stats";
 
 class Client implements ArenaStreamClient {
   isConnected = true;
+  upgrade: ArenaDatabaseUpgrade | null = null;
+  private statusListeners = new Set<() => void>();
+  getLastServerInfoMessage() {
+    return { arenaDatabaseUpgrade: this.upgrade };
+  }
+  on(_type: "status", listener: () => void) {
+    this.statusListeners.add(listener);
+    return () => this.statusListeners.delete(listener);
+  }
+  status(upgrade: ArenaDatabaseUpgrade | null) {
+    this.upgrade = upgrade;
+    for (const listener of this.statusListeners) listener();
+  }
   subscriptions: string[] = [];
   unsubscriptions: string[] = [];
   acknowledgements: number[] = [];
@@ -396,3 +410,41 @@ describe("Arena UI subscription", () => {
     await Promise.resolve();
   });
 });
+
+it.each([false, true])(
+  "snapshot and refresh deadlines only extend during upgrade: %s",
+  async (upgrading) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const client = new Client();
+    const stream = new ArenaSubscription(client, "agent", { kind: "current" }, () => {});
+    const off = stream.retain();
+    try {
+      await Promise.resolve();
+      const refresh = stream.refresh();
+      let settled = false;
+      void refresh.then(() => {
+        settled = true;
+        return undefined;
+      });
+      const subscriptions = client.subscriptions.length;
+      await vi.advanceTimersByTimeAsync(10_000);
+      if (upgrading) client.status({ startedAt: 0, deadline: 600_000 });
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(settled).toBe(!upgrading);
+      if (upgrading) {
+        client.status(null);
+        await vi.advanceTimersByTimeAsync(599_999);
+        expect(settled).toBe(false);
+        expect(client.subscriptions).toHaveLength(subscriptions);
+        expect(stream.getError()).toBeNull();
+        await vi.advanceTimersByTimeAsync(1);
+      }
+      expect((await refresh).isError).toBe(true);
+    } finally {
+      off();
+      await Promise.resolve();
+      vi.useRealTimers();
+    }
+  },
+);

@@ -1026,6 +1026,7 @@ export class ProviderSnapshotManager {
       const catalog = await runProviderRefreshWithDeadline({
         label: definition.label,
         timeoutMs: this.refreshTimeoutMs,
+        arena: provider === "opencode",
         operation: async (context) => {
           const available = await context.runActivity("availability", () =>
             raceProviderRefreshAbort(
