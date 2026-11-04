@@ -6,7 +6,12 @@ const parser = lazy(async () => {
   const { default: runtime } = await import("web-tree-sitter/tree-sitter.wasm" as string, {
     with: { type: "wasm" },
   })
-  const resolve = (asset: string) => fileURLToPath(new URL(asset, import.meta.url))
+  // A Windows path (`C:\...`) would parse as a URL with a `c:` scheme; see `resolveWasm` in tool/shell.ts.
+  const resolve = (asset: string) => {
+    if (asset.startsWith("file://")) return fileURLToPath(asset)
+    if (asset.startsWith("/") || /^[a-z]:/i.test(asset)) return asset
+    return fileURLToPath(new URL(asset, import.meta.url))
+  }
   await Parser.init({ locateFile: () => resolve(runtime) })
   const { default: grammar } = await import("tree-sitter-bash/tree-sitter-bash.wasm" as string, {
     with: { type: "wasm" },

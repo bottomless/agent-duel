@@ -189,6 +189,12 @@ export type Error =
 
 export { hostRepoPath, isolatedRoot, LOCAL_STATE_DIRNAME } from "./layout"
 
+// Git writes its link files with `/` on Windows too, and only strips a `/.git` suffix when it
+// lists a worktree; a `\.git` would list the link file in place of the worktree.
+function gitLinkPath(file: string) {
+  return process.platform === "win32" ? file.replaceAll("\\", "/") : file
+}
+
 function slugify(input: string) {
   return input
     .trim()
@@ -1547,7 +1553,9 @@ export const layer: Layer.Layer<
           }
           // What `git worktree add` writes, minus the index, which is moved in or rebuilt below.
           yield* attempt(fs.makeDirectory(admin, { recursive: true }))
-          yield* attempt(fs.writeFileString(pathSvc.join(admin, "gitdir"), `${pathSvc.join(to, ".git")}\n`))
+          yield* attempt(
+            fs.writeFileString(pathSvc.join(admin, "gitdir"), `${gitLinkPath(pathSvc.join(to, ".git"))}\n`),
+          )
           yield* attempt(fs.writeFileString(pathSvc.join(admin, "commondir"), "../..\n"))
           if (yield* usesReftable(host)) {
             // Reftable keeps a worktree's HEAD in the entry's own tables and ignores a HEAD file,
@@ -1605,7 +1613,7 @@ export const layer: Layer.Layer<
             yield* cleanDirectory(link)
           }
           const temporary = `${link}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`
-          yield* attempt(fs.writeFileString(temporary, `gitdir: ${admin}\n`))
+          yield* attempt(fs.writeFileString(temporary, `gitdir: ${gitLinkPath(admin)}\n`))
           yield* attempt(fs.rename(temporary, link))
 
           // Reading the index is the check that git can use it: it stops on a bad signature,

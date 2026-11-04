@@ -77,6 +77,34 @@ function equal(field: string, value: unknown): SqlPredicate {
   }
 }
 
+function plainScalar(value: unknown): value is string | number | boolean {
+  return (
+    typeof value === "string" || typeof value === "boolean" || (typeof value === "number" && Number.isFinite(value))
+  )
+}
+
+// One OR term per value nests the expression one level deeper each, and SQLite refuses a tree
+// deeper than 1000. Plain values go in as one JSON array instead, so a list of any length is a
+// single IN over json_each.
+function membership(field: string, values: readonly unknown[]): SqlPredicate {
+  const scalars = values.filter(plainScalar).map((value) => (typeof value === "boolean" ? Number(value) : value))
+  const predicates = values.filter((value) => !plainScalar(value)).map((value) => equal(field, value))
+  if (scalars.length > 0) {
+    const expression = fieldExpression(field)
+    const list = "(SELECT value FROM json_each(?))"
+    const json = JSON.stringify(scalars)
+    predicates.push(
+      scalarFields.has(field)
+        ? { sql: `${expression} IN ${list}`, parameters: [json] }
+        : {
+            sql: `(${expression} IN ${list} OR (${fieldType(field)} = 'array' AND EXISTS (SELECT 1 FROM json_each(${expression}) WHERE value IN ${list})))`,
+            parameters: [json, json],
+          },
+    )
+  }
+  return combine(predicates, "OR")
+}
+
 function negate(predicate: SqlPredicate): SqlPredicate {
   return { sql: `NOT COALESCE((${predicate.sql}), 0)`, parameters: predicate.parameters }
 }
@@ -103,10 +131,7 @@ function condition(field: string, expected: unknown): SqlPredicate {
     if (operator === "$lte") return ordered(field, "<=", operand)
     if (operator === "$in" || operator === "$nin") {
       if (!Array.isArray(operand)) throw new Error(`${operator} requires an array`)
-      const selected = combine(
-        operand.map((item) => equal(field, item)),
-        "OR",
-      )
+      const selected = membership(field, operand)
       return operator === "$nin" ? negate(selected) : selected
     }
     if (operator === "$all") {

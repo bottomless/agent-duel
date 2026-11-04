@@ -3,6 +3,8 @@ import { $ } from "bun"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { FSUtil } from "@opencode-ai/core/fs-util"
+import { Global } from "@opencode-ai/core/global"
+import { Hash } from "@opencode-ai/core/util/hash"
 import fs from "fs/promises"
 import path from "path"
 import { Cause, Effect, Exit, Fiber, Layer } from "effect"
@@ -422,6 +424,73 @@ it.instance(
     }),
   ),
   { git: true },
+)
+
+it.live(
+  "a new snapshot repository reads its settings as git config would have written them",
+  Effect.gen(function* () {
+    const dir = yield* scopedGitTmpdir()
+    yield* write(`${dir}/a.txt`, "a")
+    yield* Effect.gen(function* () {
+      const snapshot = yield* Snapshot.Service
+      expect(yield* snapshot.track()).toBeTruthy()
+    }).pipe(provideInstance(dir))
+    const gitdir = yield* Effect.promise(async () => {
+      const root = path.join(Global.Path.data, "snapshot")
+      const names = new Set([Hash.fast(dir), Hash.fast(await fs.realpath(dir))])
+      for (const project of await fs.readdir(root)) {
+        for (const name of await fs.readdir(path.join(root, project))) {
+          if (names.has(name)) return path.join(root, project, name)
+        }
+      }
+      throw new Error("the snapshot repository was not created")
+    })
+    const get = (key: string) =>
+      Effect.promise(() => $`git --git-dir ${gitdir} config --get ${key}`.quiet().text()).pipe(
+        Effect.map((value) => value.trim()),
+      )
+    expect(yield* get("core.autocrlf")).toBe("false")
+    expect(yield* get("core.longpaths")).toBe("true")
+    expect(yield* get("core.symlinks")).toBe(String(FSUtil.canSymlink()))
+    expect(yield* get("core.fsmonitor")).toBe("false")
+    expect(yield* get("core.untrackedCache")).toBe("true")
+    expect(yield* get("feature.manyFiles")).toBe("true")
+    expect(yield* get("index.version")).toBe("4")
+    expect(yield* get("index.threads")).toBe("true")
+  }),
+)
+
+it.live(
+  "track keeps its tree while nothing changes, and follows a change, a revert and a restore",
+  Effect.gen(function* () {
+    const dir = yield* scopedGitTmpdir()
+    yield* write(`${dir}/a.txt`, "one")
+    yield* Effect.gen(function* () {
+      const snapshot = yield* Snapshot.Service
+      const first = yield* snapshot.track()
+      expect(first).toBeTruthy()
+      expect(yield* snapshot.track()).toBe(first)
+
+      yield* write(`${dir}/a.txt`, "two")
+      const second = yield* snapshot.track()
+      expect(second).toBeTruthy()
+      expect(second).not.toBe(first)
+      expect(yield* snapshot.track()).toBe(second)
+
+      // A revert checks the file out with fresh index stats, so the worktree lists as unchanged;
+      // the tree it leaves is still the earlier one, not the one kept before it.
+      yield* snapshot.revert([yield* snapshot.patch(first!)])
+      expect(yield* readText(`${dir}/a.txt`)).toBe("one")
+      expect(yield* snapshot.track()).toBe(first)
+
+      yield* write(`${dir}/a.txt`, "two")
+      expect(yield* snapshot.track()).toBe(second)
+      // The restore moves the index back without a track, so the next track writes the tree again.
+      yield* snapshot.restore(first!)
+      expect(yield* readText(`${dir}/a.txt`)).toBe("one")
+      expect(yield* snapshot.track()).toBe(first)
+    }).pipe(provideInstance(dir))
+  }),
 )
 
 it.live(

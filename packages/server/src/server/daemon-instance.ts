@@ -11,6 +11,7 @@ import {
 } from "./pid-lock.js";
 import { daemonLaunchEnvironment } from "./config-environment.js";
 import { readPersistedConfig } from "./persisted-config.js";
+import { releaseStoppedMarker } from "./crash-reports/store.js";
 import treeKill from "tree-kill";
 const killTree = (pid: number, signal: string): Promise<void> =>
   new Promise((resolve, reject) =>
@@ -45,7 +46,7 @@ export class DaemonInstanceError extends Error {
 
 export async function readDaemonInstance(home: string): Promise<PidLockInfo | null> {
   const lock = await getPidLockInfo(home);
-  return lock && isPidLockOwnerRunning(lock) ? lock : null;
+  return lock && (await isPidLockOwnerRunning(lock)) ? lock : null;
 }
 
 export function daemonLogPath(home: string): string {
@@ -161,7 +162,7 @@ export async function stopDaemonInstance(
       `Supervisor changed for ${home}; refusing to stop PID ${instance.pid}.`,
     );
   }
-  if (!instance || !isPidLockOwnerRunning(instance)) {
+  if (!instance || !(await isPidLockOwnerRunning(instance))) {
     if (instance)
       await releasePidLock(home, { ownerPid: instance.pid, startedAt: instance.startedAt });
     return {
@@ -176,7 +177,7 @@ export async function stopDaemonInstance(
   let { forced, usedLifecycleRpc } = await requestInstanceStop(home, instance, options);
   const waitForExit = async (waitMs: number) => {
     const exitDeadline = Date.now() + waitMs;
-    while (isPidLockOwnerRunning(instance)) {
+    while (await isPidLockOwnerRunning(instance)) {
       const current = await getPidLockInfo(home);
       if (current && !isSamePidLock(instance, current))
         throw new DaemonInstanceError(
@@ -186,6 +187,7 @@ export async function stopDaemonInstance(
       if (Date.now() >= exitDeadline) return false;
       await delay(100);
     }
+    if (!forced) releaseStoppedMarker({ home, name: "daemon" });
     return true;
   };
   let stopped = await waitForExit(forced ? killTimeoutMs : Math.max(0, deadline - Date.now()));

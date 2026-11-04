@@ -1,5 +1,6 @@
 import path, { dirname, isAbsolute, join, relative, sep } from "path"
-import { realpathSync } from "fs"
+import { mkdtempSync, realpathSync, rmSync, symlinkSync } from "fs"
+import { tmpdir } from "os"
 import { readdir } from "fs/promises"
 import { lookup } from "mime-types"
 import { Context, Effect, FileSystem, Layer, Schema } from "effect"
@@ -271,6 +272,28 @@ export namespace FSUtil {
       .replace(/^\/([a-zA-Z])(?:\/|$)/, (_, drive) => `${drive.toUpperCase()}:/`)
       .replace(/^\/cygdrive\/([a-zA-Z])(?:\/|$)/, (_, drive) => `${drive.toUpperCase()}:/`)
       .replace(/^\/mnt\/([a-zA-Z])(?:\/|$)/, (_, drive) => `${drive.toUpperCase()}:/`)
+  }
+
+  let symlinkSupport: boolean | undefined
+
+  /**
+   * Whether this process can create symbolic links. Windows allows it only with Developer Mode or
+   * elevation; without it Git checks a link out as a plain file holding its target, which is what
+   * `core.symlinks=false` reads back.
+   */
+  export function canSymlink(): boolean {
+    if (process.platform !== "win32") return true
+    if (symlinkSupport !== undefined) return symlinkSupport
+    const directory = mkdtempSync(join(tmpdir(), "symlink-probe-"))
+    try {
+      symlinkSync("target", join(directory, "link"))
+      symlinkSupport = true
+    } catch {
+      symlinkSupport = false
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+    return symlinkSupport
   }
 
   export function overlaps(a: string, b: string) {

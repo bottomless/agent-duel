@@ -32,6 +32,7 @@ function encodedHeader(input: {
       capturedAt: input.context.capturedAt,
       agent: input.context.agent,
       git: input.context.git,
+      ...(input.context.log ? { log: input.context.log } : {}),
     },
     transfer: input.transfer,
   });

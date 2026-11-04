@@ -54,7 +54,12 @@ interface SupervisorOptions {
     env?: NodeJS.ProcessEnv;
   } | null;
   onWorkerReady?: (message: { listen: string; serverId: string }) => Promise<void> | void;
-  onWorkerExit?: () => Promise<void> | void;
+  /** Runs synchronously when the worker ends, before any restart. */
+  onWorkerExit?: (exit: {
+    pid: number;
+    code: number | null;
+    signal: NodeJS.Signals | null;
+  }) => Promise<void> | void;
   restartOnCrash?: boolean;
   onSupervisorExit?: () => Promise<void> | void;
   logFile?: SupervisorLogFileOptions;
@@ -378,7 +383,11 @@ export function runSupervisor(options: SupervisorOptions): SupervisorController 
       clearForceKillTimer();
       child = null;
       publication = publication
-        .then(() => options.onWorkerExit?.())
+        .then(() =>
+          currentChild.pid === undefined
+            ? undefined
+            : options.onWorkerExit?.({ pid: currentChild.pid, code, signal }),
+        )
         .catch((error) => {
           lifecycleFailed = true;
           log(`Worker exit callback failed: ${String(error)}`);

@@ -290,4 +290,33 @@ describe("pid-lock ownership", () => {
       await rm(paseoHome, { recursive: true, force: true });
     }
   });
+  // Windows hands a killed daemon's PID to another process within moments.
+  test.runIf(process.platform === "win32")(
+    "reclaims a fresh lock whose pid now names a process started after the lock",
+    async () => {
+      const paseoHome = await mkdtemp(join(tmpdir(), "paseo-pid-lock-reused-pid-"));
+      const ownerPid = process.pid + 10_000;
+
+      try {
+        await writeFile(
+          join(paseoHome, "paseo.pid"),
+          JSON.stringify({
+            pid: process.pid,
+            startedAt: new Date(Date.now() - 60 * 60_000).toISOString(),
+            hostname: "current-host",
+            uid: 0,
+            listen: "127.0.0.1:6767",
+            desktopManaged: true,
+            heartbeat: true,
+          }),
+        );
+
+        await acquirePidLock(paseoHome, null, { ownerPid });
+
+        expect((await getPidLockInfo(paseoHome))?.pid).toBe(ownerPid);
+      } finally {
+        await rm(paseoHome, { recursive: true, force: true });
+      }
+    },
+  );
 });

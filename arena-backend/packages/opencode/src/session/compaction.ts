@@ -26,7 +26,6 @@ import { ArenaRuntime } from "@/arena/runtime"
 import { contestant as arenaContestant, medium as arenaMedium } from "@/arena/model-profile"
 import type { Assignment } from "@/arena/proxy"
 import { ArenaResponseRecovery } from "@/arena/response-recovery"
-import { DEFAULT_COMPACT_AT } from "@agent-duel/arena-service/pool"
 import type { ModelMessage } from "ai"
 
 export const Event = SessionCompactionEvent
@@ -117,8 +116,22 @@ function estimateArenaModelMessages(messages: ModelMessage[]) {
     }
     return message
   })
+  const prompt = withoutMedia.map((message) => {
+    const rest = omitProviderOptions(message) as Record<string, unknown>
+    return Array.isArray(rest.content) ? { ...rest, content: rest.content.map(omitProviderOptions) } : rest
+  })
 
-  return Token.estimate(JSON.stringify(withoutMedia)) + mediaCount * ARENA_MEDIA_TOKEN_ALLOWANCE
+  return Token.estimate(JSON.stringify(prompt)) + mediaCount * ARENA_MEDIA_TOKEN_ALLOWANCE
+}
+
+// Provider options are not prompt text. In Arena they carry the control plane's sealed reasoning,
+// which encodes each block several times over and which the engine holds on the reasoning part, the
+// tool call and the tool result, while the request carries one copy. Counted, one long reasoning step
+// estimates past the contestant window. The control plane measures the request it restores.
+function omitProviderOptions(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value
+  const { providerOptions: _, ...rest } = value as Record<string, unknown>
+  return rest
 }
 
 function completedCompactions(messages: SessionV1.WithParts[]) {
@@ -271,13 +284,9 @@ const layer = Layer.effect(
           ? yield* estimate({ messages: input.messages, model: input.model })
           : undefined
       // The control plane owns the Arena compaction level, which depends on the hidden model, and
-      // reaches it first: its level is never above this one and it counts the whole request. This
-      // history check keeps chats compacting while a control plane that predates that is deployed.
-      const cfg = yield* config.get()
-      const arenaLimitReached = estimated !== undefined && estimated >= DEFAULT_COMPACT_AT
-      if (cfg.compaction?.auto !== false && arenaLimitReached) return true
+      // asks for a summary with arena_compaction_required. Only the contestant window is checked here.
       return overflow({
-        cfg,
+        cfg: yield* config.get(),
         tokens:
           estimated === undefined
             ? input.tokens

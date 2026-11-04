@@ -34,6 +34,25 @@ describe("project Git bootstrap", () => {
     await expect(inspectProjectGit(folder, runGit)).resolves.toBe("not_git");
   });
 
+  // What spawning a git that is not on PATH rejects with.
+  const gitNotFound: typeof runGitCommand = async () => {
+    throw Object.assign(new Error("spawn git ENOENT"), { code: "ENOENT" });
+  };
+
+  it("says to install Git when there is no git to start", async () => {
+    const { folder } = await createSandbox();
+    await expect(inspectProjectGit(folder, gitNotFound)).rejects.toThrow(
+      "Battles need Git, and Agent Duel couldn't find it.",
+    );
+  });
+
+  it("keeps the spawn error for a folder that is gone, which fails the same way", async () => {
+    const { root } = await createSandbox();
+    await expect(inspectProjectGit(join(root, "gone"), gitNotFound)).rejects.toThrow(
+      "spawn git ENOENT",
+    );
+  });
+
   it("reports a repository without commits as no_commit and a committed one as ready", async () => {
     const { folder, runGit, git } = await createSandbox();
     await git(["init", "--template="]);

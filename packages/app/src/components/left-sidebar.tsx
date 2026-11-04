@@ -71,7 +71,11 @@ import type { PluginSidebarNavItem } from "@/sidebar-nav/model";
 import { useSidebarNavItems } from "@/sidebar-nav/use-sidebar-nav-items";
 import { usePanelStore } from "@/stores/panel-store";
 import { useWorkspaceLayoutStore } from "@/stores/workspace-layout-store";
-import { useOwnsWindowChromeCorner, WindowChromeSafeArea } from "@/utils/desktop-window";
+import {
+  useHasOwnedWindowChromeObstruction,
+  useOwnsWindowChromeCorner,
+  WindowChromeSafeArea,
+} from "@/utils/desktop-window";
 import { useCloseAgentListGesture } from "@/mobile-panels/gestures";
 import { MobilePanelOverlay } from "@/mobile-panels/presentation";
 import { buildOpenProjectRoute, buildSettingsRoute } from "@/utils/host-routes";
@@ -537,6 +541,11 @@ function MobileSidebar({
     () => [styles.mobileCloseButtonRow, getIsElectron() && styles.mobileCloseButtonRowElectron],
     [],
   );
+  // On desktop the close button sits in the window controls' row, so the slot below that row
+  // would stay empty.
+  const hasTopLeftChrome = useHasOwnedWindowChromeObstruction("top-left");
+  const hasTopRightChrome = useHasOwnedWindowChromeObstruction("top-right");
+  const closeButtonInChromeRow = getIsElectron() && (hasTopLeftChrome || hasTopRightChrome);
 
   return (
     <MobilePanelOverlay
@@ -546,11 +555,15 @@ function MobileSidebar({
     >
       <View style={styles.sidebarContent} pointerEvents="auto" testID="left-sidebar">
         <WindowChromeSafeArea placement="below" />
-        {/* Holds the overlay's close button, which sits over it, and any plugin header rows. */}
-        <View style={styles.sidebarHeaderGroup}>
-          <View style={styles.mobileCloseButtonSlot} />
-          <SidebarNavRows onBeforeNavigate={closeSidebar} />
-        </View>
+        {closeButtonInChromeRow ? (
+          <View style={styles.sidebarHeaderDivider} />
+        ) : (
+          // Holds the overlay's close button, which sits over it.
+          <View style={styles.sidebarHeaderGroup}>
+            <View style={styles.mobileCloseButtonSlot} />
+          </View>
+        )}
+        <SidebarNavRows onBeforeNavigate={closeSidebar} />
         <WindowChromeSafeArea placement="inline" style={closeButtonRowStyle}>
           <SidebarCloseButton
             label={labels.closeSidebar}
@@ -959,6 +972,10 @@ const styles = StyleSheet.create((theme) => ({
   },
   mobileCloseButtonSlot: {
     height: 36,
+  },
+  sidebarHeaderDivider: {
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.border,
   },
   sidebarTopInset: {
     paddingTop: theme.spacing[2],

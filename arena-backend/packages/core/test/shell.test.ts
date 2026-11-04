@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test"
+import fs from "fs/promises"
+import os from "os"
 import path from "path"
 import { ShellSelect } from "@opencode/core/shell/select"
 import { FSUtil } from "@opencode/util/fs-util"
 import { which } from "@opencode/core/util/which"
-import fs from "node:fs/promises"
 import { tmpdir } from "./fixture/tmpdir"
 
 const withShell = async (shell: string | undefined, fn: () => void | Promise<void>) => {
@@ -99,6 +100,23 @@ describe("shell", () => {
         expect(ShellSelect.resolve({ priority: "compat" })).toBe(bash)
         expect(ShellSelect.resolve({ priority: "config" })).toBe(bash)
       })
+    })
+
+    test("finds Git for Windows' bash when a git without one leads PATH", async () => {
+      const installed = path.join(process.env.ProgramFiles ?? "C:\\Program Files", "Git", "bin", "bash.exe")
+      if (!(await fs.stat(installed).catch(() => undefined))) return
+      // GitHub Desktop's git: a `cmd\git.exe` with no bash beside it.
+      const other = await fs.mkdtemp(path.join(os.tmpdir(), "other-git-"))
+      await fs.mkdir(path.join(other, "cmd"))
+      await fs.writeFile(path.join(other, "cmd", "git.exe"), "not git")
+      const previous = process.env.PATH
+      try {
+        process.env.PATH = path.join(other, "cmd")
+        expect(ShellSelect.gitbash()).toBe(installed)
+      } finally {
+        process.env.PATH = previous
+        await fs.rm(other, { recursive: true, force: true })
+      }
     })
 
     test("resolves bare bash to Git Bash before PATH", async () => {

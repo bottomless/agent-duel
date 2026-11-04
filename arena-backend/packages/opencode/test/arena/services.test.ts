@@ -1,8 +1,16 @@
+import { $ } from "bun"
 import { expect, test } from "bun:test"
+import { spawn } from "node:child_process"
+import { mkdtemp, realpath, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import path from "node:path"
 import {
   assignProxyRoutes,
   captureOwnedServices,
+  defaultServiceAdapter,
   parseProcessTerminals,
+  pauseOwnedProcessGroups,
+  resumeProcessGroups,
   sessionShellPids,
   persistedProxyRoutes,
   serviceOwnerID,
@@ -500,4 +508,63 @@ test("a terminal shell under a chat's worktrees counts as open; its servers and 
     ],
   }
   expect(await terminalOpenUnder(["/repo/.agent-duel/worktrees/chat"], withShell)).toBe(true)
+})
+
+test("pauses only the worktree's own groups without a terminal, and resumes them", async () => {
+  const signals: string[] = []
+  const processes: ProcessSnapshot[] = [
+    { pid: 40, processGroupID: 40, cwd: "/repo/contestant", command: "vite" },
+    { pid: 41, processGroupID: 40, cwd: "/repo/contestant/web", command: "esbuild" },
+    { pid: 42, processGroupID: 42, ownerID: serviceOwnerID("/repo/contestant"), command: "node" },
+    { pid: 43, processGroupID: 43, cwd: "/repo/contestant", command: "/bin/zsh", sessionShell: true, terminal: true },
+    { pid: 44, processGroupID: 44, cwd: "/repo/contestant", command: "npm", terminal: true },
+    { pid: 45, processGroupID: 45, cwd: "/repo/other", command: "vite" },
+    { pid: 46, processGroupID: 46, cwd: "/repo/contestant", command: "opencode" },
+  ]
+  const adapter: ServiceAdapter = {
+    listProcesses: () => processes,
+    isProtectedProcessGroup: (group) => group === 46,
+    pauseProcessGroup: (group, signal) => {
+      signals.push(`${signal} ${group}`)
+    },
+  }
+
+  const paused = await pauseOwnedProcessGroups("/repo/contestant", adapter)
+  await resumeProcessGroups(paused, adapter)
+
+  // The npm in the user's terminal keeps running: stopping it would suspend the terminal's job.
+  expect(signals).toEqual(["SIGSTOP 40", "SIGSTOP 42", "SIGCONT 40", "SIGCONT 42"])
+})
+
+// Windows has no SIGSTOP, so nothing is paused there, and no `ps -o stat` to read the state.
+test.skipIf(process.platform === "win32")("a paused dev server cannot change the worktree under git add", async () => {
+  const dir = { path: await realpath(await mkdtemp(path.join(tmpdir(), "arena-services-"))) }
+  await $`git init -q`.cwd(dir.path).quiet()
+  await $`mkdir -p ${dir.path}/.cache`.quiet()
+  // Keeps short-lived files coming, as a build watcher does; unpaused, nearly every `add -A` loses
+  // one. Detached like a contestant command, so it leads its own process group with no terminal.
+  const churn = `let n = 0; setInterval(() => { for (let i = 0; i < 5; i++) { const f = ".cache/t" + n++; require("fs").writeFileSync(f, "x".repeat(4096)); setTimeout(() => require("fs").rmSync(f, { force: true }), 30 * Math.random()) } }, 1)`
+  const churner = spawn(process.execPath, ["-e", churn], {
+    cwd: dir.path,
+    detached: true,
+    stdio: "ignore",
+  })
+  try {
+    await Bun.sleep(300)
+    const paused = await pauseOwnedProcessGroups(dir.path)
+    expect(paused).toContain(churner.pid!)
+    const state = await $`ps -o stat= -p ${churner.pid!}`.quiet().text()
+    expect(state.trim()).toStartWith("T")
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const add = await $`git add -A`.cwd(dir.path).env({ ...process.env, GIT_INDEX_FILE: `${dir.path}/.git/paused-index` }).quiet().nothrow()
+      expect(add.stderr.toString()).toBe("")
+      expect(add.exitCode).toBe(0)
+    }
+    await resumeProcessGroups(paused)
+    const resumed = await $`ps -o stat= -p ${churner.pid!}`.quiet().text()
+    expect(resumed.trim()).not.toStartWith("T")
+  } finally {
+    defaultServiceAdapter.stopProcessGroup?.(churner.pid!, "SIGKILL")
+    await rm(dir.path, { recursive: true, force: true })
+  }
 })

@@ -625,17 +625,60 @@ one. The sweep skips the process that opened a terminal session — it holds a c
 its parent does not — and stops what runs inside it as usual. That is what lets a contestant
 terminal outlive the turn it was opened in; see [side-panel.md](side-panel.md).
 
-Prepare the next pair after application. Preparation on first opening a chat is off by default;
-`OPENCODE_ARENA_INITIAL_WARM=1` enables it. The engine cannot distinguish battle and single-agent
-chats, the draft composer sends too soon to use the pair, and host copies compete with prompts for
-the repository lock. Initial preparation waits a second, skips a working agent, and backs off on
-failure (`initialWarmPreparation`).
+Warm preparation runs once the vote has been applied. Preparing a chat's first pair when the chat is
+opened is off by default; `OPENCODE_ARENA_INITIAL_WARM=1` turns it on. The engine cannot tell a
+battle chat from a single-agent one, its host copies take the repository lock that normal prompts
+also take, and the draft composer sends too soon to use the pair. When it is on, the record lives on
+the chat as `initialWarmPreparation` until the first send consumes it, it waits a second before
+taking the chat's start lock, it is skipped while the chat's agent is working, and a failure backs
+off before the next try. Warm preparation adopts two free slots, or creates one when the pool is
+short (the first battle creates a spare in the background while it waits for the vote), and syncs
+both at once. Only the pool scan, the host copies, and the final mirror of the hosts take the
+repository lock; the file sync, the instances, and the forks run outside it under the chat's start
+lock, so a vote, a send, or a prompt in another chat of the same repository does not wait for them.
+Those holds and a spare's claim take the lock as background work
+(`withBackgroundRepositoryMutation`): one at a time, and only while no send, vote or chat opening is
+waiting on it. The lock is otherwise first come first served, and on Windows each host copy holds it
+for one to three seconds, so a vote queued behind two spare claims waited 3.6 s.
 
-Preparation adopts two free slots or creates missing ones; the first battle creates a spare while
-waiting for the vote. Only scanning the pool, copying hosts, and their final mirror take the
-repository lock. File sync, instances, and forks run under the chat's start lock so other chats'
-votes and prompts can proceed. Reserve port banks and fork canonical history with retargeted paths
-in advance; overlap assignment draw with the send's freeze.
+A new chat has no pool to adopt from, so its first send claims two worktrees and copies every
+ignored root into both. With a copy-on-write clone that is cheap; Windows has none, and a 14k-file
+project took 8.7 s per side. There a repository also keeps a spare pair for its next new chat in
+`.agent-duel/worktrees/_spares/` (`ensureProjectSpares`): a battle reaching its vote builds it in
+the background when it is short, synced to that battle's base, and a new chat's first send adopts
+it, so the scan keeps the ignored roots instead of copying them (4.0 s per side). A project gets its
+pair before its first battle too: adding it makes the daemon call `/arena/projects/prewarm`, and the
+engine builds both spares at once from the checkout's index (`prewarmProject`). The app opens a chat
+only when its first prompt is sent, so this is the earliest moment the engine can start. A first
+send that arrives while that build runs waits for it before taking the repository lock, which the
+build's claims need; it began earlier, so it finishes sooner than the send's own copy would. The
+records that let the scan keep a root belong to the process that built the spare, so the first build
+in a process retires whatever an earlier one left there, and after a restart the repository of the
+latest chat that battled gets its pair again, from that chat's last turn, once the latest pair is
+re-warmed. `OPENCODE_ARENA_PROJECT_SPARES` turns spares on (`1`) or off (`0`) on any platform; tests
+run with them off.
+
+Arena runs no project start command and no `paseo.json` hook in a slot, so a created slot and an
+adopted one start identical. Warm preparation also allocates each successor's port bank and forks
+the canonical session into it, paths retargeted, so the send has no transcript to copy. A send uses
+that fork only when the pair is trusted in this process and the canonical session, its transcript
+hash, and the port bank are unchanged; otherwise it forks then and disposes of the warm one. The
+bank is reserved only inside this process, so the send first checks that no other program has taken
+one of its ports; a taken port means a fresh bank and a fork at send. The send itself overlaps the
+assignment draw with the freeze.
+
+A send reuses the pair when it is trusted in this process and nothing moved since warm preparation:
+the checkout's HEAD, branch, index and working tree, its ignored content, the git metadata a host
+copies once (config, hooks, `info`, and the stash, notes and replace refs the ref mirror skips), and
+both slots. Otherwise it adopts the same two slots again in place, which rebuilds their hosts and
+rewrites only the difference. The watches answer whether the ignored content moved
+(`warmPairIsUsable`). Without a watcher backend (Windows) the digests a scanned sync records for each
+copied directory root, in the checkout and in the copy, answer it instead (`scannedPairIsUsable`):
+the pair is reused while both still match, which took a second message from 4.0 s to 0.7 s. A copy
+records the checkout's digest from the walk that measured the root for the copy manifest
+(`sourceTree` on its entries) instead of walking it again. A resync deciding whether to keep a root
+reads the checkout's digest afresh, because a warm pair's manifest is reused at a later send; the two
+sides resyncing at once share that walk.
 
 Trust is process-local. Reuse a pair only while the checkout's HEAD, branch, index, working tree,
 ignored content, copied Git metadata, and both slots remain unchanged. Otherwise adopt those slots
@@ -1068,7 +1111,11 @@ Terminal state and the actual Git state are recorded under the generation's priv
 applicability is set to `applicable` only when the frozen base is an ancestor of the result. A
 companion private ref transports the final index tree. Recording must preserve empty and multiple
 commits, commit-plus-residual state, and the index and dirty working tree; Arena does not add a
-wrapper commit to the developer-visible history. Untracked dependency and cache folders
+wrapper commit to the developer-visible history. A dev server or build watcher the contestant left
+running is paused (`SIGSTOP`) while the result is read and resumed afterwards: one that keeps
+creating and deleting files fails nearly every `git add`, and killing it would take the preview the
+voter opens. Groups with a controlling terminal keep running, since stopping a terminal's job
+suspends it in its shell (`pauseOwnedProcessGroups` in `arena/services.ts`). Untracked dependency and cache folders
 (`node_modules`, `.venv` and the like, at any depth) are not part of a side's result: the
 contestant's own repository excludes them, because a project that ignores only its root
 `/node_modules` would otherwise count a tool a contestant installed under `qa/` as its change and
@@ -1139,8 +1186,8 @@ field. Each layer has its own file:
   A running turn loses its sealed reasoning when the key rotates; cloud instances must share that
   key. BYOK sealing provides no secrecy from the user who owns that key.
   `Thinking redacted` is display text: never turn it into a reply or retain it as reasoning in a
-  compaction checkpoint. Omit reasoning-only assistant requests with no reply or tool call, since
-  Moonshot rejects them. Preserve cut-stream text, interruption notes, and tool order.
+  compaction checkpoint. Omit assistant requests containing only the redaction marker, since
+  Moonshot rejects an empty assistant message. Preserve cut-stream text, interruption notes, and tool order.
   The small Core vendor patches in `session/runner/to-llm-message.ts` and `session/compaction.ts`
   enforce those marker rules; keep them when updating the vendor.
   Runtime-only usage can continue through the transport, but the telemetry copy never persists
@@ -1500,8 +1547,8 @@ terminal. A completed step starts a new allowance. Model timeouts have the small
 An offline machine spends no retry. When a contestant request cannot reach the network at all (DNS
 fails or there is no route), the daemon's runtime proxy in a hosted build, or the in-process service
 in a BYOK build, answers 503 `arena_network_unavailable`. The hosted proxy answers the same in
-exactly two more cases: the control plane refused the connection (`ECONNREFUSED`), or the connect
-timed out (`UND_ERR_CONNECT_TIMEOUT`). Then no request was written, so runs wait out a restart.
+these connection failures: the control plane refused the connection (`ECONNREFUSED`), or the connect
+timed out (`UND_ERR_CONNECT_TIMEOUT` or `ETIMEDOUT`). Then no request was written, so runs wait out a restart.
 Every failure after a connection exists is a 502 that spends the retry budget: a reset, a closed
 socket, or a TLS handshake drop. The control plane can have started the model call, and every wait
 would start another. Node reports a reset immediately after connect the same way as one after the request
@@ -1614,7 +1661,7 @@ gets no deadline, and the BYOK service turns recovery off: nothing sits between 
 The control plane deploys the replay route as its own function, and the daemon's runtime router
 allows it by path.
 
-Diagnose deadlines from the OpenCode engine log and the proxy's `streamProgress` timestamps
+Diagnose deadlines from `$PASEO_HOME/engine.log` and the proxy's `streamProgress` timestamps
 (`arena/proxy.ts`). Compare chunk receipt, response end, artifact saving, and closure: a stream
 that ended but never closed stalled inside the engine. Correlate its `generationID` with the control
 plane's `arenaAssignmentGenerationMetrics`, whose `createdAt` marks the hosted function's response

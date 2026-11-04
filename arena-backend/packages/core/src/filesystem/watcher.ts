@@ -85,7 +85,7 @@ export const layer = (options?: Options) =>
   Layer.effect(
     Service,
     Effect.gen(function* () {
-      if (options?.enabled === false) {
+      if ((options?.enabled ?? process.platform !== "win32") === false) {
         return Service.of({ subscribe: () => Effect.succeed(Stream.empty) })
       }
       const native = yield* Native

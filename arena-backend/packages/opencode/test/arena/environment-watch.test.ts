@@ -8,9 +8,13 @@ import {
   createIgnoredJournal,
   createSlotWatch,
   neverObserved,
+  watcherBackendUnavailable,
   type EnvironmentWatch,
 } from "@/arena/environment-watch"
 import { cloneTree } from "@/util/copy-tree"
+
+// These exercise the native watcher, which some platforms (Windows) run without.
+const watched = describe.skipIf(watcherBackendUnavailable() !== undefined)
 
 const started: Array<{ watch: EnvironmentWatch; key: string }> = []
 const cleanups: Array<() => Promise<void>> = []
@@ -52,7 +56,7 @@ afterEach(async () => {
   await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })))
 })
 
-describe("environment watch", () => {
+watched("environment watch", () => {
   test("reports a file edited deep inside a watched root", async () => {
     const canonical = await checkout(["node_modules"])
     const watch = createEnvironmentWatch()
@@ -125,7 +129,7 @@ function changed(observation: { readonly changed: ReadonlySet<string> }) {
   return Array.from(observation.changed).toSorted()
 }
 
-describe("ignored journal", () => {
+watched("ignored journal", () => {
   test("reports a deep write after a mark, and nothing after a later mark", async () => {
     const canonical = await checkout(["node_modules"])
     const journal = journalFor("chat:j1")
@@ -463,7 +467,7 @@ describe("ignored journal", () => {
   }, 30_000)
 })
 
-describe("slot watch", () => {
+watched("slot watch", () => {
   test("reports a deep write and a deleted root since it began", async () => {
     const slot = await checkout(["node_modules", ".next"])
     const watch = createSlotWatch()

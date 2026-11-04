@@ -1,0 +1,7 @@
+# Text is LF in the repository and on disk. Git for Windows checks text out with CRLF by default,
+# and a CRLF checkout reaches the Windows build: shell integration scripts bash cannot run, and
+# prompts compiled into the engine.
+* text=auto eol=lf
+# cmd.exe reads batch files with CRLF.
+*.cmd text eol=crlf
+*.bat text eol=crlf

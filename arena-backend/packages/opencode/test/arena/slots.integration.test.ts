@@ -11,6 +11,7 @@ import * as CopySnapshot from "@/arena/copy-snapshot"
 import { ArenaContestant } from "@/arena/contestant"
 import { hostRepoPath, isolatedRoot } from "@/worktree"
 import { registry, setStoreForTest } from "@/arena/runtime"
+import { SERVICE_OWNER_ENV, serviceOwnerID } from "@/arena/services"
 import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, tmpdir } from "../fixture/fixture"
 import { arenaRequest, installOpenRouterStub, json, memoryStore, type PublicSnapshot, waitForTurn } from "./harness"
@@ -275,6 +276,7 @@ async function openChat(root: string) {
 afterEach(async () => {
   delete process.env.OPENCODE_ARENA
   delete process.env.OPENCODE_ARENA_INITIAL_WARM
+  process.env.OPENCODE_ARENA_PROJECT_SPARES = "0"
   delete process.env.OPENROUTER_API_KEY
   setStoreForTest(undefined)
   registry.assignments.clear()
@@ -1485,8 +1487,16 @@ describe("persistent contestant worktrees", () => {
       const turn = await battle({ store: memory.store, directory: root, chatID: chat.chatID, prompt: "preview" })
       await waitForWarmPair(memory.store, turn, 1)
       const retained = await memory.store.run((await memory.store.chat(chat.chatID))!.retainedWinner!.runID)
-      // A preview the winner started in the background, in a process group of its own.
-      server = spawnProcess("sleep", ["60"], { cwd: retained!.worktree, detached: true, stdio: "ignore" })
+      // A preview the winner started in the background, in a process group of its own. Windows has
+      // no groups: there the owner marker every contestant shell stamps is what tells it apart.
+      server = spawnProcess("sleep", ["60"], {
+        cwd: retained!.worktree,
+        detached: true,
+        stdio: "ignore",
+        ...(process.platform === "win32"
+          ? { env: { ...process.env, [SERVICE_OWNER_ENV]: serviceOwnerID(retained!.worktree) } }
+          : {}),
+      })
 
       const trimmed = await json<{ chats: number; released: number; kept: number }>(
         await arenaRequest("/arena/environments/trim", {
@@ -1737,6 +1747,207 @@ describe("persistent contestant worktrees", () => {
       router.restore()
     }
   }, 120_000)
+
+  test("a new chat's first send adopts the spare pair an earlier chat built for its repository", async () => {
+    process.env.OPENCODE_ARENA_PROJECT_SPARES = "1"
+    await using directory = await nestedFixture()
+    const root = directory.path
+    const memory = memoryStore()
+    const router = installOpenRouterStub()
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(memory.store)
+    const archives: (() => Promise<unknown>)[] = []
+    const spareSyncs = async () =>
+      (await readFile(`${Global.Path.log}/opencode.log`, "utf8").catch(() => ""))
+        .split("\n")
+        .filter((line) => line.includes("Arena slot sync") && line.includes("_spares")).length
+    try {
+      const first = await openChat(root)
+      archives.push(first.archive)
+      const before = await spareSyncs()
+      const turn1 = await battle({ store: memory.store, directory: root, chatID: first.chatID, prompt: "first chat" })
+      const timings1 = (await memory.store.turn(turn1))?.setupTimings
+      expect([timings1?.sides?.a?.syncPath, timings1?.sides?.b?.syncPath]).toEqual(["created", "created"])
+      // The pair is built in the background from the moment the first battle waits for its vote.
+      const deadline = Date.now() + 60_000
+      while ((await spareSyncs()) - before < 2) {
+        if (Date.now() > deadline) throw new Error("Arena did not build the repository's spare pair")
+        await Bun.sleep(100)
+      }
+      await Bun.sleep(200)
+
+      const second = await openChat(root)
+      archives.push(second.archive)
+      const turn2 = await battle({ store: memory.store, directory: root, chatID: second.chatID, prompt: "second chat" })
+      const timings2 = (await memory.store.turn(turn2))?.setupTimings
+      expect(timings2?.warmPath).toBe("cold")
+      for (const side of [timings2?.sides?.a, timings2?.sides?.b]) {
+        expect(side).toMatchObject({ syncPath: "adopted", recloned: 0 })
+      }
+      // Each side moved into the second chat's own pool, with the checkout's ignored content.
+      for (const run of await memory.store.runsForTurn(turn2)) {
+        expect(path.relative(isolatedRoot(root), run.worktree).split(path.sep)[0]).not.toBe("_spares")
+      }
+    } finally {
+      for (const archive of archives) await archive()
+      router.restore()
+    }
+  }, 180_000)
+
+  test("after a restart, the latest repository's spare pair is built again for its next new chat", async () => {
+    process.env.OPENCODE_ARENA_PROJECT_SPARES = "1"
+    await using directory = await nestedFixture()
+    const root = directory.path
+    const memory = memoryStore()
+    const router = installOpenRouterStub()
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(memory.store)
+    const archives: (() => Promise<unknown>)[] = []
+    const spareRoot = path.join(isolatedRoot(root), "_spares")
+    // Spares with the checkout's ignored content in place, the last thing a build writes before
+    // its checks; the engine's log moves to the console after a restart, so files are the signal.
+    const synced = async () => {
+      const names = (await readdir(spareRoot).catch(() => [] as string[])).filter((name) =>
+        /^spare-[0-9a-f]+$/.test(name),
+      )
+      const complete = await Promise.all(
+        names.map(async (name) =>
+          (await exists(path.join(spareRoot, name, "cache.txt"))) &&
+          (await exists(path.join(spareRoot, name, "pkg/node_modules/dep/index.js")))
+            ? name
+            : undefined,
+        ),
+      )
+      return complete.filter((name): name is string => name !== undefined)
+    }
+    const waitForSpares = async (except: readonly string[]) => {
+      await waitForCondition(
+        async () => (await synced()).filter((name) => !except.includes(name)).length >= 2,
+        "Arena did not build the repository's spare pair",
+      )
+      // Past the build's last checks, which follow the copy.
+      await Bun.sleep(1_500)
+      return (await synced()).filter((name) => !except.includes(name))
+    }
+    try {
+      const first = await openChat(root)
+      archives.push(first.archive)
+      await battle({ store: memory.store, directory: root, chatID: first.chatID, prompt: "before the restart" })
+      const built = await waitForSpares([])
+      expect(built).toHaveLength(2)
+
+      // Trust is kept per store, so a new store over the same records is a restart to it; the first
+      // request runs recovery.
+      setStoreForTest(memory.restart())
+      await arenaRequest(`/arena/chats/${first.chatID}`, { headers: headers(root) })
+      const rebuilt = await waitForSpares(built)
+      // The pair the earlier store built is gone, and a new one stands in its place.
+      expect(rebuilt).toHaveLength(2)
+      for (const name of built) expect(await exists(path.join(spareRoot, name))).toBe(false)
+
+      const second = await openChat(root)
+      archives.push(second.archive)
+      const turn = await battle({
+        store: memory.store,
+        directory: root,
+        chatID: second.chatID,
+        prompt: "after the restart",
+      })
+      const timings = (await memory.store.turn(turn))?.setupTimings
+      for (const side of [timings?.sides?.a, timings?.sides?.b]) {
+        expect(side).toMatchObject({ syncPath: "adopted", recloned: 0 })
+      }
+    } finally {
+      for (const archive of archives) await archive()
+      router.restore()
+    }
+  }, 240_000)
+
+  test("a project prewarmed before it has a chat gives its first send a spare pair", async () => {
+    process.env.OPENCODE_ARENA_PROJECT_SPARES = "1"
+    await using directory = await nestedFixture()
+    const root = directory.path
+    const memory = memoryStore()
+    const router = installOpenRouterStub()
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(memory.store)
+    const archives: (() => Promise<unknown>)[] = []
+    const spareRoot = path.join(isolatedRoot(root), "_spares")
+    const synced = async () => {
+      const names = (await readdir(spareRoot).catch(() => [] as string[])).filter((name) =>
+        /^spare-[0-9a-f]+$/.test(name),
+      )
+      const complete = await Promise.all(
+        names.map(
+          async (name) =>
+            (await exists(path.join(spareRoot, name, "cache.txt"))) &&
+            (await exists(path.join(spareRoot, name, "pkg/node_modules/dep/index.js"))),
+        ),
+      )
+      return complete.filter(Boolean).length
+    }
+    try {
+      const response = await arenaRequest("/arena/projects/prewarm", {
+        method: "POST",
+        headers: headers(root),
+        body: JSON.stringify({ root }),
+      })
+      expect(response.status).toBe(204)
+      await waitForCondition(async () => (await synced()) >= 2, "Arena did not prewarm the project's spare pair")
+      // Past the build's last checks, which follow the copy.
+      await Bun.sleep(1_500)
+      // A second request while the pair is full builds nothing more.
+      await arenaRequest("/arena/projects/prewarm", {
+        method: "POST",
+        headers: headers(root),
+        body: JSON.stringify({ root }),
+      })
+      await Bun.sleep(500)
+      expect(await synced()).toBe(2)
+
+      const first = await openChat(root)
+      archives.push(first.archive)
+      const turn = await battle({ store: memory.store, directory: root, chatID: first.chatID, prompt: "first chat" })
+      const timings = (await memory.store.turn(turn))?.setupTimings
+      for (const side of [timings?.sides?.a, timings?.sides?.b]) {
+        expect(side).toMatchObject({ syncPath: "adopted", recloned: 0 })
+      }
+    } finally {
+      for (const archive of archives) await archive()
+      router.restore()
+    }
+  }, 180_000)
+
+  test("a first send right after the prewarm adopts its pair, waiting for it outside the repository lock", async () => {
+    process.env.OPENCODE_ARENA_PROJECT_SPARES = "1"
+    await using directory = await nestedFixture()
+    const root = directory.path
+    const memory = memoryStore()
+    const router = installOpenRouterStub()
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(memory.store)
+    const archives: (() => Promise<unknown>)[] = []
+    try {
+      const first = await openChat(root)
+      archives.push(first.archive)
+      const response = await arenaRequest("/arena/projects/prewarm", {
+        method: "POST",
+        headers: headers(root),
+        body: JSON.stringify({ root }),
+      })
+      expect(response.status).toBe(204)
+      // The build claims each spare under the repository lock the send's sides hold; waiting for it
+      // inside that lock would never finish.
+      const turn = await battle({ store: memory.store, directory: root, chatID: first.chatID, prompt: "right away" })
+      const timings = (await memory.store.turn(turn))?.setupTimings
+      for (const side of [timings?.sides?.a, timings?.sides?.b]) {
+        expect(side).toMatchObject({ syncPath: "adopted", recloned: 0 })
+      }
+    } finally {
+      for (const archive of archives) await archive()
+      router.restore()
+    }
+  }, 180_000)
 
   test("archiving a chat just opened removes its first pair, whatever stage the pair reached", async () => {
     process.env.OPENCODE_ARENA_INITIAL_WARM = "1"

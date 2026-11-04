@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
 
-async function runWorker(worker: string, publicationDelay = 0) {
+async function runWorker(worker: string, publicationDelay = 0, recordExit = false) {
   const home = await mkdtemp(path.join(tmpdir(), "paseo-readiness-"));
   const workerPath = path.join(home, "worker.mjs");
   const runnerPath = path.join(home, "runner.mjs");
@@ -25,7 +25,7 @@ async function runWorker(worker: string, publicationDelay = 0) {
         await new Promise(resolve => setTimeout(resolve, ${publicationDelay}));
         await record(listen);
       },
-      onWorkerExit: () => record(null),
+      onWorkerExit: (exit) => record(${recordExit ? "exit" : "null"}),
     });
   `,
   );
@@ -119,4 +119,10 @@ test("requested shutdown before first readiness exits successfully", async () =>
   `);
   expect(result.code).toBe(0);
   expect(result.events).toEqual([null]);
+});
+
+test("exit reporting receives the worker identity before supervisor termination", async () => {
+  const result = await runWorker("process.exit(5)", 0, true);
+  expect(result.code).toBe(1);
+  expect(result.events).toEqual([{ pid: expect.any(Number), code: 5, signal: null }]);
 });
