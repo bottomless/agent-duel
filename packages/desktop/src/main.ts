@@ -799,7 +799,10 @@ function setupSingleInstanceLock(): boolean {
 
   const gotLock = app.requestSingleInstanceLock();
   if (!gotLock) {
-    app.quit();
+    // The running instance owns the daemon and has already been handed this launch. app.quit()
+    // would run before-quit here, and its stop-on-quit would shut that daemon down under the
+    // running window, killing any battle in progress. This instance has started nothing to clean up.
+    app.exit(0);
     return false;
   }
 
