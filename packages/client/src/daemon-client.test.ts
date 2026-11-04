@@ -8346,7 +8346,7 @@ test("closes before admission when a protected-capable daemon is reached in lega
   expect(JSON.parse(daemonReceived[0] as string)).toMatchObject({ type: "hello" });
 });
 
-test.each(["fetch", "arena", "timeline"] as const)(
+test.each(["fetch", "arena", "timeline", "create", "send"] as const)(
   "pending %s RPC follows upgrade status arriving after dispatch",
   async (kind) => {
     useHeartbeatClock();
@@ -8366,6 +8366,13 @@ test.each(["fetch", "arena", "timeline"] as const)(
       arena: () => client.arenaResolve("agent-1"),
       timeline: () => client.fetchAgentTimeline("agent-1"),
       fetch: () => client.fetchAgent("agent-1"),
+      create: () =>
+        client.createAgent({
+          provider: "opencode",
+          cwd: "/tmp/project",
+          initialPrompt: "first send",
+        }),
+      send: () => client.sendAgentMessage("agent-1", "first send"),
     };
     const pending = requests[kind]();
     let settled = false;

@@ -15,7 +15,7 @@ test("daemon status shows the upgrade message until the engine is ready", () => 
   });
   expect(databaseUpgradeNotice([status(null)])).toBeNull();
   expect(databaseUpgradeNotice([status({ startedAt: 0, deadline: 600_000 })])).toBe(
-    "Upgrading your database. This can take a few minutes.",
+    "Upgrading your database. Keep the app open until this finishes. This can take a few minutes.",
   );
   expect(databaseUpgradeNotice([status(null)])).toBeNull();
 });

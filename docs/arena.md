@@ -1751,18 +1751,26 @@ A failed or interrupted copy waits at least a day before retrying, so it cannot 
 An ordinary start after successful cleanup does not copy again.
 
 Interrupted audit work keeps its saved cursor; if V2 changed between starts, the audit starts
-again. Audit and copy share a deadline eight minutes after engine spawn, including module loading
-and backup time. The engine stops maintenance at that deadline and reserves two minutes to reach
-its listening message. A copy whose estimated duration does not fit the remaining window waits
-for a later start.
+again. Cleanup and waiting for the import share a deadline eight minutes after engine spawn,
+including module loading and backup time. Maintenance stops at that deadline, leaving two minutes
+of the daemon's ten-minute allowance to reach readiness. A copy whose estimated duration does not
+fit the remaining window waits for a later start.
 
-During backup, import startup and old-table cleanup, the sidebar says "Upgrading your database.
-This can take a few minutes." Both backup and cleanup receive the ten-minute startup limit;
-ordinary starts keep their 30-second limit. Cleanup uses the spawn-relative deadline above. If backup
-exceeds the startup limit, startup stops and the next start retries with the existing safeguards.
-The import still requires a complete backup. There is no skip or partial-backup resume.
-The import itself runs in the background after the first listening message; table removal waits
-for a subsequent start.
+The engine waits for the 1.x import before listening, so old chats have their history and composer
+when the engine becomes ready. Fresh and fully imported databases only need the import status check.
+An interrupted import continues from its saved cursor on the next start, keeping the original backup
+and import order. A complete backup is still required; there is no skip or partial-backup resume.
+If backup exceeds the ten-minute startup limit, startup stops and the next start retries.
+
+During backup, import and old-table cleanup, the sidebar says "Upgrading your database. Keep the app
+open until this finishes. This can take a few minutes." It stays until engine readiness. A first send
+waits for readiness too; its pending state can last through the upgrade. Backup, resumed import and
+cleanup all extend startup to the same ten-minute deadline; ordinary starts keep their 30-second limit.
+
+If the shared eight-minute budget runs out before import completes, the engine logs the fallback and
+starts listening while import continues in the background. The notice clears at readiness. An old
+chat not yet imported can then show "Failed to load agent. Session not found" without a composer
+until its import finishes. Old-table removal waits for a subsequent start.
 
 For emergency file recovery from the backup, stop the app **and its daemon** first; quitting alone
 can leave the daemon running when Keep running after quit is on. Set `PASEO_HOME` to the affected

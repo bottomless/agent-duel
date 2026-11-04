@@ -737,6 +737,9 @@ describe("OpenCodeServerManager generations", () => {
       "data",
       Buffer.from("[arena-upgrade] Backed up the 1.x databases to /scratch\n"),
     );
+    const deadline = getArenaDatabaseUpgrade()?.deadline;
+    child.stdout.emit("data", Buffer.from("[arena-upgrade] Importing OpenCode 1.x chats\n"));
+    expect(getArenaDatabaseUpgrade()?.deadline).toBe(deadline);
     await vi.advanceTimersByTimeAsync(559_999);
     expect(runtime.spawnCalls).toHaveLength(1);
     expect(runtime.terminatedPorts).toEqual([]);
@@ -747,6 +750,46 @@ describe("OpenCodeServerManager generations", () => {
     expect(acquisitions.map((item) => item.server.port)).toEqual([4480, 4480, 4480]);
     await Promise.all(acquisitions.map((item) => item.release()));
   });
+
+  test.each([false, true])(
+    "resumed import extends from spawn without a backup line, ready=%s",
+    async (ready) => {
+      vi.useFakeTimers();
+      installArenaCredentials({ mode: "byok", openRouterApiKey: "test-key" });
+      const { manager, runtime } = createTestManager([4480], {
+        autoAnnounce: false,
+        launchKind: "arena-source",
+      });
+      const startedAt = Date.now();
+      const pending = manager.acquireCurrent();
+      const result = pending.then(
+        (value) => value,
+        (error: unknown) => error,
+      );
+      await vi.advanceTimersByTimeAsync(20_000);
+      const child = runtime.processForPort(4480);
+      child.stdout.emit("data", Buffer.from("noise\n[arena-upgrade] Importing Open"));
+      child.stdout.emit("data", Buffer.from("Code 1.x chats\n"));
+      expect(getArenaDatabaseUpgrade()).toEqual({ startedAt, deadline: startedAt + 600_000 });
+      await vi.advanceTimersByTimeAsync(579_999);
+      expect(runtime.terminatedPorts).toEqual([]);
+      expect(getArenaDatabaseUpgrade()?.deadline).toBe(startedAt + 600_000);
+      if (ready) {
+        child.stdout.emit("data", Buffer.from("listening on"));
+        const acquired = await pending;
+        await acquired.release();
+      } else {
+        await vi.advanceTimersByTimeAsync(1);
+        expect(await result).toEqual(
+          expect.objectContaining({
+            message: expect.stringContaining("10-minute database upgrade limit"),
+          }),
+        );
+        expect(runtime.terminatedPorts).toEqual([4480]);
+      }
+      expect(getArenaDatabaseUpgrade()).toBeNull();
+    },
+  );
 
   test("cleanup receives the same upgrade deadline and clears status at readiness", async () => {
     vi.useFakeTimers();

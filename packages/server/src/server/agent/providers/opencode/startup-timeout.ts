@@ -1,7 +1,7 @@
 export const ARENA_DATABASE_UPGRADE_TIMEOUT_MS = 10 * 60_000;
 
 export function hasArenaDatabaseUpgradeLine(stdout: string): boolean {
-  return /(?:^|\n)\[arena-upgrade\] (?:Backing up databases before OpenCode 2\.0|Removing imported OpenCode 1\.x tables)\r?\n/.test(
+  return /(?:^|\n)\[arena-upgrade\] (?:Backing up databases before OpenCode 2\.0|Importing OpenCode 1\.x chats|Removing imported OpenCode 1\.x tables)\r?\n/.test(
     stdout,
   );
 }

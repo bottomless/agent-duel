@@ -853,7 +853,7 @@ describe("stored database upgrade status", () => {
       expect(active).not.toBe(initial);
       expect(active.serverInfo?.arenaDatabaseUpgrade).toEqual(upgrade);
       expect(databaseUpgradeNotice([active])).toBe(
-        "Upgrading your database. This can take a few minutes.",
+        "Upgrading your database. Keep the app open until this finishes. This can take a few minutes.",
       );
       store
         .getState()

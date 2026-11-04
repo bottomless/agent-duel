@@ -25,3 +25,12 @@ test("extends startup for the complete cleanup line, including a retried vacuum"
   expect(hasArenaDatabaseUpgradeLine("noise\n" + line + "\r\n")).toBe(true);
   expect(hasArenaDatabaseUpgradeLine(line + " extra\n")).toBe(false);
 });
+
+test("accepts only the complete exact pending-import line", () => {
+  const line = "[arena-upgrade] Importing OpenCode 1.x chats";
+  expect(hasArenaDatabaseUpgradeLine(line)).toBe(false);
+  expect(hasArenaDatabaseUpgradeLine(line + "\n")).toBe(true);
+  expect(hasArenaDatabaseUpgradeLine("noise\n" + line + "\r\n")).toBe(true);
+  expect(hasArenaDatabaseUpgradeLine("prefix " + line + "\n")).toBe(false);
+  expect(hasArenaDatabaseUpgradeLine(line + " extra\n")).toBe(false);
+});
