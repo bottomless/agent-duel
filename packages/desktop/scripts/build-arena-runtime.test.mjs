@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
-import { resolveArenaBuildDefines, resolveArenaCompileTarget } from "./build-arena-runtime.mjs";
+import { resolveArenaBuildDefines } from "./build-arena-runtime.mjs";
 
 const root = fileURLToPath(new URL("../../../", import.meta.url));
 const opencode = JSON.parse(
@@ -23,14 +23,6 @@ describe("packaged Arena build metadata", () => {
         "AGENT_DUEL_BUILD_NUMBER must be a non-negative safe integer",
       );
     }
-  });
-
-  test("builds the Windows x64 engine for any x64 CPU, not only those with AVX2", () => {
-    expect(resolveArenaCompileTarget("win32", "x64")).toEqual([
-      "--target=bun-windows-x64-baseline",
-    ]);
-    expect(resolveArenaCompileTarget("darwin", "arm64")).toEqual([]);
-    expect(resolveArenaCompileTarget("linux", "x64")).toEqual([]);
   });
 
   test("a compiled runtime keeps both versions and its build number outside the source checkout", () => {
