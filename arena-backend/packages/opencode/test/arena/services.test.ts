@@ -534,7 +534,8 @@ test("pauses only the worktree's own groups without a terminal, and resumes them
   expect(signals).toEqual(["SIGSTOP 40", "SIGSTOP 42", "SIGCONT 40", "SIGCONT 42"])
 })
 
-test("a paused dev server cannot change the worktree under git add", async () => {
+// Windows has no SIGSTOP, so nothing is paused there, and no `ps -o stat` to read the state.
+test.skipIf(process.platform === "win32")("a paused dev server cannot change the worktree under git add", async () => {
   await using dir = await tmpdir({ git: true })
   await $`mkdir -p ${dir.path}/.cache`.quiet()
   // Keeps short-lived files coming, as a build watcher does; unpaused, nearly every `add -A` loses

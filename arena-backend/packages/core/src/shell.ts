@@ -95,10 +95,12 @@ function resolve(file: string) {
   return which(shell) ?? undefined
 }
 
+// Git Bash first: Agent Duel already requires Git, models write POSIX shell far more reliably than
+// PowerShell, and Windows PowerShell 5.1, the one every machine has, cannot even chain with `&&`.
 function win() {
   return Array.from(
     new Set(
-      [which("pwsh"), which("powershell"), gitbash(), process.env.COMSPEC || "cmd.exe"]
+      [gitbash(), which("pwsh"), which("powershell"), process.env.COMSPEC || "cmd.exe"]
         .filter((item): item is string => Boolean(item))
         .map(full),
     ),
@@ -124,9 +126,23 @@ export function gitbash() {
   if (process.platform !== "win32") return
   if (Flag.OPENCODE_GIT_BASH_PATH) return Flag.OPENCODE_GIT_BASH_PATH
   const git = which("git")
-  if (!git) return
-  const file = path.join(git, "..", "..", "bin", "bash.exe")
-  if (stat(file)?.size) return file
+  // `git.exe` is found in `cmd\`, `bin\` or `mingw64\bin\` of the install, depending on which of
+  // them leads PATH (a Git Bash session puts `mingw64\bin` first). Another git can lead PATH, such
+  // as GitHub Desktop's, which has no bash, so Git for Windows' install folders come after it.
+  const beside = git
+    ? [
+        path.join(git, "..", "..", "bin", "bash.exe"),
+        path.join(git, "..", "bash.exe"),
+        path.join(git, "..", "..", "..", "bin", "bash.exe"),
+      ]
+    : []
+  const installed = [
+    process.env.ProgramFiles,
+    process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, "Programs"),
+  ]
+    .filter((root): root is string => Boolean(root))
+    .map((root) => path.join(root, "Git", "bin", "bash.exe"))
+  return [...beside, ...installed].find((file) => stat(file)?.size)
 }
 
 function fallback() {

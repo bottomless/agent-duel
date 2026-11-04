@@ -8,6 +8,7 @@ export {
   describeUncleanShutdown,
   recordCrashReport,
   releaseRunningMarker,
+  releaseStoppedMarker,
 } from "./crash-reports/store.js";
 export { getOrCreateServerId } from "./server-id.js";
 export { createRootLogger, type LogLevel, type LogFormat } from "./logger.js";

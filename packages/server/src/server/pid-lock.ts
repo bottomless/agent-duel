@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import { open, readFile, stat, unlink, mkdir, utimes } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -49,6 +50,39 @@ function isPidRunning(pid: number): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Whether the process now at the lock's PID could be the one that wrote it. Windows gives a freed
+ * PID to a new process within moments, so a daemon killed without releasing its lock (an installer
+ * replacing the app, a crash) leaves a PID that names another process, and the next daemon would
+ * refuse to start. A process that started after the lock was written cannot own it. Elsewhere PIDs
+ * come back far more slowly, and a live PID is trusted as before.
+ */
+async function isLockOwnerRunning(lock: PidLockInfo): Promise<boolean> {
+  if (!isPidRunning(lock.pid)) return false;
+  if (process.platform !== "win32") return true;
+  const started = await windowsProcessStartTime(lock.pid);
+  const written = Date.parse(lock.startedAt);
+  if (started === null || Number.isNaN(written)) return true;
+  // The lock is written after its process starts; a second covers the clocks' rounding.
+  return started <= written + 1000;
+}
+
+/** A process's creation time, readable for any process, unlike Get-Process's StartTime. */
+function windowsProcessStartTime(pid: number): Promise<number | null> {
+  const command = `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CreationDate.ToUniversalTime().ToString('o')`;
+  return new Promise((resolve) => {
+    execFile(
+      "powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-Command", command],
+      { timeout: 10_000, windowsHide: true },
+      (error, stdout) => {
+        const started = error ? Number.NaN : Date.parse(stdout.trim());
+        resolve(Number.isNaN(started) ? null : started);
+      },
+    );
+  });
 }
 
 function getPidFilePath(paseoHome: string): string {
@@ -116,7 +150,7 @@ async function clearExistingPidLock(
   lockOwnerPid: number,
   options: AcquirePidLockOptions | undefined,
 ): Promise<"already_owned" | "cleared"> {
-  const lockOwnerRunning = isPidRunning(existingLock.pid);
+  const lockOwnerRunning = await isLockOwnerRunning(existingLock);
   if (existingLock.pid === lockOwnerPid && lockOwnerRunning) {
     await touchPidLockFile(pidPath);
     return "already_owned";
@@ -357,7 +391,7 @@ export async function isLocked(
   if (!info) {
     return { locked: false };
   }
-  if (!isPidRunning(info.pid)) {
+  if (!(await isLockOwnerRunning(info))) {
     return { locked: false, info };
   }
   return { locked: true, info };

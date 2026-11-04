@@ -31,6 +31,7 @@ import {
   getWindowBackgroundColor,
   resolveSystemWindowTheme,
   resolveWindowBounds,
+  settleRestoredWindowSize,
   setupWindowResizeEvents,
   setupWindowStatePersistence,
   setupDefaultContextMenu,
@@ -79,6 +80,7 @@ import {
 } from "./settings/window-state.js";
 import {
   isDesktopManagedDaemonRunningSync,
+  stopDesktopDaemon,
   stopDesktopDaemonViaCli,
 } from "./daemon/daemon-manager.js";
 import {
@@ -645,6 +647,9 @@ async function createWindow(
     app.dock?.setBadge(devWorktreeName);
   }
 
+  if (restoredWindowState && process.platform === "win32") {
+    settleRestoredWindowSize(mainWindow, restoredWindowState);
+  }
   if (restoredWindowState?.isMaximized) {
     mainWindow.maximize();
   }
@@ -794,7 +799,10 @@ function setupSingleInstanceLock(): boolean {
 
   const gotLock = app.requestSingleInstanceLock();
   if (!gotLock) {
-    app.quit();
+    // The running instance owns the daemon and has already been handed this launch. app.quit()
+    // would run before-quit here, and its stop-on-quit would shut that daemon down under the
+    // running window, killing any battle in progress. This instance has started nothing to clean up.
+    app.exit(0);
     return false;
   }
 
@@ -977,6 +985,15 @@ const quitLifecycle = createQuitLifecycle({
       currentVersion: app.getVersion(),
       releaseChannel: settings.releaseChannel,
       signal,
+      // A daemon kept running after quit still runs from the install folder, and Windows cannot
+      // replace a running file: stop it first, as Install & restart does, instead of leaving the
+      // installer to kill it.
+      onBeforeQuit:
+        process.platform === "win32"
+          ? async () => {
+              await stopDesktopDaemon("app_update");
+            }
+          : undefined,
     });
   },
   createUpdateDeadlineSignal: () => AbortSignal.timeout(UPDATE_QUIT_DEADLINE_MS),

@@ -66,6 +66,7 @@ export interface AppUpdateService {
     currentVersion: string;
     releaseChannel: AppReleaseChannel;
     signal: AbortSignal;
+    onBeforeQuit?: () => Promise<void>;
   }): Promise<boolean>;
 }
 
@@ -417,10 +418,12 @@ export function createAppUpdateService(deps: AppUpdateServiceDeps): AppUpdateSer
     currentVersion,
     releaseChannel,
     signal,
+    onBeforeQuit,
   }: {
     currentVersion: string;
     releaseChannel: AppReleaseChannel;
     signal: AbortSignal;
+    onBeforeQuit?: () => Promise<void>;
   }): Promise<boolean> {
     if (!deps.isPackaged() || !downloadedUpdateVersion) {
       return false;
@@ -435,7 +438,11 @@ export function createAppUpdateService(deps: AppUpdateServiceDeps): AppUpdateSer
       return false;
     }
 
-    const result = await installCachedUpdate(currentVersion, { signal, restart: false });
+    const result = await installCachedUpdate(currentVersion, {
+      onBeforeQuit,
+      signal,
+      restart: false,
+    });
     return result.installed;
   }
 

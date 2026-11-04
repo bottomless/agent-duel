@@ -2,6 +2,14 @@ import { spawn } from "node:child_process"
 import { createHash } from "node:crypto"
 import path from "node:path"
 import type { ArenaPortAlias, CapturedService } from "./records"
+import {
+  readWindowsProcesses,
+  terminateWindowsGroup,
+  windowsGroupAlive,
+  windowsGroupListeners,
+  windowsGroupProtected,
+  windowsSnapshots,
+} from "./windows-processes"
 
 const PORT_ALIASES = ["PASEO_PORT", "PASEO_PORT2", "PASEO_PORT3"] as const
 const MAX_COMMAND_BYTES = 512
@@ -115,9 +123,10 @@ function inside(root: string, candidate: string) {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))
 }
 
+// Stored with `/`, the form `safeOwnerRelativeCwd` gives an owner-reported directory.
 function relativeCwd(root: string, cwd: string) {
   const relative = path.relative(root, path.resolve(cwd))
-  return relative || "."
+  return relative.replaceAll(path.sep, "/") || "."
 }
 
 function safeOwnerRelativeCwd(value: string | undefined) {
@@ -565,8 +574,6 @@ export async function resumeProcessGroups(
   }
 }
 
-type CommandProcess = ProcessSnapshot & { readonly processStartIdentity: string }
-
 async function commandOutput(command: string, args: readonly string[]) {
   return await new Promise<string>((resolve) => {
     // `ps lstart` is parsed as a fixed 24-character column below. That width only holds in the
@@ -661,8 +668,8 @@ export function sessionShellPids(rows: readonly TerminalProcessRow[]): ReadonlyS
   return shells
 }
 
-async function listRealProcesses(): Promise<readonly CommandProcess[]> {
-  if (process.platform === "win32") return []
+async function listRealProcesses(): Promise<readonly ProcessSnapshot[]> {
+  if (process.platform === "win32") return windowsSnapshots(await readWindowsProcesses())
   const cwdRows = parseLsofCwds(await commandOutput("lsof", ["-nP", "-a", "-d", "cwd", "-F", "pn"]))
   // The shell hook stamps child environments before launch. Reading only the
   // ownership marker lets a service remain discoverable after it changes cwd.
@@ -705,6 +712,7 @@ async function listRealProcesses(): Promise<readonly CommandProcess[]> {
 }
 
 async function realListeners(processGroupID: number) {
+  if (process.platform === "win32") return await windowsGroupListeners(processGroupID)
   const output = await commandOutput("lsof", ["-nP", "-a", "-g", String(processGroupID), "-iTCP", "-sTCP:LISTEN", "-FnP"])
   return output.split("\n").flatMap((line) => {
     const match = line.match(/^n.*:(\d+)$/)
@@ -731,7 +739,8 @@ export const defaultServiceAdapter: ServiceAdapter = {
   listProcesses: listRealProcesses,
   listTerminals: () => [],
   stopProcessGroup: (processGroupID, signal) => {
-    if (process.platform === "win32") return
+    // Windows has no signals to ask with: both steps terminate the group's members.
+    if (process.platform === "win32") return terminateWindowsGroup(processGroupID)
     try {
       process.kill(-processGroupID, signal)
     } catch (cause) {
@@ -748,13 +757,13 @@ export const defaultServiceAdapter: ServiceAdapter = {
     process.kill(-processGroupID, signal)
   },
   processGroupAlive: (processGroupID) => {
-    if (process.platform === "win32") return false
+    if (process.platform === "win32") return windowsGroupAlive(processGroupID)
     try { process.kill(-processGroupID, 0); return true } catch { return false }
   },
   listenersForProcessGroup: realListeners,
   wait: (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
   isProtectedProcessGroup: async (processGroupID) => {
-    if (process.platform === "win32") return false
+    if (process.platform === "win32") return await windowsGroupProtected(processGroupID)
     const own = Number((await commandOutput("ps", ["-o", "pgid=", "-p", String(process.pid)])).trim())
     return Number.isInteger(own) && own > 0 && own === processGroupID
   },

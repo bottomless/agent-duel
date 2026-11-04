@@ -640,7 +640,7 @@ describe("Arena winner ref carry-over", () => {
 
     // A lossless move is still asked, because the other worktree loses its branch.
     expect(reviews[0]).toMatchObject([{ key: "refs/heads/main", proposal: "agent", choices: ["agent", "yours"] }])
-    expect(reviews[0]?.[0]?.kind === "ref" && reviews[0][0].checkedOutAt).toEndWith("/arena-second-worktree")
+    expect(reviews[0]?.[0]?.kind === "ref" && reviews[0][0].checkedOutAt).toMatch(/[\\/]arena-second-worktree$/)
     expect(turn.gitApplication).toMatchObject({ state: "applied", refs: [{ ref: "refs/heads/main", action: "updated" }] })
 
     // The branch moved, and the other worktree stayed on its commit, detached, with its files.

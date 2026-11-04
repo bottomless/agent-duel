@@ -1,5 +1,6 @@
 import { $ } from "bun"
 import { afterEach, describe, expect, test } from "bun:test"
+import os from "node:os"
 import { connectLocalStore } from "@/arena/local-store"
 import { registry, setStoreForTest } from "@/arena/runtime"
 import { resetDatabase } from "../fixture/db"
@@ -61,11 +62,20 @@ describe("Arena winner's transcript in the chat", () => {
 
       const messages = await json<unknown[]>(await arenaRequest(`/session/${source.id}/message`, { headers }))
       const transcript = JSON.stringify(messages)
-      for (const run of runs) expect(transcript).not.toContain(run.worktree)
+      // Git Bash, the contestant shell on Windows, prints the checkout as `/c/...`, or under `/tmp` when
+      // the user's temp directory is its `/tmp`; the fixture lives there.
+      const shown =
+        process.platform === "win32"
+          ? [
+              `/tmp${directory.path.slice(os.tmpdir().length)}`,
+              `/${directory.path[0]!.toLowerCase()}${directory.path.slice(2)}`,
+            ].map((path) => path.replaceAll("\\", "/"))
+          : [directory.path]
+      for (const run of runs) expect(transcript).not.toContain(JSON.stringify(run.worktree).slice(1, -1))
       expect(transcript).not.toContain("/.agent-duel/worktrees/")
       expect(transcript).not.toContain("/opencode/arena/ses_")
-      expect(transcript).toContain(`${directory.path}/src/a.ts`)
-      expect(transcript).toContain(`${directory.path}/.git/HEAD`)
+      expect(shown.filter((path) => transcript.includes(`${path}/src/a.ts`))).toHaveLength(1)
+      expect(shown.filter((path) => transcript.includes(`${path}/.git/HEAD`))).toHaveLength(1)
       expect(transcript).toContain("$TMPDIR/shot.png")
     } finally {
       router.restore()
