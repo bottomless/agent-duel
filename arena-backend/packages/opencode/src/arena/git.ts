@@ -22,7 +22,6 @@ import { basename, dirname, join, resolve } from "path"
 import { Git } from "@/git"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { PRIVATE_REF_PREFIXES } from "@/worktree/layout"
-import { ALL_IGNORED_PATHS_COMMAND, IGNORED_PATHS_COMMAND, parseIgnoredPaths, withEmptyIgnoredFolders } from "./warm"
 import { identicalNumberedCopies } from "./sync-conflict-copy"
 import type { RefChange, RefOutcome } from "./ref-types"
 import type { AgentMove, BranchAction, RefNamespace, RefObservation, YourMove } from "./branch-review"
@@ -115,13 +114,6 @@ export type ApplySnapshotInput = {
   readonly expectedIndexTree: string
   readonly resultCommit: string
   readonly selectedRef?: string
-}
-
-export type ReanchorInput = {
-  readonly canonical: string
-  readonly baseCommit: string
-  readonly resultCommit: string
-  readonly permanentRef: string
 }
 
 export type ApplyResult = {
@@ -1741,26 +1733,6 @@ export const prepareSideBranch = Effect.fn("ArenaGit.prepareSideBranch")(functio
   return yield* attachSideBranch({ ...input, ...reset })
 })
 
-/** Detach a retained result from its persistent side branch without removing its directory. */
-export const detachAtResult = Effect.fn("ArenaGit.detachAtResult")(function* (input: {
-  readonly worktree: string
-  readonly resultCommit: string
-}) {
-  const git = yield* Git.Service
-  const root = yield* readRoot(git, input.worktree, "find_retained_worktree")
-  yield* run(git, root, "detach_retained_worktree", ["checkout", "--detach", "--force", input.resultCommit])
-  const head = yield* read(git, root, "verify_retained_head", ["rev-parse", "--verify", "HEAD"])
-  const branch = yield* readBranch(git, root)
-  if (head !== input.resultCommit || branch !== undefined) {
-    return yield* Effect.fail(new OperationError("verify_retained_detachment", "Retained result did not detach cleanly"))
-  }
-  return {
-    worktree: root,
-    head,
-    tree: yield* read(git, root, "read_retained_tree", ["rev-parse", "HEAD^{tree}"]),
-  } satisfies WorktreeAttachment
-})
-
 /** Refresh a warm worktree while its persistent side branch remains attached there. */
 export const refreshAttachedSide = Effect.fn("ArenaGit.refreshAttachedSide")(function* (input: SideBranchInput) {
   const git = yield* Git.Service
@@ -2571,18 +2543,6 @@ export const verifyContestantState = Effect.fn("ArenaGit.verifyContestantState")
   } satisfies VerifiedContestantState
 })
 
-export const inspectWorktree = Effect.fn("ArenaGit.inspectWorktree")(function* (worktree: string) {
-  const git = yield* Git.Service
-  const root = yield* readRoot(git, worktree, "find_worktree")
-  const head = yield* read(git, root, "read_worktree_head", ["rev-parse", "--verify", "HEAD"])
-  return {
-    worktree: root,
-    branch: yield* readBranch(git, root),
-    head,
-    tree: yield* read(git, root, "read_worktree_tree", ["rev-parse", "HEAD^{tree}"]),
-  } satisfies WorktreeAttachment
-})
-
 /** Pin the selected result without conflating it with the merged canonical working tree. */
 export const selectResult = Effect.fn("ArenaGit.selectResult")(function* (input: {
   readonly canonical: string
@@ -2980,14 +2940,6 @@ const readWorkingTree = Effect.fn("ArenaGit.readWorkingTree")(function* (
   return (yield* readWorkingTreeState(git, root, options)).tree
 })
 
-/** List ignored setup output as collapsed copy roots for the second contestant. */
-export const ignoredPaths = Effect.fn("ArenaGit.ignoredPaths")(function* (directory: string) {
-  const git = yield* Git.Service
-  const roots = parseIgnoredPaths(yield* read(git, directory, "list_ignored", [...IGNORED_PATHS_COMMAND]))
-  const all = parseIgnoredPaths(yield* read(git, directory, "list_ignored_all", [...ALL_IGNORED_PATHS_COMMAND]))
-  return withEmptyIgnoredFolders(roots, all)
-})
-
 export const snapshotBase = Effect.fn("ArenaGit.snapshotBase")(function* (input: SnapshotBaseInput) {
   const git = yield* Git.Service
   const root = yield* readRoot(git, input.canonical, "find_canonical_root")
@@ -3082,30 +3034,6 @@ export const snapshotBase = Effect.fn("ArenaGit.snapshotBase")(function* (input:
     indexTree,
     ...(input.permanentRef ? { permanentRef: input.permanentRef } : {}),
   } satisfies SnapshotBase
-})
-
-export const reanchor = Effect.fn("ArenaGit.reanchor")(function* (input: ReanchorInput) {
-  const git = yield* Git.Service
-  const root = yield* readRoot(git, input.canonical, "find_canonical_root")
-  const tree = yield* read(git, root, "read_reanchored_tree", ["rev-parse", `${input.resultCommit}^{tree}`])
-  const commit = yield* read(
-    git,
-    root,
-    "create_reanchored_commit",
-    ["commit-tree", tree, "-p", input.baseCommit, "-m", "Arena result"],
-    {
-      env: {
-        GIT_AUTHOR_NAME: "OpenCode Arena",
-        GIT_AUTHOR_EMAIL: "arena@localhost",
-        GIT_AUTHOR_DATE: wrapperDate,
-        GIT_COMMITTER_NAME: "OpenCode Arena",
-        GIT_COMMITTER_EMAIL: "arena@localhost",
-        GIT_COMMITTER_DATE: wrapperDate,
-      },
-    },
-  )
-  yield* preserveRef(git, root, input.permanentRef, commit)
-  return commit
 })
 
 export const finalize = Effect.fn("ArenaGit.finalize")(function* (input: FinalizeInput) {
@@ -3382,17 +3310,6 @@ export const containsCommit = Effect.fn("ArenaGit.containsCommit")(function* (in
   return result.exitCode === 0
 })
 
-/** Return Git's primary checkout path, repairing stale worktree registrations first. */
-export const repositoryOwner = Effect.fn("ArenaGit.repositoryOwner")(function* (directory: string) {
-  const git = yield* Git.Service
-  const root = yield* readRoot(git, directory, "find_repository_root")
-  yield* run(git, root, "repair_repository_worktrees", ["worktree", "repair"])
-  const worktrees = yield* inspectWorktrees(git, root)
-  const owner = worktrees[0]?.path
-  if (!owner) return yield* Effect.fail(new OperationError("read_repository_owner", "Git returned no worktrees"))
-  return owner
-})
-
 /**
  * The canonical checkout's branch and nothing else, for the stream poll: a full inspection runs
  * six git commands, and asking every second what the developer has checked out must cost one.
@@ -3455,13 +3372,6 @@ const settled = <A, E>(exit: Exit.Exit<A, E>) =>
 const conflictPaths = Effect.fn("ArenaGit.conflictPaths")(function* (git: Git.Interface, root: string) {
   const files = yield* read(git, root, "read_conflicts", ["diff", "--name-only", "--diff-filter=U"])
   return files.split(/\r?\n/).filter(Boolean)
-})
-
-/** Read the checkout's standard unmerged paths without changing its Git state. */
-export const inspectConflicts = Effect.fn("ArenaGit.inspectConflicts")(function* (canonical: string) {
-  const git = yield* Git.Service
-  const root = yield* readRoot(git, canonical, "find_conflict_root")
-  return yield* conflictPaths(git, root)
 })
 
 /** A replayed winner commit is not applied until Git's cherry-pick has been continued. */
