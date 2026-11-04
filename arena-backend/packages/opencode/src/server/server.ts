@@ -8,6 +8,7 @@ import { Provider } from "@opencode/schema/provider"
 import { createRoutes } from "@opencode/server/routes"
 import type { ServerOptions } from "@opencode/server/options"
 import { Api } from "@opencode/server/api"
+import { Observability } from "@opencode/util/observability"
 import { sanitizeV2, type HiddenError } from "@/arena/v2-privacy"
 import { arenaCredentials, hashArenaControlToken } from "@/arena/credentials"
 import { engineDatabaseFilename, fenceLegacyEnginesLayer } from "@/arena/database-upgrade"
@@ -443,10 +444,13 @@ async function buildRuntime(options: ServerOptions): Promise<Runtime> {
       [],
       Layer.merge(arenaRouteLayer, fenceLegacyEnginesLayer),
     )
+    // The V2 route graph does not use the legacy app runtimes that installed Observability.
+    // Own the daemon's file logger here so startup, requests and background fibers share its scope.
+    const loggedRoutes = process.env.OPENCODE_LOG_FILE ? routes.pipe(Layer.provideMerge(Observability.layer())) : routes
     // The Bun host supplies the platform services at runtime. The official route
     // graph carries a broad inferred environment through its extension layer; keep
     // that implementation detail at this one host boundary.
-    const build = Effect.provide(HttpServer.layerServices)(Layer.buildWithScope(routes, scope))
+    const build = Effect.provide(HttpServer.layerServices)(Layer.buildWithScope(loggedRoutes, scope))
     const context = await Effect.runPromise(build)
     const routeHandler = Context.get(context, HttpRouter.HttpRouter)
       .asHttpEffect()

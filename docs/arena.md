@@ -1668,7 +1668,13 @@ gets no deadline, and the BYOK service turns recovery off: nothing sits between 
 The control plane deploys the replay route as its own function, and the daemon's runtime router
 allows it by path.
 
-Diagnose deadlines from `$PASEO_HOME/engine.log` and the proxy's `streamProgress` timestamps
+Use `$PASEO_HOME/engine.log` for the V2 engine's INFO diagnostics. The daemon selects this file
+through `OPENCODE_LOG_FILE` in both source and packaged launches. Without that hook, the Arena
+host keeps its console logging. The file keeps the existing 50 MiB bound and trims to about
+25 MiB in place; crash reports attach its tail. Process command payloads are omitted from this file.
+Direct console warnings still go to the daemon log.
+
+Diagnose deadlines with these logs and the proxy's `streamProgress` timestamps
 (`arena/proxy.ts`). Compare chunk receipt, response end, artifact saving, and closure: a stream
 that ended but never closed stalled inside the engine. Correlate its `generationID` with the control
 plane's `arenaAssignmentGenerationMetrics`, whose `createdAt` marks the hosted function's response

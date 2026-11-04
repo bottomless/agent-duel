@@ -13,9 +13,11 @@ export const LOG_TRIM_INTERVAL = "1 hour"
 export const LOG_TRIM_LOCK_STALE_MS = 5 * 60 * 1000
 const LOG_TRIM_CHUNK = 64 * 1024
 
-function formatter(id: string = runID()) {
+function formatter(id: string = runID(), redactCommands = false) {
   return Logger.map(Logger.formatStructured, (output) => {
     const messages = Array.isArray(output.message) ? output.message : [output.message]
+    // Process arguments can contain tool text or credentials. The daemon attaches this file
+    // to crash reports; keep process lifecycle messages without their executable payloads.
     return [
       ["timestamp", output.timestamp],
       ["level", output.level],
@@ -25,6 +27,7 @@ function formatter(id: string = runID()) {
       ...flatten(output.spans),
       ...flatten(output.annotations),
     ]
+      .filter(([key]) => !redactCommands || !/(^|\.)(command|cmd|args|processes)(\.|$)/.test(key))
       .map(([key, value]) => `${key}=${format(value)}`)
       .join(" ")
   })
@@ -67,7 +70,7 @@ export function fileLogger(target = file(), id: string = runID()) {
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     yield* fs.makeDirectory(path.dirname(target), { recursive: true })
-    const logger = yield* Logger.toFile(formatter(id), target, { flag: "a" })
+    const logger = yield* Logger.toFile(formatter(id, Boolean(process.env.OPENCODE_LOG_FILE)), target, { flag: "a" })
     yield* trim(target).pipe(
       Effect.ignore,
       Effect.repeat(Schedule.spaced(LOG_TRIM_INTERVAL)),
