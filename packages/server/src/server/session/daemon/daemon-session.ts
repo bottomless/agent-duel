@@ -1,4 +1,5 @@
 import type pino from "pino";
+import { getArenaDatabaseUpgrade } from "../../agent/providers/opencode/arena-upgrade.js";
 import type { ProviderAvailability } from "../../agent/agent-manager.js";
 import type { SessionInboundMessage, SessionOutboundMessage } from "../../messages.js";
 import { getPidLockInfo } from "../../pid-lock.js";
@@ -117,6 +118,7 @@ export class DaemonSession {
         type: "daemon.get_status.response",
         payload: {
           requestId: msg.requestId,
+          arenaDatabaseUpgrade: getArenaDatabaseUpgrade(),
           serverId: this.serverId ?? "",
           version: this.daemonVersion ?? null,
           pid: process.pid,
@@ -141,6 +143,7 @@ export class DaemonSession {
           listen: null,
           relay: null,
           providers: [],
+          arenaDatabaseUpgrade: getArenaDatabaseUpgrade(),
         },
       });
     }

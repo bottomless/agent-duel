@@ -7,6 +7,11 @@ import type { AgentStorage } from "./agent-storage.js";
 import { ensureAgentLoaded } from "./agent-loading.js";
 import { isStaleProviderSessionError } from "./stale-provider-session-error.js";
 import type { ActiveTurnBehavior } from "@getpaseo/protocol/messages";
+import { arenaUpgradeTimeout } from "@getpaseo/protocol/arena-upgrade";
+import {
+  getArenaDatabaseUpgrade,
+  onArenaDatabaseUpgrade,
+} from "./providers/opencode/arena-upgrade.js";
 
 export type AgentUnarchiveController = Pick<AgentManager, "notifyAgentState" | "unarchiveSnapshot">;
 
@@ -251,8 +256,8 @@ export interface StartCreatedAgentInitialPromptParams {
  * up to 30s for the server to boot (OPENCODE_SERVER_STARTUP_TIMEOUT_MS) and then a
  * session.create on the same budget, so this is deliberately set well above 30s.
  *
- * Not derived from the provider constant on purpose: this module is provider-agnostic
- * and must not depend on a specific provider's internals.
+ * An observed Arena database upgrade extends only that OpenCode wait, leaving this
+ * ordinary budget for session creation after the engine's upgrade deadline.
  */
 const AGENT_RUN_START_TIMEOUT_MS = 60_000;
 
@@ -263,22 +268,25 @@ export async function waitForAgentRunStartWithTimeout(
 ): Promise<void> {
   const provider = agentManager.getAgent(agentId)?.provider ?? "provider";
   const startAbort = new AbortController();
-  const startTimeout = setTimeout(
-    () =>
+  const waitStartedAt = Date.now();
+  const cancelTimeout = arenaUpgradeTimeout({
+    timeoutMs: AGENT_RUN_START_TIMEOUT_MS,
+    getUpgrade: () => (provider === "opencode" ? getArenaDatabaseUpgrade() : null),
+    subscribe: onArenaDatabaseUpgrade,
+    onTimeout: () =>
       startAbort.abort(
         new Error(
-          `${provider} run did not start within ${AGENT_RUN_START_TIMEOUT_MS / 1000} seconds (phase: run start)`,
+          `${provider} run did not start within ${(Date.now() - waitStartedAt) / 1000} seconds (phase: run start)`,
         ),
       ),
-    AGENT_RUN_START_TIMEOUT_MS,
-  );
+  });
 
   try {
     await agentManager.waitForAgentRunStart(agentId, {
       signal: signal ? AbortSignal.any([startAbort.signal, signal]) : startAbort.signal,
     });
   } finally {
-    clearTimeout(startTimeout);
+    cancelTimeout();
   }
 }
 

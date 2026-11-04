@@ -1,3 +1,4 @@
+import { arenaUpgradeTimeout, type ArenaDatabaseUpgrade } from "@getpaseo/protocol/arena-upgrade";
 import { i18n } from "@/i18n/i18next";
 import {
   applyArenaChanges,
@@ -10,6 +11,8 @@ import { ArenaChatTooLargeError } from "./chat-too-large";
 
 export interface ArenaStreamClient {
   readonly isConnected: boolean;
+  getLastServerInfoMessage(): { arenaDatabaseUpgrade?: ArenaDatabaseUpgrade | null } | null;
+  on(type: "status", listener: () => void): () => void;
   subscribeArenaUpdates(
     listener: (packet: ArenaStreamPacket & { subscriptionId: string }) => void,
   ): () => void;
@@ -31,7 +34,7 @@ export class ArenaSubscription {
   private generation: string | null = null;
   private sequence = -1;
   private snapshot: ArenaSnapshot | undefined;
-  private baselineTimeout: ReturnType<typeof setTimeout> | undefined;
+  private cancelBaselineTimeout: (() => void) | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private offUpdates: (() => void) | undefined;
   private offConnection: (() => void) | undefined;
@@ -122,15 +125,16 @@ export class ArenaSubscription {
     new Promise((resolve) => {
       // Both timeout and delivery converge here; deleting the waiter makes delivery one-shot.
       let finished = false;
+      let cancelTimeout = () => {};
       const finish = (result: { isError: boolean; data?: ArenaSnapshot }) => {
         if (finished) return;
         finished = true;
-        clearTimeout(timeout);
+        cancelTimeout();
         this.waiters.delete(finish);
         // oxlint-disable-next-line promise/no-multiple-resolved -- finished guards timeout and delivery.
         resolve(result);
       };
-      const timeout = setTimeout(() => finish({ isError: true, data: this.snapshot }), 30_000);
+      cancelTimeout = this.upgradeTimeout(() => finish({ isError: true, data: this.snapshot }));
       this.waiters.add(finish);
       this.retry();
     });
@@ -143,8 +147,8 @@ export class ArenaSubscription {
   };
 
   private disconnect() {
-    if (this.baselineTimeout) clearTimeout(this.baselineTimeout);
-    this.baselineTimeout = undefined;
+    this.cancelBaselineTimeout?.();
+    this.cancelBaselineTimeout = undefined;
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
     const id = this.id;
@@ -167,11 +171,20 @@ export class ArenaSubscription {
     const id = globalThis.crypto.randomUUID();
     this.notBattleRepository = false;
     this.id = id;
-    this.baselineTimeout = setTimeout(() => {
+    this.cancelBaselineTimeout = this.upgradeTimeout(() => {
       if (this.id === id) this.recover(new Error(i18n.t("arena.snapshotTimeout")));
-    }, 30_000);
+    });
     void this.client.arenaStreamSubscribe(this.agentId, id, this.target).catch((error: unknown) => {
       if (this.id === id) this.recover(error instanceof Error ? error : new Error(String(error)));
+    });
+  }
+
+  private upgradeTimeout(onTimeout: () => void): () => void {
+    return arenaUpgradeTimeout({
+      timeoutMs: 30_000,
+      getUpgrade: () => this.client.getLastServerInfoMessage()?.arenaDatabaseUpgrade ?? null,
+      subscribe: (listener) => this.client.on("status", listener),
+      onTimeout,
     });
   }
 
@@ -226,8 +239,8 @@ export class ArenaSubscription {
           throw new Error(i18n.t("arena.updateBeforeSnapshot"));
         this.snapshot = applyArenaChanges(this.snapshot, packet.frame.changes);
       }
-      if (this.baselineTimeout) clearTimeout(this.baselineTimeout);
-      this.baselineTimeout = undefined;
+      this.cancelBaselineTimeout?.();
+      this.cancelBaselineTimeout = undefined;
       this.generation = packet.generation;
       this.sequence = packet.sequence;
       this.publish(this.snapshot);

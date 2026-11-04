@@ -897,6 +897,30 @@ describe("V1Migration database workflow", () => {
     )
   })
 
+  test("rolls back the skipped count with a failed session and counts it once on retry", async () => {
+    await database(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* db.run(sql`INSERT INTO project (id, worktree, time_created, time_updated, sandboxes)
+        VALUES ('global', '/tmp/test', 1, 2, '[]')`)
+        yield* db.run(sql`INSERT INTO session (id,project_id,slug,directory,title,version,time_created,time_updated)
+        VALUES ('ses_test','global','old','/tmp/test','Old','1',1,2)`)
+        const valid = user("msg_000000000049aaaaaaaaaaaaaa")
+        yield* db.run(sql`INSERT INTO message VALUES (${valid.id},'ses_test',1,2,${valid.data})`)
+        yield* db.run(sql`INSERT INTO message VALUES ('msg_bad','ses_test',1,2,'{')`)
+        yield* db.run(sql`CREATE TRIGGER fail_import BEFORE INSERT ON session_message BEGIN
+        SELECT RAISE(ABORT, 'fixture failure after skipped count'); END`)
+        expect((yield* Effect.exit(V1Migration.run()))._tag).toBe("Failure")
+        expect(yield* db.get(sql`SELECT value FROM kv WHERE key='migration.v1-v2.skipped'`)).toBeUndefined()
+        yield* db.run(sql`DROP TRIGGER fail_import`)
+        yield* V1Migration.run()
+        expect(yield* db.get(sql`SELECT value FROM kv WHERE key='migration.v1-v2.skipped'`)).toEqual({ value: "1" })
+        yield* V1Migration.run()
+        expect(yield* db.get(sql`SELECT value FROM kv WHERE key='migration.v1-v2.skipped'`)).toEqual({ value: "1" })
+      }),
+    )
+  })
+
   test("yields while clearing stale events in batches", async () => {
     await database(
       Effect.gen(function* () {
@@ -1095,6 +1119,117 @@ describe("V1Migration database workflow", () => {
           icon_color: null,
           commands: null,
         })
+      }),
+    )
+  })
+
+  test("repairs a session removed behind the descending cursor before recording completion", async () => {
+    await database(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* db.run(sql`INSERT INTO project (id,worktree,time_created,time_updated,sandboxes)
+        VALUES ('global','/tmp/test',1,2,'[]')`)
+        for (const id of ["ses_a", "ses_b", "ses_c"])
+          yield* db.run(sql`
+        INSERT INTO session (id,project_id,slug,directory,title,version,time_created,time_updated)
+        VALUES (${id},'global',${id},'/tmp/test','Test','1',1,2)`)
+        // Reproduce an interleaved writer: C has committed when A's transaction deletes it.
+        yield* db.run(sql`CREATE TRIGGER remove_earlier AFTER INSERT ON session_v2 WHEN NEW.id='ses_a'
+        BEGIN DELETE FROM session_v2 WHERE id='ses_c'; END`)
+        expect(yield* V1Migration.run()).toEqual({ status: "completed" })
+        expect(yield* db.all(sql`SELECT id FROM session_v2 ORDER BY id`)).toEqual([
+          { id: "ses_a" },
+          { id: "ses_b" },
+          { id: "ses_c" },
+        ])
+        expect(yield* db.get(sql`SELECT value FROM kv WHERE key='migration.v1-v2.skipped'`)).toEqual({ value: "0" })
+      }),
+    )
+  })
+
+  test("repair keeps a durable checkpoint when interrupted and resumes without losing sessions", async () => {
+    await database(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* db.run(sql`INSERT INTO project (id,worktree,time_created,time_updated,sandboxes)
+        VALUES ('global','/tmp/test',1,2,'[]')`)
+        for (const id of ["ses_a", "ses_c"])
+          yield* db.run(sql`
+        INSERT INTO session (id,project_id,slug,directory,title,version,time_created,time_updated)
+        VALUES (${id},'global',${id},'/tmp/test','Test','1',1,2)`)
+        yield* db.run(sql`CREATE TRIGGER remove_earlier AFTER INSERT ON session_v2 WHEN NEW.id='ses_a'
+        BEGIN DELETE FROM session_v2 WHERE id='ses_c'; END`)
+        yield* db.run(sql`CREATE TRIGGER interrupt_repair BEFORE INSERT ON session_v2
+        WHEN NEW.id='ses_c' AND EXISTS (SELECT 1 FROM kv WHERE key='migration.v1-v2' AND json_extract(value,'$.repair')=1)
+        BEGIN SELECT RAISE(ABORT,'interrupted repair'); END`)
+        expect((yield* Effect.exit(V1Migration.run()))._tag).toBe("Failure")
+        expect(yield* db.get(sql`SELECT value FROM kv WHERE key='migration.v1-v2'`)).toEqual({
+          value: '{"phase":"sessions","repair":true}',
+        })
+        yield* db.run(sql`DROP TRIGGER interrupt_repair`)
+        yield* V1Migration.run()
+        expect(yield* db.all(sql`SELECT id FROM session_v2 ORDER BY id`)).toEqual([{ id: "ses_a" }, { id: "ses_c" }])
+      }),
+    )
+  })
+
+  test("completion also catches a source session created behind the cursor", async () => {
+    await database(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* db.run(sql`INSERT INTO project (id,worktree,time_created,time_updated,sandboxes)
+        VALUES ('global','/tmp/test',1,2,'[]')`)
+        yield* db.run(sql`INSERT INTO session (id,project_id,slug,directory,title,version,time_created,time_updated)
+        VALUES ('ses_a','global','a','/tmp/test','Test','1',1,2)`)
+        yield* db.run(sql`CREATE TRIGGER late_source AFTER INSERT ON session_v2 WHEN NEW.id='ses_a'
+        BEGIN INSERT INTO session (id,project_id,slug,directory,title,version,time_created,time_updated)
+        VALUES ('ses_z','global','z','/tmp/test','Late','1',1,2); END`)
+        yield* V1Migration.run()
+        expect(yield* db.all(sql`SELECT id FROM session_v2 ORDER BY id`)).toEqual([{ id: "ses_a" }, { id: "ses_z" }])
+      }),
+    )
+  })
+
+  test("retries missing sessions in an older completed fenced import without replacing other chats", async () => {
+    await database(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* db.run(sql`INSERT INTO project (id,worktree,time_created,time_updated,sandboxes)
+        VALUES ('global','/tmp/test',1,2,'[]')`)
+        for (const id of ["ses_a", "ses_b"])
+          yield* db.run(sql`
+        INSERT INTO session (id,project_id,slug,directory,title,version,time_created,time_updated)
+        VALUES (${id},'global',${id},'/tmp/test','Test','1',1,2)`)
+        yield* V1Migration.run()
+        yield* db.run(sql`ALTER TABLE session RENAME TO _arena_v1_session`)
+        yield* db.run(sql`DELETE FROM session_v2 WHERE id='ses_b'`)
+        yield* db.run(sql`UPDATE session_v2 SET title='new V2 work' WHERE id='ses_a'`)
+        expect(yield* V1Migration.status()).toEqual({ status: "required" })
+        yield* V1Migration.run()
+        expect(yield* db.all(sql`SELECT id,title FROM session_v2 ORDER BY id`)).toEqual([
+          { id: "ses_a", title: "new V2 work" },
+          { id: "ses_b", title: "Test" },
+        ])
+        expect(yield* V1Migration.status()).toEqual({ status: "completed" })
+      }),
+    )
+  })
+
+  test("a durable intentional deletion remains deleted during completion repair", async () => {
+    await database(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* db.run(sql`INSERT INTO project (id,worktree,time_created,time_updated,sandboxes)
+        VALUES ('global','/tmp/test',1,2,'[]')`)
+        yield* db.run(sql`INSERT INTO session (id,project_id,slug,directory,title,version,time_created,time_updated)
+        VALUES ('ses_deleted','global','deleted','/tmp/test','Test','1',1,2)`)
+        yield* V1Migration.run()
+        yield* db.run(sql`INSERT INTO event(id,aggregate_id,seq,created,type,data)
+        VALUES ('deleted','ses_deleted',10,10,'session.deleted.2','{"sessionID":"ses_deleted"}')`)
+        yield* db.run(sql`DELETE FROM session_v2 WHERE id='ses_deleted'`)
+        yield* V1Migration.run()
+        expect(yield* db.all(sql`SELECT id FROM session_v2`)).toEqual([])
+        expect(yield* V1Migration.status()).toEqual({ status: "completed" })
       }),
     )
   })
@@ -1350,6 +1485,9 @@ describe("V1Migration database workflow", () => {
         ])
         expect(yield* db.all(sql`SELECT id FROM session_message`)).toEqual([])
         expect(yield* V1Migration.status()).toEqual({ status: "completed" })
+        expect(yield* db.get(sql`SELECT value FROM kv WHERE key = 'migration.v1-v2.skipped'`)).toEqual({ value: "1" })
+        yield* V1Migration.run()
+        expect(yield* db.get(sql`SELECT value FROM kv WHERE key = 'migration.v1-v2.skipped'`)).toEqual({ value: "1" })
         expect(output.map((entry) => entry.message)).toContainEqual([
           "Skipped V1 migration row",
           {

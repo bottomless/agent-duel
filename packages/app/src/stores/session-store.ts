@@ -291,6 +291,7 @@ export interface DaemonServerInfo {
   serverId: string;
   hostname: string | null;
   version: string | null;
+  arenaDatabaseUpgrade?: ServerInfoStatusPayload["arenaDatabaseUpgrade"];
   desktopManaged?: boolean;
   capabilities?: ServerCapabilities;
   features?: ServerInfoStatusPayload["features"];
@@ -301,6 +302,7 @@ export function toDaemonServerInfo(serverInfo: ServerInfoStatusPayload): DaemonS
     serverId: serverInfo.serverId,
     hostname: serverInfo.hostname ?? null,
     version: serverInfo.version ?? null,
+    arenaDatabaseUpgrade: serverInfo.arenaDatabaseUpgrade,
     ...(serverInfo.desktopManaged !== undefined
       ? { desktopManaged: serverInfo.desktopManaged }
       : {}),
@@ -703,6 +705,13 @@ function areServerInfoFeaturesEqual(
   return JSON.stringify(current ?? null) === JSON.stringify(next ?? null);
 }
 
+function areArenaDatabaseUpgradesEqual(
+  current: ServerInfoStatusPayload["arenaDatabaseUpgrade"] | undefined,
+  next: ServerInfoStatusPayload["arenaDatabaseUpgrade"] | undefined,
+): boolean {
+  return current?.startedAt === next?.startedAt && current?.deadline === next?.deadline;
+}
+
 function isSessionServerInfoUnchanged(input: {
   currentServerInfo: SessionState["serverInfo"] | undefined;
   nextHostname: string | null;
@@ -711,6 +720,7 @@ function isSessionServerInfoUnchanged(input: {
   nextCapabilities: ServerCapabilities | undefined;
   nextFeatures: ServerInfoStatusPayload["features"] | undefined;
   nextServerId: string;
+  nextArenaDatabaseUpgrade: ServerInfoStatusPayload["arenaDatabaseUpgrade"] | undefined;
 }): boolean {
   const {
     currentServerInfo,
@@ -727,6 +737,10 @@ function isSessionServerInfoUnchanged(input: {
     prevHostname === nextHostname &&
     prevVersion === nextVersion &&
     currentServerInfo?.desktopManaged === nextDesktopManaged &&
+    areArenaDatabaseUpgradesEqual(
+      currentServerInfo?.arenaDatabaseUpgrade,
+      input.nextArenaDatabaseUpgrade,
+    ) &&
     areServerCapabilitiesEqual(currentServerInfo?.capabilities, nextCapabilities) &&
     areServerInfoFeaturesEqual(currentServerInfo?.features, nextFeatures)
   );
@@ -876,6 +890,7 @@ export const useSessionStore = create<SessionStore>()(
               nextCapabilities,
               nextFeatures,
               nextServerId: info.serverId,
+              nextArenaDatabaseUpgrade: info.arenaDatabaseUpgrade,
             })
           ) {
             return prev;
@@ -891,6 +906,7 @@ export const useSessionStore = create<SessionStore>()(
                   serverId: info.serverId,
                   hostname: nextHostname,
                   version: nextVersion,
+                  arenaDatabaseUpgrade: info.arenaDatabaseUpgrade,
                   ...(nextDesktopManaged !== undefined
                     ? { desktopManaged: nextDesktopManaged }
                     : {}),

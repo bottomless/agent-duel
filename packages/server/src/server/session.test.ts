@@ -1,3 +1,4 @@
+import { setArenaDatabaseUpgrade } from "./agent/providers/opencode/arena-upgrade.js";
 import {
   createWorkspaceRuntimeStore,
   type WorkspaceRuntimeStore,
@@ -2356,6 +2357,7 @@ describe("daemon status + pairing RPC", () => {
         type: "daemon.get_status.response",
         payload: {
           requestId: "status-1",
+          arenaDatabaseUpgrade: null,
           serverId: "srv-test",
           version: "9.9.9",
           pid: process.pid,
@@ -2395,6 +2397,7 @@ describe("daemon status + pairing RPC", () => {
         type: "daemon.get_status.response",
         payload: {
           requestId: "status-fallback-1",
+          arenaDatabaseUpgrade: null,
           serverId: "srv-test",
           version: "9.9.9",
           pid: process.pid,
@@ -6200,5 +6203,27 @@ test("a failing direct source observes fire-and-forget file replies without unha
     process.off("unhandledRejection", collect);
     await session.cleanup();
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("status feed snapshots an upgrade that started before subscription", async () => {
+  const owner = {};
+  const messages: unknown[] = [];
+  const session = createSessionForTest({ messages });
+  const upgrade = { startedAt: 0, deadline: 600_000 };
+  try {
+    setArenaDatabaseUpgrade(owner, upgrade);
+    await session.handleMessage({
+      type: "session.events.set_subscription.request",
+      requestId: "upgrade",
+      events: ["status.server_info"],
+    });
+    expect(messages.at(-1)).toMatchObject({
+      type: "session.events.set_subscription.response",
+      payload: { arenaDatabaseUpgrade: upgrade },
+    });
+  } finally {
+    setArenaDatabaseUpgrade(owner, null);
+    await session.cleanup();
   }
 });

@@ -92,7 +92,9 @@ type Options = {
   readonly nextDatabasePath?: string
 }
 
-type MigrationState = { readonly phase: "sessions"; readonly cursor?: string } | { readonly phase: "completed" }
+type MigrationState =
+  | { readonly phase: "sessions"; readonly cursor?: string; readonly repair?: boolean }
+  | { readonly phase: "completed" }
 
 type RuntimeState =
   | { readonly status: "idle" }
@@ -219,7 +221,7 @@ const decodeMessage = Schema.decodeUnknownOption(SessionV1.Info)
 const decodePart = Schema.decodeUnknownOption(SessionV1.Part)
 let runtimeState: RuntimeState = { status: "idle" }
 
-export function transformSession(input: TransformInput): TransformResult {
+function decodeSource(input: Pick<TransformInput, "messages" | "parts"> & { session: { id: string } }) {
   const warnings: Warning[] = []
   const messages = input.messages
     .map((row) => {
@@ -267,6 +269,16 @@ export function transformSession(input: TransformInput): TransformResult {
     })
     .filter((item): item is NonNullable<typeof item> => item !== undefined)
     .sort((a, b) => a.row.id.localeCompare(b.row.id))
+  return { messages, parts, warnings }
+}
+
+/** Uses the importer's decoders when auditing imports completed by older Arena builds. */
+export function countSkippedRows(input: Pick<TransformInput, "messages" | "parts"> & { session: { id: string } }) {
+  return decodeSource(input).warnings.length
+}
+
+export function transformSession(input: TransformInput): TransformResult {
+  const { messages, parts, warnings } = decodeSource(input)
   const byMessage = Map.groupBy(parts, (item) => item.row.message_id)
   const paired = new Set<string>()
   const used = new Set(messages.map((item) => item.row.id))
@@ -490,14 +502,44 @@ export function transformSession(input: TransformInput): TransformResult {
   }
 }
 
+// Only a durable deletion of this same ID permits an absent imported session. IDs are never reused.
+export const DELETION_EVIDENCE_SQL = `EXISTS (
+  SELECT 1 FROM event d WHERE d.aggregate_id=source.id
+  AND d.type IN ('session.deleted.1','session.deleted.2')
+  AND json_valid(d.data) AND json_extract(d.data,'$.sessionID')=source.id
+)`
+
+function legacySource(db: Database.Interface["db"]) {
+  return db
+    .get<{ name: string }>(
+      sql`SELECT name FROM sqlite_master WHERE type='table'
+    AND name IN ('session','_arena_v1_session') ORDER BY name DESC LIMIT 1`,
+    )
+    .pipe(Effect.orDie)
+}
+
+function missingSession(db: Pick<Database.Interface["db"], "get">, source: string) {
+  return db
+    .get<{ id: string; project_id: string }>(
+      sql`
+    SELECT source.id,source.project_id FROM ${sql.identifier(source)} source
+    WHERE NOT EXISTS (SELECT 1 FROM session_v2 WHERE id=source.id)
+    AND NOT ${sql.raw(DELETION_EVIDENCE_SQL)} ORDER BY source.id DESC LIMIT 1
+  `,
+    )
+    .pipe(Effect.orDie)
+}
+
 export function status(): Effect.Effect<Status, never, Database.Service> {
   return Effect.gen(function* () {
     const db = (yield* Database.Service).db
-    if (!(yield* hasLegacySessions(db))) return { status: "completed" as const }
+    const source = yield* legacySource(db)
+    if (!source) return { status: "completed" as const }
     const state = yield* readState(db)
     if (runtimeState.status === "running") return runtimeState
     if (runtimeState.status === "error") return runtimeState
-    if (state?.phase === "completed") return { status: "completed" as const }
+    if (state?.phase === "completed" && !(yield* missingSession(db, source.name)))
+      return { status: "completed" as const }
     return { status: "required" as const }
   })
 }
@@ -537,8 +579,10 @@ export function run(options: Options = {}): Effect.Effect<RunResult, never, Data
       const db = (yield* Database.Service).db
       const global = yield* Global.Service
       const state = yield* readState(db)
-      if (state?.phase === "completed") return { status: "completed" as const }
-      if (!(yield* hasLegacySessions(db))) return { status: "completed" as const }
+      const source = yield* legacySource(db)
+      if (!source) return { status: "completed" as const }
+      if (state?.phase === "completed" && !(yield* missingSession(db, source.name)))
+        return { status: "completed" as const }
       const now = Date.now()
       yield* db.run(sql`
           INSERT OR IGNORE INTO project (id, worktree, time_created, time_updated, time_active, sandboxes)
@@ -565,12 +609,15 @@ export function run(options: Options = {}): Effect.Effect<RunResult, never, Data
           )
           .pipe(Effect.orDie)
       const sourceTotal = yield* countNextSessions(nextPath(options, global.data))
-      const legacyTotal = (yield* db.get<{ value: number }>(sql`SELECT COUNT(*) AS value FROM session`))?.value ?? 0
+      const legacyTotal =
+        (yield* db.get<{ value: number }>(sql`SELECT COUNT(*) AS value FROM ${sql.identifier(source.name)}`))?.value ??
+        0
       const cursor = state?.phase === "sessions" ? state.cursor : undefined
       const migrated =
         cursor !== undefined
-          ? ((yield* db.get<{ value: number }>(sql`SELECT COUNT(*) AS value FROM session WHERE id >= ${cursor}`))
-              ?.value ?? 0)
+          ? ((yield* db.get<{ value: number }>(
+              sql`SELECT COUNT(*) AS value FROM ${sql.identifier(source.name)} WHERE id >= ${cursor}`,
+            ))?.value ?? 0)
           : 0
       const denominator = sourceTotal + legacyTotal
       updateProgress({ label: "Migrating sessions", numerator: migrated, denominator })
@@ -584,23 +631,54 @@ export function run(options: Options = {}): Effect.Effect<RunResult, never, Data
       while (true) {
         const state = yield* readState(db)
         const cursorValue = state?.phase === "sessions" ? state.cursor : undefined
-        const nextID = yield* db.get<{ id: string; project_id: string }>(
-          cursorValue === undefined
-            ? sql`SELECT id, project_id FROM session ORDER BY id DESC LIMIT 1`
-            : sql`SELECT id, project_id FROM session WHERE id < ${cursorValue} ORDER BY id DESC LIMIT 1`,
-        )
-        if (!nextID) break
+        const repairing = state?.phase === "completed" || (state?.phase === "sessions" && state.repair)
+        const nextID = repairing
+          ? yield* missingSession(db, source.name)
+          : yield* db.get<{ id: string; project_id: string }>(
+              cursorValue === undefined
+                ? sql`SELECT id, project_id FROM ${sql.identifier(source.name)} ORDER BY id DESC LIMIT 1`
+                : sql`SELECT id, project_id FROM ${sql.identifier(source.name)} WHERE id < ${cursorValue} ORDER BY id DESC LIMIT 1`,
+            )
+        if (!nextID) {
+          // Check and complete in the same write transaction: another writer cannot slip a deletion
+          // between the coverage check and the completion marker. Repair also survives a restart.
+          const completed = yield* db
+            .transaction((tx) =>
+              Effect.gen(function* () {
+                const missing = yield* missingSession(tx, source.name)
+                const value: MigrationState = missing ? { phase: "sessions", repair: true } : { phase: "completed" }
+                yield* tx
+                  .insert(KVTable)
+                  .values({ key: MIGRATION_STATE_KEY, value })
+                  .onConflictDoUpdate({ target: KVTable.key, set: { value, time_updated: Date.now() } })
+                  .run()
+                return !missing
+              }),
+            )
+            .pipe(Effect.orDie)
+          if (completed) break
+          continue
+        }
         yield* db
           .transaction((tx) =>
             Effect.gen(function* () {
               yield* tx
                 .insert(KVTable)
-                .values({ key: MIGRATION_STATE_KEY, value: { phase: "sessions", cursor: nextID.id } })
+                .values({
+                  key: MIGRATION_STATE_KEY,
+                  value: { phase: "sessions", cursor: nextID.id, ...(repairing ? { repair: true } : {}) },
+                })
                 .onConflictDoUpdate({
                   target: KVTable.key,
-                  set: { value: { phase: "sessions", cursor: nextID.id }, time_updated: Date.now() },
+                  set: {
+                    value: { phase: "sessions", cursor: nextID.id, ...(repairing ? { repair: true } : {}) },
+                    time_updated: Date.now(),
+                  },
                 })
                 .run()
+              const deleted = yield* tx.get(sql`SELECT 1 FROM ${sql.identifier(source.name)} source
+                WHERE source.id=${nextID.id} AND ${sql.raw(DELETION_EVIDENCE_SQL)}`)
+              if (deleted) return
               const projectID = projects.has(nextID.project_id) ? nextID.project_id : Project.ID.global
               if (projectID !== nextID.project_id)
                 yield* Effect.logWarning("Reassigned V1 session with missing project", {
@@ -619,7 +697,7 @@ export function run(options: Options = {}): Effect.Effect<RunResult, never, Data
                     summary_additions, summary_deletions, summary_files, summary_diffs, metadata, cost,
                     tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write,
                     revert, NULL, agent, model, time_created, time_updated, time_compacting, time_archived
-                  FROM session
+                  FROM ${sql.identifier(source.name)}
                   WHERE id = ${nextID.id}
                 `)
               const next = yield* tx
@@ -635,6 +713,14 @@ export function run(options: Options = {}): Effect.Effect<RunResult, never, Data
                 sql`SELECT id, message_id, session_id, time_created, time_updated, data FROM part WHERE session_id = ${next.id}`,
               )
               const transformed = transformSession({ session: next, messages: sourceMessages, parts: sourceParts })
+              // Commit the count with the imported rows and cursor, so a retry cannot lose or double it.
+              yield* tx.run(sql`
+                INSERT INTO kv (key, value, time_created, time_updated)
+                VALUES ('migration.v1-v2.skipped', ${String(transformed.warnings.length)}, ${now}, ${now})
+                ON CONFLICT(key) DO UPDATE SET
+                  value = CAST(CAST(value AS INTEGER) + ${transformed.warnings.length} AS TEXT),
+                  time_updated = ${now}
+              `)
               yield* Effect.forEach(transformed.warnings, (warning) =>
                 Effect.logWarning("Skipped V1 migration row", warning),
               )
@@ -680,20 +766,6 @@ export function run(options: Options = {}): Effect.Effect<RunResult, never, Data
           }
         yield* Effect.yieldNow
       }
-      yield* db
-        .transaction((tx) =>
-          Effect.gen(function* () {
-            yield* tx
-              .insert(KVTable)
-              .values({ key: MIGRATION_STATE_KEY, value: { phase: "completed" } })
-              .onConflictDoUpdate({
-                target: KVTable.key,
-                set: { value: { phase: "completed" }, time_updated: Date.now() },
-              })
-              .run()
-          }),
-        )
-        .pipe(Effect.orDie)
       return { status: "completed" as const }
     }).pipe(Effect.orDie),
   )
@@ -1123,13 +1195,12 @@ function parseState(input: unknown): MigrationState | undefined {
   if (!input || typeof input !== "object" || !("phase" in input)) return
   if (input.phase === "completed") return { phase: "completed" }
   if (input.phase !== "sessions") return
-  if (!("cursor" in input) || input.cursor === undefined) return { phase: "sessions" }
-  if (typeof input.cursor === "string") return { phase: "sessions", cursor: input.cursor }
-}
-
-function hasLegacySessions(db: Database.Interface["db"]) {
-  return db.get(sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session'`).pipe(
-    Effect.map((row) => row !== undefined),
-    Effect.orDie,
-  )
+  if (!("cursor" in input) || input.cursor === undefined)
+    return { phase: "sessions", ...("repair" in input && input.repair === true ? { repair: true } : {}) }
+  if (typeof input.cursor === "string")
+    return {
+      phase: "sessions",
+      cursor: input.cursor,
+      ...("repair" in input && input.repair === true ? { repair: true } : {}),
+    }
 }

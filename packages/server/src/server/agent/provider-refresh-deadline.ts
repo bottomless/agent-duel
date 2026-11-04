@@ -1,8 +1,14 @@
 import type { ProviderRefreshContext } from "./agent-sdk-types.js";
+import { arenaUpgradeTimeout } from "@getpaseo/protocol/arena-upgrade";
+import {
+  getArenaDatabaseUpgrade,
+  onArenaDatabaseUpgrade,
+} from "./providers/opencode/arena-upgrade.js";
 
 interface RunProviderRefreshOptions<T> {
   label: string;
   timeoutMs: number;
+  arena?: boolean;
   operation: (context: ProviderRefreshContext) => Promise<T>;
 }
 
@@ -36,6 +42,7 @@ export async function runProviderRefreshWithDeadline<T>(
   options: RunProviderRefreshOptions<T>,
 ): Promise<T> {
   const controller = new AbortController();
+  const startedAt = Date.now();
   const activityCounts = new Map<string, number>();
   let timeoutError: Error | undefined;
 
@@ -59,14 +66,19 @@ export async function runProviderRefreshWithDeadline<T>(
     },
   };
 
-  const timer = setTimeout(() => {
-    const pending = Array.from(activityCounts.keys());
-    const suffix = pending.length > 0 ? `; pending: ${pending.join(", ")}` : "";
-    timeoutError = new Error(
-      `Timed out refreshing ${options.label} after ${options.timeoutMs}ms${suffix}`,
-    );
-    controller.abort(timeoutError);
-  }, options.timeoutMs);
+  const cancelTimeout = arenaUpgradeTimeout({
+    timeoutMs: options.timeoutMs,
+    getUpgrade: () => (options.arena ? getArenaDatabaseUpgrade() : null),
+    subscribe: onArenaDatabaseUpgrade,
+    onTimeout: () => {
+      const pending = Array.from(activityCounts.keys());
+      const suffix = pending.length > 0 ? `; pending: ${pending.join(", ")}` : "";
+      timeoutError = new Error(
+        `Timed out refreshing ${options.label} after ${Date.now() - startedAt}ms${suffix}`,
+      );
+      controller.abort(timeoutError);
+    },
+  });
 
   try {
     const result = await options.operation(context);
@@ -75,6 +87,6 @@ export async function runProviderRefreshWithDeadline<T>(
   } catch (error) {
     throw timeoutError ?? error;
   } finally {
-    clearTimeout(timer);
+    cancelTimeout();
   }
 }

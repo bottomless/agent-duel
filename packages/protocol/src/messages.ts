@@ -3321,7 +3321,14 @@ export const SessionEventsSetSubscriptionRequestSchema = z.object({
 });
 export const SessionEventsSetSubscriptionResponseSchema = z.object({
   type: z.literal("session.events.set_subscription.response"),
-  payload: z.object({ requestId: z.string(), subscriptionId: z.string().optional() }),
+  payload: z.object({
+    requestId: z.string(),
+    subscriptionId: z.string().optional(),
+    arenaDatabaseUpgrade: z
+      .object({ startedAt: z.number(), deadline: z.number() })
+      .nullable()
+      .optional(),
+  }),
 });
 
 export const BrowserHostRegisterRequestSchema = z.object({
@@ -3743,6 +3750,10 @@ const ServerCapabilitiesFromUnknownSchema = z
 export const ServerInfoStatusPayloadSchema = z
   .object({
     status: z.literal("server_info"),
+    arenaDatabaseUpgrade: z
+      .object({ startedAt: z.number(), deadline: z.number() })
+      .nullable()
+      .default(null),
     protocolVersion: z.number().int().optional(),
     serverId: z.string().trim().min(1),
     hostname: ServerInfoHostnameSchema.optional(),
@@ -5262,6 +5273,10 @@ export const DaemonGetStatusResponseSchema = z.object({
   payload: z
     .object({
       requestId: z.string(),
+      arenaDatabaseUpgrade: z
+        .object({ startedAt: z.number(), deadline: z.number() })
+        .nullable()
+        .default(null),
       serverId: z.string(),
       version: z.string().nullable().optional(),
       pid: z.number(),

@@ -3,11 +3,14 @@ import { existsSync } from "node:fs"
 import { chmod, lstat, mkdir, readlink, realpath, rename, rm, stat } from "node:fs/promises"
 import { homedir } from "node:os"
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
+import { fileURLToPath } from "node:url"
 import { Database } from "@opencode/core/database/database"
 import { V1Migration } from "@opencode/core/database/v1-migration"
+import { removeImportedLegacyTables, type CleanupInput } from "./database-cleanup"
+import { engineDatabaseLease } from "./database-lease"
 import { Global } from "@opencode/util/global"
 import { sql } from "drizzle-orm"
-import { Effect, Layer } from "effect"
+import { Effect, Fiber, Layer, Option } from "effect"
 
 /** Holds the databases as 1.x left them; see the accidental-1.x guard in docs/arena.md. */
 export const BACKUP_DIRECTORY = "pre-opencode-2-backup"
@@ -50,7 +53,7 @@ async function canonicalPath(filename: string): Promise<string> {
   })
 }
 
-async function verifyDatabaseOwnership(engineDatabase: string, arena: string) {
+export async function verifyDatabaseOwnership(engineDatabase: string, arena: string) {
   if (engineDatabase === ":memory:") return
   const home = resolve(dirname(arena))
   const database = await canonicalPath(resolve(engineDatabase))
@@ -144,13 +147,66 @@ export async function backUpBeforeUpgrade(input: {
   console.log(`[arena-upgrade] Backed up the 1.x databases to ${directory}`)
 }
 
+// Cleanup and import waiting share the spawn budget, leaving two minutes to finish startup.
+const UPGRADE_DEADLINE = Date.now() - process.uptime() * 1000 + 8 * 60_000
+let engineLease: Awaited<ReturnType<typeof engineDatabaseLease>>
+
 export async function backUpEngineDatabases() {
   const filename = engineDatabaseFilename()
-  await backUpBeforeUpgrade({
+  const input = {
     engineDatabase: filename === ":memory:" || isAbsolute(filename) ? filename : join(Global.Path.data, filename),
     arenaDirectory: arenaDirectory(),
-  })
+  }
+  {
+    using lease = existsSync(input.engineDatabase) ? await engineDatabaseLease(input.engineDatabase) : undefined
+    await backUpBeforeUpgrade(input)
+  }
+  await finishLegacyCleanup(input)
+  // Keep the shared lease until process exit, before any runtime connection opens.
+  engineLease = input.engineDatabase === ":memory:" ? undefined : await engineDatabaseLease(input.engineDatabase)
 }
+
+/** Bound synchronous SQLite work without blocking the engine's main thread or killing its startup. */
+export async function finishLegacyCleanup(input: CleanupInput, timeoutMs = Math.max(0, UPGRADE_DEADLINE - Date.now())) {
+  if (input.engineDatabase === ":memory:" || !existsSync(input.engineDatabase)) return
+  const deadline = Math.min(input.deadline ?? UPGRADE_DEADLINE, Date.now() + timeoutMs, UPGRADE_DEADLINE)
+  if (deadline <= Date.now()) return
+  try {
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        ...(Bun.main.endsWith(".ts") ? ["--no-env-file", fileURLToPath(new URL("../index.ts", import.meta.url))] : []),
+        "--arena-database-cleanup",
+      ],
+      { stdin: "pipe", stdout: "inherit", stderr: "inherit" },
+    )
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      child.stdin.write(JSON.stringify({ ...input, deadline }))
+      child.stdin.end()
+      timer = setTimeout(
+        () => {
+          console.warn("[arena-upgrade] Cleanup startup budget exhausted; startup continues")
+          child.kill("SIGKILL")
+        },
+        Math.max(0, deadline - Date.now()),
+      )
+      const code = await child.exited
+      if (code !== 0)
+        console.warn("[arena-upgrade] Cleanup interrupted; startup continues and a later start will resume")
+    } finally {
+      clearTimeout(timer)
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGKILL")
+        await child.exited
+      }
+    }
+  } catch {
+    console.warn("[arena-upgrade] Could not run cleanup maintenance; startup continues")
+  }
+}
+
+export { removeImportedLegacyTables }
 
 /** Waits for the V1 import, whichever fiber runs it, then makes the database refuse a 1.x engine. */
 export const fenceLegacyEngines = Effect.gen(function* () {
@@ -162,9 +218,34 @@ export const fenceLegacyEngines = Effect.gen(function* () {
   yield* Effect.logInfo("database fenced against 1.x engines")
 })
 
-export const fenceLegacyEnginesLayer = Layer.effectDiscard(
-  fenceLegacyEngines.pipe(
-    Effect.catchCause((cause) => Effect.logError("could not fence the database against 1.x engines", { cause })),
-    Effect.forkScoped({ startImmediately: true }),
-  ),
-)
+/** Timeout only the join: the scoped import keeps its cursor and continues after readiness. */
+export function waitForLegacyImport(
+  options: {
+    readonly deadline?: number
+    readonly log?: (line: string) => void
+  } = {},
+) {
+  return Effect.gen(function* () {
+    const status = yield* V1Migration.status()
+    const fence = fenceLegacyEngines.pipe(
+      Effect.catchCause((cause) => Effect.logError("could not fence the database against 1.x engines", { cause })),
+    )
+    if (status.status === "completed") {
+      yield* fence
+      return
+    }
+    const log = options.log ?? console.log
+    log("[arena-upgrade] Importing OpenCode 1.x chats")
+    const fiber = yield* fence.pipe(Effect.forkScoped({ startImmediately: true }))
+    const remaining = Math.max(0, Math.min(options.deadline ?? UPGRADE_DEADLINE, UPGRADE_DEADLINE) - Date.now())
+    const result = yield* Fiber.join(fiber).pipe(Effect.timeoutOption(remaining))
+    if (Option.isNone(result))
+      log("[arena-upgrade] Import startup budget exhausted; startup continues with import in the background")
+  }).pipe(
+    Effect.catchCause((cause) =>
+      Effect.logError("could not wait for the database import; startup continues", { cause }),
+    ),
+  )
+}
+
+export const fenceLegacyEnginesLayer = Layer.effectDiscard(waitForLegacyImport())

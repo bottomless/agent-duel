@@ -242,7 +242,7 @@ describe("ensureAgentIsInitialized", () => {
     });
 
     vi.advanceTimersByTime(64_999);
-    refreshAgentInitializationTimeout({ key, agentId, setAgentInitializing });
+    refreshAgentInitializationTimeout({ key, serverId, agentId, setAgentInitializing });
 
     vi.advanceTimersByTime(1);
     expect(getInitDeferred(key)).toBeDefined();

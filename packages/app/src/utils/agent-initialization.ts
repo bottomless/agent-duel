@@ -1,8 +1,10 @@
+import { arenaUpgradeTimeout } from "@getpaseo/protocol/arena-upgrade";
+
 export interface DeferredInit {
   promise: Promise<void>;
   resolve: () => void;
   reject: (error: Error) => void;
-  timeoutId: ReturnType<typeof setTimeout> | null;
+  cancelTimeout: (() => void) | null;
   requestDirection: "tail" | "after";
 }
 
@@ -30,7 +32,7 @@ export function createInitDeferred(key: string, requestDirection: "tail" | "afte
     promise,
     resolve,
     reject,
-    timeoutId: null,
+    cancelTimeout: null,
     requestDirection,
   };
   initPromises.set(key, deferred);
@@ -41,17 +43,17 @@ export function refreshInitTimeout(input: {
   key: string;
   onTimeout: () => void;
   timeoutMs?: number;
+  upgrade?: Pick<Parameters<typeof arenaUpgradeTimeout>[0], "getUpgrade" | "subscribe">;
 }): void {
-  const timeoutId = setTimeout(input.onTimeout, input.timeoutMs ?? INIT_TIMEOUT_MS);
   const deferred = initPromises.get(input.key);
-  if (!deferred) {
-    clearTimeout(timeoutId);
-    return;
-  }
-  if (deferred.timeoutId) {
-    clearTimeout(deferred.timeoutId);
-  }
-  deferred.timeoutId = timeoutId;
+  if (!deferred) return;
+  deferred.cancelTimeout?.();
+  deferred.cancelTimeout = arenaUpgradeTimeout({
+    timeoutMs: input.timeoutMs ?? INIT_TIMEOUT_MS,
+    onTimeout: input.onTimeout,
+    getUpgrade: input.upgrade?.getUpgrade ?? (() => null),
+    subscribe: input.upgrade?.subscribe ?? (() => () => undefined),
+  });
 }
 
 export function resolveInitDeferred(key: string): void {
@@ -59,9 +61,7 @@ export function resolveInitDeferred(key: string): void {
   if (!deferred) {
     return;
   }
-  if (deferred.timeoutId) {
-    clearTimeout(deferred.timeoutId);
-  }
+  deferred.cancelTimeout?.();
   initPromises.delete(key);
   deferred.resolve();
 }
@@ -71,9 +71,7 @@ export function rejectInitDeferred(key: string, error: Error): void {
   if (!deferred) {
     return;
   }
-  if (deferred.timeoutId) {
-    clearTimeout(deferred.timeoutId);
-  }
+  deferred.cancelTimeout?.();
   initPromises.delete(key);
   deferred.reject(error);
 }

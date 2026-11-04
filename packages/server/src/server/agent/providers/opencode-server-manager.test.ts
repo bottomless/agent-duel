@@ -28,6 +28,7 @@ import {
   type OpenCodePortAllocator,
   type OpenCodeServerProcessSpawner,
 } from "./opencode/server-manager.js";
+import { getArenaDatabaseUpgrade } from "./opencode/arena-upgrade.js";
 import { resolveEngineLogPath } from "./opencode/paths.js";
 import { createArenaByokService } from "../../accounts/byok.js";
 import { clearArenaCredentials, installArenaCredentials } from "../../accounts/credentials.js";
@@ -713,6 +714,191 @@ describe("OpenCodeServerManager generations", () => {
 
     expect(runtime.terminatedPorts).toEqual([4451]);
   });
+
+  test("chunked Arena upgrade output extends from spawn, stays through import, and shares retries", async () => {
+    vi.useFakeTimers();
+    installArenaCredentials({ mode: "byok", openRouterApiKey: "test-key" });
+    const { manager, runtime } = createTestManager([4480], {
+      autoAnnounce: false,
+      launchKind: "arena-source",
+    });
+    const first = manager.acquireCurrent();
+    await vi.advanceTimersByTimeAsync(0);
+    const child = runtime.processForPort(4480);
+    await vi.advanceTimersByTimeAsync(20_000);
+    child.stdout.emit("data", Buffer.from("x".repeat(9000) + "\n[arena-upgrade] Backing up data"));
+    child.stdout.emit("data", Buffer.from("bases before OpenCode 2.0\n"));
+    expect(getArenaDatabaseUpgrade()?.deadline).toBe(Date.now() + 580_000);
+    const retry = manager.acquireNew();
+    const second = manager.acquireCurrent();
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(runtime.terminatedPorts).toEqual([]);
+    child.stdout.emit(
+      "data",
+      Buffer.from("[arena-upgrade] Backed up the 1.x databases to /scratch\n"),
+    );
+    const deadline = getArenaDatabaseUpgrade()?.deadline;
+    child.stdout.emit("data", Buffer.from("[arena-upgrade] Importing OpenCode 1.x chats\n"));
+    expect(getArenaDatabaseUpgrade()?.deadline).toBe(deadline);
+    await vi.advanceTimersByTimeAsync(559_999);
+    expect(runtime.spawnCalls).toHaveLength(1);
+    expect(runtime.terminatedPorts).toEqual([]);
+    child.stdout.emit("data", Buffer.from("listen"));
+    child.stdout.emit("data", Buffer.from("ing on"));
+    const acquisitions = await Promise.all([first, retry, second]);
+    expect(getArenaDatabaseUpgrade()).toBeNull();
+    expect(acquisitions.map((item) => item.server.port)).toEqual([4480, 4480, 4480]);
+    await Promise.all(acquisitions.map((item) => item.release()));
+  });
+
+  test.each([false, true])(
+    "resumed import extends from spawn without a backup line, ready=%s",
+    async (ready) => {
+      vi.useFakeTimers();
+      installArenaCredentials({ mode: "byok", openRouterApiKey: "test-key" });
+      const { manager, runtime } = createTestManager([4480], {
+        autoAnnounce: false,
+        launchKind: "arena-source",
+      });
+      const startedAt = Date.now();
+      const pending = manager.acquireCurrent();
+      const result = pending.then(
+        (value) => value,
+        (error: unknown) => error,
+      );
+      await vi.advanceTimersByTimeAsync(20_000);
+      const child = runtime.processForPort(4480);
+      child.stdout.emit("data", Buffer.from("noise\n[arena-upgrade] Importing Open"));
+      child.stdout.emit("data", Buffer.from("Code 1.x chats\n"));
+      expect(getArenaDatabaseUpgrade()).toEqual({ startedAt, deadline: startedAt + 600_000 });
+      await vi.advanceTimersByTimeAsync(579_999);
+      expect(runtime.terminatedPorts).toEqual([]);
+      expect(getArenaDatabaseUpgrade()?.deadline).toBe(startedAt + 600_000);
+      if (ready) {
+        child.stdout.emit("data", Buffer.from("listening on"));
+        const acquired = await pending;
+        await acquired.release();
+      } else {
+        await vi.advanceTimersByTimeAsync(1);
+        expect(await result).toEqual(
+          expect.objectContaining({
+            message: expect.stringContaining("10-minute database upgrade limit"),
+          }),
+        );
+        expect(runtime.terminatedPorts).toEqual([4480]);
+      }
+      expect(getArenaDatabaseUpgrade()).toBeNull();
+    },
+  );
+
+  test("cleanup receives the same upgrade deadline and clears status at readiness", async () => {
+    vi.useFakeTimers();
+    installArenaCredentials({ mode: "byok", openRouterApiKey: "test-key" });
+    const { manager, runtime } = createTestManager([4480], {
+      autoAnnounce: false,
+      launchKind: "arena-source",
+    });
+    const pending = manager.acquireCurrent();
+    await vi.advanceTimersByTimeAsync(0);
+    const child = runtime.processForPort(4480);
+    const startedAt = Date.now();
+    child.stdout.emit("data", Buffer.from("[arena-upgrade] Removing imported OpenCode 1."));
+    child.stdout.emit("data", Buffer.from("x tables\n"));
+    expect(getArenaDatabaseUpgrade()).toEqual({ startedAt, deadline: startedAt + 600_000 });
+    await vi.advanceTimersByTimeAsync(480_000);
+    expect(runtime.terminatedPorts).toEqual([]);
+    child.stdout.emit("data", Buffer.from("listening on"));
+    const acquired = await pending;
+    expect(getArenaDatabaseUpgrade()).toBeNull();
+    await acquired.release();
+  });
+
+  test("dedicated starts wait for an ongoing upgrade before spawning", async () => {
+    vi.useFakeTimers();
+    installArenaCredentials({ mode: "byok", openRouterApiKey: "test-key" });
+    const { manager, runtime } = createTestManager([4483, 4484], {
+      autoAnnounce: false,
+      launchKind: "arena-source",
+    });
+    const first = manager.acquireCurrent();
+    await vi.advanceTimersByTimeAsync(0);
+    runtime
+      .processForPort(4483)
+      .stdout.emit(
+        "data",
+        Buffer.from("[arena-upgrade] Backing up databases before OpenCode 2.0\n"),
+      );
+    const dedicated = manager.acquireDedicated({ PROFILE: "other" });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(runtime.spawnCalls).toHaveLength(1);
+    runtime.processForPort(4483).announceListening();
+    const current = await first;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(runtime.spawnCalls).toHaveLength(2);
+    runtime.processForPort(4484).announceListening();
+    const second = await dedicated;
+    await second.release();
+    await current.release();
+  });
+
+  test.each([false, true])(
+    "a hung Arena upgrade is killed at ten minutes, import=%s",
+    async (importing) => {
+      vi.useFakeTimers();
+      installArenaCredentials({ mode: "byok", openRouterApiKey: "test-key" });
+      const { manager, runtime } = createTestManager([4481], {
+        autoAnnounce: false,
+        launchKind: "arena-binary",
+      });
+      const acquisition = manager.acquireCurrent();
+      const failure = expect(acquisition).rejects.toThrow("10-minute database upgrade limit");
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(10_000);
+      const child = runtime.processForPort(4481);
+      child.stdout.emit(
+        "data",
+        Buffer.from("[arena-upgrade] Backing up databases before OpenCode 2.0\n"),
+      );
+      if (importing)
+        child.stdout.emit(
+          "data",
+          Buffer.from(
+            "[arena-upgrade] Backed up the 1.x databases to /scratch\n" + "z".repeat(9000),
+          ),
+        );
+      await vi.advanceTimersByTimeAsync(589_999);
+      expect(runtime.terminatedPorts).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+      await failure;
+      expect(runtime.terminatedPorts).toEqual([4481]);
+      expect(getArenaDatabaseUpgrade()).toBeNull();
+      expect(await runtime.managedProcesses.list()).toEqual([]);
+    },
+  );
+
+  test.each(["arena-source", undefined] as const)(
+    "keeps thirty seconds without an Arena backup signal: %s",
+    async (launchKind) => {
+      vi.useFakeTimers();
+      installArenaCredentials({ mode: "byok", openRouterApiKey: "test-key" });
+      const { manager, runtime } = createTestManager([4482], { autoAnnounce: false, launchKind });
+      const acquisition = manager.acquireCurrent();
+      const failure = expect(acquisition).rejects.toThrow("OpenCode server startup timeout");
+      await vi.advanceTimersByTimeAsync(0);
+      if (!launchKind)
+        runtime
+          .processForPort(4482)
+          .stdout.emit(
+            "data",
+            Buffer.from("[arena-upgrade] Backing up databases before OpenCode 2.0\n"),
+          );
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(runtime.terminatedPorts).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+      await failure;
+      expect(runtime.terminatedPorts).toEqual([4482]);
+    },
+  );
 
   test("startup timeout kills the spawned server and removes its managed-process record", async () => {
     vi.useFakeTimers();

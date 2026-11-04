@@ -1,4 +1,5 @@
 import type { ArenaActivity } from "@getpaseo/protocol/arena/activity";
+import { arenaUpgradeTimeout, waitsForArenaEngine } from "@getpaseo/protocol/arena-upgrade";
 import type { ArenaStreamTarget, ArenaStreamPacket } from "@getpaseo/protocol/arena/stream";
 import {
   HOST_ROUTE_OPCODE,
@@ -2140,6 +2141,8 @@ export class DaemonClient {
   }): Promise<T> {
     const wire = this.owned.prepareRequest(params.message);
     const timeout = params.timeout ?? DEFAULT_SESSION_RPC_TIMEOUT_MS;
+    const requestStartedAt = Date.now();
+    const upgradeAware = timeout > 0 && waitsForArenaEngine(params.message.type);
     const { promise, cancel } = this.waitForWithCancel<RpcWaitResult<T>>(
       (msg) => {
         if (msg.type === "rpc_error" && msg.payload.requestId === params.requestId) {
@@ -2160,16 +2163,46 @@ export class DaemonClient {
         }
         return { kind: "ok", value };
       },
-      timeout,
+      upgradeAware ? 0 : timeout,
       { ...params.options, requestId: params.requestId },
     );
+    const cancelUpgradeTimeout = upgradeAware
+      ? arenaUpgradeTimeout({
+          timeoutMs: timeout,
+          getUpgrade: () => this.lastServerInfoMessage?.arenaDatabaseUpgrade ?? null,
+          subscribe: (listener) => this.on("status", listener),
+          onTimeout: () =>
+            cancel(
+              new DaemonConnectionError(
+                `Timeout waiting for message (${Date.now() - requestStartedAt}ms)`,
+                "DAEMON_REQUEST_TIMEOUT",
+              ),
+            ),
+        })
+      : undefined;
 
+    let releaseUpgradeStatus: (() => void) | undefined;
     try {
       await this.sendSessionMessageOrThrow(wire.message);
+      if (upgradeAware) {
+        const status = this.observeEvents(["status.server_info"]);
+        const unsubscribe = status.subscribe({
+          snapshot: () => undefined,
+          update: () => undefined,
+        });
+        releaseUpgradeStatus = () => {
+          unsubscribe();
+          void status
+            .release()
+            .catch((error) => this.logger.warn({ error }, "Failed to release upgrade status"));
+        };
+      }
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
       cancel(err);
       void promise.catch(() => undefined);
+      cancelUpgradeTimeout?.();
+      releaseUpgradeStatus?.();
       throw err;
     }
 
@@ -2178,6 +2211,8 @@ export class DaemonClient {
       if (result.kind === "error") throw result.error;
       return result.value;
     } finally {
+      cancelUpgradeTimeout?.();
+      releaseUpgradeStatus?.();
       await wire.finish();
     }
   }
@@ -2898,6 +2933,23 @@ export class DaemonClient {
                   requestType: message.type,
                   error: payload.error,
                 });
+              if (
+                responseType === "session.events.set_subscription.response" &&
+                this.lastServerInfoMessage
+              ) {
+                const status =
+                  payload as CorrelatedResponsePayload<"session.events.set_subscription.response">;
+                if (status.arenaDatabaseUpgrade !== undefined) {
+                  // Snapshot closes the gap between hello and registering the status feed.
+                  this.deliverSessionMessage({
+                    type: "status",
+                    payload: {
+                      ...this.lastServerInfoMessage,
+                      arenaDatabaseUpgrade: status.arenaDatabaseUpgrade,
+                    },
+                  });
+                }
+              }
               accept(payload);
               return payload;
             },

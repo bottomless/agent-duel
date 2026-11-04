@@ -1,3 +1,4 @@
+import { setArenaDatabaseUpgrade } from "../../agent/providers/opencode/arena-upgrade.js";
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -145,6 +146,7 @@ describe("DaemonSession", () => {
         type: "daemon.get_status.response",
         payload: {
           requestId: "s-1",
+          arenaDatabaseUpgrade: null,
           serverId: "srv-1",
           version: "1.2.3",
           pid: process.pid,
@@ -178,6 +180,7 @@ describe("DaemonSession", () => {
         type: "daemon.get_status.response",
         payload: {
           requestId: "s-2",
+          arenaDatabaseUpgrade: null,
           serverId: "srv-1",
           version: "1.2.3",
           pid: process.pid,
@@ -468,4 +471,26 @@ describe("DaemonSession", () => {
     );
     expect(message.payload.diagnostic).toContain("Agent lifecycle: idle=8, running=2");
   });
+});
+
+test("daemon status reports an upgrade without waiting for engine readiness, and clears it", async () => {
+  const owner = {};
+  const { subsystem, emitted } = makeSubsystem({});
+  const upgrade = { startedAt: 0, deadline: 600_000 };
+  try {
+    setArenaDatabaseUpgrade(owner, upgrade);
+    await subsystem.handleGetStatusRequest({
+      type: "daemon.get_status.request",
+      requestId: "upgrade",
+    });
+    expect(emitted.at(-1)).toMatchObject({ payload: { arenaDatabaseUpgrade: upgrade } });
+    setArenaDatabaseUpgrade(owner, null);
+    await subsystem.handleGetStatusRequest({
+      type: "daemon.get_status.request",
+      requestId: "ready",
+    });
+    expect(emitted.at(-1)).toMatchObject({ payload: { arenaDatabaseUpgrade: null } });
+  } finally {
+    setArenaDatabaseUpgrade(owner, null);
+  }
 });

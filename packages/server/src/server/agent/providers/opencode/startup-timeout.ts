@@ -1,13 +1,16 @@
-/** The backup runs before import and emits these lines at its start and successful completion. */
-export function openCodeStartupTimeoutMessage(arena: boolean, stdout: string): string {
-  if (
-    arena &&
-    stdout.includes("[arena-upgrade] Backing up databases before OpenCode 2.0\n") &&
-    !stdout.includes("[arena-upgrade] Backed up the 1.x databases to ")
-  ) {
+export const ARENA_DATABASE_UPGRADE_TIMEOUT_MS = 10 * 60_000;
+
+export function hasArenaDatabaseUpgradeLine(stdout: string): boolean {
+  return /(?:^|\n)\[arena-upgrade\] (?:Backing up databases before OpenCode 2\.0|Importing OpenCode 1\.x chats|Removing imported OpenCode 1\.x tables)\r?\n/.test(
+    stdout,
+  );
+}
+
+export function openCodeStartupTimeoutMessage(upgrading: boolean): string {
+  if (upgrading) {
     return (
-      "Arena's pre-upgrade database backup did not report completion within the 30-second engine startup limit. " +
-      "Startup was stopped. A complete backup is required to upgrade; do not skip it."
+      "Arena did not finish starting within the 10-minute database upgrade limit. " +
+      "Startup was stopped during database backup, import or cleanup. A complete backup is required to upgrade; do not skip it."
     );
   }
   return "OpenCode server startup timeout";

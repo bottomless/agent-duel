@@ -21,12 +21,19 @@ export function createHistorySyncTimeoutError(): Error {
 }
 
 export function refreshAgentInitializationTimeout(input: {
+  serverId: string;
   key: string;
   agentId: string;
   setAgentInitializing: SetAgentInitializing;
 }): void {
   refreshInitTimeout({
     key: input.key,
+    upgrade: {
+      getUpgrade: () =>
+        useSessionStore.getState().sessions[input.serverId]?.serverInfo?.arenaDatabaseUpgrade ??
+        null,
+      subscribe: (listener) => useSessionStore.subscribe(listener),
+    },
     onTimeout: () => {
       input.setAgentInitializing(input.agentId, false);
       rejectInitDeferred(input.key, createHistorySyncTimeoutError());
@@ -57,7 +64,7 @@ export function ensureAgentIsInitialized(input: EnsureAgentIsInitializedInput): 
   );
 
   const deferred = createInitDeferred(key, timelineRequest.direction);
-  refreshAgentInitializationTimeout({ key, agentId, setAgentInitializing });
+  refreshAgentInitializationTimeout({ key, serverId, agentId, setAgentInitializing });
 
   setAgentInitializing(agentId, true);
 

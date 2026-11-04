@@ -189,6 +189,7 @@ class FakeDaemonClient {
     if (this.daemonVersion === null) return null;
     return {
       status: "server_info",
+      arenaDatabaseUpgrade: null,
       serverId: "srv_test",
       hostname: "test",
       version: this.daemonVersion,
