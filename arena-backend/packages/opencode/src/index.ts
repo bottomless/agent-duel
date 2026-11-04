@@ -1,3 +1,16 @@
+// Maintenance runs before any engine, routes, credentials, or battle services are initialized.
+if (Bun.argv[2] === "--arena-database-cleanup") {
+  try {
+    const { removeImportedLegacyTables, verifyDatabaseOwnership } = await import("./arena/database-upgrade")
+    const input = JSON.parse(await Bun.stdin.text())
+    await verifyDatabaseOwnership(input.engineDatabase, input.arenaDirectory)
+    await removeImportedLegacyTables(input)
+  } catch {
+    console.warn("[arena-upgrade] Could not finish legacy cleanup; keeping recoverable state and continuing startup")
+  }
+  process.exit(0)
+}
+
 const args = Bun.argv.slice(2)
 
 function option(name: string) {

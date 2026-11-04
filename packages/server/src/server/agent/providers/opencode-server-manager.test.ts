@@ -748,6 +748,28 @@ describe("OpenCodeServerManager generations", () => {
     await Promise.all(acquisitions.map((item) => item.release()));
   });
 
+  test("cleanup receives the same upgrade deadline and clears status at readiness", async () => {
+    vi.useFakeTimers();
+    installArenaCredentials({ mode: "byok", openRouterApiKey: "test-key" });
+    const { manager, runtime } = createTestManager([4480], {
+      autoAnnounce: false,
+      launchKind: "arena-source",
+    });
+    const pending = manager.acquireCurrent();
+    await vi.advanceTimersByTimeAsync(0);
+    const child = runtime.processForPort(4480);
+    const startedAt = Date.now();
+    child.stdout.emit("data", Buffer.from("[arena-upgrade] Removing imported OpenCode 1."));
+    child.stdout.emit("data", Buffer.from("x tables\n"));
+    expect(getArenaDatabaseUpgrade()).toEqual({ startedAt, deadline: startedAt + 600_000 });
+    await vi.advanceTimersByTimeAsync(480_000);
+    expect(runtime.terminatedPorts).toEqual([]);
+    child.stdout.emit("data", Buffer.from("listening on"));
+    const acquired = await pending;
+    expect(getArenaDatabaseUpgrade()).toBeNull();
+    await acquired.release();
+  });
+
   test("dedicated starts wait for an ongoing upgrade before spawning", async () => {
     vi.useFakeTimers();
     installArenaCredentials({ mode: "byok", openRouterApiKey: "test-key" });

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import type { WorkspaceDescriptorPayload } from "@getpaseo/protocol/messages";
@@ -11,6 +11,8 @@ import {
   type Agent,
   type WorkspaceDescriptor,
 } from "./session-store";
+import { databaseUpgradeNotice } from "@/utils/database-upgrade-notice";
+import { arenaUpgradeTimeout } from "@getpaseo/protocol/arena-upgrade";
 import type { StreamItem } from "../types/stream";
 import { reduceTurnLiveness, type TurnLivenessTransition } from "@/timeline/turn-liveness";
 
@@ -821,5 +823,62 @@ describe("removeWorkspace", () => {
     expect(after.sessions).toBe(before.sessions);
     expect(after.session).toBe(before.session);
     expect(after.workspaces).toBe(before.workspaces);
+  });
+});
+
+describe("stored database upgrade status", () => {
+  it("publishes status-only changes, extends the stored-field timeout and clears the notice", async () => {
+    vi.useFakeTimers();
+    initializeTestSession();
+    const store = useSessionStore;
+    const info = { serverId: "test-server", hostname: "host", version: "2" };
+    store.getState().updateSessionServerInfo("test-server", info);
+    const initial = store.getState().sessions["test-server"];
+    let timedOut = false;
+    const cancel = arenaUpgradeTimeout({
+      timeoutMs: 30_000,
+      getUpgrade: () =>
+        store.getState().sessions["test-server"].serverInfo?.arenaDatabaseUpgrade ?? null,
+      subscribe: (listener) => store.subscribe(listener),
+      onTimeout: () => {
+        timedOut = true;
+      },
+    });
+    try {
+      const upgrade = { startedAt: Date.now(), deadline: Date.now() + 600_000 };
+      store
+        .getState()
+        .updateSessionServerInfo("test-server", { ...info, arenaDatabaseUpgrade: upgrade });
+      const active = store.getState().sessions["test-server"];
+      expect(active).not.toBe(initial);
+      expect(active.serverInfo?.arenaDatabaseUpgrade).toEqual(upgrade);
+      expect(databaseUpgradeNotice([active])).toBe(
+        "Upgrading your database. This can take a few minutes.",
+      );
+      store
+        .getState()
+        .updateSessionServerInfo("test-server", { ...info, arenaDatabaseUpgrade: { ...upgrade } });
+      expect(store.getState().sessions["test-server"]).toBe(active);
+      const extended = { ...upgrade, deadline: upgrade.deadline + 1_000 };
+      store
+        .getState()
+        .updateSessionServerInfo("test-server", { ...info, arenaDatabaseUpgrade: extended });
+      expect(store.getState().sessions["test-server"].serverInfo?.arenaDatabaseUpgrade).toEqual(
+        extended,
+      );
+      await vi.advanceTimersByTimeAsync(31_000);
+      expect(timedOut).toBe(false);
+      store
+        .getState()
+        .updateSessionServerInfo("test-server", { ...info, arenaDatabaseUpgrade: null });
+      const ready = store.getState().sessions["test-server"];
+      expect(ready.serverInfo?.arenaDatabaseUpgrade).toBeNull();
+      expect(databaseUpgradeNotice([ready])).toBeNull();
+      await vi.advanceTimersByTimeAsync(600_000);
+      expect(timedOut).toBe(true);
+    } finally {
+      cancel();
+      vi.useRealTimers();
+    }
   });
 });
