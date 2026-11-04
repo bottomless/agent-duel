@@ -59,7 +59,11 @@ import { type SidebarGroupMode, useSidebarViewStore } from "@/stores/sidebar-vie
 import { useKeyboardShortcutsStore } from "@/stores/keyboard-shortcuts-store";
 import { usePanelStore } from "@/stores/panel-store";
 import { useWorkspaceLayoutStore } from "@/stores/workspace-layout-store";
-import { useOwnsWindowChromeCorner, WindowChromeSafeArea } from "@/utils/desktop-window";
+import {
+  useHasOwnedWindowChromeObstruction,
+  useOwnsWindowChromeCorner,
+  WindowChromeSafeArea,
+} from "@/utils/desktop-window";
 import { useCloseAgentListGesture } from "@/mobile-panels/gestures";
 import { MobilePanelOverlay } from "@/mobile-panels/presentation";
 import { useIsMobilePanelPresented } from "@/mobile-panels/provider";
@@ -592,6 +596,11 @@ function MobileSidebar({
     () => [styles.mobileCloseButtonRow, getIsElectron() && styles.mobileCloseButtonRowElectron],
     [],
   );
+  // On desktop the close button sits in the window controls' row, so the slot below that row
+  // would stay empty.
+  const hasTopLeftChrome = useHasOwnedWindowChromeObstruction("top-left");
+  const hasTopRightChrome = useHasOwnedWindowChromeObstruction("top-right");
+  const closeButtonInChromeRow = getIsElectron() && (hasTopLeftChrome || hasTopRightChrome);
 
   return (
     <MobilePanelOverlay
@@ -601,10 +610,14 @@ function MobileSidebar({
     >
       <View style={styles.sidebarContent} pointerEvents="auto" testID="left-sidebar">
         <WindowChromeSafeArea placement="below" />
-        {/* Holds the overlay's close button, which sits over it. */}
-        <View style={styles.sidebarHeaderGroup}>
-          <View style={styles.mobileCloseButtonSlot} />
-        </View>
+        {closeButtonInChromeRow ? (
+          <View style={styles.sidebarHeaderDivider} />
+        ) : (
+          // Holds the overlay's close button, which sits over it.
+          <View style={styles.sidebarHeaderGroup}>
+            <View style={styles.mobileCloseButtonSlot} />
+          </View>
+        )}
         <WindowChromeSafeArea placement="inline" style={closeButtonRowStyle}>
           <Pressable
             style={styles.mobileCloseButton}
@@ -1011,6 +1024,10 @@ const styles = StyleSheet.create((theme) => ({
   },
   mobileCloseButtonSlot: {
     height: 36,
+  },
+  sidebarHeaderDivider: {
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.border,
   },
   sidebarTopInset: {
     paddingTop: theme.spacing[2],
