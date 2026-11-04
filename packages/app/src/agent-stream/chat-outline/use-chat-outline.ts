@@ -61,8 +61,10 @@ export function useChatOutline({
   const loadedItems = useMemo(() => [...tail, ...(head ?? NO_STREAM_ITEMS)], [head, tail]);
   const prompts = enabled ? (index?.prompts ?? NO_PROMPTS) : NO_PROMPTS;
 
+  // Only a timeline the daemon has served can be indexed. A draft's optimistic stream has no
+  // epoch, and its id names no agent the daemon knows.
   useEffect(() => {
-    if (!isWeb || !enabled) {
+    if (!isWeb || !enabled || timelineEpoch === null) {
       setIndex(null);
       return;
     }
