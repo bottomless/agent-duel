@@ -25,6 +25,8 @@ export type ArenaContext = {
   readonly metadataRateLimit?: MetadataRateLimit
   /** Heartbeats and replayable responses on contestant streams (`stream-recovery.ts`). */
   readonly streamRecovery: boolean
+  /** Keeps each battle call's request and response (`generation-capture.ts`). */
+  readonly captureGenerations: boolean
 }
 
 type Failure = (message: string, status: number) => Response
