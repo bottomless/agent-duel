@@ -41,6 +41,13 @@ export type ArenaServiceOptions = {
    * no network between it and the engine and turns it off.
    */
   readonly streamRecovery?: boolean
+  /**
+   * Keeps every battle call's request as OpenRouter received it and its raw response
+   * (`generation-capture.ts`). Off by default: only the control plane turns it on. A BYOK service
+   * stores into the voter's own machine, where the real model, tool ids and reasoning would unblind
+   * the battle.
+   */
+  readonly captureGenerations?: boolean
 }
 
 export type ArenaService = {
@@ -75,6 +82,7 @@ export function createArenaService(options: ArenaServiceOptions): ArenaService {
     metadataRateLimit:
       options.metadataRateLimit === null ? undefined : (options.metadataRateLimit ?? defaultMetadataRateLimit),
     streamRecovery: options.streamRecovery ?? true,
+    captureGenerations: options.captureGenerations ?? false,
   }
   const assignments = (request: Request) => handleAssignmentsRequest(request, context)
   const openrouter = (request: Request) => handleOpenRouterRequest(request, context)
