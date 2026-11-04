@@ -30,6 +30,7 @@ import { SessionRunnerRetry } from "./retry.js"
 import { SessionStep } from "./step.js"
 import { ToolOutput } from "../../tool-output.js"
 import { Plugin } from "../../plugin.js"
+import { PluginHooks } from "../../plugin/hooks.js"
 import { MAX_STEPS_PROMPT } from "./max-steps.js"
 
 const CONTINUE_AFTER_INCOMPLETE_STREAM =
@@ -49,6 +50,7 @@ const layer = Layer.effect(
     const db = (yield* Database.Service).db
     const compaction = yield* SessionCompaction.Service
     const plugins = yield* Plugin.Service
+    const hooks = yield* PluginHooks.Service
     const title = yield* SessionTitle.Service
     const steps = yield* SessionStep.make
     // Title generation starts once input is visible and must not delay model execution.
@@ -305,19 +307,42 @@ const layer = Layer.effect(
         })
         const completed = yield* SessionStep.Outcome.$match(outcome, {
           Completed: (outcome) => Effect.succeed(outcome.needsContinuation),
-          Retry: (outcome) =>
-            retry.wait({
+          Retry: Effect.fnUntraced(function* (outcome) {
+            yield* retry.wait({
               decision: outcome.decision,
               error: outcome.error,
               assistantMessageID,
-            }),
+            })
+            // Agent Duel vendor patch: an idle attempt with no output can request a fresh reply.
+            const continuation = yield* hooks.trigger("session", "continuation", {
+              sessionID,
+              model: loaded.model.ref,
+              error: outcome.error,
+              message: (yield* store.message(assistantMessageID))?.message,
+            })
+            if (!continuation.text) return
+            yield* bus.publish(SessionEvent.Step.Failed, { sessionID, assistantMessageID, error: outcome.error })
+            yield* bus.publish(SessionEvent.Synthetic, { sessionID, text: continuation.text })
+            assistantMessageID = SessionMessage.ID.create()
+          }),
           Continue: Effect.fnUntraced(function* (outcome) {
             yield* retry.wait({
               decision: outcome.decision,
               error: outcome.error,
               assistantMessageID,
             })
-            yield* bus.publish(SessionEvent.Synthetic, { sessionID, text: CONTINUE_AFTER_INCOMPLETE_STREAM })
+            // Agent Duel vendor patch: a reasoning-only stall has no partial reply to continue.
+            const continuation = yield* hooks.trigger("session", "continuation", {
+              sessionID,
+              model: loaded.model.ref,
+              error: outcome.error,
+              message: (yield* store.message(assistantMessageID))?.message,
+              text: CONTINUE_AFTER_INCOMPLETE_STREAM,
+            })
+            yield* bus.publish(SessionEvent.Synthetic, {
+              sessionID,
+              text: continuation.text ?? CONTINUE_AFTER_INCOMPLETE_STREAM,
+            })
             assistantMessageID = SessionMessage.ID.create()
           }),
           OutputLimit: Effect.fn("SessionRunner.continueOutputLimit")(function* (outcome) {
@@ -433,6 +458,7 @@ export const node = makeLocationNode({
     SessionStore.node,
     SessionCompaction.node,
     Plugin.node,
+    PluginHooks.node,
     SessionTitle.node,
     Snapshot.node,
     ToolOutput.node,

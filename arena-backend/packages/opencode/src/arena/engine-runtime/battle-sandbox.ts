@@ -1,9 +1,11 @@
 import path from "node:path"
+import { statSync } from "node:fs"
 import { Permission } from "@opencode/core/permission"
 import { Tool } from "@opencode/schema/tool"
 import { Patch } from "@opencode/util/patch"
 import { Global } from "@opencode/util/global"
 import { Effect, Result } from "effect"
+import { LOCAL_STATE_DIRNAME } from "@/worktree/layout"
 import { resolveExistingPrefix, shellPaths } from "./outside-project"
 
 function contains(root: string, target: string) {
@@ -20,13 +22,6 @@ export function battlePathDenial(
 ): string | undefined {
   const absolute = path.isAbsolute(target) ? target : `${directory}/${target}`
   const resolved = resolveExistingPrefix(absolute)
-  const blocked = [absolute, resolved].some(
-    (file) => Permission.evaluate("external_directory", path.join(file, "*"), rules).effect === "deny",
-  )
-  if (blocked) return "Arena contestants cannot access other Arena worktrees or another side's temp directory."
-  if (operation === "read") return
-  if (/^\/dev\/(?:null|std(?:in|out|err)|fd\/\d+)$/.test(resolved)) return
-
   // Only the sandbox's final reopen rules grant writes. Inherited edit allows cannot widen it.
   const start = rules.findLastIndex((rule) => rule.action === "external_directory" && rule.resource === "*")
   const own = rules
@@ -38,7 +33,31 @@ export function battlePathDenial(
         path.isAbsolute(rule.resource) &&
         rule.resource.endsWith("/*"),
     )
-  if (own.some((rule) => contains(resolveExistingPrefix(rule.resource.slice(0, -2)), resolved))) return
+    .map((rule) => resolveExistingPrefix(rule.resource.slice(0, -2)))
+  const blocked = [absolute, resolved].some(
+    (file) => Permission.evaluate("external_directory", path.join(file, "*"), rules).effect === "deny",
+  )
+  if (blocked) {
+    // A file beside our worktree is in the battle folder, not in another contestant's area.
+    const battleFolder = [path.resolve(absolute), resolved].every((file) =>
+      own.some(
+        (root) =>
+          root.split(path.sep).includes(LOCAL_STATE_DIRNAME) &&
+          (contains(file, root) ||
+            (contains(path.dirname(file), root) &&
+              !target.endsWith(path.sep) &&
+              statSync(file, { throwIfNoEntry: false })?.isDirectory() !== true &&
+              !file.endsWith(".git"))),
+      ),
+    )
+    if (battleFolder)
+      return `Arena contestants cannot ${operation} ${target} in the battle folder. Write only in your own worktree or your own $TMPDIR.`
+    return "Arena contestants cannot access other Arena worktrees or another side's temp directory."
+  }
+  if (operation === "read") return
+  if (/^\/dev\/(?:null|std(?:in|out|err)|fd\/\d+)$/.test(resolved)) return
+
+  if (own.some((root) => contains(root, resolved))) return
   return "Arena contestants can read the main checkout but write only in their own worktree and their own $TMPDIR."
 }
 

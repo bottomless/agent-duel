@@ -95,9 +95,6 @@ export function promptCacheKey(sessionID: string) {
   return /^ses_[0-9a-f]{64}$/.test(sessionID) ? sessionID.slice(4) : sessionID
 }
 
-/** Fallback for a control plane that does not answer with a model-specific compaction refusal. */
-export const REQUEST_TOKEN_LIMIT = 272_000
-
 const MEDIA_TOKENS = 4_000
 
 const DATA_URI = /^data:[^,]*;base64,/i
@@ -141,7 +138,13 @@ function stripMedia(value: unknown): { readonly value: unknown; readonly media: 
   let media = payload ? 1 : 0
   const result: Record<string, unknown> = {}
   for (const [key, item] of Object.entries(source)) {
+    // Sealed replay state is duplicated across parts, not model-visible prompt content.
+    if (["providerState", "providerResultState", "providerMetadata", "providerOptions"].includes(key)) continue
     if (payload?.has(key)) continue
+    if (key === "input" || key === "arguments" || (type === "json" && key === "value")) {
+      result[key] = item
+      continue
+    }
     const stripped = stripMedia(item)
     media += stripped.media
     result[key] = stripped.value
@@ -153,10 +156,6 @@ function stripMedia(value: unknown): { readonly value: unknown; readonly media: 
 export function requestTokenEstimate(request: unknown) {
   const stripped = stripMedia(request)
   return Math.round(JSON.stringify(stripped.value).length / 4) + stripped.media * MEDIA_TOKENS
-}
-
-export function requestNeedsCompaction(request: unknown) {
-  return requestTokenEstimate(request) >= REQUEST_TOKEN_LIMIT
 }
 
 /** A first request and the request immediately after a checkpoint have no older exchange to shrink. */

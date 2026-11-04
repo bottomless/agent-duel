@@ -36,13 +36,11 @@ export {
   ArenaEngineRequest,
   classification,
   promptCacheKey,
-  requestNeedsCompaction,
   requestHeaders,
   requestIdentity,
   RETRY_MARK_SLACK_MS,
   forgetScheduledRetry,
   requestTokenEstimate,
-  REQUEST_TOKEN_LIMIT,
 } from "./request.js"
 export {
   ArenaEngineSandbox,

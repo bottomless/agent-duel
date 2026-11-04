@@ -2,6 +2,14 @@ import { spawn } from "node:child_process"
 import { createHash } from "node:crypto"
 import path from "node:path"
 import type { ArenaPortAlias, CapturedService } from "./records"
+import {
+  readWindowsProcesses,
+  terminateWindowsGroup,
+  windowsGroupAlive,
+  windowsGroupListeners,
+  windowsGroupProtected,
+  windowsSnapshots,
+} from "./windows-processes"
 
 const PORT_ALIASES = ["PASEO_PORT", "PASEO_PORT2", "PASEO_PORT3"] as const
 const MAX_COMMAND_BYTES = 512
@@ -35,6 +43,8 @@ export type ProcessSnapshot = {
    * — and never a service the turn started, however deep in the worktree it stands.
    */
   readonly sessionShell?: boolean
+  /** True for any process with a controlling terminal: a terminal's shell and what runs in it. */
+  readonly terminal?: boolean
   /** A stable process start token (for example, `ps lstart`) used to reject reused PIDs. */
   readonly processStartIdentity?: string
   readonly listeners?: readonly ServiceListener[]
@@ -63,6 +73,7 @@ export type ServiceAdapter = {
     signal: "SIGTERM" | "SIGKILL",
   ) => Promise<void> | void
   readonly stopTerminal?: (terminalID: string) => Promise<void> | void
+  readonly pauseProcessGroup?: (processGroupID: number, signal: "SIGSTOP" | "SIGCONT") => Promise<void> | void
   readonly processGroupAlive?: (processGroupID: number) => Promise<boolean> | boolean
   readonly terminalAlive?: (terminalID: string) => Promise<boolean> | boolean
   /** Re-scan listeners after stopping. A missing method means no listener data is available. */
@@ -112,9 +123,10 @@ function inside(root: string, candidate: string) {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))
 }
 
+// Stored with `/`, the form `safeOwnerRelativeCwd` gives an owner-reported directory.
 function relativeCwd(root: string, cwd: string) {
   const relative = path.relative(root, path.resolve(cwd))
-  return relative || "."
+  return relative.replaceAll(path.sep, "/") || "."
 }
 
 function safeOwnerRelativeCwd(value: string | undefined) {
@@ -510,7 +522,57 @@ function stopRecord(record: CapturedService, status: ServiceStopRecord["status"]
 
 export const stopServices = stopOwnedServices
 
-type CommandProcess = ProcessSnapshot & { readonly processStartIdentity: string }
+/**
+ * Pauses the worktree's own process groups and returns them for `resumeProcessGroups`. A dev
+ * server or build watcher the contestant left running can delete a file between Git listing and
+ * reading it, and fails the result snapshot on every attempt while it keeps churning. Paused, it
+ * stays alive, so the voter still opens its preview. A group with a controlling terminal is left
+ * running: stopping a terminal's job hands the terminal back to its shell as a suspended job.
+ * Contestant commands start in their own session, without one. A group that cannot be signalled
+ * keeps running, and the snapshot's own retry is all that covers it.
+ */
+export async function pauseOwnedProcessGroups(
+  worktree: string,
+  adapter: ServiceAdapter = defaultServiceAdapter,
+): Promise<readonly number[]> {
+  const pause = adapter.pauseProcessGroup
+  if (!adapter.listProcesses || !pause) return []
+  const root = path.resolve(worktree)
+  const processes = await resolved(adapter.listProcesses())
+  const withTerminal = new Set(processes.flatMap((item) => (item.terminal ? [item.processGroupID] : [])))
+  const groups = new Set<number>()
+  for (const item of processes) {
+    const group = item.processGroupID
+    if (group === undefined || item.sessionShell || !processBelongsTo(root, item)) continue
+    if (withTerminal.has(group) || groups.has(group)) continue
+    if (adapter.isProtectedProcessGroup && (await resolved(adapter.isProtectedProcessGroup(group)))) continue
+    groups.add(group)
+  }
+  const paused: number[] = []
+  for (const group of groups) {
+    try {
+      await resolved(pause(group, "SIGSTOP"))
+      paused.push(group)
+    } catch {
+      // Left running; see above.
+    }
+  }
+  return paused
+}
+
+/** Resumes the groups `pauseOwnedProcessGroups` paused. A group that has since gone is skipped. */
+export async function resumeProcessGroups(
+  groups: readonly number[],
+  adapter: ServiceAdapter = defaultServiceAdapter,
+): Promise<void> {
+  for (const group of groups) {
+    try {
+      await resolved(adapter.pauseProcessGroup?.(group, "SIGCONT"))
+    } catch {
+      // A group that cannot be resumed is one that no longer exists.
+    }
+  }
+}
 
 async function commandOutput(command: string, args: readonly string[]) {
   return await new Promise<string>((resolve) => {
@@ -606,14 +668,16 @@ export function sessionShellPids(rows: readonly TerminalProcessRow[]): ReadonlyS
   return shells
 }
 
-async function listRealProcesses(): Promise<readonly CommandProcess[]> {
-  if (process.platform === "win32") return []
+async function listRealProcesses(): Promise<readonly ProcessSnapshot[]> {
+  if (process.platform === "win32") return windowsSnapshots(await readWindowsProcesses())
   const cwdRows = parseLsofCwds(await commandOutput("lsof", ["-nP", "-a", "-d", "cwd", "-F", "pn"]))
   // The shell hook stamps child environments before launch. Reading only the
   // ownership marker lets a service remain discoverable after it changes cwd.
   // The complete process environment is neither logged nor persisted.
   const owners = parseOwnerProcesses(await commandOutput("ps", ["axeww", "-o", "pid=,command="]))
-  const shells = sessionShellPids(parseProcessTerminals(await commandOutput("ps", ["ax", "-o", "pid=,ppid=,tty="])))
+  const terminalRows = parseProcessTerminals(await commandOutput("ps", ["ax", "-o", "pid=,ppid=,tty="]))
+  const shells = sessionShellPids(terminalRows)
+  const withTerminal = new Set(terminalRows.flatMap((row) => (row.tty && row.tty !== NO_TERMINAL ? [row.pid] : [])))
   const cwds = new Map(cwdRows.map((row) => [row.pid, row.cwd] as const))
   const pids = [...new Set([...cwdRows.map((row) => row.pid), ...owners.keys()])].sort((a, b) => a - b)
   if (pids.length === 0) return []
@@ -641,12 +705,14 @@ async function listRealProcesses(): Promise<readonly CommandProcess[]> {
       args: tokens.slice(1),
       ...(owner ?? {}),
       ...(shells.has(pid) ? { sessionShell: true } : {}),
+      ...(withTerminal.has(pid) ? { terminal: true } : {}),
       processStartIdentity: details.start,
     }]
   })
 }
 
 async function realListeners(processGroupID: number) {
+  if (process.platform === "win32") return await windowsGroupListeners(processGroupID)
   const output = await commandOutput("lsof", ["-nP", "-a", "-g", String(processGroupID), "-iTCP", "-sTCP:LISTEN", "-FnP"])
   return output.split("\n").flatMap((line) => {
     const match = line.match(/^n.*:(\d+)$/)
@@ -673,7 +739,8 @@ export const defaultServiceAdapter: ServiceAdapter = {
   listProcesses: listRealProcesses,
   listTerminals: () => [],
   stopProcessGroup: (processGroupID, signal) => {
-    if (process.platform === "win32") return
+    // Windows has no signals to ask with: both steps terminate the group's members.
+    if (process.platform === "win32") return terminateWindowsGroup(processGroupID)
     try {
       process.kill(-processGroupID, signal)
     } catch (cause) {
@@ -685,14 +752,18 @@ export const defaultServiceAdapter: ServiceAdapter = {
       if ((cause as NodeJS.ErrnoException).code !== "ESRCH") throw cause
     }
   },
+  pauseProcessGroup: (processGroupID, signal) => {
+    if (process.platform === "win32") return
+    process.kill(-processGroupID, signal)
+  },
   processGroupAlive: (processGroupID) => {
-    if (process.platform === "win32") return false
+    if (process.platform === "win32") return windowsGroupAlive(processGroupID)
     try { process.kill(-processGroupID, 0); return true } catch { return false }
   },
   listenersForProcessGroup: realListeners,
   wait: (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
   isProtectedProcessGroup: async (processGroupID) => {
-    if (process.platform === "win32") return false
+    if (process.platform === "win32") return await windowsGroupProtected(processGroupID)
     const own = Number((await commandOutput("ps", ["-o", "pgid=", "-p", String(process.pid)])).trim())
     return Number.isInteger(own) && own > 0 && own === processGroupID
   },

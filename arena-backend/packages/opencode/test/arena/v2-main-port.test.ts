@@ -15,8 +15,10 @@ import type { Session } from "@opencode/schema/session"
 import type { PromptInput } from "@opencode/schema/prompt-input"
 import { AssignmentRegistry } from "@/arena/proxy"
 import { createArenaEnginePlugin } from "@/arena/engine-runtime/plugin"
-import { canCompactHistory, compactionResponse, REQUEST_TOKEN_LIMIT } from "@/arena/engine-runtime/request"
+import { canCompactHistory, compactionResponse } from "@/arena/engine-runtime/request"
 import { compactionRequiredError, requestTooLargeMessage } from "@agent-duel/arena-service/request-error"
+import { ArenaResponseRecovery } from "@/arena/response-recovery"
+import { abandonedAttempts, messagesToGraft } from "@/arena/session-runtime/projection"
 import { ArenaPorts } from "@/arena/ports"
 import { connectLocalStore } from "@/arena/local-store"
 import { setStoreForTest } from "@/arena/runtime"
@@ -225,7 +227,7 @@ test("first-request and post-summary hard refusals fail neutrally without anothe
   }
 })
 
-test("an older control plane still gets a local 272K fallback checkpoint", async () => {
+test("does not compact at 272K without a control-plane refusal", async () => {
   let summaries = 0
   let primary = 0
   await runner(
@@ -237,18 +239,86 @@ test("an older control plane still gets a local 272K fallback checkpoint", async
         return reply(summary)
       }
       primary++
-      return reply(primary === 1 ? "x".repeat(REQUEST_TOKEN_LIMIT * 4 + 1000) : "Finished")
+      return reply(primary === 1 ? "x".repeat(272_000 * 4 + 1000) : "Finished")
     },
     async (sessions, id) => {
       await prompt(sessions, id, "Earlier exchange")
       await prompt(sessions, id, "Continue")
       const messages = await Effect.runPromise(sessions.messages({ sessionID: id, order: "asc" }))
-      expect(messages.filter((message) => message.type === "compaction")).toMatchObject([{ status: "completed" }])
+      expect(messages.filter((message) => message.type === "compaction")).toEqual([])
     },
   )
-  expect(summaries).toBe(1)
+  expect(summaries).toBe(0)
   expect(primary).toBe(2)
 })
+
+test.each(["empty", "reasoning", "partial"] as const)(
+  "an idle %s reply uses the right recovery note and keeps its row",
+  async (mode) => {
+    const expected = mode === "partial" ? ArenaResponseRecovery.IDLE_CONTINUE : ArenaResponseRecovery.IDLE_RESTART
+    let primary = 0
+    const requests: unknown[] = []
+    let idleController: ReadableStreamDefaultController<Uint8Array> | undefined
+    await runner(
+      async (request) => {
+        if (request.headers.get("x-arena-generation-classification") !== "generation") return reply("Title")
+        requests.push(await request.json())
+        if (++primary > 1) return reply("Recovered")
+        if (mode === "empty") throw new Error("Response headers timed out")
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              idleController = controller
+              controller.enqueue(
+                new TextEncoder().encode(
+                  `data: ${JSON.stringify({ id: "reasoning-only", choices: [{ index: 0, delta: { reasoning: "Thinking without writing", ...(mode === "partial" ? { content: "A partial answer" } : {}) }, finish_reason: null }] })}\n\n`,
+                ),
+              )
+            },
+          }),
+          { headers: { "content-type": "text/event-stream" } },
+        )
+      },
+      async (sessions, id) => {
+        await Effect.runPromise(sessions.prompt({ sessionID: id, text: "Recover this idle response", resume: true }))
+        if (mode !== "empty")
+          await Effect.runPromise(
+            Effect.gen(function* () {
+              while (true) {
+                const rows = yield* sessions.messages({ sessionID: id, order: "asc" })
+                if (
+                  rows.some(
+                    (message) =>
+                      message.type === "assistant" && message.content.some((part) => part.type === "reasoning"),
+                  )
+                )
+                  return
+                yield* Effect.yieldNow
+              }
+            }).pipe(Effect.timeout("2 seconds")),
+          )
+        if (mode !== "empty") idleController!.error(new Error("SSE read timed out"))
+        await Effect.runPromise(sessions.wait(id).pipe(Effect.timeout("10 seconds")))
+        const messages = await Effect.runPromise(sessions.messages({ sessionID: id, order: "asc" }))
+        expect(messages.filter((message) => message.type === "assistant")).toHaveLength(2)
+        expect(messages.filter((message) => message.type === "synthetic")).toMatchObject([{ text: expected }])
+        expect(messages.filter((message) => message.type === "assistant").at(-1)).toMatchObject({
+          finish: "stop",
+          content: [{ type: "text", text: "Recovered" }],
+        })
+        const first = messages.find((message) => message.type === "assistant")!
+        const note = messages.find((message) => message.type === "synthetic")!
+        const boundary = messages.find((message) => message.type === "user")!.id
+        expect(messagesToGraft(messages, boundary)).toContain(first)
+        expect(messagesToGraft(messages, boundary)).toContain(note)
+        expect([...abandonedAttempts(messages, boundary)]).toEqual([first.id, note.id])
+      },
+    )
+    expect(requests).toHaveLength(2)
+    expect(JSON.stringify(requests[1])).toContain(expected)
+    expect(JSON.stringify(requests[1])).not.toContain("Continue from where you left off")
+  },
+)
 
 test("only the exact neutral 413 is converted and history eligibility stops at a checkpoint", async () => {
   const request = new Request("http://test.invalid", { headers: { "x-arena-compaction": "auto" } })

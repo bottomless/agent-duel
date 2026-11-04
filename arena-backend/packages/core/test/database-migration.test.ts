@@ -164,6 +164,25 @@ describe("DatabaseMigration", () => {
     )
   })
 
+  test("initializes one new database from several processes at once", async () => {
+    await using tmp = await tmpdir()
+    const worker = path.join(import.meta.dir, "fixture/open-database-worker.ts")
+    for (const round of [1, 2, 3, 4, 5]) {
+      const filename = path.join(tmp.path, `process-${round}.sqlite`)
+      const results = await Promise.all(
+        [1, 2, 3, 4].map(async () => {
+          const proc = Bun.spawn([process.execPath, worker, filename], {
+            cwd: path.join(import.meta.dir, ".."),
+            stdout: "ignore",
+            stderr: "pipe",
+          })
+          return { code: await proc.exited, stderr: await new Response(proc.stderr).text() }
+        }),
+      )
+      for (const result of results) expect(result.code, result.stderr).toBe(0)
+    }
+  }, 60_000)
+
   if (process.platform === "linux") {
     test("declared schema has no ungenerated migrations", async () => {
       const result = await $`bun ${fileURLToPath(new URL("../script/migration.ts", import.meta.url))} --check`

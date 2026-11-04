@@ -127,6 +127,37 @@ export async function copyTree(source: string, target: string): Promise<"cloned"
   return "copied"
 }
 
+/**
+ * Copy a file or directory tree in full, for when it cannot be cloned. Links are copied as links,
+ * as `cp` with `verbatimSymlinks` does.
+ *
+ * Windows has no clone to reach for, and `cp` copies one file at a time while an antivirus scans
+ * each new one: a 9,600-file `node_modules` took 7s, and a turn copies every dependency root of
+ * both sides. Robocopy's threads copy that tree in 1.8s. Anything robocopy could not copy is
+ * copied again by `cp`, so its errors are the ones a caller sees.
+ */
+export async function copyDirectory(source: string, target: string, signal?: AbortSignal) {
+  if (process.platform === "win32" && (await lstat(source)).isDirectory()) {
+    const robocopy = Bun.spawn(
+      [
+        path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "robocopy.exe"),
+        source,
+        target,
+        // Subdirectories, empty ones too; data, attributes and times; links as links.
+        ...["/E", "/COPY:DAT", "/DCOPY:T", "/SL", "/SJ", "/MT:16", "/R:0", "/W:0"],
+        ...["/NFL", "/NDL", "/NJH", "/NJS", "/NP"],
+      ],
+      { stdin: "ignore", stdout: "ignore", stderr: "ignore", ...(signal ? { signal } : {}) },
+    )
+    const code = await robocopy.exited
+    signal?.throwIfAborted()
+    // Below 8 every file was copied.
+    if (code < 8) return
+    await rm(target, { recursive: true, force: true })
+  }
+  await cp(source, target, { recursive: true, verbatimSymlinks: true })
+}
+
 type CloneStrategy = {
   readonly method: CloneMethod
   readonly attempt: (source: string, target: string, signal?: AbortSignal) => Promise<boolean>

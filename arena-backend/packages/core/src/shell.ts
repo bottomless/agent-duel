@@ -276,7 +276,10 @@ const layer = () =>
 
         const id = Shell.ID.ascending()
         const args = ShellSelect.args(invocation.shell, invocation.command)
-        const file = path.join(outputDir, `${id}.out`)
+        // Agent Duel vendor patch: the shell hook can place contestant output in its allowed temp.
+        const directory = invocation.outputDirectory ?? outputDir
+        yield* Effect.promise(() => mkdir(directory, { recursive: true }))
+        const file = path.join(directory, `${id}.out`)
 
         const info: Info = {
           id,

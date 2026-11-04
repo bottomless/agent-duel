@@ -18,6 +18,10 @@ import { PassThrough } from "node:stream"
 import launch from "cross-spawn"
 import { makeGlobalNode } from "./effect/app-node.js"
 import { filesystem, path } from "./effect/app-node-platform.js"
+import { WindowsJob } from "./windows-job.js"
+
+/** The job holding each spawned command on Windows; see windows-job.ts. */
+const jobs = new WeakMap<NodeChildProcess.ChildProcess, bigint>()
 
 const toError = (err: unknown): Error => (err instanceof globalThis.Error ? err : new globalThis.Error(String(err)))
 
@@ -281,6 +285,14 @@ const makeCrossSpawnSpawner = Effect.gen(function* () {
       const closed = Deferred.makeUnsafe<readonly [code: number | null, signal: NodeJS.Signals | null]>()
       const exited = Deferred.makeUnsafe<readonly [code: number | null, signal: NodeJS.Signals | null]>()
       const proc = launch(command.command, command.args, opts)
+      const job = globalThis.process.platform === "win32" && proc.pid ? WindowsJob.attach(proc.pid) : undefined
+      if (job !== undefined) {
+        jobs.set(proc, job)
+        proc.on("close", () => {
+          jobs.delete(proc)
+          WindowsJob.close(job)
+        })
+      }
       let end = false
       let exit: readonly [code: number | null, signal: NodeJS.Signals | null] | undefined
       proc.on("error", (err) => {
@@ -347,6 +359,9 @@ const makeCrossSpawnSpawner = Effect.gen(function* () {
     signal: NodeJS.Signals,
   ) => {
     if (globalThis.process.platform === "win32") {
+      // The job reaches what a Git Bash exec took out of the parent chain; taskkill is the fallback.
+      const job = jobs.get(proc)
+      if (job !== undefined && WindowsJob.terminate(job)) return Effect.void
       return Effect.callback<void, PlatformError.PlatformError>((resume) => {
         NodeChildProcess.exec(`taskkill /pid ${proc.pid} /T /F`, { windowsHide: true }, (err) => {
           if (err) return resume(Effect.fail(toPlatformError("kill", toError(err), command)))

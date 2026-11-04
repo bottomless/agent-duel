@@ -4,6 +4,7 @@ import { realpathSync } from "fs"
 import { Global } from "@opencode/util/global"
 import { Wildcard } from "@opencode/core/util/wildcard"
 import { PermissionV1 } from "@opencode/schema/permission-v1"
+import { DIRECTORY as SHELL_OUTPUT } from "@opencode/core/shell"
 
 /**
  * Rules under this key deny writes into external directories that `external_directory` allows.
@@ -94,6 +95,11 @@ export function contestantPermissions(
     ...sharedTmp().map(deny(EXTERNAL_WRITE)),
     ...spellings(tmpRoot()).map(deny("external_directory")),
     ...sandbox.readOnly.map(deny(EXTERNAL_WRITE)),
+    ...spellings(path.join(Global.Path.data, SHELL_OUTPUT)).flatMap((directory) => [
+      deny("external_directory")(directory),
+      deny("read")(directory),
+      deny(EXTERNAL_WRITE)(directory),
+    ]),
     ...sandbox.blocked.map(deny("external_directory")),
     ...sandbox.own.flatMap(reopen),
     // The side's own spelling comes last: it is also what marks the session as a contestant's; see
@@ -154,8 +160,10 @@ export function denial(input: {
   if (rule?.action !== "deny") return
   const root = globDirectory(rule.pattern)
   if (input.write) {
-    if (sharedTmp().includes(root)) {
-      return `Arena contestants cannot change files in ${root}, which both sides use while they run. Use the same name under $TMPDIR (${tmp}) instead.`
+    // A rule keeps its directory as `path.join` wrote it, so on Windows the rule for `/tmp` is `\tmp`.
+    const shared = sharedTmp().find((directory) => path.normalize(directory) === path.normalize(root))
+    if (shared) {
+      return `Arena contestants cannot change files in ${shared}, which both sides use while they run. Use the same name under $TMPDIR (${tmp}) instead.`
     }
     return `Arena contestants can read the main checkout but change files only in their own worktree. ${directory} is in the main checkout.`
   }

@@ -153,6 +153,15 @@ export interface SessionRetry {
   decision: SessionRetryDecision
 }
 
+/** Agent Duel vendor patch: let the provider policy describe an interrupted reply accurately. */
+export interface SessionContinuation {
+  readonly sessionID: Session.ID
+  readonly model: Model.Ref
+  readonly error: SessionError.Error
+  readonly message?: SessionMessage.Info
+  text?: string
+}
+
 export interface SessionHooks {
   readonly prompt: SessionPrompt
   readonly context: SessionContext
@@ -167,6 +176,7 @@ export interface SessionHooks {
   readonly "experimental.ws.send": SessionWebSocketSend
   readonly "experimental.ws.receive": SessionWebSocketReceive
   readonly retry: SessionRetry
+  readonly continuation: SessionContinuation
 }
 
 export type SessionDomain = Pick<

@@ -96,9 +96,9 @@ function win(options?: Options, bin?: string) {
   return Array.from(
     new Set(
       [
+        gitbash(options, bin),
         findExecutable("pwsh", bin),
         findExecutable("powershell", bin),
-        gitbash(options, bin),
         process.env.COMSPEC || "cmd.exe",
       ]
         .filter((item): item is string => Boolean(item))
@@ -126,9 +126,20 @@ export function gitbash(options?: Options, bin?: string) {
   if (process.platform !== "win32") return
   if (options?.gitbash) return options.gitbash
   const git = findExecutable("git", bin)
-  if (!git) return
-  const file = path.join(git, "..", "..", "bin", "bash.exe")
-  if (stat(file)?.size) return file
+  const beside = git
+    ? [
+        path.join(git, "..", "..", "bin", "bash.exe"),
+        path.join(git, "..", "bash.exe"),
+        path.join(git, "..", "..", "..", "bin", "bash.exe"),
+      ]
+    : []
+  const installed = [
+    process.env.ProgramFiles,
+    process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, "Programs"),
+  ]
+    .filter((root): root is string => Boolean(root))
+    .map((root) => path.join(root, "Git", "bin", "bash.exe"))
+  return [...beside, ...installed].find((file) => stat(file)?.size)
 }
 
 function fallback(bin?: string) {

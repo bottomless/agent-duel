@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { open, readFile, stat, unlink, utimes } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
@@ -86,17 +87,30 @@ function writtenDuringThisBoot(lock: PidLockInfo): boolean {
   return !precedesThisBoot(lock.startedAt);
 }
 
-/**
- * Whether the process that wrote this lock is still running.
- *
- * A PID alone does not identify the supervisor: the operating system hands the number to
- * something else once the supervisor is gone, and a reboot reassigns it freely. A process
- * cannot predate the boot it runs under, so a lock written during another boot is abandoned
- * however alive its PID looks.
- */
-export function isPidLockOwnerRunning(lock: PidLockInfo): boolean {
-  if (!writtenDuringThisBoot(lock)) return false;
-  return isPidRunning(lock.pid);
+/** A reused PID or a previous boot cannot own the current lock. */
+export async function isPidLockOwnerRunning(lock: PidLockInfo): Promise<boolean> {
+  if (!writtenDuringThisBoot(lock) || !isPidRunning(lock.pid)) return false;
+  if (process.platform !== "win32") return true;
+  const started = await windowsProcessStartTime(lock.pid);
+  const written = Date.parse(lock.startedAt);
+  if (started === null || Number.isNaN(written)) return true;
+  return started <= written + 1000;
+}
+
+/** A process's creation time, readable for any process, unlike Get-Process's StartTime. */
+function windowsProcessStartTime(pid: number): Promise<number | null> {
+  const command = `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CreationDate.ToUniversalTime().ToString('o')`;
+  return new Promise((resolve) => {
+    execFile(
+      "powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-Command", command],
+      { timeout: 10_000, windowsHide: true },
+      (error, stdout) => {
+        const started = error ? Number.NaN : Date.parse(stdout.trim());
+        resolve(Number.isNaN(started) ? null : started);
+      },
+    );
+  });
 }
 
 function getPidFilePath(paseoHome: string): string {
@@ -163,7 +177,7 @@ async function clearExistingPidLock(
   existingLock: PidLockInfo,
   lockOwnerPid: number,
 ): Promise<"already_owned" | "cleared"> {
-  const lockOwnerRunning = isPidLockOwnerRunning(existingLock);
+  const lockOwnerRunning = await isPidLockOwnerRunning(existingLock);
   if (existingLock.pid === lockOwnerPid && lockOwnerRunning) {
     await touchPidLockFile(pidPath);
     return "already_owned";
@@ -174,7 +188,7 @@ async function clearExistingPidLock(
   if (
     !confirmedLock ||
     !isSamePidLock(existingLock, confirmedLock) ||
-    isPidLockOwnerRunning(confirmedLock)
+    (await isPidLockOwnerRunning(confirmedLock))
   ) {
     throw new PidLockError("PID lock changed while checking whether it was abandoned");
   }
@@ -409,7 +423,7 @@ export async function isLocked(
   if (!info) {
     return { locked: false };
   }
-  if (!isPidLockOwnerRunning(info)) {
+  if (!(await isPidLockOwnerRunning(info))) {
     return { locked: false, info };
   }
   return { locked: true, info };

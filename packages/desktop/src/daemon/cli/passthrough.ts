@@ -2,7 +2,15 @@ import { pathToFileURL } from "node:url";
 import { resolvePassthroughCliEntrypoint } from "./entrypoints.js";
 
 const DESKTOP_CLI_ENV = "PASEO_DESKTOP_CLI";
-const IGNORED_ARG_PREFIXES = ["-psn_", "--class=", "--no-sandbox", "--remote-debugging-port="];
+// Launch arguments added by the OS or an installer, not CLI input. The Windows installer reopens the
+// app with --updated after an in-app update; treating it as CLI input would exit the relaunch at once.
+const IGNORED_ARG_PREFIXES = [
+  "-psn_",
+  "--class=",
+  "--no-sandbox",
+  "--remote-debugging-port=",
+  "--updated",
+];
 
 export type PassthroughCliRunner = (argv: string[]) => Promise<number>;
 

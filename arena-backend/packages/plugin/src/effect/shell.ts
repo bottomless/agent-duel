@@ -6,6 +6,8 @@ export interface ShellCreateBefore {
   timeout: number
   shell: string
   env: Record<string, string | undefined>
+  /** Agent Duel vendor patch: isolate a contestant's file-backed command output. */
+  outputDirectory?: string
 }
 
 export interface ShellHooks {

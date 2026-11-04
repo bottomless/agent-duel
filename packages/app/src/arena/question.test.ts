@@ -1,4 +1,9 @@
 import { describe, expect, test } from "vitest";
+import {
+  buildQuestionFormAnswers,
+  buildQuestionFormSelections,
+  parseQuestionFormQuestions,
+} from "../components/question-form-card-core";
 import type { ArenaRun } from "@getpaseo/protocol/arena/rpc-schemas";
 import {
   arenaPendingQuestions,
@@ -212,6 +217,7 @@ describe("Arena contestant questions", () => {
           behavior: "allow",
           updatedInput: {
             answers: { Files: "README, License", Note: "Keep it short" },
+            answerSelections: { Files: { selected: ["README", "License"] } },
           },
         }),
     ).toEqual([["README", "License"], ["Keep it short"]]);
@@ -224,3 +230,45 @@ describe("Arena contestant questions", () => {
     );
   });
 });
+
+test.each([
+  {
+    multiple: true,
+    selected: new Set([0, 1]),
+    other: "Custom, note",
+    expected: ["Alpha, Beta", "Gamma", "Custom, note"],
+  },
+  { multiple: true, selected: new Set([0]), other: "Gamma", expected: ["Alpha, Beta", "Gamma"] },
+  { multiple: true, selected: new Set<number>(), other: "Alpha, Beta", expected: ["Alpha, Beta"] },
+  { multiple: false, selected: new Set([0]), other: "Custom, note", expected: ["Custom, note"] },
+  { multiple: true, selected: new Set([0, 1]), other: "  ", expected: ["Alpha, Beta", "Gamma"] },
+])(
+  "keeps option labels and Other separate: $multiple / $other",
+  ({ multiple, selected, other, expected }) => {
+    const [question] = arenaPendingQuestions(
+      runWithQuestions([
+        {
+          id: "other",
+          questions: [
+            {
+              header: "Choice",
+              question: "Choose",
+              multiple,
+              options: [{ label: "Alpha, Beta" }, { label: "Gamma" }],
+            },
+          ],
+        },
+      ]),
+    );
+    const forms = parseQuestionFormQuestions(question.permission.request.input);
+    if (!forms) throw new Error("missing question form");
+    const response = {
+      behavior: "allow" as const,
+      updatedInput: {
+        answers: buildQuestionFormAnswers(forms, { 0: selected }, { 0: other }),
+        answerSelections: buildQuestionFormSelections(forms, { 0: selected }, { 0: other }),
+      },
+    };
+    expect(arenaQuestionAnswers(question, response)).toEqual([expected]);
+  },
+);

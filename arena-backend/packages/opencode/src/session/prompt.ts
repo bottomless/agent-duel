@@ -1426,9 +1426,11 @@ const layer = Layer.effect(
                       {
                         role: "user" as const,
                         content:
-                          recoveryReason === "arena-idle"
-                            ? ArenaResponseRecovery.IDLE_CONTINUE
-                            : ArenaResponseRecovery.CONTINUE,
+                          recoveryReason !== "arena-idle"
+                            ? ArenaResponseRecovery.CONTINUE
+                            : lastAssistantMsg && MessageV2.hasReply(lastAssistantMsg.parts)
+                              ? ArenaResponseRecovery.IDLE_CONTINUE
+                              : ArenaResponseRecovery.IDLE_RESTART,
                       },
                     ]
                   : []),

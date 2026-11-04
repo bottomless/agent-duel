@@ -28,6 +28,7 @@ import {
   type OpenCodePortAllocator,
   type OpenCodeServerProcessSpawner,
 } from "./opencode/server-manager.js";
+import { resolveEngineLogPath } from "./opencode/paths.js";
 import { createArenaByokService } from "../../accounts/byok.js";
 import { clearArenaCredentials, installArenaCredentials } from "../../accounts/credentials.js";
 
@@ -199,6 +200,7 @@ describe("OpenCodeServerManager generations", () => {
       PASEO_ARENA_SESSION_TOKEN: undefined,
       PASEO_OPENROUTER_BASE_URL: undefined,
       PASEO_OPENCODE_CONTROL_TOKEN: undefined,
+      OPENCODE_LOG_FILE: resolveEngineLogPath(),
     });
     const payload = readStdinPayload(runtime, 4081);
     expect(Object.keys(payload).toSorted()).toEqual([
@@ -270,6 +272,7 @@ describe("OpenCodeServerManager generations", () => {
       PASEO_ARENA_SESSION_TOKEN: undefined,
       PASEO_OPENROUTER_BASE_URL: undefined,
       PASEO_OPENCODE_CONTROL_TOKEN: undefined,
+      OPENCODE_LOG_FILE: resolveEngineLogPath(),
     });
     expect(JSON.stringify(runtime.spawnCalls[0])).not.toContain("sk-or-v1-private");
     await acquisition.release();

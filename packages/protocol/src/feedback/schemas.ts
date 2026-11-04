@@ -37,39 +37,50 @@ export const feedbackTimelineRowSchema = z
   .strict();
 export type FeedbackTimelineRow = z.infer<typeof feedbackTimelineRowSchema>;
 
+export const feedbackLogTailMaximumLines = 200;
+export const feedbackLogLineMaximumLength = 4_000;
+
 export const feedbackContextMetadataSchema = z
   .object({
     version: z.literal(1),
     capturedAt: z.iso.datetime(),
+    // A crash report names no agent and no repository; it carries the log tail instead.
     agent: z
       .object({
         id: boundedIdentifier,
         provider: z.string().trim().min(1).max(64),
         sessionId: z.string().trim().min(1).max(512).nullable(),
       })
-      .strict(),
-    git: z.discriminatedUnion("kind", [
-      z.object({ kind: z.literal("not_git") }).strict(),
-      z
-        .object({
-          kind: z.literal("git"),
-          branch: z.string().max(512).nullable(),
-          baseRef: z.string().max(512).nullable(),
-          upstreamRef: z.string().max(512).nullable(),
-          isDirty: z.boolean(),
-          aheadBehind: z
-            .object({ ahead: z.number().int(), behind: z.number().int() })
-            .strict()
-            .nullable(),
-          diffStat: z
-            .object({ additions: z.number().int(), deletions: z.number().int() })
-            .strict()
-            .nullable(),
-          status: z.string().max(200_000),
-        })
-        .strict(),
-      z.object({ kind: z.literal("unavailable"), reason: z.string().max(512) }).strict(),
-    ]),
+      .strict()
+      .nullable(),
+    log: z
+      .array(z.string().max(feedbackLogLineMaximumLength))
+      .max(feedbackLogTailMaximumLines)
+      .optional(),
+    git: z
+      .discriminatedUnion("kind", [
+        z.object({ kind: z.literal("not_git") }).strict(),
+        z
+          .object({
+            kind: z.literal("git"),
+            branch: z.string().max(512).nullable(),
+            baseRef: z.string().max(512).nullable(),
+            upstreamRef: z.string().max(512).nullable(),
+            isDirty: z.boolean(),
+            aheadBehind: z
+              .object({ ahead: z.number().int(), behind: z.number().int() })
+              .strict()
+              .nullable(),
+            diffStat: z
+              .object({ additions: z.number().int(), deletions: z.number().int() })
+              .strict()
+              .nullable(),
+            status: z.string().max(200_000),
+          })
+          .strict(),
+        z.object({ kind: z.literal("unavailable"), reason: z.string().max(512) }).strict(),
+      ])
+      .nullable(),
   })
   .strict();
 export type FeedbackContextMetadata = z.infer<typeof feedbackContextMetadataSchema>;
@@ -148,9 +159,30 @@ const chatFeedbackSchema = feedbackBaseSchema
   })
   .strict();
 
+export const crashReportSchema = z
+  .object({
+    process: z.enum(["daemon", "engine", "app", "window"]),
+    // `unclean_shutdown`: the process was found gone at the next start, with no exit of its own.
+    kind: z.enum(["exception", "exit", "unclean_shutdown"]),
+    occurredAt: z.iso.datetime(),
+    message: z.string().trim().min(1).max(5_000),
+    exitCode: z.number().int().nullable(),
+    signal: z.string().trim().min(1).max(64).nullable(),
+  })
+  .strict();
+export type CrashReport = z.infer<typeof crashReportSchema>;
+
+const crashFeedbackSchema = feedbackBaseSchema
+  .extend({
+    source: z.literal("crash"),
+    crash: crashReportSchema,
+  })
+  .strict();
+
 export const feedbackSubmissionSchema = z.discriminatedUnion("source", [
   sidebarFeedbackSchema,
   chatFeedbackSchema,
+  crashFeedbackSchema,
 ]);
 export type FeedbackSubmission = z.infer<typeof feedbackSubmissionSchema>;
 

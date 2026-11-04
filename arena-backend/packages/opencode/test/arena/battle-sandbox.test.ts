@@ -37,6 +37,9 @@ import { AssignmentRegistry } from "@/arena/proxy"
 import { contestantPermissions, tmpDirectory, tmpParent } from "@/arena/contestant"
 import { createArenaEnginePlugin } from "@/arena/engine-runtime/plugin"
 import { shellPaths } from "@/arena/engine-runtime/outside-project"
+import { Global } from "@opencode/util/global"
+import { permissionRules, sandboxForSession } from "@/arena/engine-runtime/sandbox"
+import { canonicalizeTranscriptPaths } from "@/arena/canonical-path"
 import { battlePathDenial } from "@/arena/engine-runtime/battle-sandbox"
 
 const rootID = Session.ID.make("ses_r04_side")
@@ -57,16 +60,10 @@ function fixture() {
   const other = path.join(checkout, ".agent-duel/other")
   mkdirSync(side, { recursive: true })
   mkdirSync(other)
-  const rules = contestantPermissions([{ permission: "*", pattern: "*", action: "allow" }], {
-    tmp: tmpDirectory(rootID),
-    readOnly: [checkout],
-    blocked: [path.join(checkout, ".agent-duel")],
-    own: [side],
-  }).map((rule) => ({
-    action: rule.permission === "external_directory_write" ? "edit" : rule.permission,
-    resource: rule.pattern,
-    effect: rule.action,
-  }))
+  const rules = permissionRules(
+    [{ action: "*", resource: "*", effect: "allow" }],
+    sandboxForSession(rootID, side, checkout),
+  )
   return { checkout, side, other, rules, [Symbol.dispose]: () => rmSync(checkout, { recursive: true, force: true }) }
 }
 function harness(f: ReturnType<typeof fixture>, battle = true, capturedDirectory = f.side, autoAccept = true) {
@@ -506,4 +503,157 @@ describe("side paths and descendants", () => {
       }),
     )
   })
+})
+
+describe("fb3 Git and battle-folder regressions", () => {
+  const reads = [
+    "log",
+    "status",
+    "rev-parse HEAD",
+    "show HEAD",
+    "diff",
+    "ls-files",
+    "branch --show-current",
+    "remote -v",
+  ]
+  it.each(reads)("allows git %s with and without -C", async (command) => {
+    using f = fixture()
+    const h = harness(f)
+    await run(
+      h,
+      Effect.gen(function* () {
+        for (const prefix of ["git", `git -C ${f.checkout}`])
+          yield* h.execute("shell", { command: `${prefix} ${command}` })
+        expect(h.executions).toHaveLength(2)
+        expect(h.cards).toEqual([])
+      }),
+    )
+    expect(await shellPaths(`git -C ${f.checkout} ${command}`, f.side, "write")).toEqual([])
+  })
+  it.each([
+    "add file",
+    "commit",
+    "checkout branch",
+    "branch new",
+    "branch --show-current extra",
+    "remote add name url",
+    "remote -v extra",
+    "-c core.pager=cat log",
+    "--config-env=core.pager=GIT_PAGER log",
+    "--exec-path=/outside log",
+    "--git-dir=/outside log",
+    "--work-tree=/outside status",
+    "log --output=out",
+    "log --output out",
+    "diff --ext-diff",
+    "show --textconv",
+    "status > output.txt",
+  ])("treats git %s as a write outside the project", async (command) => {
+    using f = fixture()
+    const h = harness(f)
+    await run(
+      h,
+      Effect.gen(function* () {
+        const redirect = command.includes(">") ? command.replace("output.txt", `${f.checkout}/output.txt`) : command
+        expect(
+          yield* h.execute("shell", { command: `git -C ${f.checkout} ${redirect}` }).pipe(Effect.result),
+        ).toMatchObject({ _tag: "Failure", failure: { message: expect.stringContaining("write only") } })
+        expect(h.executions).toEqual([])
+      }),
+    )
+  })
+  it.each(reads)("denies git -C into another side for %s", async (command) => {
+    using f = fixture()
+    const h = harness(f)
+    await run(
+      h,
+      Effect.gen(function* () {
+        for (const target of [f.other, `${tmpParent()}/ses_other`]) {
+          const result = yield* h.execute("shell", { command: `git -C ${target} ${command}` }).pipe(Effect.result)
+          expect(result).toMatchObject({
+            _tag: "Failure",
+            failure: {
+              message: "Arena contestants cannot access other Arena worktrees or another side's temp directory.",
+            },
+          })
+        }
+        expect(h.executions).toEqual([])
+      }),
+    )
+  })
+  it("names a battle-folder write accurately without disclosing another side", () => {
+    using f = fixture()
+    expect(battlePathDenial(f.rules, "write", "../build.log", f.side)).toBe(
+      "Arena contestants cannot write ../build.log in the battle folder. Write only in your own worktree or your own $TMPDIR.",
+    )
+    expect(battlePathDenial(f.rules, "write", path.join(f.other, "build.log"), f.side)).toBe(
+      "Arena contestants cannot access other Arena worktrees or another side's temp directory.",
+    )
+    expect(battlePathDenial(f.rules, "read", f.other, f.side)).toBe(
+      "Arena contestants cannot access other Arena worktrees or another side's temp directory.",
+    )
+    symlinkSync(f.side, path.join(f.other, "link"))
+    expect(battlePathDenial(f.rules, "read", path.join(f.other, "link"), f.side)).toBe(
+      "Arena contestants cannot access other Arena worktrees or another side's temp directory.",
+    )
+  })
+  it("denies the shared shell output folder and gives contestants their own output directory", async () => {
+    using f = fixture()
+    const h = harness(f)
+    await run(
+      h,
+      Effect.gen(function* () {
+        const shared = path.join(Global.Path.data, "shell", "old-project", "user.out")
+        expect(battlePathDenial(f.rules, "read", shared, f.side)).toBe(
+          "Arena contestants cannot access other Arena worktrees or another side's temp directory.",
+        )
+        expect(Permission.evaluate("read", shared, f.rules).effect).toBe("deny")
+        const serviceRules = contestantPermissions(
+          [{ permission: "*", pattern: "*", action: "allow" }],
+          sandboxForSession(rootID, f.side, f.checkout),
+        ).map((rule) => ({
+          action: rule.permission === "external_directory_write" ? "edit" : rule.permission,
+          resource: rule.pattern,
+          effect: rule.action,
+        }))
+        expect(Permission.evaluate("read", shared, serviceRules).effect).toBe("deny")
+        expect(battlePathDenial(serviceRules, "read", shared, f.side)).toBe(
+          "Arena contestants cannot access other Arena worktrees or another side's temp directory.",
+        )
+        yield* h.execute("shell", { command: "printf side" })
+        yield* h.execute("shell", { command: "printf child" }, childID)
+        expect(h.executions.map((event) => event.outputDirectory)).toEqual([tmpDirectory(rootID), tmpDirectory(rootID)])
+      }),
+    )
+    const off = harness(f, false)
+    await run(
+      off,
+      Effect.gen(function* () {
+        yield* off.execute("shell", { command: "printf off" })
+        expect(off.executions.map((event) => event.outputDirectory)).toEqual([undefined])
+      }),
+    )
+  })
+})
+
+it("winner promotion retargets a native background-shell file before its temp is released", async () => {
+  const file = path.join(tmpDirectory("ses_abc123"), "sh_example.out")
+  const part = {
+    type: "tool",
+    name: "shell",
+    state: {
+      status: "completed",
+      content: [{ type: "text", text: `Background command started. Output file: ${file}` }],
+      metadata: { file },
+    },
+  }
+  const promoted = await canonicalizeTranscriptPaths(
+    part,
+    { worktrees: ["/repo/.agent-duel/a"], canonical: "/repo", temp: tmpParent() },
+    "assistant",
+  )
+  expect(promoted.state.content).toEqual([
+    { type: "text", text: "Background command started. Output file: $TMPDIR/sh_example.out" },
+  ])
+  expect(promoted.state.metadata.file).toBe("$TMPDIR/sh_example.out")
 })

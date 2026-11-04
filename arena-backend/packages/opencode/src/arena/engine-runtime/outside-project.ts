@@ -103,6 +103,31 @@ const READS = new Set([
   "wc",
   "which",
 ])
+
+// Git is not a reader as a whole: aliases, configuration and output/helper flags can write.
+function gitRead(words: readonly string[]) {
+  if (path.basename(words[0] ?? "") !== "git") return false
+  if (
+    words.some((word) =>
+      /^(?:-c.*|--(?:config-env|exec-path|git-dir|work-tree|output|ext-diff|textconv)(?:=.*)?|-o.*)$/.test(word),
+    )
+  )
+    return false
+  let index = 1
+  while (words[index] === "-C" && words[index + 1]) index += 2
+  const command = words[index]
+  const args = words.slice(index + 1)
+  if (command === "branch") return args.length === 1 && args[0] === "--show-current"
+  if (command === "remote") return args.length === 1 && args[0] === "-v"
+  return ["log", "status", "rev-parse", "show", "diff", "ls-files"].includes(command)
+}
+
+function gitDirectories(words: readonly string[], cwd: string) {
+  const directories = [cwd]
+  for (let index = 1; words[index] === "-C" && words[index + 1]; index += 2)
+    directories.push(path.resolve(directories.at(-1)!, expandHome(words[index + 1])))
+  return directories
+}
 // Track directory changes before reading the next command in this shell scope.
 const CWD = new Set(["cd", "chdir", "popd", "pushd", "push-location", "set-location"])
 const SHELLS = new Set(["bash", "csh", "tcsh", "dash", "eval", "fish", "ksh", "sh", "xargs", "zsh"])
@@ -474,7 +499,12 @@ export async function shellPaths(command: string, cwd: string, access: "all" | "
         }
       } else {
         if (access === "all") {
-          if (!READS.has(name)) for (const word of wordPaths(words)) for (const base of initial) add(word, base)
+          const executable = executableWords(words)
+          if (!READS.has(name) && !gitRead(executable))
+            for (const word of wordPaths(words)) for (const base of initial) add(word, base)
+          if (path.basename(executable[0] ?? "") === "git" && !gitRead(executable))
+            for (const base of initial)
+              for (const directory of gitDirectories(executable, base)) add(directory, base, true)
         } else {
           const executable = executableWords(words)
           const program = path.basename(executable[0] ?? "")
@@ -490,7 +520,11 @@ export async function shellPaths(command: string, cwd: string, access: "all" | "
             executable.some((word) =>
               ["-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprintf"].includes(word),
             )
-          const reader = READS.has(program) || (program === "find" && !findWrites)
+          const reader = READS.has(program) || gitRead(executable) || (program === "find" && !findWrites)
+          if (program === "git")
+            for (const base of initial)
+              for (const directory of gitDirectories(executable, base))
+                add(directory, base, true, reader ? "read" : "write")
           for (const word of operands) {
             const operation = reader || (copy && word !== destination) ? "read" : "write"
             for (const base of initial) add(word, base, false, operation)

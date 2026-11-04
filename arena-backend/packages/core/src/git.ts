@@ -11,6 +11,8 @@ import { FileDiff } from "@opencode/schema/file-diff"
 import { KeyedMutex } from "./effect/keyed-mutex.js"
 import { VcsPatch } from "./vcs/patch.js"
 import { gitExecutable } from "./util/git-executable.js"
+import { stat } from "fs/promises"
+import { GitLayout } from "./git-layout.js"
 
 export class Repository extends Schema.Class<Repository>("Git.Repository")({
   worktree: AbsolutePath,
@@ -27,7 +29,7 @@ const snapshotConfigInclude = `[include]
 const snapshotConfig = `[core]
 	autocrlf = false
 	longpaths = true
-	symlinks = true
+	symlinks = ${FSUtil.canSymlink()}
 	fsmonitor = false
 	untrackedCache = true
 	# A split index cannot name its shared file once manyFiles skips index checksums.
@@ -195,6 +197,11 @@ const layer = Layer.effect(
     const locks = KeyedMutex.makeUnsafe<string>()
     const locked = <A, E, R>(repository: Repository, effect: Effect.Effect<A, E, R>) =>
       locks.withLock(repository.gitDirectory)(effect)
+    // What discovery found for each `.git`, by `GitLayout.layoutKey`.
+    const layouts = new Map<string, Repository>()
+    // Each remote's URL, or that there is none, by `remoteKey`: `Project.resolve` asks at every
+    // instance, and the answer moves only with the repository's configuration.
+    const remotes = new Map<string, string | undefined>()
 
     const discover = Effect.fn("Git.repo.discover")(function* (input: AbsolutePath) {
       const dotgit = yield* fs.up({ targets: [".git"], start: input, mode: "first" }).pipe(
@@ -204,21 +211,52 @@ const layer = Layer.effect(
       if (!dotgit) return undefined
 
       const cwd = path.dirname(dotgit)
-      const result = yield* run(cwd, proc, ["rev-parse", "--git-dir", "--git-common-dir", "--show-toplevel"])
-      const [gitDir, commonDir, topLevel] = result.text.split(/\r?\n/)
-      if (!gitDir || !commonDir) return undefined
+      const key = yield* Effect.promise(() => GitLayout.layoutKey(dotgit))
+      const known = key === undefined ? undefined : layouts.get(key)
+      if (known) return known
+      const git = (args: string[]) => run(cwd, proc, args)
+      // One process where the checkout has a working tree, which is every case but a bare
+      // repository or a cwd inside `.git`: each process start costs tens of milliseconds on
+      // Windows, and every instance and snapshot location asks.
+      const combined = yield* git(["rev-parse", "--show-toplevel", "--git-dir", "--git-common-dir"])
+      const lines = combined.text.split(/\r?\n/)
+      const [topLevel, gitDir, commonDir] =
+        combined.exitCode === 0 && lines.length >= 3
+          ? [
+              { exitCode: 0, text: lines[0]! },
+              { exitCode: 0, text: lines[1]! },
+              { exitCode: 0, text: lines[2]! },
+            ]
+          : [
+              yield* git(["rev-parse", "--show-toplevel"]),
+              yield* git(["rev-parse", "--git-dir"]),
+              yield* git(["rev-parse", "--git-common-dir"]),
+            ]
+      if (gitDir.exitCode !== 0 || commonDir.exitCode !== 0) return undefined
 
-      return new Repository({
-        worktree: AbsolutePath.make(topLevel ? resolvePath(cwd, topLevel) : cwd),
-        gitDirectory: AbsolutePath.make(resolvePath(cwd, gitDir)),
-        commonDirectory: AbsolutePath.make(resolvePath(cwd, commonDir)),
+      const repository = new Repository({
+        worktree: AbsolutePath.make(topLevel.exitCode === 0 ? resolvePath(cwd, topLevel.text) : cwd),
+        gitDirectory: AbsolutePath.make(resolvePath(cwd, gitDir.text)),
+        commonDirectory: AbsolutePath.make(resolvePath(cwd, commonDir.text)),
       })
+      if (key !== undefined) {
+        if (layouts.size >= LAYOUT_CACHE_SIZE) layouts.delete(layouts.keys().next().value!)
+        layouts.set(key, repository)
+      }
+      return repository
     })
 
     const remote = Effect.fn("Git.remote.get")(function* (repository: Repository, name = "origin") {
+      const key = yield* Effect.promise(() => remoteKey(repository, name))
+      if (key !== undefined && remotes.has(key)) return remotes.get(key)
       const result = yield* run(repository.worktree, proc, ["remote", "get-url", name])
-      if (result.exitCode !== 0) return undefined
-      return result.text.trim() || undefined
+      const url = result.exitCode === 0 ? result.text.trim() || undefined : undefined
+      // Exit 2 is git's "No such remote", as much an answer as a URL; any other failure is asked again.
+      if (key !== undefined && (result.exitCode === 0 || result.exitCode === 2)) {
+        if (remotes.size >= LAYOUT_CACHE_SIZE) remotes.delete(remotes.keys().next().value!)
+        remotes.set(key, url)
+      }
+      return url
     })
 
     const roots = Effect.fn("Git.history.rootCommits")(function* (repository: Repository) {
@@ -1412,6 +1450,28 @@ function pathGroups(paths: readonly RelativePath[]) {
 
 function uniqueSuffix() {
   return `${process.pid}-${Math.random().toString(36).slice(2)}`
+}
+
+const LAYOUT_CACHE_SIZE = 512
+
+/**
+ * A remote's URL lives in the repository's `config`, or in a worktree's `config.worktree`. Their
+ * inodes, modification times and sizes key what was read from them; a configuration that cannot
+ * be read keys nothing.
+ */
+async function remoteKey(repository: Repository, name: string) {
+  const version = (file: string) =>
+    stat(file).then(
+      // Git rewrites a configuration through a lock file, so a write also moves its inode.
+      (stats) => `${stats.ino}:${stats.mtimeMs}:${stats.size}`,
+      (error: NodeJS.ErrnoException) => (error.code === "ENOENT" ? "none" : undefined),
+    )
+  const [shared, worktree] = await Promise.all([
+    version(path.join(repository.commonDirectory, "config")),
+    version(path.join(repository.gitDirectory, "config.worktree")),
+  ])
+  if (shared === undefined || shared === "none" || worktree === undefined) return undefined
+  return [repository.commonDirectory, repository.gitDirectory, name, shared, worktree].join("\0")
 }
 
 function resolvePath(cwd: string, value: string) {

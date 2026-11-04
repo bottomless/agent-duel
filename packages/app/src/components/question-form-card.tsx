@@ -15,6 +15,7 @@ import { ScrollableCodeSurface } from "@/components/ui/scrollable-code-surface";
 import {
   areQuestionsAnswered,
   buildQuestionFormAnswers,
+  buildQuestionFormSelections,
   isQuestionAnswered,
   parseQuestionFormQuestions,
   questionShowsTextInput,
@@ -432,6 +433,11 @@ export function QuestionFormCard({
       updatedInput: {
         ...permission.request.input,
         answers: buildQuestionFormAnswers(questions, selections, otherTexts),
+        ...(permission.request.provider === "opencode"
+          ? {
+              answerSelections: buildQuestionFormSelections(questions, selections, otherTexts),
+            }
+          : {}),
       },
     });
   }, [
@@ -442,6 +448,7 @@ export function QuestionFormCard({
     otherTexts,
     onRespond,
     permission.request.input,
+    permission.request.provider,
   ]);
 
   const handleDeny = useCallback(() => {

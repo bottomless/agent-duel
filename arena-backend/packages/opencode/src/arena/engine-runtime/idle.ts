@@ -34,7 +34,8 @@ function timeoutError(error: unknown, depth = 0): boolean {
 
 /** True for a model request that Core stopped at its header or chunk deadline. */
 export function idleTimeout(error: { readonly type: string; readonly message: string }) {
-  return error.type === "provider.transport" && TIMEOUT_MESSAGES.has(error.message)
+  const message = error.message.replace(/^Connection lost while reading the response: /, "")
+  return error.type === "provider.transport" && TIMEOUT_MESSAGES.has(message)
 }
 
 /** True for the failure that ends a turn whose timeout budget is spent. */

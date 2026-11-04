@@ -25,10 +25,8 @@ import {
   classification,
   promptCacheKey,
   requestHeaders,
-  requestNeedsCompaction,
   sessionRequestIDs,
 } from "./request"
-import { COMPACTION_HEADER, COMPACTION_OFFER } from "@agent-duel/arena-service/request-budget"
 import { ArenaPorts } from "../ports"
 import { ArenaEngineSandbox, previewEnvironment } from "./sandbox"
 import type { ToolExecutionGate } from "./gate"
@@ -395,20 +393,6 @@ function install(context: Context, options: InstalledOptions) {
     )
 
     yield* context.session.hook(
-      "preflight",
-      (event) =>
-        Effect.sync(() => {
-          if (!arenaSession(options, String(event.sessionID)) || event.kind !== "primary") return
-          if (
-            event.request.http?.headers?.[COMPACTION_HEADER] === COMPACTION_OFFER &&
-            requestNeedsCompaction(event.request)
-          )
-            event.decision = "compact"
-        }),
-      { providerID: String(PROVIDER_ID) },
-    )
-
-    yield* context.session.hook(
       "http.response",
       (event) =>
         Effect.promise(async () => {
@@ -457,6 +441,22 @@ function install(context: Context, options: InstalledOptions) {
           if (event.decision.retry && idleTimeout(event.error))
             event.decision.message = ArenaResponseRecovery.IDLE_RECOVERING
           if (options.retryDelayMs !== undefined && event.decision.retry) event.decision.delay = options.retryDelayMs
+        }),
+      { providerID: String(PROVIDER_ID) },
+    )
+
+    yield* context.session.hook(
+      "continuation",
+      (event) =>
+        Effect.sync(() => {
+          if (!arenaSession(options, String(event.sessionID)) || !idleTimeout(event.error)) return
+          const message = event.message
+          const hasReply =
+            message?.type === "assistant" &&
+            message.content.some(
+              (part) => part.type === "tool" || (part.type === "text" && part.text.trim().length > 0),
+            )
+          event.text = hasReply ? ArenaResponseRecovery.IDLE_CONTINUE : ArenaResponseRecovery.IDLE_RESTART
         }),
       { providerID: String(PROVIDER_ID) },
     )
@@ -545,6 +545,7 @@ function install(context: Context, options: InstalledOptions) {
         const assignment = options.assignments.assignments.get(sessionID)
         const owner = assignment?.telemetry ? assignment.rootSessionID : sessionID
         Object.assign(event.env, options.previewEnvironment?.(owner, event.cwd) ?? previewEnvironment(owner))
+        if (assignment?.telemetry) event.outputDirectory = tmpDirectory(owner)
         yield* Effect.promise(() => mkdir(tmpDirectory(owner), { recursive: true }))
       }),
     )

@@ -59,6 +59,16 @@ describe("SQLite Arena queries", () => {
     expect(ids(db, { turnID: "turn-1" })).toEqual(["a"])
   })
 
+  test("matches $in and $nin lists longer than SQLite's expression depth", () => {
+    using db = database()
+    const many = Array.from({ length: 5000 }, (_, index) => `missing-${index}`)
+    expect(ids(db, { _id: { $nin: many } })).toEqual(["a", "b"])
+    expect(ids(db, { _id: { $in: [...many, "b"] } })).toEqual(["b"])
+    expect(ids(db, { turnID: { $nin: [...many, "turn-1"] } })).toEqual(["b"])
+    expect(ids(db, { finalizedSides: { $in: [...many, "b"] } })).toEqual(["b"])
+    expect(ids(db, { resolution: { $in: [null, ...many] } })).toEqual(["a", "b"])
+  })
+
   test("rejects unsupported operations instead of weakening a write guard", () => {
     expect(() => compileFilter({ state: { $unknown: "complete" } })).toThrow("Unsupported SQLite query operator")
     expect(() => compileFilter({ $unknown: [] })).toThrow("Unsupported SQLite filter")

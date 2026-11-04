@@ -228,8 +228,11 @@ import { createArenaByokService } from "./accounts/byok.js";
 import { createAccountsService, type AccountsService } from "./accounts/service.js";
 import { createAccountsRouter } from "./accounts/routes.js";
 import { createRequireSessionMiddleware } from "./accounts/middleware.js";
+import { readArenaCredentials } from "./accounts/credentials.js";
 import { createArenaRuntimeRouter } from "./accounts/arena-runtime-router.js";
 import { FeedbackBackend } from "./feedback/backend.js";
+import { CrashReportSender } from "./crash-reports/sender.js";
+import { onCrashReported } from "./crash-reports/reporter.js";
 import { createFeedbackContextCapture, type FeedbackContextCapture } from "./feedback/context.js";
 import { ensureAgentLoaded } from "./agent/agent-loading.js";
 import { createLeaderboardRouter } from "./leaderboard/routes.js";
@@ -541,6 +544,7 @@ function mountWebUi(app: express.Application, config: PaseoDaemonConfig, logger:
 }
 
 interface MountAccountsOptions {
+  home: string;
   arenaAccess: ArenaAccessConfig;
   logger: Logger;
   feedbackContext: FeedbackContextCapture;
@@ -556,7 +560,7 @@ interface MountAccountsOptions {
 function mountAccounts(
   app: express.Application,
   options: MountAccountsOptions,
-): AccountsService | null {
+): { accounts: AccountsService | null; crashReports: CrashReportSender | null } {
   const { arenaAccess, logger } = options;
   if (arenaAccess.kind !== "accounts") {
     // The app asks before it renders anything, so the answer has to exist even
@@ -573,7 +577,7 @@ function mountAccounts(
         "No control plane configured (PASEO_CONTROL_PLANE_URL); the daemon is unauthenticated",
       );
     }
-    return null;
+    return { accounts: null, crashReports: null };
   }
   const accountsConfig = arenaAccess.accounts;
   const accounts = createAccountsService({
@@ -591,13 +595,25 @@ function mountAccounts(
       appVersion: options.appVersion,
     }),
   );
+  const feedbackBackend = new FeedbackBackend(accountsConfig.controlPlaneUrl, {
+    logger,
+    appVersion: options.appVersion,
+  });
+  const crashReports = new CrashReportSender({
+    home: options.home,
+    backend: feedbackBackend,
+    token: () => {
+      const installed = readArenaCredentials()?.credentials;
+      return installed?.mode === "hosted" ? installed.token : null;
+    },
+    logger,
+  });
+  onCrashReported(() => void crashReports.flush());
+  crashReports.start();
   app.use(
     "/api/feedback",
     createFeedbackRouter({
-      backend: new FeedbackBackend(accountsConfig.controlPlaneUrl, {
-        logger,
-        appVersion: options.appVersion,
-      }),
+      backend: feedbackBackend,
       sessions: accounts.sessions,
       context: options.feedbackContext,
     }),
@@ -606,7 +622,7 @@ function mountAccounts(
     { controlPlaneUrl: accountsConfig.controlPlaneUrl },
     "Accounts enabled through the control plane",
   );
-  return accounts;
+  return { accounts, crashReports };
 }
 
 function resolveExpressTrustProxySetting(config: PaseoDaemonConfig): true | string[] {
@@ -916,7 +932,8 @@ export async function createPaseoDaemon(
           },
         })
       : null;
-  const accounts = mountAccounts(app, {
+  const { accounts, crashReports } = mountAccounts(app, {
+    home: config.paseoHome,
     arenaAccess,
     appVersion: daemonVersion,
     logger,
@@ -1883,6 +1900,8 @@ export async function createPaseoDaemon(
       await wsServer.close();
     }
     await serviceProxy.stopStandalone();
+    onCrashReported(undefined);
+    crashReports?.stop();
     await accounts?.close().catch(() => undefined);
     // Force-drop remaining sockets so httpServer.close() resolves promptly.
     // We've already closed wsServer (which sent ws-layer close frames) and

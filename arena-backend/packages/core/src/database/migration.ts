@@ -21,33 +21,34 @@ export type Migration = {
 // it is bootstrapping, since two instances over one file must not race.
 export function apply(db: Database) {
   return Effect.gen(function* () {
-    // OpenCode owns the unprefixed table namespace. Embedders sharing this
-    // database may own underscore-prefixed tables, which bootstrap ignores.
-    const tables = yield* db.all<{ name: string }>(
-      sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND substr(name, 1, 1) <> '_'`,
-    )
-    if (tables.some((table) => table.name === "session" || table.name === "session_v2"))
-      return yield* applyOnly(db, migrations)
-    if (tables.length > 0) return yield* Effect.die(new Error("Database is not empty and has no session table"))
+    // The lock only covers this process. Another process can open the same file at the same time
+    // (the desktop app starts more than one engine), so look at the tables inside a write
+    // transaction: the second process waits for the first one's schema instead of creating it again.
     const started = Date.now()
     yield* Effect.logInfo("database schema bootstrap started", { migrations: migrations.length })
-    yield* db.transaction((tx) =>
-      Effect.gen(function* () {
-        yield* schema.up(tx)
-        yield* tx.run(
-          sql`CREATE TABLE ${sql.identifier("migration")} (id TEXT PRIMARY KEY, time_completed INTEGER NOT NULL)`,
-        )
-        yield* Effect.forEach(migrations, (migration) =>
-          tx.run(
-            sql`INSERT INTO ${sql.identifier("migration")} (id, time_completed) VALUES (${migration.id}, ${Date.now()})`,
-          ),
-        )
-      }),
+    const created = yield* db.transaction(
+      (tx) =>
+        Effect.gen(function* () {
+          const tables = yield* tx.all<{ name: string }>(
+            sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND substr(name, 1, 1) <> '_'`,
+          )
+          if (tables.some((table) => table.name === "session" || table.name === "session_v2")) return false
+          if (tables.length > 0) return yield* Effect.die(new Error("Database is not empty and has no session table"))
+          yield* schema.up(tx)
+          yield* tx.run(
+            sql`CREATE TABLE ${sql.identifier("migration")} (id TEXT PRIMARY KEY, time_completed INTEGER NOT NULL)`,
+          )
+          yield* Effect.forEach(migrations, (migration) =>
+            tx.run(
+              sql`INSERT INTO ${sql.identifier("migration")} (id, time_completed) VALUES (${migration.id}, ${Date.now()})`,
+            ),
+          )
+          return true
+        }),
+      { behavior: "immediate" },
     )
-    yield* Effect.logInfo("database schema bootstrap completed", {
-      migrations: migrations.length,
-      durationMs: Date.now() - started,
-    })
+    if (!created) yield* applyOnly(db, migrations)
+    else yield* Effect.logInfo("database schema bootstrap completed", { migrations: migrations.length, durationMs: Date.now() - started })
   })
 }
 
@@ -108,13 +109,17 @@ export function applyOnly(db: Database, input: Migration[]) {
       if (completed.has(migration.id)) continue
       const started = Date.now()
       yield* Effect.logInfo("database migration started", { migration: migration.id })
-      const apply = db.transaction((tx) =>
-        Effect.gen(function* () {
-          yield* migration.up(tx)
-          yield* tx.run(
-            sql`INSERT INTO ${sql.identifier("migration")} (id, time_completed) VALUES (${migration.id}, ${Date.now()})`,
-          )
-        }),
+      const apply = db.transaction(
+        (tx) =>
+          Effect.gen(function* () {
+            // Another process may have run it since the journal was read.
+            if (yield* tx.get(sql`SELECT id FROM ${sql.identifier("migration")} WHERE id = ${migration.id}`)) return
+            yield* migration.up(tx)
+            yield* tx.run(
+              sql`INSERT INTO ${sql.identifier("migration")} (id, time_completed) VALUES (${migration.id}, ${Date.now()})`,
+            )
+          }),
+        { behavior: "immediate" },
       )
       const run =
         migration.foreignKeys !== false

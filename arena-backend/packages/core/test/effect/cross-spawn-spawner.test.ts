@@ -6,6 +6,7 @@ import { Deferred, Effect, Exit, PlatformError, Stream } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import { CrossSpawnSpawner } from "@opencode/util/cross-spawn-spawner"
 import { LayerNode } from "@opencode/util/effect/layer-node"
+import { ShellSelect } from "@opencode/core/shell/select"
 import { testEffect } from "../lib/effect"
 
 const live = LayerNode.compile(CrossSpawnSpawner.node)
@@ -447,6 +448,26 @@ describe("cross-spawn spawner", () => {
   })
 
   describe("Windows-specific", () => {
+    fx.live(
+      "kills what a Git Bash exec took out of the parent chain",
+      Effect.gen(function* () {
+        const bash = ShellSelect.gitbash()
+        if (process.platform !== "win32" || !bash) return
+
+        // The inner bash replaces itself, MSYS-style: its Windows parent is gone, so taskkill /T
+        // never reached it and it held the pipes open, and exitCode never resolved.
+        const handle = yield* ChildProcess.make(bash, ["-c", `eval "bash -c 'sleep 299; :'"`], {
+          stdout: "pipe",
+          stderr: "pipe",
+        })
+        yield* Stream.runDrain(handle.stdout).pipe(Effect.forkChild)
+        yield* Effect.sleep("2 seconds")
+        yield* handle.kill()
+        const exit = yield* Effect.exit(handle.exitCode.pipe(Effect.timeout("10 seconds")))
+        expect(Exit.isFailure(exit) && String(exit.cause).includes("TimeoutError")).toBe(false)
+      }),
+    )
+
     fx.effect(
       "uses shell routing on Windows",
       Effect.gen(function* () {
