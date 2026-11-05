@@ -1,14 +1,16 @@
 import { useTranslation } from "react-i18next";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { AgentPermissionResponse } from "@getpaseo/protocol/agent-types";
-import type {
-  ArenaReviewAnswer,
-  ArenaRun,
-  ArenaSide,
-  ArenaSnapshot,
+import {
+  ArenaDiscardReasonSchema,
+  type ArenaDiscardReason,
+  type ArenaReviewAnswer,
+  type ArenaRun,
+  type ArenaSide,
+  type ArenaSnapshot,
 } from "@getpaseo/protocol/arena/rpc-schemas";
 import { useToast } from "@/contexts/toast-context";
-import { confirmDialog } from "@/utils/confirm-dialog";
+import { confirmDialog, confirmDialogWithChoice } from "@/utils/confirm-dialog";
 import { toErrorMessage } from "@/utils/error-messages";
 import { DISCARD_WINNER_CONFIRMATION } from "./review";
 import { earlyBattleToast } from "./constants";
@@ -22,6 +24,10 @@ import {
 } from "./use-arena-session";
 
 export type ArenaStopResolution = "discard" | "apply_a" | "apply_b";
+
+function isDiscardReason(choice: string | undefined): choice is ArenaDiscardReason {
+  return ArenaDiscardReasonSchema.safeParse(choice).success;
+}
 
 function sideLabel(side: ArenaSide): string {
   return side.toUpperCase();
@@ -111,6 +117,29 @@ export function useArenaBattleActions(
     [choose, t],
   );
 
+  // The work can be partial and the other side's result goes, so it asks first. The vote says it is
+  // on purpose: the engine refuses a plain vote for a side that failed.
+  const acceptFailed = useCallback(
+    async (side: ArenaSide) => {
+      if (!turnId) return;
+      const label = sideLabel(side);
+      const confirmed = await confirmDialog({
+        title: t("arena.acceptFailedTitle", { side: label }),
+        message: t("arena.acceptFailedHelp", { side: label }),
+        confirmLabel: t("arena.acceptSide", { side: label }),
+        cancelLabel: t("arena.cancel"),
+        destructive: true,
+      });
+      if (!confirmed) return;
+      try {
+        await mutateTurn({ kind: "vote", turnId, vote: side, acceptFailed: true });
+      } catch (error) {
+        showError(error);
+      }
+    },
+    [mutateTurn, showError, t, turnId],
+  );
+
   const tie = useCallback(async () => {
     if (!turnId) return;
     try {
@@ -132,18 +161,33 @@ export function useArenaBattleActions(
   const resolveStop = useCallback(
     async (resolution: ArenaStopResolution) => {
       if (!turnId) return;
+      let discardReason: ArenaDiscardReason | undefined;
       if (resolution === "discard") {
-        const confirmed = await confirmDialog({
+        const answer = await confirmDialogWithChoice({
           title: t("arena.discardBattleTitle"),
           message: t("arena.discardBattleHelp"),
           confirmLabel: t("arena.discardBattle"),
           cancelLabel: t("arena.cancel"),
           destructive: true,
+          choices: {
+            label: t("arena.discardReasonLabel"),
+            options: [
+              { id: "both_wrong", label: t("arena.discardReasonBothWrong") },
+              { id: "changed_mind", label: t("arena.discardReasonChangedMind") },
+              { id: "other", label: t("arena.discardReasonOther") },
+            ],
+          },
         });
-        if (!confirmed) return;
+        if (!answer.confirmed) return;
+        if (isDiscardReason(answer.choice)) discardReason = answer.choice;
       }
       try {
-        await mutateTurn({ kind: "resolve_stop", turnId, resolution });
+        await mutateTurn({
+          kind: "resolve_stop",
+          turnId,
+          resolution,
+          ...(discardReason ? { discardReason } : {}),
+        });
       } catch (error) {
         showError(error);
       }
@@ -234,6 +278,7 @@ export function useArenaBattleActions(
       actionError,
       choose,
       pickEarly,
+      acceptFailed,
       tie,
       stop,
       resolveStop,
@@ -247,6 +292,7 @@ export function useArenaBattleActions(
       replyPermission,
     }),
     [
+      acceptFailed,
       choose,
       actionError,
       pending,

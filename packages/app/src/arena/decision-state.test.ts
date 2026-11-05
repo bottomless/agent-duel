@@ -181,13 +181,16 @@ describe("arenaDecisionPhase", () => {
       canChooseB: false,
       canTie: false,
       canDiscard: false,
+      bothFailed: false,
+      canAcceptA: false,
+      canAcceptB: false,
       canRetry: false,
       canResume: false,
       failedSide: "b",
     });
   });
 
-  it("offers Discard in Tie's place when both sides failed", () => {
+  it("offers Discard without Tie when both sides failed", () => {
     expect(
       arenaDecisionPhase(
         snapshot({
@@ -205,9 +208,35 @@ describe("arenaDecisionPhase", () => {
       canChooseB: false,
       canTie: false,
       canDiscard: true,
+      bothFailed: true,
+      canAcceptA: false,
+      canAcceptB: false,
       canRetry: true,
       canResume: false,
       failedSide: null,
+    });
+  });
+
+  it("offers Accept for a failed side the engine says can be taken", () => {
+    expect(
+      arenaDecisionPhase(
+        snapshot({
+          state: "awaiting_vote",
+          turn: { canDiscardBattle: true },
+          runs: [
+            run({ id: "run-a", side: "a", runState: "complete", selectable: true }),
+            run({ id: "run-b", side: "b", runState: "error", canAcceptFailed: true }),
+          ],
+        }),
+      ),
+    ).toMatchObject({
+      canChooseA: true,
+      canChooseB: false,
+      canAcceptA: false,
+      canAcceptB: true,
+      canDiscard: true,
+      bothFailed: false,
+      failedSide: "b",
     });
   });
 

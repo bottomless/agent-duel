@@ -96,7 +96,7 @@ const failed = (side: "a" | "b", canRetry: boolean) =>
 describe("ArenaDecisionPill", () => {
   afterEach(cleanup);
 
-  it("offers Discard in Tie's place when both agents failed", () => {
+  it("offers Discard alone when both agents failed with no saved work", () => {
     const view = render(
       <ArenaDecisionPill
         serverId="server"
@@ -114,6 +114,32 @@ describe("ArenaDecisionPill", () => {
     // Neither failure can be voted for, so neither Choose is offered at all.
     expect(view.queryByTestId("arena-choose-a")).toBeNull();
     expect(view.queryByTestId("arena-choose-b")).toBeNull();
+    expect(view.queryByTestId("arena-accept-failed-a")).toBeNull();
+    expect(view.queryByTestId("arena-accept-failed-b")).toBeNull();
+  });
+
+  it("offers Accept for each failed side with saved work, and Discard between them", () => {
+    const view = render(
+      <ArenaDecisionPill
+        serverId="server"
+        agentId="agent"
+        snapshot={awaitingVote(
+          [
+            { ...failed("a", false), canAcceptFailed: true },
+            { ...failed("b", true), canAcceptFailed: true },
+          ],
+          { canTie: false, canDiscardBattle: true },
+        )}
+        onHeightChange={noop}
+      />,
+    );
+    expect(
+      view.getByText("Both agents failed · accepting either won't count as a vote"),
+    ).toBeTruthy();
+    expect(view.queryByTestId("arena-accept-failed-a")).not.toBeNull();
+    expect(view.queryByTestId("arena-accept-failed-b")).not.toBeNull();
+    expect(view.queryByTestId("arena-stopped-discard")).not.toBeNull();
+    expect(view.queryByTestId("arena-choose-tie")).toBeNull();
   });
 
   it("drops retry from the hint once neither side can be retried", () => {
@@ -132,23 +158,61 @@ describe("ArenaDecisionPill", () => {
     expect(view.queryByTestId("arena-stopped-discard")).not.toBeNull();
   });
 
-  it("keeps Tie without Discard while one result can be chosen", () => {
+  it("offers Choose, Discard, and Accept while one result can be chosen", () => {
+    const view = render(
+      <ArenaDecisionPill
+        serverId="server"
+        agentId="agent"
+        snapshot={awaitingVote(
+          [{ ...failed("a", false), canAcceptFailed: true }, run({ id: "run-b", side: "b" })],
+          { canTie: false, canDiscardBattle: true },
+        )}
+        onHeightChange={noop}
+      />,
+    );
+    expect(view.queryByTestId("arena-choose-tie")).toBeNull();
+    expect(view.queryByTestId("arena-stopped-discard")).not.toBeNull();
+    expect(view.queryByText(/Both agents failed/)).toBeNull();
+    // The voter learns first that neither choice counts.
+    expect(view.getByText("Agent A failed · choosing either won't count as a vote")).toBeTruthy();
+    expect(view.queryByTestId("arena-accept-failed-a")).not.toBeNull();
+    expect(view.queryByTestId("arena-choose-a")).toBeNull();
+    expect(view.queryByTestId("arena-choose-b")).not.toBeNull();
+  });
+
+  it("leaves out a failed side whose result was not saved", () => {
     const view = render(
       <ArenaDecisionPill
         serverId="server"
         agentId="agent"
         snapshot={awaitingVote([failed("a", false), run({ id: "run-b", side: "b" })], {
           canTie: false,
-          canDiscardBattle: false,
+          canDiscardBattle: true,
         })}
         onHeightChange={noop}
       />,
     );
-    expect(view.queryByTestId("arena-choose-tie")).not.toBeNull();
-    expect(view.queryByTestId("arena-stopped-discard")).toBeNull();
-    expect(view.queryByText(/Both agents failed/)).toBeNull();
-    // The finished side can still be chosen, and the voter learns first that the vote won't count.
     expect(view.getByText("Agent A failed · choosing B won't count as a vote")).toBeTruthy();
+    expect(view.queryByTestId("arena-accept-failed-a")).toBeNull();
+    expect(view.queryByTestId("arena-choose-a")).toBeNull();
+    expect(view.queryByTestId("arena-choose-b")).not.toBeNull();
+  });
+
+  it("offers Tie and Discard together when both sides finished", () => {
+    const view = render(
+      <ArenaDecisionPill
+        serverId="server"
+        agentId="agent"
+        snapshot={awaitingVote([run({ id: "run-a", side: "a" }), run({ id: "run-b", side: "b" })], {
+          canTie: true,
+          canDiscardBattle: true,
+        })}
+        onHeightChange={noop}
+      />,
+    );
+    expect(view.queryByTestId("arena-choose-a")).not.toBeNull();
+    expect(view.queryByTestId("arena-choose-tie")).not.toBeNull();
+    expect(view.queryByTestId("arena-stopped-discard")).not.toBeNull();
     expect(view.queryByTestId("arena-choose-b")).not.toBeNull();
   });
 

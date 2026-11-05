@@ -18,6 +18,8 @@ import {
   type Side,
   type Vote,
   type VoteDiscardedReason,
+  type DiscardReason,
+  type DiscardStage,
 } from "./domain"
 import { ArenaActivity } from "./activity"
 import { bound, boundPrepared } from "./artifact"
@@ -80,6 +82,7 @@ const historyProjection = {
   resolution: 1,
   vote: 1,
   voteDiscardedReason: 1,
+  acceptedFailedSide: 1,
   selectedEarly: 1,
   appliedSide: 1,
   canonicalUserMessageID: 1,
@@ -1253,6 +1256,9 @@ export class Store {
     readonly resolution: Resolution
     readonly vote?: Vote
     readonly voteDiscardedReason?: VoteDiscardedReason
+    readonly acceptedFailedSide?: Side
+    readonly discardStage?: DiscardStage
+    readonly discardReason?: DiscardReason
     readonly participantID?: string
     readonly appliedSide?: Side
     /** Left out for a discard that names nobody (`identitiesRevealed`). */
@@ -1271,6 +1277,9 @@ export class Store {
           resolution: input.resolution,
           ...(input.vote ? { vote: input.vote } : {}),
           ...(input.voteDiscardedReason ? { voteDiscardedReason: input.voteDiscardedReason } : {}),
+          ...(input.acceptedFailedSide ? { acceptedFailedSide: input.acceptedFailedSide } : {}),
+          ...(input.discardStage ? { discardStage: input.discardStage } : {}),
+          ...(input.discardReason ? { discardReason: input.discardReason } : {}),
           ...(input.participantID ? { voteParticipantID: input.participantID } : {}),
           ...(input.resolution.kind === "vote" ? { selectedEarly: false } : {}),
           ...(input.resolution.kind === "vote"
@@ -1279,7 +1288,10 @@ export class Store {
                 "transitionTimestamps.applying": input.at,
               }
             : {}),
-          ...(input.resolution.kind === "stopped" ? { comparisonState: "skipped" as const } : {}),
+          // A battle discarded at its vote has a comparison of its own, finished or on its way.
+          ...(input.resolution.kind === "stopped" && input.expectedState !== "awaiting_vote"
+            ? { comparisonState: "skipped" as const }
+            : {}),
           ...(input.appliedSide ? { appliedSide: input.appliedSide } : {}),
           ...(input.models
             ? { "placement.a.model": input.models.a, "placement.b.model": input.models.b, revealAt: input.at }

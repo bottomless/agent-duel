@@ -40,6 +40,7 @@ import type {
   ArenaReviewEvent,
   ArenaReviewIngestResult,
   ArenaSnapshot,
+  ArenaDiscardReason,
   ArenaVote,
 } from "@getpaseo/protocol/arena/rpc-schemas";
 import { MAX_WEBSOCKET_MESSAGE_BYTES } from "@getpaseo/protocol/websocket-message-limit";
@@ -2741,9 +2742,20 @@ export class DaemonClient {
     return { received: payload.received, accepted: payload.accepted };
   }
 
-  async arenaVote(agentId: string, turnId: string, vote: ArenaVote): Promise<ArenaSnapshot> {
+  async arenaVote(
+    agentId: string,
+    turnId: string,
+    vote: ArenaVote,
+    acceptFailed?: boolean,
+  ): Promise<ArenaSnapshot> {
     const payload = await this.sendNamespacedCorrelatedSessionRequest<"arena.turn.vote.response">({
-      message: { type: "arena.turn.vote.request", agentId, turnId, vote },
+      message: {
+        type: "arena.turn.vote.request",
+        agentId,
+        turnId,
+        vote,
+        ...(acceptFailed ? { acceptFailed } : {}),
+      },
       timeout: 120_000,
     });
     return payload.snapshot;
@@ -2770,6 +2782,7 @@ export class DaemonClient {
     agentId: string,
     turnId: string,
     resolution: "discard" | "apply_a" | "apply_b",
+    discardReason?: ArenaDiscardReason,
   ): Promise<ArenaSnapshot> {
     const payload =
       await this.sendNamespacedCorrelatedSessionRequest<"arena.turn.resolve_stop.response">({
@@ -2778,6 +2791,7 @@ export class DaemonClient {
           agentId,
           turnId,
           resolution,
+          ...(discardReason ? { discardReason } : {}),
         },
         timeout: 120_000,
       });

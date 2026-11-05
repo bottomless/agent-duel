@@ -17,6 +17,12 @@ import {
 } from "./decision-state";
 import { useArenaBattleActions, type ArenaBattleActions } from "./use-battle-actions";
 
+function sideChoiceLabelKey(kind: "vote" | "keep" | "accept"): string {
+  if (kind === "keep") return "arena.keepSide";
+  if (kind === "accept") return "arena.acceptSide";
+  return "arena.choose";
+}
+
 /**
  * The decision for one side: the vote, the early pick, or keeping that side after a stop.
  *
@@ -35,7 +41,7 @@ export function ArenaSideChoiceButton({
   testID,
 }: {
   side: ArenaSide;
-  kind: "early" | "vote" | "keep";
+  kind: "early" | "vote" | "keep" | "accept";
   label?: string;
   loading?: boolean;
   disabled?: boolean;
@@ -57,10 +63,7 @@ export function ArenaSideChoiceButton({
       />
     );
   }
-  const buttonLabel =
-    kind === "keep"
-      ? t("arena.keepSide", { side: sideLabel })
-      : t("arena.choose", { side: sideLabel });
+  const buttonLabel = t(sideChoiceLabelKey(kind), { side: sideLabel });
   return (
     <Button
       variant="secondary"
@@ -191,8 +194,8 @@ export function ResumeDecision({ actions }: { actions: ArenaBattleActions }) {
 }
 
 /**
- * The third choice after a stop, in Tie's place when neither result can be chosen, or beside Resume
- * after the engine's restart cut the battle off.
+ * The choice to apply neither side: at the vote, after a stop, or beside Resume after the engine's
+ * restart cut the battle off.
  */
 export function DiscardDecision({ actions }: { actions: ArenaBattleActions }) {
   const { t } = useTranslation();

@@ -36,8 +36,12 @@ export type ArenaDecisionPhase =
       canChooseB: boolean;
       /** Only between two results that can be chosen; a tie applies A whatever A is. */
       canTie: boolean;
-      /** Neither result can be chosen, so Discard takes Tie's place. */
       canDiscard: boolean;
+      /** Neither result can be chosen, so Tie leaves the pill. */
+      bothFailed: boolean;
+      /** A failed side whose work can be taken anyway, in place of its Choose. */
+      canAcceptA: boolean;
+      canAcceptB: boolean;
       /** A failed side can still be retried, which the hint beside Discard offers. */
       canRetry: boolean;
       /**
@@ -123,6 +127,9 @@ function awaitingVotePhase(
     canChooseB,
     canTie: turn.canTie,
     canDiscard: turn.canDiscardBattle,
+    bothFailed: !turn.canResumeBattle && !canChooseA && !canChooseB,
+    canAcceptA: runA?.canAcceptFailed === true,
+    canAcceptB: runB?.canAcceptFailed === true,
     canRetry: runA?.canRetry === true || runB?.canRetry === true,
     canResume: turn.canResumeBattle,
     failedSide: failedSide(canChooseA, canChooseB),

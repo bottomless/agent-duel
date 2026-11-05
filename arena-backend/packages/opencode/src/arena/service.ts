@@ -81,6 +81,8 @@ import type { BattleAssignmentDecision } from "@agent-duel/arena-service/assignm
 import { ArenaAttachments } from "./attachments"
 import { forkSessionInto, type ArenaFork } from "./fork"
 import {
+  acceptedFailedSide,
+  canAcceptFailed,
   canDiscardBattle,
   canReopenInterruptedBattle,
   canResumeBattle,
@@ -105,6 +107,9 @@ import {
   type BattleState,
   type Resolution,
   type Side,
+  type DiscardReason,
+  type DiscardStage,
+  RESULT_NOT_SAVED_MESSAGE,
   type StopResolution,
   type Vote,
 } from "./domain"
@@ -1325,6 +1330,8 @@ export interface Interface {
     turnID: string,
     vote: Vote,
     participantID?: string,
+    /** The voter is taking a failed side's work on purpose; see `canAcceptFailed`. */
+    acceptFailed?: boolean,
   ) => Effect.Effect<ReturnType<typeof project>, Error>
   readonly recordReview: (
     turnID: string,
@@ -1341,7 +1348,11 @@ export interface Interface {
   readonly retryComparison: (turnID: string) => Effect.Effect<ReturnType<typeof project>, Error>
   readonly stop: (turnID: string) => Effect.Effect<ReturnType<typeof project>, Error>
   /** Keep a side after a stop, or discard the battle; see `canDiscardBattle`. */
-  readonly resolveStop: (turnID: string, resolution: StopResolution) => Effect.Effect<ReturnType<typeof project>, Error>
+  readonly resolveStop: (
+    turnID: string,
+    resolution: StopResolution,
+    discardReason?: DiscardReason,
+  ) => Effect.Effect<ReturnType<typeof project>, Error>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Arena") {}
@@ -4916,7 +4927,7 @@ export const layer: Layer.Layer<
           runState: "error",
           durationMs: null,
           selectable: false,
-          error: `Arena result finalization failed\n${detail}`,
+          error: `${RESULT_NOT_SAVED_MESSAGE}\n${detail}`,
           completedAt: new Date(),
         }),
       )
@@ -5220,9 +5231,13 @@ export const layer: Layer.Layer<
           artifactIDs: [a.artifactID, b.artifactID, ...patchArtifacts.map((artifact) => artifact.id)],
         }),
       )
+      // The service refuses a report for a battle it already holds as discarded. That failure is
+      // nobody's to retry, so the battle reads as one with no report.
+      const latest = yield* promise(() => store.turn(turn._id))
+      const discarded = latest?.resolution?.kind === "stopped" && latest.resolution.resolution === "discard"
       yield* promise(() =>
         store.updateTurn(turn._id, {
-          comparisonState: comparison.state === "complete" ? "complete" : "failed",
+          comparisonState: comparison.state === "complete" ? "complete" : discarded ? "skipped" : "failed",
           comparisonID: comparison._id,
         }),
       )
@@ -10385,13 +10400,16 @@ export const layer: Layer.Layer<
         }
         side = resolution.appliedSide
         vote = resolution.kind === "vote" ? resolution.vote : resolution.kind === "early" ? resolution.vote : undefined
-        const discardedReason = voteDiscardedReason(resolution, yield* promise(() => store.runsForTurn(turn._id)))
+        const decidedRuns = yield* promise(() => store.runsForTurn(turn._id))
+        const discardedReason = voteDiscardedReason(resolution, decidedRuns)
+        const acceptedFailed = acceptedFailedSide(resolution, decidedRuns)
         const recorded = yield* promise(() =>
           store.recordResolution({
             turnID: turn._id,
             resolution,
             vote,
             ...(discardedReason ? { voteDiscardedReason: discardedReason } : {}),
+            ...(acceptedFailed ? { acceptedFailedSide: acceptedFailed } : {}),
             participantID: participantID(rawParticipantID),
             appliedSide: side,
             models: revealed.models,
@@ -10870,7 +10888,12 @@ export const layer: Layer.Layer<
       rawParticipantID,
     ) => promoteImpl(store, turn, side, resolution, vote, retry, rawParticipantID).pipe(Effect.mapError(error))
 
-    const vote = Effect.fn("Arena.vote")(function* (id: string, selected: Vote, rawParticipantID?: string) {
+    const vote = Effect.fn("Arena.vote")(function* (
+      id: string,
+      selected: Vote,
+      rawParticipantID?: string,
+      acceptFailed?: boolean,
+    ) {
       const store = yield* available()
       const votingParticipantID = yield* Effect.try({
         try: () => participantID(rawParticipantID),
@@ -10880,6 +10903,8 @@ export const layer: Layer.Layer<
       if (!turn) return yield* Effect.fail(new Error(`Arena turn not found: ${id}`))
       if (turn.resolution) return yield* respond(store, turn.chatID)
       if (turn.state === "running") {
+        // A Retry from another window can reopen the side between the press and this request.
+        if (acceptFailed) return yield* Effect.fail(new Error("Arena turn is not ready for a vote"))
         if (selected === "tie") return yield* Effect.fail(new Error("Arena ties require both contestant results"))
         const revealed = yield* promise(() => resolvedPlacement(turn, `select:${selected}`))
         const committed = committedResolution(earlyResolution(selected), revealed.decision)
@@ -10928,8 +10953,13 @@ export const layer: Layer.Layer<
       if (canResumeBattle(turn, runs)) {
         return yield* Effect.fail(new Error("Resume or discard this battle before choosing"))
       }
-      // A failed side has no result to choose, so a battle whose sides both failed is only discarded.
-      if (!canVote(turn, runs, selected)) {
+      // A failed side is taken only on purpose, so a vote from a window that has not heard of the
+      // failure yet is refused rather than applying unfinished work.
+      if (acceptFailed) {
+        if (selected === "tie" || !canAcceptFailed(turn, runs, selected)) {
+          return yield* Effect.fail(new Error("Arena can only accept a failed side whose result was saved"))
+        }
+      } else if (!canVote(turn, runs, selected)) {
         return yield* Effect.fail(new Error("Arena can only choose a result that finished"))
       }
       const resolved = voteResolution(selected)
@@ -11173,23 +11203,19 @@ export const layer: Layer.Layer<
       return yield* respond(store, turn.chatID)
     })
 
-    const resolveStop = Effect.fn("Arena.resolveStop")(function* (id: string, selected: StopResolution) {
+    const resolveStop = Effect.fn("Arena.resolveStop")(function* (
+      id: string,
+      selected: StopResolution,
+      discardReason?: DiscardReason,
+    ) {
       const store = yield* available()
       const turn = yield* promise(() => store.turn(id))
       if (!turn) return yield* Effect.fail(new Error(`Arena turn not found: ${id}`))
       if (turn.resolution) return yield* respond(store, turn.chatID)
       const runs = yield* promise(() => store.runsForTurn(turn._id))
-      // A finished battle is discarded here too when neither result can be chosen.
+      // A battle at its vote is discarded here too.
       const open = selected === "discard" ? canDiscardBattle(turn, runs) : turn.state === "awaiting_stop_resolution"
-      if (!open) {
-        return yield* Effect.fail(
-          new Error(
-            turn.state === "awaiting_vote"
-              ? "Arena battle can be discarded only when neither result can be chosen"
-              : "Arena stopped battle is not ready for resolution",
-          ),
-        )
-      }
+      if (!open) return yield* Effect.fail(new Error("Arena stopped battle is not ready for resolution"))
       const resolved = stoppedResolution(selected)
       if (resolved.appliedSide) {
         const side = resolved.appliedSide
@@ -11202,7 +11228,7 @@ export const layer: Layer.Layer<
       // Archived before the control plane commits, so a failure here leaves the battle undecided.
       yield* ensureArchives(store, turn)
       const revealed = yield* promise(() => modelsForDecision(turn, "discard"))
-      yield* discardCommitted(store, turn._id, revealed)
+      yield* discardCommitted(store, turn._id, revealed, discardReason)
       return yield* respond(store, turn.chatID)
     })
 
@@ -11217,6 +11243,8 @@ export const layer: Layer.Layer<
       expectedState: DiscardableState,
       models: Readonly<Record<Side, string>>,
       reveal: boolean,
+      discardStage: DiscardStage,
+      discardReason?: DiscardReason,
     ) =>
       promise(() =>
         store.recordResolution({
@@ -11224,6 +11252,8 @@ export const layer: Layer.Layer<
           resolution: stoppedResolution("discard", reveal ? undefined : { revealed: false }),
           ...(reveal ? { models } : {}),
           expectedState,
+          discardStage,
+          ...(discardReason ? { discardReason } : {}),
           at: new Date(),
         }),
       ).pipe(
@@ -11277,6 +11307,11 @@ export const layer: Layer.Layer<
       turn: TurnDocument,
       chat: ChatDocument,
     ) {
+      // Analytics only, as for a vote: forked and swallowed so it can never block the discard.
+      yield* recordBattleMetrics(store, turn._id).pipe(
+        Effect.catchCause((cause) => Effect.logError("Arena battle metrics failed", { turnID: turn._id, cause })),
+        Effect.forkIn(scope),
+      )
       yield* promise(() => store.transitionTurn(turn._id, "discarding"))
       yield* cleanup(store, turn, chat.repository.root)
       const canonical = yield* withGit(inspectCanonical(chat.repository.root)).pipe(Effect.mapError(error))
@@ -11302,13 +11337,18 @@ export const layer: Layer.Layer<
      * `running` between the reveal and the local compare-and-set; its runs are then stopped and the
      * discard recorded once they settle, so the battle never runs on into a vote nothing can record.
      */
-    const discardCommitted = (store: Store, turnID: string, revealed: Awaited<ReturnType<typeof resolvedPlacement>>) =>
-      holdingDiscard(turnID, discardCommittedLoop(store, turnID, revealed))
+    const discardCommitted = (
+      store: Store,
+      turnID: string,
+      revealed: Awaited<ReturnType<typeof resolvedPlacement>>,
+      discardReason?: DiscardReason,
+    ) => holdingDiscard(turnID, discardCommittedLoop(store, turnID, revealed, discardReason))
 
     const discardCommittedLoop = Effect.fn("Arena.discardCommitted")(function* (
       store: Store,
       turnID: string,
       revealed: Awaited<ReturnType<typeof resolvedPlacement>>,
+      discardReason?: DiscardReason,
     ) {
       const deadline = Date.now() + 30_000
       while (true) {
@@ -11325,7 +11365,16 @@ export const layer: Layer.Layer<
           const lost = expectedState === "finalization_failed" || expectedState === "interrupted_recovery"
           if (!lost) yield* ensureArchives(store, turn)
           const reveal = lost || (yield* promise(() => anySideShowedOutput(store, turn._id)))
-          const recorded = yield* recordDiscard(store, turn, expectedState, revealed.models, reveal)
+          const stage = lost ? "recovery" : expectedState === "awaiting_vote" ? "vote" : "stop"
+          const recorded = yield* recordDiscard(
+            store,
+            turn,
+            expectedState,
+            revealed.models,
+            reveal,
+            stage,
+            discardReason,
+          )
           if (recorded.recorded) {
             if (reveal) yield* revealTelemetry(recorded.turn, revealed.metrics)
             else yield* releaseTelemetry(recorded.turn)
@@ -11377,7 +11426,7 @@ export const layer: Layer.Layer<
               const reveal = yield* promise(() => anySideShowedOutput(store, turn._id))
               const revealed = yield* promise(() => modelsForDecision(turn, "discard"))
               // A turn claimed back to `running` meanwhile is stopped on the next pass, then discarded.
-              const recorded = yield* recordDiscard(store, turn, expectedState, revealed.models, reveal)
+              const recorded = yield* recordDiscard(store, turn, expectedState, revealed.models, reveal, "archive")
               // A discard another request recorded is its to finish, unless a crash cut that request off.
               const orphaned =
                 !recorded.recorded &&
@@ -11648,12 +11697,14 @@ export const layer: Layer.Layer<
       discardSteer,
       retryRun,
       resumeBattle,
-      vote: (turnID, selected, participantID) => vote(turnID, selected, participantID).pipe(Effect.mapError(error)),
+      vote: (turnID, selected, participantID, acceptFailed) =>
+        vote(turnID, selected, participantID, acceptFailed).pipe(Effect.mapError(error)),
       recordReview,
       retryResolution,
       retryComparison,
       stop: (turnID) => stop(turnID).pipe(Effect.mapError(error)),
-      resolveStop: (turnID, resolution) => resolveStop(turnID, resolution).pipe(Effect.mapError(error)),
+      resolveStop: (turnID, resolution, discardReason) =>
+        resolveStop(turnID, resolution, discardReason).pipe(Effect.mapError(error)),
     })
   }),
 )

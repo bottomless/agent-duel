@@ -424,6 +424,18 @@ export const ar: TranslationResources = {
     discardBattleHelp:
       "سيُهمل عمل كلا الوكيلين من هذه الجولة. يبقى سجل محادثتك السابق ومشروعك دون تغيير.",
     discardBattle: "تجاهل المعركة",
+    acceptSide: "قبول {{side}}",
+    acceptedFailedNote: "(فشل، مقبول)",
+    acceptFailedTitle: "هل تقبل عمل الوكيل {{side}} الفاشل؟",
+    acceptFailedHelp:
+      "فشل الوكيل {{side}} قبل أن ينتهي، لذا قد يكون عمله جزئيًا. تصبح ملفاته ومحادثته سجل هذه الدردشة، ويُهمل عمل الوكيل الآخر. لا يُحتسب هذا تصويتًا.",
+    failedSideAccept: "فشل الوكيل {{side}} · لن يُحتسب اختيار أي منهما تصويتًا",
+    bothFailedAccept: "فشل الوكيلان · لن يُحتسب قبول أي منهما تصويتًا",
+    acceptedFailedModel: "قُبل عمل {{model}} الفاشل (الوكيل {{side}})",
+    discardReasonLabel: "لماذا؟ (اختياري)",
+    discardReasonBothWrong: "كلاهما خطأ",
+    discardReasonChangedMind: "غيّرت رأيي",
+    discardReasonOther: "أخرى",
     chatTooLarge:
       "هذه المعركة أكبر من أن تُعرض. ابدأ محادثة جديدة للمتابعة. تغييراتك البرمجية موجودة بالفعل في مشروعك.",
     comparisonTooLarge: "هذه المقارنة أكبر من أن تُعرض.",

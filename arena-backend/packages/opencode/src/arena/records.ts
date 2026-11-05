@@ -1,4 +1,12 @@
-import type { BattleState, Resolution, Side, Vote, VoteDiscardedReason } from "./domain"
+import type {
+  BattleState,
+  DiscardReason,
+  DiscardStage,
+  Resolution,
+  Side,
+  Vote,
+  VoteDiscardedReason,
+} from "./domain"
 import type { ArenaActiveOperation, ArenaOperationProgress } from "./operation-tracker"
 import type { RefChange, RefOutcome } from "./ref-types"
 import type { GenerationMetrics, UsageTotals } from "@agent-duel/arena-service/metrics"
@@ -397,6 +405,12 @@ export type TurnDocument = {
    * does not count (`voteDiscardedReason` in `domain.ts`).
    */
   voteDiscardedReason?: VoteDiscardedReason
+  /** The applied side had failed and the voter took its work anyway (`acceptedFailedSide` in `domain.ts`). */
+  acceptedFailedSide?: Side
+  /** Set on a discarded battle: where it was discarded (`DiscardStage`). */
+  discardStage?: DiscardStage
+  /** Set when the voter gave a reason for the discard, which is optional. */
+  discardReason?: DiscardReason
   voteParticipantID?: string
   selectedEarly?: boolean
   /** Replies sent to the contestants while the battle ran. */
@@ -989,6 +1003,11 @@ export type BattleMetricsDocument = {
   readonly vote?: Vote
   /** The vote does not count, so `won` is false on both sides; drop these from any model ranking. */
   readonly voteDiscardedReason?: VoteDiscardedReason
+  /** The applied side had failed. Always with `voteDiscardedReason`, so rankings already drop it. */
+  readonly acceptedFailedSide?: Side
+  /** A discarded battle's stage; `resolutionKind` reads `stopped` for all of them. */
+  readonly discardStage?: DiscardStage
+  readonly discardReason?: DiscardReason
   readonly resolutionKind?: string
   readonly selectedEarly: boolean
   /** A steer reaches both contestants, so it belongs to the turn, not a side. */
@@ -1013,6 +1032,7 @@ export type BattleHistoryTurn = Pick<
   | "resolution"
   | "vote"
   | "voteDiscardedReason"
+  | "acceptedFailedSide"
   | "selectedEarly"
   | "appliedSide"
   | "canonicalUserMessageID"

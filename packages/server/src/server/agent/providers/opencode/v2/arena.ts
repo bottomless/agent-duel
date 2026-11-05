@@ -193,10 +193,10 @@ export function createArenaSessionApi(options: ArenaSessionApiOptions): ArenaApi
       snapshot(`/arena/runs/${encodeURIComponent(runId)}/retry`, { method: "POST" }),
     resumeBattle: (turnId) =>
       snapshot(`/arena/turns/${encodeURIComponent(turnId)}/resume`, { method: "POST" }),
-    vote: (turnId, vote: ArenaVote, participantID) =>
+    vote: (turnId, vote: ArenaVote, participantID, acceptFailed) =>
       snapshot(`/arena/turns/${encodeURIComponent(turnId)}/vote`, {
         method: "POST",
-        body: { vote, participantID },
+        body: { vote, participantID, ...(acceptFailed ? { acceptFailed } : {}) },
       }),
     recordReview: (turnId, events: readonly ArenaReviewEvent[], participantID, ipAddress) =>
       request(
@@ -209,10 +209,10 @@ export function createArenaSessionApi(options: ArenaSessionApiOptions): ArenaApi
       ),
     stop: (turnId) =>
       snapshot(`/arena/turns/${encodeURIComponent(turnId)}/stop`, { method: "POST" }),
-    resolveStop: (turnId, resolution) =>
+    resolveStop: (turnId, resolution, discardReason) =>
       snapshot(`/arena/turns/${encodeURIComponent(turnId)}/stop-resolution`, {
         method: "POST",
-        body: { resolution },
+        body: { resolution, ...(discardReason ? { discardReason } : {}) },
       }),
     retryComparison: (turnId) =>
       snapshot(`/arena/turns/${encodeURIComponent(turnId)}/retry-comparison`, { method: "POST" }),

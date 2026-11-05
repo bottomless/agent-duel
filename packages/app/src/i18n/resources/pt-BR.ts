@@ -439,6 +439,18 @@ export const ptBR: TranslationResources = {
     discardBattleHelp:
       "O trabalho dos dois agentes neste turno será descartado. Seu histórico anterior e projeto ficam inalterados.",
     discardBattle: "Descartar batalha",
+    acceptSide: "Aceitar {{side}}",
+    acceptedFailedNote: "(falhou, aceito)",
+    acceptFailedTitle: "Aceitar o trabalho com falha do agente {{side}}?",
+    acceptFailedHelp:
+      "O agente {{side}} falhou antes de terminar, então o trabalho pode estar incompleto. Os arquivos e a conversa dele passam para o histórico deste chat, e o trabalho do outro agente é descartado. Isso não conta como voto.",
+    failedSideAccept: "O agente {{side}} falhou · escolher qualquer um não contará como voto",
+    bothFailedAccept: "Ambos os agentes falharam · aceitar qualquer um não contará como voto",
+    acceptedFailedModel: "Trabalho com falha de {{model}} aceito (agente {{side}})",
+    discardReasonLabel: "Por quê? (opcional)",
+    discardReasonBothWrong: "Ambos errados",
+    discardReasonChangedMind: "Mudei de ideia",
+    discardReasonOther: "Outro",
     chatTooLarge:
       "Esta batalha é grande demais para exibir. Inicie outro chat para continuar. Suas alterações de código já estão no projeto.",
     comparisonTooLarge: "Esta comparação é grande demais para exibir.",
