@@ -4,7 +4,7 @@
 
 **Breaking change: you cannot go back to 1.x after this upgrade.**
 
-- The first start of this version imports your chats from 1.x, and they continue here.
+- The first start imports your chats from 1.x and reclaims the duplicated old tables before opening chats. Both steps share an eight-minute startup budget; unfinished work resumes in the background or at a later start. Existing chats show an upgrade message and open automatically when the engine is ready.
 - After the import, a 1.x build refuses this database and shows `Database is not empty and has no session table`. Do not reinstall a 1.x build on an upgraded machine.
 - The upgrade makes no pre-upgrade database copy. Going back to 1.x would require a new migration. See `docs/arena.md` for disk space and recovery requirements.
 - A 1.x install that you do not upgrade keeps its own data, and this change does not touch it.
