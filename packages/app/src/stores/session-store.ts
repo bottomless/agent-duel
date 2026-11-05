@@ -709,7 +709,11 @@ function areArenaDatabaseUpgradesEqual(
   current: ServerInfoStatusPayload["arenaDatabaseUpgrade"] | undefined,
   next: ServerInfoStatusPayload["arenaDatabaseUpgrade"] | undefined,
 ): boolean {
-  return current?.startedAt === next?.startedAt && current?.deadline === next?.deadline;
+  return (
+    current?.startedAt === next?.startedAt &&
+    current?.deadline === next?.deadline &&
+    current?.backgroundImport === next?.backgroundImport
+  );
 }
 
 function isSessionServerInfoUnchanged(input: {

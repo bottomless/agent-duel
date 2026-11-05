@@ -22,6 +22,7 @@ import { resolveEngineLogPath, resolveOpenCodeHomeDir } from "./paths.js";
 import {
   openCodeStartupTimeoutMessage,
   hasArenaDatabaseUpgradeLine,
+  arenaBackgroundImportLine,
   ARENA_DATABASE_UPGRADE_TIMEOUT_MS,
 } from "./startup-timeout.js";
 import { setArenaDatabaseUpgrade } from "./arena-upgrade.js";
@@ -657,6 +658,10 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
     let stderrBuffer = "";
     let stdoutBuffer = "";
     let upgradeDetected = false;
+    let backgroundImport = false;
+    let upgradeLineBuffer = "";
+    let upgradeLineOverflow = false;
+    let processEnded = false;
     const STARTUP_BUFFER_CAP = 8192;
     const appendCapped = (current: string, chunk: string): string => {
       if (current.length >= STARTUP_BUFFER_CAP) {
@@ -702,6 +707,35 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
       };
       timeout = setTimeout(timedOut, OPENCODE_SERVER_STARTUP_TIMEOUT_MS);
 
+      const observeBackgroundImport = (output: string) => {
+        const lines = (upgradeLineBuffer + output).split(/\r?\n/);
+        const skipFirst = upgradeLineOverflow;
+        const pendingLine = lines.pop()!;
+        upgradeLineOverflow =
+          pendingLine.length > STARTUP_BUFFER_CAP || (skipFirst && lines.length === 0);
+        upgradeLineBuffer = pendingLine.slice(-STARTUP_BUFFER_CAP);
+        for (const [index, line] of lines.entries()) {
+          if (index === 0 && skipFirst) continue;
+          const importing = arenaBackgroundImportLine(line);
+          if (importing === undefined) continue;
+          backgroundImport = importing;
+          if (importing && started) {
+            setArenaDatabaseUpgrade(server, {
+              startedAt,
+              deadline: startedAt + ARENA_DATABASE_UPGRADE_TIMEOUT_MS,
+              backgroundImport: true,
+            });
+          } else if (!importing && started) {
+            finishUpgrade();
+          } else if (upgradeDetected) {
+            setArenaDatabaseUpgrade(server, {
+              startedAt,
+              deadline: startedAt + ARENA_DATABASE_UPGRADE_TIMEOUT_MS,
+            });
+          }
+        }
+      };
+
       serverProcess.stdout?.on("data", (data: Buffer) => {
         const output = data.toString();
         stdoutBuffer = isArenaLaunch
@@ -720,11 +754,19 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
           timeout = setTimeout(timedOut, Math.max(0, deadline - Date.now()));
           setArenaDatabaseUpgrade(server, { startedAt, deadline });
         }
+        if (isArenaLaunch && !server.stopping && !processEnded) observeBackgroundImport(output);
         if ((isArenaLaunch ? stdoutBuffer : output).includes("listening on") && !settled) {
           started = true;
           settled = true;
           clearTimeout(timeout);
-          finishUpgrade();
+          server.databaseUpgrade = false;
+          if (backgroundImport) {
+            setArenaDatabaseUpgrade(server, {
+              startedAt,
+              deadline: startedAt + ARENA_DATABASE_UPGRADE_TIMEOUT_MS,
+              backgroundImport: true,
+            });
+          } else finishUpgrade();
           resolveListening();
         }
       });
@@ -741,11 +783,15 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
       });
 
       serverProcess.on("error", (error) => {
+        processEnded = true;
+        finishUpgrade();
         const headline = error instanceof Error ? error.message : String(error);
         failStartup(new Error(buildStartupErrorMessage(headline)));
       });
 
       serverProcess.on("exit", (code, signal) => {
+        processEnded = true;
+        finishUpgrade();
         this.logger.info(
           { ...generationLogContext(server), code, signal },
           "OpenCode server generation exited",
@@ -926,6 +972,8 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
 
   private async killServer(server: OpenCodeServerGeneration): Promise<void> {
     server.stopping = true;
+    server.databaseUpgrade = false;
+    setArenaDatabaseUpgrade(server, null);
     if (server.arenaRuntimeToken) {
       revokeArenaRuntimeCredentials(server.arenaRuntimeToken);
       server.arenaRuntimeToken = undefined;

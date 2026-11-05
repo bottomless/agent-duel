@@ -37,7 +37,7 @@ import { FileDropZone } from "@/components/file-drop/file-drop-zone";
 import { ChatFeedbackCard } from "@/feedback/chat-feedback-card";
 import { useRetainedPanelActive } from "@/components/retained-panel";
 import { RetainedChatContent } from "./retained-chat-content";
-import { DatabaseUpgradeChat } from "./database-upgrade-chat";
+import { DatabaseUpgradeChat, DatabaseImportError } from "./database-upgrade-chat";
 import { Composer } from "@/composer";
 import {
   dispatchComposerAgentMessage,
@@ -345,19 +345,26 @@ function renderChatAgentNonReadyView(args: {
   effectiveAgent: AgentScreenAgent | null;
   t: TFunction;
   onRetryLoad: () => void;
+  serverId: string;
 }): React.ReactElement | null {
-  const { viewState, effectiveAgent, t, onRetryLoad } = args;
+  const { viewState, effectiveAgent, t, onRetryLoad, serverId } = args;
   if (viewState.tag === "not_found") {
     return (
-      <View style={styles.container} testID="agent-not-found">
-        <View style={styles.errorContainer}>
-          <Text style={styles.errorText}>{t("agentPanel.states.notFound")}</Text>
+      <DatabaseImportError serverId={serverId} message={viewState.message} onRetry={onRetryLoad}>
+        <View style={styles.container} testID="agent-not-found">
+          <View style={styles.errorContainer}>
+            <Text style={styles.errorText}>{t("agentPanel.states.notFound")}</Text>
+          </View>
         </View>
-      </View>
+      </DatabaseImportError>
     );
   }
   if (viewState.tag === "error") {
-    return <AgentLoadErrorView message={viewState.message} onRetry={onRetryLoad} />;
+    return (
+      <DatabaseImportError serverId={serverId} message={viewState.message} onRetry={onRetryLoad}>
+        <AgentLoadErrorView message={viewState.message} onRetry={onRetryLoad} />
+      </DatabaseImportError>
+    );
   }
   if (viewState.tag === "boot" || !effectiveAgent) {
     return (
@@ -720,16 +727,32 @@ function AgentPanelBody({
 
   if (lookupState.tag === "not_found") {
     return (
-      <View style={styles.container} testID="agent-not-found">
-        <View style={styles.errorContainer}>
-          <Text style={styles.errorText}>{t("agentPanel.states.notFound")}</Text>
+      <DatabaseImportError
+        serverId={serverId}
+        message={lookupState.message}
+        onRetry={retryAgentLookup}
+        retryWhileImporting
+      >
+        <View style={styles.container} testID="agent-not-found">
+          <View style={styles.errorContainer}>
+            <Text style={styles.errorText}>{t("agentPanel.states.notFound")}</Text>
+          </View>
         </View>
-      </View>
+      </DatabaseImportError>
     );
   }
 
   if (lookupState.tag === "error") {
-    return <AgentLoadErrorView message={lookupState.message} onRetry={retryAgentLookup} />;
+    return (
+      <DatabaseImportError
+        serverId={serverId}
+        message={lookupState.message}
+        onRetry={retryAgentLookup}
+        retryWhileImporting
+      >
+        <AgentLoadErrorView message={lookupState.message} onRetry={retryAgentLookup} />
+      </DatabaseImportError>
+    );
   }
 
   const agent: AgentScreenAgent | null =
@@ -1122,6 +1145,7 @@ function ChatAgentContent({
     effectiveAgent,
     t,
     onRetryLoad: retryAgentLoad,
+    serverId,
   });
   if (nonReadyView) return nonReadyView;
   invariant(agentId, "agent id is defined when agent content is ready");

@@ -1757,16 +1757,20 @@ An interrupted import continues from its saved cursor, keeping the import order.
 
 Before schema migrations or other database maintenance, an unfinished upgrade announces itself to
 the daemon. During import and old-table cleanup, the sidebar says "Upgrading your database. Keep the app
-open until this finishes. This can take a few minutes." It stays until engine readiness, across both
-steps. An existing chat waiting for history says "Upgrading your database. This chat opens when the
+open until this finishes. This can take a few minutes." It stays across both steps until engine
+readiness. An existing chat waiting for history says "Upgrading your database. This chat opens when the
 upgrade finishes." It loads automatically at readiness. New-chat composers remain usable. Both notices
 currently use English in every locale. A first send waits for readiness too; its pending state can last
 through the upgrade. Initial import, resumed import and cleanup use the same spawn-relative ten-minute deadline; ordinary starts keep their 30-second limit.
 
 If the shared eight-minute budget runs out before import completes, the engine logs the fallback and
 stops the import child, then starts listening while the runtime resumes import in the background.
-The notice clears at readiness. An old chat not yet imported can then show "Failed to load agent.
-Session not found" without a composer until its import finishes. Old-table removal waits for a subsequent start.
+The sidebar notice stays until that import ends. Imported chats and new chats remain usable. A chat
+whose load fails with "Session not found" shows the same upgrade pane message while import continues.
+It opens automatically when its history becomes available or import ends. Other load errors keep
+their usual presentation. A failed import or stopped engine clears the background notice and lets
+remaining load errors show. Restarting does not retain the previous engine's import state.
+Background import does not extend startup or send deadlines. Old-table removal waits for a subsequent start.
 
 If recovery needs a new migration, stop the app **and its daemon** before preserving the affected
 home's current engine database, `arena/arena.sqlite`, their WAL and SHM files, and `arena/artifacts/`.
