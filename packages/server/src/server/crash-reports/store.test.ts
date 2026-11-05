@@ -1,15 +1,19 @@
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  approveCrashReports,
   claimRunningMarker,
+  crashReportsAwaitingUser,
   crashReportsDirectory,
   describeUncleanShutdown,
+  isReadyToSend,
   pendingCrashReports,
   readLogTail,
   recordCrashReport,
   recordMarkerExit,
+  recordMarkerStopping,
   releaseRunningMarker,
   releaseStoppedMarker,
   removeCrashReport,
@@ -111,7 +115,95 @@ describe("crash report store", () => {
   });
 });
 
+describe("external ends", () => {
+  function record(crash: Parameters<typeof recordCrashReport>[0]["crash"]) {
+    return recordCrashReport({ home, crash, appVersion: "0.4.0-beta.17" })!;
+  }
+
+  it("holds back what something outside the app ended and sends the app's own failures", () => {
+    const unclean = record({ process: "app", kind: "unclean_shutdown", message: "Gone" });
+    const killed = record({
+      process: "daemon",
+      kind: "exit",
+      message: "Killed",
+      signal: "SIGKILL",
+    });
+    const gpu = record({ process: "app", kind: "exit", message: "GPU killed", external: true });
+    const segfault = record({
+      process: "engine",
+      kind: "exit",
+      message: "Segv",
+      signal: "SIGSEGV",
+    });
+    const exitCode = record({ process: "engine", kind: "exit", message: "Exited", exitCode: 1 });
+    const exception = record({ process: "daemon", kind: "exception", message: "TypeError" });
+
+    expect([unclean, killed, gpu].map((report) => isReadyToSend(report))).toEqual([
+      false,
+      false,
+      false,
+    ]);
+    expect([segfault, exitCode, exception].map((report) => isReadyToSend(report))).toEqual([
+      true,
+      true,
+      true,
+    ]);
+    expect(
+      crashReportsAwaitingUser(home)
+        .map((report) => report.id)
+        .sort(),
+    ).toEqual([unclean.id, killed.id, gpu.id].sort());
+  });
+
+  it("sends an external end once the user approves it, with their message", () => {
+    const first = record({ process: "app", kind: "unclean_shutdown", message: "Gone" });
+    const second = record({ process: "daemon", kind: "unclean_shutdown", message: "Gone" });
+
+    approveCrashReports(home, [first.id], "My Mac froze and I held the power button");
+
+    const approved = pendingCrashReports(home).find((report) => report.id === first.id);
+    expect(approved?.sendApproved).toEqual({
+      message: "My Mac froze and I held the power button",
+    });
+    expect(isReadyToSend(approved!)).toBe(true);
+    expect(crashReportsAwaitingUser(home).map((report) => report.id)).toEqual([second.id]);
+  });
+
+  it("reads reports written before external ends were held back as ready to send", () => {
+    const report = record({ process: "app", kind: "unclean_shutdown", message: "Gone" });
+    const file = path.join(crashReportsDirectory(home), `${report.id}.json`);
+    const { external: _external, ...older } = report;
+    writeFileSync(file, JSON.stringify(older));
+
+    expect(pendingCrashReports(home).map((pending) => isReadyToSend(pending))).toEqual([true]);
+  });
+});
+
 describe("running marker", () => {
+  it("treats a run killed after it began a requested shutdown as a normal exit", () => {
+    claimRunningMarker({ home, name: "daemon", version: "1" });
+    recordMarkerStopping(home, "daemon");
+    const marker = JSON.parse(
+      readFileSync(path.join(crashReportsDirectory(home), "daemon.running"), "utf8"),
+    );
+    expect(marker.stoppingAt).toEqual(expect.any(String));
+    // The next run sees the same marker under another process id, with the old process gone.
+    writeFileSync(
+      path.join(crashReportsDirectory(home), "daemon.running"),
+      JSON.stringify({ ...marker, pid: 999_999 }),
+    );
+    recordMarkerExit({
+      home,
+      name: "daemon",
+      pid: 999_999,
+      exit: { code: null, signal: "SIGKILL" },
+    });
+
+    expect(
+      claimRunningMarker({ home, name: "daemon", version: "1", isAlive: () => false }),
+    ).toBeNull();
+  });
+
   it("returns the previous run when it ended without exiting", () => {
     const directory = crashReportsDirectory(home);
     claimRunningMarker({ home, name: "daemon", version: "1" });

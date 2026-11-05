@@ -143,6 +143,16 @@ The daemon password and account session are separate credentials; a remote clien
   session is installed and the control plane has it. A control plane that does not accept that
   source answers 400 and the reports keep waiting, so deploy it before a release that sends them.
   The code is in `packages/server/src/server/crash-reports/`.
+- Only the app's own failures go without asking: an exception, an exit code, or a crash signal such
+  as `SIGSEGV`. When something outside the app ended a process (found gone with no exit of its
+  own, killed by a signal like `SIGKILL`, or Electron's `killed` reason), nothing in the log
+  explains it. The report waits for the next launch, where the app asks whether to send it and
+  takes the user's account of what happened as the feedback message
+  (`packages/app/src/feedback/crash-report-review.tsx`). The control plane must store that
+  message before a release sends it; an older one drops it without an error.
+- A daemon killed after it began a requested shutdown is a normal exit. Quitting the desktop app
+  kills a daemon that is still stopping after 5 seconds, so the worker marks its running marker
+  as stopping (`recordMarkerStopping`) before anything that can hang.
 - The control plane can refuse builds below a minimum version or on a blocklist. It then answers
   `/api/auth/methods` with `updateRequired: true`, and the account gate shows the update screen
   (`packages/app/src/accounts/update-required.tsx`) in place of sign-in, terms and the app. The

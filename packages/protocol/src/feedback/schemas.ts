@@ -172,12 +172,53 @@ export const crashReportSchema = z
   .strict();
 export type CrashReport = z.infer<typeof crashReportSchema>;
 
+export const crashReportUserMessageSchema = z.string().trim().min(1).max(5_000);
+
 const crashFeedbackSchema = feedbackBaseSchema
   .extend({
     source: z.literal("crash"),
     crash: crashReportSchema,
+    /** What the user wrote when they chose to send a report about an external end. */
+    message: crashReportUserMessageSchema.optional(),
   })
   .strict();
+
+/**
+ * A crash report waiting for the user: something outside the app ended a process, so the app asks
+ * before sending it (`packages/server/src/server/crash-reports/routes.ts`).
+ */
+export const crashReportAwaitingUserSchema = z
+  .object({
+    id: z.uuid(),
+    crash: crashReportSchema,
+    appVersion: z.string().trim().min(1).max(64).nullable(),
+  })
+  .strict();
+export type CrashReportAwaitingUser = z.infer<typeof crashReportAwaitingUserSchema>;
+
+export const crashReportsAwaitingUserResponseSchema = z
+  .object({ reports: z.array(crashReportAwaitingUserSchema) })
+  .strict();
+export type CrashReportsAwaitingUserResponse = z.infer<
+  typeof crashReportsAwaitingUserResponseSchema
+>;
+
+export const crashReportDecisionSchema = z.discriminatedUnion("decision", [
+  z
+    .object({
+      decision: z.literal("send"),
+      ids: z.array(z.uuid()).min(1).max(20),
+      message: crashReportUserMessageSchema.optional(),
+    })
+    .strict(),
+  z
+    .object({
+      decision: z.literal("discard"),
+      ids: z.array(z.uuid()).min(1).max(20),
+    })
+    .strict(),
+]);
+export type CrashReportDecision = z.infer<typeof crashReportDecisionSchema>;
 
 export const feedbackSubmissionSchema = z.discriminatedUnion("source", [
   sidebarFeedbackSchema,
