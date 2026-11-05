@@ -1717,8 +1717,6 @@ export const es: TranslationResources = {
     },
     crashReports: {
       title: "Agent Duel se detuvo inesperadamente",
-      subtitle:
-        "Puede que se forzara su cierre, se quedara sin memoria o que tu equipo se reiniciara. Un informe nos ayuda a averiguarlo.",
       stopped: "{{process}} se detuvo · {{time}}",
       processes: {
         app: "La app",

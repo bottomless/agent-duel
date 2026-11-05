@@ -1722,8 +1722,6 @@ export const fr: TranslationResources = {
     },
     crashReports: {
       title: "Agent Duel s'est arrêté de façon inattendue",
-      subtitle:
-        "Il a peut-être été forcé à quitter, manqué de mémoire, ou votre ordinateur a redémarré. Un rapport nous aide à le savoir.",
       stopped: "{{process}} s'est arrêté · {{time}}",
       processes: {
         app: "L'app",

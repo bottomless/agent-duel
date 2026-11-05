@@ -1666,8 +1666,6 @@ export const ar: TranslationResources = {
     },
     crashReports: {
       title: "توقف Agent Duel بشكل غير متوقع",
-      subtitle:
-        "ربما تم إنهاؤه قسرًا أو نفدت الذاكرة أو أُعيد تشغيل جهازك. يساعدنا التقرير على معرفة السبب.",
       stopped: "توقف {{process}} · {{time}}",
       processes: {
         app: "التطبيق",

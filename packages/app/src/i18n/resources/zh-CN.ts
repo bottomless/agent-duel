@@ -1646,7 +1646,6 @@ export const zhCN: TranslationResources = {
     },
     crashReports: {
       title: "Agent Duel 意外停止",
-      subtitle: "可能是被强制退出、内存不足，或电脑重新启动。报告可以帮助我们查明原因。",
       stopped: "{{process}}已停止 · {{time}}",
       processes: {
         app: "应用",

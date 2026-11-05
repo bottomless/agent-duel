@@ -81,13 +81,7 @@ export function CrashReportReview({ endpoint, sessionToken }: CrashReportReviewP
   const send = useCallback(() => decide("send"), [decide]);
   const discard = useCallback(() => decide("discard"), [decide]);
 
-  const header = useMemo<SheetHeader>(
-    () => ({
-      title: t("feedback.crashReports.title"),
-      subtitle: <Text style={styles.subtitle}>{t("feedback.crashReports.subtitle")}</Text>,
-    }),
-    [t],
-  );
+  const header = useMemo<SheetHeader>(() => ({ title: t("feedback.crashReports.title") }), [t]);
   const footer = useMemo(
     () => (
       <View style={styles.footerActions}>
@@ -177,10 +171,6 @@ export function CrashReportReview({ endpoint, sessionToken }: CrashReportReviewP
 }
 
 const styles = StyleSheet.create((theme) => ({
-  subtitle: {
-    color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.sm,
-  },
   reports: {
     gap: theme.spacing[3],
   },

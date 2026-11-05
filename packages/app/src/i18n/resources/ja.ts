@@ -1685,8 +1685,6 @@ export const ja: TranslationResources = {
     },
     crashReports: {
       title: "Agent Duel が予期せず停止しました",
-      subtitle:
-        "強制終了、メモリ不足、またはコンピュータの再起動が原因の可能性があります。レポートが原因の特定に役立ちます。",
       stopped: "{{process}}が停止しました · {{time}}",
       processes: {
         app: "アプリ",

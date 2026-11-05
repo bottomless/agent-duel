@@ -1704,8 +1704,6 @@ export const ru: TranslationResources = {
     },
     crashReports: {
       title: "Agent Duel неожиданно остановился",
-      subtitle:
-        "Возможно, его принудительно закрыли, ему не хватило памяти или компьютер перезагрузился. Отчёт поможет нам разобраться.",
       stopped: "{{process}}: остановка · {{time}}",
       processes: {
         app: "Приложение",

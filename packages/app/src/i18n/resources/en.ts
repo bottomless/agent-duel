@@ -1681,8 +1681,6 @@ export const en = {
     },
     crashReports: {
       title: "Agent Duel stopped unexpectedly",
-      subtitle:
-        "It may have been force quit or run out of memory, or your computer restarted. A report helps us find out.",
       stopped: "{{process}} stopped · {{time}}",
       processes: {
         app: "The app",

@@ -1702,8 +1702,6 @@ export const ptBR: TranslationResources = {
     },
     crashReports: {
       title: "O Agent Duel parou inesperadamente",
-      subtitle:
-        "Ele pode ter sido forçado a fechar, ficado sem memória, ou seu computador reiniciou. Um relatório nos ajuda a descobrir.",
       stopped: "{{process}} parou · {{time}}",
       processes: {
         app: "O app",
