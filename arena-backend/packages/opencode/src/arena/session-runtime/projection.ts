@@ -429,6 +429,8 @@ export function messagesToGraft(messages: readonly CanonicalMessage[], boundary:
   return messages.filter((message) => {
     if (message.type === "system") return false
     if (message.type === "synthetic" && message.id.startsWith(BATTLE_RESUME_MESSAGE_PREFIX)) return false
+    // The previous battle's handoff sorts before the prompt; this holds even if a clock step put it after.
+    if (message.type === "synthetic" && message.metadata?.arenaCarry !== undefined) return false
     if (message.type === "idle" && message.error !== undefined) return false
     return String(message.id) >= boundary
   })

@@ -353,6 +353,14 @@ async function prepareNativePrompt(
             // Keep the workspace warning beside the user's prompt for the model, while the
             // native user row and its public timeline retain the exact submitted text.
             if (turn.note) yield* sessions.synthetic({ sessionID, text: turn.note, resume: false })
+            if (turn.carry) {
+              yield* sessions.synthetic({
+                sessionID,
+                text: turn.carry.text,
+                metadata: turn.carry.metadata,
+                resume: false,
+              })
+            }
           }),
           context,
         ),

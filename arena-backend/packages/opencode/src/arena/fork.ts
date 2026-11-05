@@ -137,6 +137,12 @@ export const forkSessionInto = Effect.fn("ArenaFork.forkSessionInto")(function* 
   // belongs to the old assignment, even when both models are named arena/contestant.
   const canonicalMessages = yield* sessions.canonicalMessages(forked.id)
   for (const message of canonicalMessages) {
+    // A handoff a Battle-off turn read (`carry-note.ts`) was that turn's alone; the next battle
+    // gets its own, or none.
+    if (message.type === "synthetic" && message.metadata?.arenaCarry !== undefined) {
+      yield* sessions.removeMessage({ sessionID: forked.id, messageID: MessageID.make(String(message.id)) })
+      continue
+    }
     const localized = localizeEmbeddedPaths(input.expireReasoning ? expireCopiedReasoning(message) : message, roots)
     // A user's prompt is input, not generated transcript text.  Keep its exact bytes while
     // still localizing file attachments and any other embedded paths.

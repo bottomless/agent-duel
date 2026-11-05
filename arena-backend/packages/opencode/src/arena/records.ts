@@ -343,6 +343,30 @@ export type AttachmentSummary = {
   readonly excerpt?: string
 }
 
+export type CarryRecord = {
+  readonly version: 1
+  readonly source: "replay" | "none"
+  readonly note?: string
+  /** A short fixed token: `pending` while the request runs, else why there is no note. */
+  readonly reason?: string
+  /** The winner's final contestant call the service replayed. */
+  readonly generationID?: string
+  readonly requestedAt: Date
+  readonly completedAt?: Date
+}
+
+export type CarryInput = {
+  readonly version: 1
+  readonly fromTurnID: Identifier
+  readonly text: string
+}
+
+/** Set by the first send after the vote, battle or Battle off: the one turn this handoff reaches. */
+export type CarryOutput = {
+  readonly at: Date
+  readonly outcome: "delivered" | "expired" | "skipped"
+}
+
 export type TurnDocument = {
   readonly _id: Identifier
   readonly chatID: Identifier
@@ -389,6 +413,12 @@ export type TurnDocument = {
   firstResultAt?: Date
   comparisonState: "pending" | "running" | "complete" | "skipped" | "failed"
   comparisonID?: Identifier
+  /** The handoff the winner's model wrote after the vote, or why there is none (`carry.ts`). */
+  carry?: CarryRecord
+  /** Written once by the send that read `carry`; later sends and a late replay leave it alone. */
+  carryOut?: CarryOutput
+  /** The previous turn's handoff both sides read before their prompt, frozen when this turn was sent. */
+  readonly carryIn?: CarryInput
   failureReason?: string
   resolution?: Resolution
   vote?: Vote

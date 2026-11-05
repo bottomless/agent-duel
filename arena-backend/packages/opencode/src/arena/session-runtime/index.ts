@@ -853,17 +853,41 @@ const promptLayer: Layer.Layer<
         })
       }
       const admittedAt = yield* Clock.currentTimeMillis
-      yield* sessions.prompt({
-        sessionID: input.sessionID,
-        id: input.messageID ? currentMessageID(input.messageID) : undefined,
-        text: promptText(input),
-        files: [...(promptFiles(input.files) ?? []), ...(partFiles(input.parts) ?? [])],
-        agents: input.agents,
-        skills: input.skills,
-        metadata,
-        delivery: input.delivery,
-        resume: wake,
-      })
+      // The preface is durable before the prompt is; a prompt that fails to admit must not leave it
+      // behind, or a resume would run a step whose last user message is the note alone.
+      const prefaceID = input.preface ? currentMessageID(input.preface.id) : undefined
+      if (input.preface && prefaceID) {
+        const messages = yield* sessions.messages({ sessionID: input.sessionID })
+        const inbox = yield* sessions.inbox(input.sessionID)
+        if (![...messages, ...inbox].some((message) => message.id === prefaceID)) {
+          yield* sessions.synthetic({
+            sessionID: input.sessionID,
+            id: prefaceID,
+            text: input.preface.text,
+            ...(input.preface.metadata ? { metadata: input.preface.metadata } : {}),
+            resume: false,
+          })
+        }
+      }
+      yield* sessions
+        .prompt({
+          sessionID: input.sessionID,
+          id: input.messageID ? currentMessageID(input.messageID) : undefined,
+          text: promptText(input),
+          files: [...(promptFiles(input.files) ?? []), ...(partFiles(input.parts) ?? [])],
+          agents: input.agents,
+          skills: input.skills,
+          metadata,
+          delivery: input.delivery,
+          resume: wake,
+        })
+        .pipe(
+          Effect.onError(() =>
+            prefaceID
+              ? sessions.cancelInbox({ sessionID: input.sessionID, inboxID: prefaceID }).pipe(Effect.ignore)
+              : Effect.void,
+          ),
+        )
       return admittedAt
     })
     return SessionPrompt.of({
