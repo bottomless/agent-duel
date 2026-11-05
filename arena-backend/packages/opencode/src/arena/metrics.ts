@@ -1,3 +1,4 @@
+import { compactionMetrics } from "./compaction-metrics"
 import { Side, voteDiscardedReason } from "./domain"
 import {
   battleMetricsSchemaVersion,
@@ -379,34 +380,43 @@ export function computeBattleMetrics(input: BattleMetricsInput): BattleMetricsDo
           .toSorted((left, right) => left.startedAt.getTime() - right.startedAt.getTime())
           .at(0)
       : undefined
-    const completionTokens = usage?.completionTokens ?? 0
+    const completionTokens = usage?.completionTokens ?? null
     const transcript = transcripts[side]
     const read = transcript !== undefined
     const summary = read ? finalAssistantText(transcript, run.terminalAssistantMessageID) : undefined
     const matchedAlias =
-      summary === undefined || assignment.model === undefined
-        ? undefined
-        : mentionedAlias(summary, assignment.model)
+      summary === undefined || assignment.model === undefined ? undefined : mentionedAlias(summary, assignment.model)
     const other = side === "a" ? "b" : "a"
 
     sides[side] = {
+      ...(run.compactions ? { compactions: compactionMetrics(run.compactions, runGenerations) } : {}),
       // Models are written to the turn only on a revealing resolution. A battle discarded before
       // either side showed output is never revealed, so the model stays unknown here.
       ...(assignment.model === undefined ? {} : { model: assignment.model }),
       providers: run.resolvedProviders ?? [],
       llmCalls: runGenerations.length,
       latencyMs,
+      ...(first?.firstTokenAt && turn.setupTimings
+        ? {
+            perceivedWaitMs:
+              Math.max(0, first.firstTokenAt.getTime() - turn.createdAt.getTime()) +
+              turn.setupTimings.preCreationMs +
+              (turn.setupTimings.admissionWaitMs ?? 0),
+          }
+        : {}),
       ...(first?.firstTokenAt && first.startedAt
         ? { ttftMs: first.firstTokenAt.getTime() - first.startedAt.getTime() }
         : {}),
-      ...(latencyMs > 0 && completionTokens > 0 ? { tokensPerSec: completionTokens / (latencyMs / 1000) } : {}),
-      promptTokens: usage?.promptTokens ?? 0,
+      ...(latencyMs > 0 && completionTokens !== null && completionTokens > 0
+        ? { tokensPerSec: completionTokens / (latencyMs / 1000) }
+        : {}),
+      promptTokens: usage?.promptTokens ?? null,
       completionTokens,
-      reasoningTokens: usage?.reasoningTokens ?? 0,
-      totalTokens: usage?.totalTokens ?? 0,
-      cacheReadTokens: usage?.cacheReadTokens ?? 0,
-      cacheWriteTokens: usage?.cacheWriteTokens ?? 0,
-      cost: usage?.cost ?? 0,
+      reasoningTokens: usage?.reasoningTokens ?? null,
+      totalTokens: usage?.totalTokens ?? null,
+      cacheReadTokens: usage?.cacheReadTokens ?? null,
+      cacheWriteTokens: usage?.cacheWriteTokens ?? null,
+      cost: usage?.cost ?? null,
       ...(usage?.upstreamInferenceCost === undefined ? {} : { upstreamInferenceCost: usage.upstreamInferenceCost }),
       // A refused attempt saved before refusals were marked as errors still has its status.
       providerErrors: runGenerations.filter(
@@ -442,9 +452,7 @@ export function computeBattleMetrics(input: BattleMetricsInput): BattleMetricsDo
   const ipAddress = [...reviewEvents].reverse().find((event) => event.ipAddress)?.ipAddress
   const voteAtMs = offsetFrom(base, turn.voteAt)
   const msFromFirstResultToVote =
-    turn.voteAt && turn.firstResultAt
-      ? Math.max(0, turn.voteAt.getTime() - turn.firstResultAt.getTime())
-      : undefined
+    turn.voteAt && turn.firstResultAt ? Math.max(0, turn.voteAt.getTime() - turn.firstResultAt.getTime()) : undefined
 
   return {
     _id: turn._id,

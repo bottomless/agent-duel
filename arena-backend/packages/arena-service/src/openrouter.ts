@@ -2,7 +2,8 @@ import { createHash, createHmac, randomUUID } from "crypto"
 import { recordAssignmentGenerationMetrics, reserveRoutingAssignment, type SingleAgentModelSize } from "./assignments"
 import { authorize, type ArenaContext, type Fetch } from "./context"
 import { KEEP_ALIVE_HEADER, keepAliveAnswer, keepsCacheWarm } from "./keep-alive"
-import type { StoredGenerationMetrics, UsageTotals } from "./metrics"
+import type { StoredGenerationMetrics } from "./metrics"
+import { createProviderUsageParser } from "./usage"
 import {
   classifyPaymentError,
   compactionRequiredError,
@@ -42,43 +43,6 @@ function sanitizeUsage(value: unknown) {
   return Object.fromEntries(Object.entries(value).filter(([key]) => !key.toLowerCase().includes("cost")))
 }
 
-function number(value: unknown) {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0
-}
-
-function nonNegativeNumber(value: unknown) {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined
-}
-
-function usage(value: unknown, latencyMs: number): UsageTotals | undefined {
-  if (!record(value)) return undefined
-  const source = record(value.usage)
-    ? value.usage
-    : record(value.data) && record(value.data.usage)
-      ? value.data.usage
-      : undefined
-  if (!source) return undefined
-  const promptDetails = record(source.prompt_tokens_details) ? source.prompt_tokens_details : undefined
-  const completionDetails = record(source.completion_tokens_details) ? source.completion_tokens_details : undefined
-  const cacheDetails = record(source.cache_tokens) ? source.cache_tokens : undefined
-  const promptTokens = number(source.prompt_tokens ?? source.input_tokens)
-  const completionTokens = number(source.completion_tokens ?? source.output_tokens)
-  const costDetails = record(source.cost_details) ? source.cost_details : undefined
-  const upstreamInferenceCost = nonNegativeNumber(costDetails?.upstream_inference_cost)
-  return {
-    promptTokens,
-    completionTokens,
-    reasoningTokens: number(completionDetails?.reasoning_tokens ?? source.reasoning_tokens),
-    totalTokens: number(source.total_tokens) || promptTokens + completionTokens,
-    cacheReadTokens: number(promptDetails?.cached_tokens ?? cacheDetails?.read ?? source.cache_read_tokens),
-    cacheWriteTokens: number(promptDetails?.cache_write_tokens ?? cacheDetails?.write ?? source.cache_write_tokens),
-    cost: number(source.cost ?? value.cost),
-    ...(upstreamInferenceCost === undefined ? {} : { upstreamInferenceCost }),
-    attempts: 1,
-    latencyMs,
-  }
-}
-
 function finishReason(value: unknown) {
   if (!record(value)) return undefined
   if (typeof value.status === "string" && ["completed", "incomplete", "failed"].includes(value.status)) {
@@ -99,20 +63,18 @@ function generation(value: unknown) {
 }
 
 function metricsCollector(generationID: string, startedAt: number) {
-  let usagePayload: unknown
+  const usage = createProviderUsageParser()
   let finished: string | undefined
   let provider: string | undefined
   return {
     observe(event: unknown) {
       const value = generation(event)
-      if (record(value) && (value.usage !== undefined || (record(value.data) && value.data.usage !== undefined))) {
-        usagePayload = value
-      }
+      usage.observe(value)
       finished = finishReason(value) ?? finished
       if (record(value) && typeof value.provider === "string" && value.provider) provider = value.provider
     },
     value(): StoredGenerationMetrics | undefined {
-      const measured = usage(usagePayload, Math.max(0, Date.now() - startedAt))
+      const measured = usage.final() ? usage.value(Math.max(0, Date.now() - startedAt)) : undefined
       if (!measured && !finished) return undefined
       return {
         generationID,

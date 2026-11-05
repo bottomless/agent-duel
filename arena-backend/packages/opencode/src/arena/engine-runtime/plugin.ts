@@ -20,6 +20,7 @@ import { ArenaEngineAssignment, type ArenaAssignmentRegistry } from "./assignmen
 import { ArenaEngineModels, CONTESTANT_IDENTITY, PROVIDER_ID, modelReference } from "./models"
 import { OUTPUT_TOKEN_LIMIT } from "../model-profile"
 import {
+  OpportunisticCompactionID,
   canCompactHistory,
   compactionResponse,
   classification,
@@ -365,22 +366,26 @@ function install(context: Context, options: InstalledOptions) {
         ensureAssignment(context, options, String(event.sessionID)).pipe(
           Effect.andThen(
             Effect.all({
+              opportunisticID: OpportunisticCompactionID,
               session: context.session.get({ sessionID: event.sessionID }),
               history:
                 event.kind === "primary"
                   ? context.session.context({ sessionID: event.sessionID }).pipe(Effect.orElseSucceed(() => []))
                   : Effect.succeed([]),
             }).pipe(
-              Effect.map(({ session, history }) => {
+              Effect.map(({ session, history, opportunisticID }) => {
                 const assignment = options.assignments?.assignments.get(String(event.sessionID))
                 event.headers = {
                   ...event.headers,
+                  ...(opportunisticID ? { "x-arena-opportunistic-compaction-id": opportunisticID } : {}),
                   ...requestHeaders({
                     sessionID: String(event.sessionID),
                     kind: event.kind,
                     parentSessionID: session.parentID,
                     rootSessionID: assignment?.rootSessionID,
-                    requestID: sessionRequestIDs.next(String(event.sessionID), event.kind),
+                    requestID: opportunisticID
+                      ? randomUUID()
+                      : sessionRequestIDs.next(String(event.sessionID), event.kind),
                     arenaCompaction: canCompactHistory(history),
                   }),
                 }

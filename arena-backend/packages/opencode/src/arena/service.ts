@@ -1,3 +1,4 @@
+import { ArenaEngagementUsage } from "./engagement-usage"
 import {
   Session,
   SessionPrompt,
@@ -1408,6 +1409,7 @@ export const layer: Layer.Layer<
     const git = yield* Git.Service
     const instances = yield* InstanceStore.Service
     const sessions = yield* Session
+    const engagements = new Map<string, { readonly usageID: string }>()
     const prompts = yield* SessionPrompt
     const image = yield* Image.Service
     const statuses = yield* SessionStatus
@@ -1545,6 +1547,8 @@ export const layer: Layer.Layer<
         recorder?.close()
         telemetry = undefined
         setTelemetry(undefined)
+        for (const engagement of engagements.values()) ArenaEngagementUsage.clear(engagement.usageID)
+        engagements.clear()
       }),
     )
 
@@ -4138,7 +4142,15 @@ export const layer: Layer.Layer<
       model?: { readonly providerID: ProviderV2.ID; readonly modelID: ModelV2.ID }
     }) {
       if (!enabled()) return undefined
+      const compacted = yield* sessions.compactions
+        .accept(input.sessionID)
+        .pipe(Effect.catchCause(() => Effect.succeed(false)))
       const store = yield* available()
+      if (compacted) {
+        const chat = yield* promise(() => store.chatForSession(input.sessionID))
+        if (chat)
+          yield* recordCanonicalTranscript(store, chat._id, yield* sessions.messages({ sessionID: input.sessionID }))
+      }
       const requestedModelSize: SingleAgentModelSize =
         input.model?.modelID === ModelV2.ID.make("contestant") || input.model?.modelID === ModelV2.ID.make("frontier")
           ? "frontier"
@@ -4283,6 +4295,7 @@ export const layer: Layer.Layer<
 
     const recordRevert = (sessionID: SessionID) =>
       Effect.gen(function* () {
+        sessions.compactions.invalidate(sessionID)
         if (!enabled()) return
         const store = yield* getStore
         const chat = yield* promise(() => store.chatForSession(sessionID))
@@ -4331,6 +4344,8 @@ export const layer: Layer.Layer<
       stopped: boolean,
       runStateOverride?: RunDocument["runState"],
     ) {
+      const engagement = engagements.get(run.runID)
+      const sourceAdmission = sessions.compactions.admission(run.sessionID)
       const stored = yield* promise(() => store.run(run.runID))
       const completedAt = stored?.completedAt ?? new Date()
       const assistant =
@@ -4386,6 +4401,21 @@ export const layer: Layer.Layer<
         runState === "complete" && stored?.startedAt
           ? (stored.priorDurationMs ?? 0) + Math.max(0, completedAt.getTime() - stored.startedAt.getTime())
           : null
+      // Register the candidate before exposing completion to vote/continuation paths.
+      const engagementUsage = engagement ? ArenaEngagementUsage.finish(engagement.usageID) : undefined
+      if (engagement) {
+        ArenaEngagementUsage.clear(engagement.usageID)
+        if (engagements.get(run.runID) === engagement) engagements.delete(run.runID)
+      }
+      if (runState === "complete") {
+        yield* sessions.compactions
+          .start({ sessionID: run.sessionID, runID: run.runID, admission: sourceAdmission, usage: engagementUsage })
+          .pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Arena could not start opportunistic compaction", { runID: run.runID, cause }),
+            ),
+          )
+      }
       yield* promise(() =>
         store.updateRun(run.runID, {
           runState,
@@ -4720,6 +4750,12 @@ export const layer: Layer.Layer<
     ) {
       const turn = yield* promise(() => store.turn(run.turnID))
       if (turn?.state === "stopping" || turn?.state === "early_selected") return Exit.void
+      yield* sessions.compactions.accept(run.sessionID).pipe(Effect.catchCause(() => Effect.succeed(false)))
+      const previousEngagement = engagements.get(run.runID)
+      if (previousEngagement) ArenaEngagementUsage.clear(previousEngagement.usageID)
+      engagements.set(run.runID, {
+        usageID: ArenaEngagementUsage.begin({ runID: run.runID, sessionID: run.sessionID }),
+      })
       // A new loop for this run opens its turn to steers again.
       closingRuns.delete(run.runID)
       yield* openShellTurn(run.sessionID)
@@ -6209,6 +6245,7 @@ export const layer: Layer.Layer<
       autoAccept = false,
       attachments: readonly ArenaAttachments.Input[] = [],
     ) {
+      const promptReceivedAt = receivedAt ?? Date.now()
       const prompt = userPrompt.trim()
       if (!prompt && attachments.length === 0) return yield* Effect.fail(new Error("Arena prompt cannot be empty"))
       const build = yield* promise(() => resolveBuildMetadata())
@@ -6219,8 +6256,18 @@ export const layer: Layer.Layer<
         try: () => participantID(rawParticipantID),
         catch: error,
       })
-      const storedChat = yield* promise(() => store.chat(id))
+      let storedChat = yield* promise(() => store.chat(id))
       if (!storedChat) return yield* Effect.fail(new Error(`Arena chat not found: ${id}`))
+      const sourceSessionID = SessionID.make(storedChat.canonicalSessionID)
+      const compacted = yield* sessions.compactions
+        .accept(sourceSessionID, promptReceivedAt)
+        .pipe(Effect.catchCause(() => Effect.succeed(false)))
+      if (compacted)
+        storedChat = yield* recordCanonicalTranscript(
+          store,
+          id,
+          yield* sessions.messages({ sessionID: sourceSessionID }),
+        )
       if (yield* recoverInterruptedSingleAgentRating(store, storedChat.canonicalSessionID)) {
         return yield* Effect.fail(new Error("Arena frontier result must be rated before starting a battle"))
       }
@@ -6728,6 +6775,7 @@ export const layer: Layer.Layer<
       target: ReplyTarget,
       attachments: readonly ArenaAttachments.Input[] = [],
     ) {
+      const receivedAt = Date.now()
       const store = yield* available()
       const text = userPrompt.trim()
       if (!text && attachments.length === 0) return yield* Effect.fail(new Error("Arena reply cannot be empty"))
@@ -6748,6 +6796,14 @@ export const layer: Layer.Layer<
         return yield* Effect.fail(new Error("Arena reply target is unavailable"))
       }
       const selectedRuns = selected as RunDocument[]
+      yield* Effect.forEach(
+        selectedRuns,
+        (run) =>
+          sessions.compactions
+            .accept(SessionID.make(run.rootSessionID), receivedAt)
+            .pipe(Effect.catchCause(() => Effect.succeed(false))),
+        { discard: true },
+      )
       // A reply to both while one side still works and the other has finished goes to each the way
       // it can take it: the finished side resumes and the working side is steered, with one message.
       const finished = selectedRuns.filter((run) => run.runState === "complete")
@@ -9560,6 +9616,7 @@ export const layer: Layer.Layer<
       yield* recordStoppedShells(store, stopped.stopped, stopped.stoppedAt, (sessionID) =>
         sessions.get(SessionID.make(sessionID)).pipe(Effect.map((session) => session.parentID)),
       )
+      yield* promise(() => store.recoverCompactions())
       yield* reconcileComparisons(store)
       const chats = yield* promise(() => store.chats.find({}).toArray())
       // A restart can follow a crash that left one of Arena's refs empty or naming a lost object, and
@@ -10025,6 +10082,17 @@ export const layer: Layer.Layer<
           })
         }
       }
+      yield* sessions.compactions
+        .transfer({
+          sourceSessionID: winnerRoot,
+          targetSessionID: canonical,
+          transform: (checkpoint) => canonicalize({ ...checkpoint, providerState: undefined }),
+        })
+        .pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("Arena could not transfer compaction", { runID: winner._id, cause }),
+          ),
+        )
       yield* promise(() =>
         store.updateTurn(turn._id, {
           canonicalGraftedAt: new Date(),

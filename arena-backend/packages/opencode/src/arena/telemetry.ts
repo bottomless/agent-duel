@@ -1,14 +1,21 @@
 import { createHash } from "crypto"
 import type { Store } from "./mongo"
 import { ArenaWaitError, type RequestMetadata, type Telemetry } from "./proxy"
-import type { GenerationMetrics, UsageTotals } from "./records"
+import type { GenerationDocument, GenerationMetrics, UsageTotals } from "./records"
 import { ArenaPrivacy } from "./privacy"
+import { addUsageTotals, hasFinalProviderUsage, parseProviderUsage } from "@agent-duel/arena-service/usage"
+import { requestTokenEstimate } from "./engine-runtime/request"
+import { bind as bindEngagementUsage, finalize as finalizeEngagementUsage } from "./engagement-usage"
+import { resolveAssignments } from "./assignment-client"
+import type { BattleAssignmentDecision } from "@agent-duel/arena-service/assignment-decision"
 
 type ActiveGeneration = {
   readonly id: string
   readonly callIndex: number
   readonly metadata: RequestMetadata
   readonly chunks: string[]
+  readonly contextTokens: number
+  readonly engagementID?: string
   responseAt?: Date
   firstChunkAt?: Date
   status?: number
@@ -26,6 +33,10 @@ type PendingMetrics = GenerationMetrics & {
   readonly runID: string
 }
 
+type TelemetryOptions = {
+  readonly resolveAssignments?: typeof resolveAssignments
+}
+
 const encoder = new TextEncoder()
 
 function hash(input: string) {
@@ -34,43 +45,6 @@ function hash(input: string) {
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
-}
-
-function number(value: unknown) {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0
-}
-
-function nonNegativeNumber(value: unknown) {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined
-}
-
-function usageFromPayload(value: unknown, latencyMs: number): UsageTotals | undefined {
-  if (!record(value)) return undefined
-  const source = record(value.usage)
-    ? value.usage
-    : record(value.data) && record(value.data.usage)
-      ? value.data.usage
-      : undefined
-  if (!source) return undefined
-  const promptDetails = record(source.prompt_tokens_details) ? source.prompt_tokens_details : undefined
-  const completionDetails = record(source.completion_tokens_details) ? source.completion_tokens_details : undefined
-  const cacheDetails = record(source.cache_tokens) ? source.cache_tokens : undefined
-  const promptTokens = number(source.prompt_tokens ?? source.input_tokens)
-  const completionTokens = number(source.completion_tokens ?? source.output_tokens)
-  const costDetails = record(source.cost_details) ? source.cost_details : undefined
-  const upstreamInferenceCost = nonNegativeNumber(costDetails?.upstream_inference_cost)
-  return {
-    promptTokens,
-    completionTokens,
-    reasoningTokens: number(completionDetails?.reasoning_tokens ?? source.reasoning_tokens),
-    totalTokens: number(source.total_tokens) || promptTokens + completionTokens,
-    cacheReadTokens: number(promptDetails?.cached_tokens ?? cacheDetails?.read ?? source.cache_read_tokens),
-    cacheWriteTokens: number(promptDetails?.cache_write_tokens ?? cacheDetails?.write ?? source.cache_write_tokens),
-    cost: number(source.cost ?? value.cost),
-    ...(upstreamInferenceCost === undefined ? {} : { upstreamInferenceCost }),
-    attempts: 1,
-    latencyMs,
-  }
 }
 
 const privateResponseKeys = new Set([
@@ -194,13 +168,19 @@ export function carriesModelOutput(chunk: string) {
   })
 }
 
-function terminalPayload(raw: string) {
-  return payloads(raw).findLast((value) => record(value) && value.usage !== undefined)
-}
-
-function finishReason(raw: string) {
+function finishReason(raw: string): string | undefined {
   for (const value of payloads(raw).toReversed()) {
     if (!record(value)) continue
+    if (record(value.response)) {
+      const nested: string | undefined = finishReason(JSON.stringify(value.response))
+      if (nested) return nested
+    }
+    if (record(value.delta) && typeof value.delta.stop_reason === "string" && value.delta.stop_reason.trim()) {
+      return value.delta.stop_reason
+    }
+    if (record(value.message) && typeof value.message.stop_reason === "string" && value.message.stop_reason.trim()) {
+      return value.message.stop_reason
+    }
     if (typeof value.status === "string" && ["completed", "incomplete", "failed"].includes(value.status)) {
       return value.status
     }
@@ -214,24 +194,29 @@ function finishReason(raw: string) {
   return undefined
 }
 
-function addUsage(left: UsageTotals, right: UsageTotals): UsageTotals {
-  const upstreamInferenceCost =
-    left.attempts === 0
-      ? right.upstreamInferenceCost
-      : left.upstreamInferenceCost === undefined || right.upstreamInferenceCost === undefined
-        ? undefined
-        : left.upstreamInferenceCost + right.upstreamInferenceCost
-  return {
-    promptTokens: left.promptTokens + right.promptTokens,
-    completionTokens: left.completionTokens + right.completionTokens,
-    reasoningTokens: left.reasoningTokens + right.reasoningTokens,
-    totalTokens: left.totalTokens + right.totalTokens,
-    cacheReadTokens: left.cacheReadTokens + right.cacheReadTokens,
-    cacheWriteTokens: left.cacheWriteTokens + right.cacheWriteTokens,
-    cost: left.cost + right.cost,
-    ...(upstreamInferenceCost === undefined ? {} : { upstreamInferenceCost }),
-    attempts: left.attempts + right.attempts,
-    latencyMs: left.latencyMs + right.latencyMs,
+function decisionForResolution(value: unknown): BattleAssignmentDecision | undefined {
+  if (!record(value) || typeof value.kind !== "string") return undefined
+  switch (value.kind) {
+    case "aborted":
+      return "aborted"
+    case "vote":
+      return value.vote === "tie"
+        ? "tie"
+        : value.vote === "a" || value.vote === "b"
+          ? `select:${value.vote}`
+          : undefined
+    case "early":
+      return value.vote === "a" || value.vote === "b" ? `select:${value.vote}` : undefined
+    case "stopped":
+      return value.resolution === "apply_a"
+        ? "select:a"
+        : value.resolution === "apply_b"
+          ? "select:b"
+          : value.resolution === "discard"
+            ? "discard"
+            : undefined
+    default:
+      return undefined
   }
 }
 
@@ -245,6 +230,24 @@ const zeroUsage: UsageTotals = {
   cost: 0,
   attempts: 0,
   latencyMs: 0,
+  provenance: "provider",
+  version: 2,
+}
+
+function unknownCompletedUsage(generation: GenerationDocument): UsageTotals {
+  return {
+    promptTokens: null,
+    completionTokens: null,
+    reasoningTokens: null,
+    totalTokens: null,
+    cacheReadTokens: null,
+    cacheWriteTokens: null,
+    cost: null,
+    attempts: 1,
+    latencyMs: generation.completedAt
+      ? Math.max(0, generation.completedAt.getTime() - generation.startedAt.getTime())
+      : 0,
+  }
 }
 
 function providerGenerationID(raw: string) {
@@ -255,7 +258,7 @@ function providerGenerationID(raw: string) {
   return undefined
 }
 
-export function create(store: Store): Telemetry {
+export function create(store: Store, options?: TelemetryOptions): Telemetry {
   const active = new WeakMap<RequestMetadata, ActiveGeneration>()
   const counters = new Map<string, number>()
   const attempts = new Map<string, Map<string, Attempt>>()
@@ -263,6 +266,9 @@ export function create(store: Store): Telemetry {
   const revealed = new Set<string>()
   const released = new Set<string>()
   const revealedMetrics = new Map<string, GenerationMetrics>()
+  const refreshing = new Set<string>()
+  const refreshQueue = new Map<string, Set<string>>()
+  const resolveBattleAssignments = options?.resolveAssignments ?? resolveAssignments
   const queues = new Map<string, Promise<void>>()
   const counterSeeds = new Map<string, Promise<void>>()
 
@@ -295,14 +301,22 @@ export function create(store: Store): Telemetry {
     const current = previous
       .catch(() => undefined)
       .then(async () => {
+        const existing = (await store.generationsForRuns([metrics.runID])).find(
+          (generation) => generation._id === metrics.generationID,
+        )
+        const usage =
+          metrics.usage ?? existing?.usage ?? (existing?.completedAt ? unknownCompletedUsage(existing) : undefined)
         await store.updateGeneration(metrics.generationID, {
-          ...(metrics.usage ? { usage: metrics.usage } : {}),
+          ...(usage ? { usage } : {}),
           ...(metrics.finishReason ? { finishReason: metrics.finishReason } : {}),
         })
         const generations = await store.generationsForRuns([metrics.runID])
-        const usages = generations.flatMap((generation) => (generation.usage ? [generation.usage] : []))
+        const usages = generations.flatMap((generation) => {
+          if (generation.usage) return [generation.usage]
+          return generation.completedAt ? [unknownCompletedUsage(generation)] : []
+        })
         if (usages.length > 0) {
-          await store.updateRun(metrics.runID, { usage: usages.reduce(addUsage, zeroUsage) })
+          await store.updateRun(metrics.runID, { usage: usages.reduce(addUsageTotals, zeroUsage) })
         }
         pending.delete(metrics.generationID)
       })
@@ -325,10 +339,82 @@ export function create(store: Store): Telemetry {
     if (revealed.has(metrics.runID)) await persist(combined)
   }
 
+  const refreshRevealedRun = async (runID: string, requestedIDs: readonly string[]) => {
+    if (refreshing.has(runID)) {
+      const queued = refreshQueue.get(runID) ?? new Set<string>()
+      requestedIDs.forEach((generationID) => queued.add(generationID))
+      refreshQueue.set(runID, queued)
+      return
+    }
+    refreshing.add(runID)
+    try {
+      const run = await store.run(runID)
+      const turn = run ? await store.turn(run.turnID) : undefined
+      const resolution = turn?.resolution
+      if (!turn || !resolution || !revealed.has(runID)) return
+      const decision = decisionForResolution(resolution)
+      if (!decision) return
+      const wanted = new Set(requestedIDs)
+      // A control-plane write can trail the local reveal by a short interval. Retry a bounded
+      // number of times in the background; stream completion and the next prompt never wait.
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const resolved = await resolveBattleAssignments("battle", turn._id, decision)
+          const matching = new Map(
+            resolved.assignments.flatMap((assignment) =>
+              assignment.metrics.map((metric) => [metric.generationID, metric] as const),
+            ),
+          )
+          for (const [generationID, metric] of matching) revealedMetrics.set(generationID, metric)
+          if ([...wanted].every((generationID) => matching.has(generationID))) {
+            const generations = await store.generationsForRuns([runID])
+            await Promise.all(
+              generations.flatMap((generation) => {
+                const metric = matching.get(generation._id)
+                if (!metric?.usage && !metric?.finishReason) return []
+                return [
+                  retain({
+                    generationID: generation._id,
+                    runID,
+                    ...(metric.usage ? { usage: metric.usage } : {}),
+                    ...(metric.finishReason ? { finishReason: metric.finishReason } : {}),
+                  }),
+                ]
+              }),
+            )
+            return
+          }
+        } catch {
+          // A reveal retry is best effort; leave unknown usage if the control plane is unavailable.
+        }
+        await new Promise((resolve) => setTimeout(resolve, attempt === 0 ? 100 : 500))
+      }
+    } finally {
+      refreshing.delete(runID)
+      const queued = refreshQueue.get(runID)
+      if (queued) {
+        refreshQueue.delete(runID)
+        void refreshRevealedRun(runID, [...queued]).catch(() => undefined)
+      }
+    }
+  }
+
+  const scheduleRefresh = (runID: string, generationIDs: readonly string[]) => {
+    const ids = [...new Set(generationIDs)]
+    if (ids.length === 0) return
+    void refreshRevealedRun(runID, ids).catch(() => undefined)
+  }
+
   return {
     async start(metadata, _body) {
-      const callIndex = await nextCallIndex(metadata.assignment.runID)
       const id = metadata.generationID
+      // Bind before any awaited store work: a new engagement can begin while this generation is
+      // being persisted, but its completion must remain attached to the engagement at start.
+      const engagementID = bindEngagementUsage(id, {
+        runID: metadata.assignment.runID,
+        sessionID: metadata.assignment.rootSessionID,
+      })
+      const callIndex = await nextCallIndex(metadata.assignment.runID)
       const runAttempts = attempts.get(metadata.assignment.runID) ?? new Map<string, Attempt>()
       const previous = runAttempts.get(metadata.requestID)
       // Counts real attempts: the resend after a wait keeps the index of the attempt that waited.
@@ -346,6 +432,10 @@ export function create(store: Store): Telemetry {
         assignmentID: metadata.assignment.assignmentID,
         requestedModel: metadata.requestedModel,
         requestedReasoning: { effort: "high" },
+        ...(engagementID ? { engagementID } : {}),
+        ...(metadata.opportunisticCompactionID
+          ? { opportunisticCompactionID: metadata.opportunisticCompactionID }
+          : {}),
         enforcedReasoning: metadata.enforcedReasoning,
         classification:
           metadata.classification ?? (metadata.sessionID === metadata.assignment.rootSessionID ? "root" : "subagent"),
@@ -365,7 +455,14 @@ export function create(store: Store): Telemetry {
       if (metadata.sessionID !== metadata.assignment.rootSessionID) {
         await store.addDescendant(metadata.assignment.runID, metadata.sessionID)
       }
-      active.set(metadata, { id, callIndex, metadata, chunks: [] })
+      active.set(metadata, {
+        id,
+        callIndex,
+        metadata,
+        chunks: [],
+        contextTokens: requestTokenEstimate(_body),
+        ...(engagementID ? { engagementID } : {}),
+      })
     },
     async response({ metadata, status, headers, receivedAt }) {
       const generation = active.get(metadata)
@@ -389,6 +486,29 @@ export function create(store: Store): Telemetry {
       if (!generation) return
       active.delete(metadata)
       const raw = generation.chunks.join("")
+      const latencyMs = Math.max(0, completedAt.getTime() - metadata.startedAt.getTime())
+      const values = payloads(raw)
+      const measured = hasFinalProviderUsage(values) ? parseProviderUsage(values, latencyMs) : undefined
+      const finished = finishReason(raw)
+      finalizeEngagementUsage({
+        generationID: generation.id,
+        ...(generation.engagementID ? { engagementID: generation.engagementID } : {}),
+        runID: metadata.assignment.runID,
+        sessionID: metadata.sessionID,
+        rootSessionID: metadata.assignment.rootSessionID,
+        classification:
+          metadata.classification ?? (metadata.sessionID === metadata.assignment.rootSessionID ? "root" : "subagent"),
+        requestKind: metadata.requestKind,
+        ...(metadata.opportunisticCompactionID
+          ? { opportunisticCompactionID: metadata.opportunisticCompactionID }
+          : {}),
+        ...(measured ? { usage: measured } : {}),
+        contextTokens:
+          measured?.completionTokens === null || measured === undefined
+            ? generation.contextTokens
+            : generation.contextTokens + measured.completionTokens,
+        finalizedAt: completedAt,
+      })
       const response = sanitizeStoredResponse(raw)
       const responseArtifactID = `${generation.id}|response`
       await store.storeArtifact({
@@ -408,18 +528,14 @@ export function create(store: Store): Telemetry {
         providerGenerationID: providerGenerationID(response),
         payloadHashes: { response: hash(response) },
       })
-      const measured = usageFromPayload(
-        terminalPayload(raw),
-        Math.max(0, completedAt.getTime() - metadata.startedAt.getTime()),
-      )
-      const finished = finishReason(raw)
-      if (measured || finished) {
-        await retain({
-          generationID: generation.id,
-          runID: metadata.assignment.runID,
-          ...(measured ? { usage: measured } : {}),
-          ...(finished ? { finishReason: finished } : {}),
-        })
+      await retain({
+        generationID: generation.id,
+        runID: metadata.assignment.runID,
+        ...(measured ? { usage: measured } : {}),
+        ...(finished ? { finishReason: finished } : {}),
+      })
+      if (metadata.opportunisticCompactionID && revealed.has(metadata.assignment.runID)) {
+        scheduleRefresh(metadata.assignment.runID, [generation.id])
       }
     },
     async error(metadata, error, at) {
@@ -435,6 +551,29 @@ export function create(store: Store): Telemetry {
       // A refused attempt's only chunk is the error body Arena wrote, not a token from the model.
       const refused = generation.status !== undefined && generation.status >= 400
       const raw = generation.chunks.join("")
+      const latencyMs = Math.max(0, at.getTime() - metadata.startedAt.getTime())
+      const values = payloads(raw)
+      const measured = hasFinalProviderUsage(values) ? parseProviderUsage(values, latencyMs) : undefined
+      const finished = finishReason(raw)
+      finalizeEngagementUsage({
+        generationID: generation.id,
+        ...(generation.engagementID ? { engagementID: generation.engagementID } : {}),
+        runID: metadata.assignment.runID,
+        sessionID: metadata.sessionID,
+        rootSessionID: metadata.assignment.rootSessionID,
+        classification:
+          metadata.classification ?? (metadata.sessionID === metadata.assignment.rootSessionID ? "root" : "subagent"),
+        requestKind: metadata.requestKind,
+        ...(metadata.opportunisticCompactionID
+          ? { opportunisticCompactionID: metadata.opportunisticCompactionID }
+          : {}),
+        ...(measured ? { usage: measured } : {}),
+        contextTokens:
+          measured?.completionTokens === null || measured === undefined
+            ? generation.contextTokens
+            : generation.contextTokens + measured.completionTokens,
+        finalizedAt: at,
+      })
       const response = sanitizeStoredResponse(raw)
       const hasResponse = generation.responseAt !== undefined || response.length > 0
       const responseArtifactID = `${generation.id}|response`
@@ -459,15 +598,14 @@ export function create(store: Store): Telemetry {
         error: "Arena contestant request failed",
         ...(wait ? { wait } : {}),
       })
-      const measured = usageFromPayload(terminalPayload(raw), Math.max(0, at.getTime() - metadata.startedAt.getTime()))
-      const finished = finishReason(raw)
-      if (measured || finished) {
-        await retain({
-          generationID: generation.id,
-          runID: metadata.assignment.runID,
-          ...(measured ? { usage: measured } : {}),
-          ...(finished ? { finishReason: finished } : {}),
-        })
+      await retain({
+        generationID: generation.id,
+        runID: metadata.assignment.runID,
+        ...(measured ? { usage: measured } : {}),
+        ...(finished ? { finishReason: finished } : {}),
+      })
+      if (metadata.opportunisticCompactionID && revealed.has(metadata.assignment.runID)) {
+        scheduleRefresh(metadata.assignment.runID, [generation.id])
       }
     },
     release(input) {
@@ -478,14 +616,16 @@ export function create(store: Store): Telemetry {
       }
     },
     async reveal(input) {
-      input.runIDs.forEach((runID) => revealed.add(runID))
+      const runIDs = input.runIDs.filter((runID) => !released.has(runID))
+      if (runIDs.length === 0) return
+      runIDs.forEach((runID) => revealed.add(runID))
       input.metrics.forEach((metrics) => revealedMetrics.set(metrics.generationID, metrics))
-      const generations = await store.generationsForRuns(input.runIDs)
+      const generations = await store.generationsForRuns(runIDs)
       await Promise.all(
         generations.flatMap((generation) => {
           const local = pending.get(generation._id)
           const server = revealedMetrics.get(generation._id)
-          if (!local && !server) return []
+          if (!local && !server && !generation.completedAt) return []
           return [
             persist({
               generationID: generation._id,
@@ -496,6 +636,14 @@ export function create(store: Store): Telemetry {
           ]
         }),
       )
+      for (const runID of runIDs) {
+        scheduleRefresh(
+          runID,
+          generations
+            .filter((generation) => generation.runID === runID && generation.opportunisticCompactionID)
+            .map((generation) => generation._id),
+        )
+      }
     },
   }
 }
