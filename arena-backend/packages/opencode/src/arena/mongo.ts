@@ -900,6 +900,44 @@ export class Store {
     }
   }
 
+  /**
+   * Claims a failed comparison for a retry. The turn and its record both read `running` before the
+   * press is answered: the app reads the record's state first, so a record left `failed` kept the
+   * Retry button up for the whole retry and every further press failed. Of two racing presses, only
+   * one claims the turn. The record keeps its error and artifacts until the retry overwrites them.
+   */
+  async claimComparisonRetry(turnID: string, at = new Date()) {
+    const claimed = await this.turns.findOneAndUpdate(
+      { _id: turnID, comparisonState: "failed" },
+      { $set: { comparisonState: "running", updatedAt: at } },
+      { returnDocument: "after" },
+    )
+    if (!claimed) {
+      const current = await this.turns.findOne({ _id: turnID })
+      if (!current) throw new Error(`Arena turn not found: ${turnID}`)
+      return { turn: current, claimed: false as const }
+    }
+    if (claimed.comparisonID) {
+      await this.comparisons.updateOne(
+        { _id: claimed.comparisonID, state: "failed" },
+        { $set: { state: "running", updatedAt: at } },
+      )
+    }
+    this.changed({ chatID: claimed.chatID, turnID })
+    return { turn: claimed, claimed: true as const }
+  }
+
+  /** Puts a claimed retry that ended before its record was settled back to `failed`, record first. */
+  async releaseComparisonRetry(turnID: string, comparisonID: string | undefined) {
+    if (comparisonID) {
+      await this.comparisons.updateOne(
+        { _id: comparisonID, state: "running" },
+        { $set: { state: "failed", updatedAt: new Date() } },
+      )
+    }
+    return this.updateTurn(turnID, { comparisonState: "failed" })
+  }
+
   async addDescendant(runID: string, sessionID: string) {
     const updated = await this.runs.findOneAndUpdate(
       { _id: runID },

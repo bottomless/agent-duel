@@ -194,8 +194,13 @@ record, so read the turn's `comparisonState` until the record exists (`battleSum
 `comparison-visibility.ts`); the review keeps the tab it opened on, and reading only the record
 opened every battle on Changes. Changes
 retries a failed read twice before showing a small manual retry. The summary generator retries
-transient network and service failures
-up to three attempts, while permanent failures such as payment or credentials remain actionable.
+transient network and service failures over about a minute (`RETRY_DELAYS_MS` in
+`arena/comparison.ts`), because a shared upstream pool can refuse every utility model with 429 for
+that long; permanent failures such as payment or credentials remain actionable. Retry summary claims
+the failed summary and marks both the turn and its record `running` before it answers
+(`claimComparisonRetry`): the app reads the record's state first, and a record left `failed` kept
+the button up for the whole retry while every further press failed. A press that loses to a running
+retry gets the current snapshot, not an error.
 Identical file results say nothing about whether the contestants' text answers agree. The threads
 are the headline and the review is their complement, so the review must never outweigh the agent
 headings above it: the tabs are text in a strip across the

@@ -528,7 +528,7 @@ test.each([503, 429, 402])(
   },
 )
 
-test("caps automatic comparison retries at three attempts", async () => {
+test("caps automatic comparison retries at six attempts", async () => {
   setArenaCredentials({
     mode: "hosted",
     researchPartition: "test-research-partition",
@@ -570,8 +570,62 @@ test("caps automatic comparison retries at three attempts", async () => {
       return new Response("Unavailable", { status: 503, headers: { "retry-after": "0.001" } })
     },
   })
-  expect(calls).toBe(3)
+  expect(calls).toBe(6)
   expect(result.state).toBe("failed")
+})
+
+test("outlasts a utility rate limit that clears after several refusals", async () => {
+  setArenaCredentials({
+    mode: "hosted",
+    researchPartition: "test-research-partition",
+    researchAccountID: "test-account",
+    token: "test-key",
+    controlPlaneUrl: "https://control.test",
+    controlTokenHash: "0".repeat(64),
+  })
+  let comparison: ComparisonDocument | undefined
+  let calls = 0
+  const result = await generate({
+    store: store({
+      saveComparison: async (input: ComparisonDocument) => (comparison = input),
+      updateComparison: async (_id: string, patch: Partial<ComparisonDocument>) =>
+        (comparison = { ...comparison!, ...patch }),
+      storeArtifact: async (input: { _id: string }) => input,
+    }),
+    turnID: "rate-limited",
+    turnIndex: 1,
+    userPrompt: "Fix it",
+    baseCommit: "base",
+    aCommit: "a",
+    bCommit: "b",
+    baseTree: "base-tree",
+    aTree: "a-tree",
+    bTree: "b-tree",
+    aToB: "",
+    aToBTruncated: false,
+    baseToA: "A",
+    baseToB: "B",
+    baseToATruncated: false,
+    baseToBTruncated: false,
+    transcriptA: "A",
+    transcriptB: "B",
+    files: [],
+    artifactIDs: [],
+    execute: async () => {
+      calls += 1
+      if (calls <= 4) {
+        return Response.json(
+          { error: { message: "Provider returned error", code: 429 } },
+          { status: 429, headers: { "retry-after": "0.001" } },
+        )
+      }
+      return Response.json({ choices: [{ message: { content: "Recovered verdict" } }], usage: { total_tokens: 5 } })
+    },
+  })
+  expect(calls).toBe(5)
+  expect(result.state).toBe("complete")
+  expect(result.output).toBe("Recovered verdict")
+  expect(result.usage?.attempts).toBe(5)
 })
 
 test("large file evidence makes exactly one model call and records partial coverage", async () => {

@@ -419,6 +419,8 @@ function installOpenRouterStub(options?: {
   readonly failFirstOrdinals?: ReadonlyArray<number>
   /** Runs once the control plane holds a newly resolved decision, before the engine reads the answer. */
   readonly afterResolve?: (resolved: { readonly scopeID: string; readonly decision?: string }) => Promise<void> | void
+  /** Answers a difference-summary request in place of the stub's report; undefined keeps the report. */
+  readonly utilityResponse?: () => Promise<Response | undefined>
   /** Scripts a contestant reply outright, subagent requests included; undefined falls back to the rules above. */
   readonly respond?: (request: {
     readonly model: string
@@ -508,6 +510,8 @@ function installOpenRouterStub(options?: {
       const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> }
       utilityCalls++
       utilityPrompts.push(body.messages[0]?.content ?? "")
+      const answered = await options?.utilityResponse?.()
+      if (answered) return answered
       return Response.json({
         provider: "groq",
         choices: [{ message: { content: "The two retained Git results and transcripts were compared." } }],
@@ -7513,6 +7517,84 @@ describe("Arena service vertical slice", () => {
       expect(Array.from(router.calls.entries())).toEqual(contestantCalls)
       expect(router.utilityCalls()).toBe(utilityCalls + 1)
     } finally {
+      router.restore()
+    }
+  }, 30_000)
+
+  test("a rate-limited summary retry reads running from the press until it lands, and a second press is a no-op", async () => {
+    await using directory = await tmpdir({
+      git: true,
+      config: { formatter: false, lsp: false, watcher: { ignore: [".git"] } },
+    })
+    await $`git add opencode.json`.cwd(directory.path).quiet()
+    await $`git commit -m "test: configure arena fixture"`.cwd(directory.path).quiet()
+    const memory = memoryStore()
+    let utility: "rate_limited" | "held" | "report" = "rate_limited"
+    const held = Promise.withResolvers<void>()
+    const router = installOpenRouterStub({
+      utilityResponse: async () => {
+        if (utility === "rate_limited") {
+          return Response.json(
+            { error: { message: "Provider returned error", code: 429 } },
+            { status: 429, headers: { "retry-after": "0.001" } },
+          )
+        }
+        if (utility === "held") await held.promise
+        return undefined
+      },
+    })
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(memory.store)
+
+    try {
+      const headers = {
+        "content-type": "application/json",
+        "x-opencode-directory": directory.path,
+      }
+      const source = await json<{ id: string }>(
+        await request("/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ title: "Arena summary retry" }),
+        }),
+      )
+      const attached = await json<PublicSnapshot>(await request(`/arena/sessions/${source.id}`, { headers }))
+      const admitted = await json<PublicSnapshot>(
+        await request(`/arena/chats/${attached.chat.id}/turns`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "Create evidence for a rate-limited summary." }),
+        }),
+      )
+      const turnID = admitted.turn?.id
+      if (!turnID) throw new Error("Arena did not return an admitted turn")
+      await waitForTurn(memory.store, turnID, "awaiting_vote", (turn) => turn.comparisonState === "failed")
+      const failed = await json<PublicSnapshot>(await request(`/arena/turns/${turnID}`, { headers }))
+      expect(failed.comparison?.state).toBe("failed")
+      const rateLimitedCalls = router.utilityCalls()
+      expect(rateLimitedCalls).toBeGreaterThan(1)
+
+      utility = "held"
+      const pressed = await request(`/arena/turns/${turnID}/retry-comparison`, { method: "POST", headers })
+      expect(pressed.status).toBe(200)
+      const retrying = await json<PublicSnapshot>(pressed)
+      expect(retrying.turn?.comparisonState).toBe("running")
+      expect(retrying.comparison?.state).toBe("running")
+
+      const again = await request(`/arena/turns/${turnID}/retry-comparison`, { method: "POST", headers })
+      expect(again.status).toBe(200)
+      const stillRetrying = await json<PublicSnapshot>(again)
+      expect(stillRetrying.turn?.comparisonState).toBe("running")
+      expect(stillRetrying.comparison?.state).toBe("running")
+
+      held.resolve()
+      utility = "report"
+      const comparison = await waitForComparison(memory.store, turnID)
+      expect(comparison.output).toBe("The two retained Git results and transcripts were compared.")
+      expect((await memory.store.turn(turnID))?.comparisonState).toBe("complete")
+      expect(router.utilityCalls()).toBe(rateLimitedCalls + 1)
+    } finally {
+      held.resolve()
       router.restore()
     }
   }, 30_000)
