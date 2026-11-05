@@ -1,0 +1,560 @@
+Validation collected by Codex on 2026-11-05.
+The targeted tests and live battle ran in the development checkout with the summarizer work present.
+The isolated fix uses the same three source/test files. Full repository tests were not run.
+Desktop Windows/Linux, browser QA, and packaged binaries were not tested for this change.
+
+Core AI SDK regression: bun run script/test.ts test/aisdk.test.ts --bail=1
+--------------------------------------------------------------------------
+bun test v1.3.14 (0d9b296a)
+
+ 45 pass
+ 0 fail
+ 145 expect() calls
+Ran 45 tests across 1 file. [407.00ms]
+
+Arena native-session integration: bun test test/arena/v2-engine-runtime.test.ts --bail=1
+----------------------------------------------------------------------------------------
+bun test v1.3.14 (0d9b296a)
+
+test/arena/v2-engine-runtime.test.ts:
+(pass) Arena v2 engine runtime > publishes only opaque contestant models with bounded reasoning variants [0.78ms]
+(pass) Arena v2 engine runtime > adds blinded request identity and stable cache lineage headers [0.16ms]
+(pass) Arena v2 engine runtime > keeps automatic permission approval scoped to a session [0.03ms]
+(pass) Arena v2 engine runtime > propagates an assignment to descendants and scopes their temp environment [0.48ms]
+(pass) Arena v2 engine runtime > routes the current Core AI SDK path through the Arena fetch and keeps the request opaque [35.96ms]
+[23:40:22.956] INFO (#3): database schema bootstrap started {
+  migrations: 50,
+}
+[23:40:22.961] INFO (#3): database schema bootstrap completed {
+  migrations: 50,
+  durationMs: 5,
+}
+[23:40:23.003] INFO (#146): spawning process {
+  command: "git",
+  args: [ "rev-parse", "--git-dir", "--git-common-dir", "--show-toplevel" ],
+  cwd: "<checkout>",
+}
+[23:40:23.020] INFO (#146): spawning process {
+  command: "git",
+  args: [ "remote", "get-url", "origin" ],
+  cwd: "<checkout>",
+}
+[23:40:23.034] INFO (#146): spawning process {
+  command: "git",
+  args: [ "worktree", "list", "--porcelain" ],
+  cwd: "<checkout>",
+}
+[23:40:23.066] INFO (#184): spawning process {
+  command: "git",
+  args: [ "rev-parse", "--git-dir", "--git-common-dir", "--show-toplevel" ],
+  cwd: "<checkout>",
+}
+[23:40:23.082] INFO (#184): spawning process {
+  command: "git",
+  args: [ "remote", "get-url", "origin" ],
+  cwd: "<checkout>",
+}
+[23:40:23.099] INFO (#184): spawning process {
+  command: "git",
+  args: [ "worktree", "list", "--porcelain" ],
+  cwd: "<checkout>",
+}
+[23:40:23.190] INFO (#184): location services booted {
+  directory: "<checkout>/arena-backend/packages/opencode/test/arena",
+  workspaceID: undefined,
+  durationMs: 126,
+}
+[23:40:23.472] INFO (#319): event {
+  event: {
+    id: "evt_1ae15c030001zw5VVA9eZusMMS",
+    created: 1793922023472,
+    type: "provider.updated",
+    location: {
+      directory: "<checkout>/arena-backend/packages/opencode/test/arena",
+      workspaceID: undefined,
+    },
+    data: {},
+  },
+}
+[23:40:23.479] INFO (#323): event {
+  event: {
+    id: "evt_1ae15c037001b6GZflmocmTa7f",
+    created: 1793922023479,
+    type: "model.updated",
+    location: {
+      directory: "<checkout>/arena-backend/packages/opencode/test/arena",
+      workspaceID: undefined,
+    },
+    data: {},
+  },
+}
+[23:40:23.481] INFO (#709): spawning process {
+  command: "git",
+  args: [
+    "--no-optional-locks", "-c", "core.autocrlf=false", "-c", "core.fsmonitor=false", "-c", "core.longpaths=true",
+    "-c", "core.symlinks=true", "-c", "core.quotepath=false", "symbolic-ref", "--quiet", "--short",
+    "HEAD"
+  ],
+  cwd: "<checkout>/arena-backend/packages/opencode/test/arena",
+}
+[23:40:23.482] INFO (#710): spawning process {
+  command: "git",
+  args: [
+    "--no-optional-locks", "-c", "core.autocrlf=false", "-c", "core.fsmonitor=false", "-c", "core.longpaths=true",
+    "-c", "core.symlinks=true", "-c", "core.quotepath=false", "remote"
+  ],
+  cwd: "<checkout>/arena-backend/packages/opencode/test/arena",
+}
+[23:40:23.507] INFO (#710): spawning process {
+  command: "git",
+  args: [
+    "--no-optional-locks", "-c", "core.autocrlf=false", "-c", "core.fsmonitor=false", "-c", "core.longpaths=true",
+    "-c", "core.symlinks=true", "-c", "core.quotepath=false", "symbolic-ref", "refs/remotes/origin/HEAD"
+  ],
+  cwd: "<checkout>/arena-backend/packages/opencode/test/arena",
+}
+[23:40:23.523] INFO (#565): event {
+  event: {
+    id: "evt_1ae15c062002aUhHm5Bw6MxwpF",
+    created: 1793922023522,
+    type: "agent.updated",
+    location: {
+      directory: "<checkout>/arena-backend/packages/opencode/test/arena",
+      workspaceID: undefined,
+    },
+    data: {},
+  },
+}
+[23:40:23.523] INFO (#565): event {
+  event: {
+    id: "evt_1ae15c063001B5IRNlnhf8Lt9D",
+    created: 1793922023523,
+    type: "command.updated",
+    location: {
+      directory: "<checkout>/arena-backend/packages/opencode/test/arena",
+      workspaceID: undefined,
+    },
+    data: {},
+  },
+}
+[23:40:23.547] INFO (#748): spawning process {
+  command: "git",
+  args: [ "rev-parse", "--git-dir", "--git-common-dir", "--show-toplevel" ],
+  cwd: "<checkout>",
+}
+[23:40:24.850] INFO (#804): spawning process {
+  command: "git",
+  args: [ "rev-parse", "--git-dir", "--git-common-dir", "--show-toplevel" ],
+  cwd: "<checkout>",
+}
+[23:40:24.875] INFO (#804): spawning process {
+  command: "git",
+  args: [ "--git-dir", "/var/folders/h4/87l_mw_s4m78z0nn21sffv6h0000gn/T/opencode-test-data-44343/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/05c9593d716e633ceb58fe6d7004a35b44334ecd.init-44343-xxa3xw7dqih",
+    "--work-tree", "<checkout>", "init"
+  ],
+  cwd: "<checkout>",
+}
+[23:40:24.897] INFO (#830): spawning process {
+  command: "git",
+  args: [ "--git-dir", "/var/folders/h4/87l_mw_s4m78z0nn21sffv6h0000gn/T/opencode-test-data-44343/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/05c9593d716e633ceb58fe6d7004a35b44334ecd",
+    "--work-tree", "<checkout>", "diff-files",
+    "--name-only", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+[23:40:24.899] INFO (#831): spawning process {
+  command: "git",
+  args: [ "--git-dir", "/var/folders/h4/87l_mw_s4m78z0nn21sffv6h0000gn/T/opencode-test-data-44343/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/05c9593d716e633ceb58fe6d7004a35b44334ecd",
+    "--work-tree", "<checkout>", "ls-files", "--others",
+    "--exclude-standard", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+[23:40:24.918] INFO (#802): spawning process {
+  command: "git",
+  args: [ "--git-dir", "<user-home>/agent-duel/.git/worktrees/agent-duel1", "--work-tree",
+    "<checkout>", "check-ignore", "--no-index",
+    "--stdin", "-z"
+  ],
+  cwd: "<checkout>",
+}
+[23:40:24.937] INFO (#802): spawning process {
+  command: "git",
+  args: [ "--git-dir", "/var/folders/h4/87l_mw_s4m78z0nn21sffv6h0000gn/T/opencode-test-data-44343/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/05c9593d716e633ceb58fe6d7004a35b44334ecd",
+    "--work-tree", "<checkout>", "update-index",
+    "--add", "--remove", "--replace", "-z", "--stdin"
+  ],
+  cwd: "<checkout>",
+}
+[23:40:24.962] INFO (#802): spawning process {
+  command: "git",
+  args: [ "--git-dir", "/var/folders/h4/87l_mw_s4m78z0nn21sffv6h0000gn/T/opencode-test-data-44343/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/05c9593d716e633ceb58fe6d7004a35b44334ecd",
+    "--work-tree", "<checkout>", "write-tree"
+  ],
+  cwd: "<checkout>",
+}
+[23:40:25.001] INFO (#916): spawning process {
+  command: "git",
+  args: [ "--git-dir", "/var/folders/h4/87l_mw_s4m78z0nn21sffv6h0000gn/T/opencode-test-data-44343/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/05c9593d716e633ceb58fe6d7004a35b44334ecd",
+    "--work-tree", "<checkout>", "diff-files",
+    "--name-only", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+[23:40:25.003] INFO (#917): spawning process {
+  command: "git",
+  args: [ "--git-dir", "/var/folders/h4/87l_mw_s4m78z0nn21sffv6h0000gn/T/opencode-test-data-44343/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/05c9593d716e633ceb58fe6d7004a35b44334ecd",
+    "--work-tree", "<checkout>", "ls-files", "--others",
+    "--exclude-standard", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+[23:40:25.047] INFO (#971): spawning process {
+  command: "git",
+  args: [ "--git-dir", "/var/folders/h4/87l_mw_s4m78z0nn21sffv6h0000gn/T/opencode-test-data-44343/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/05c9593d716e633ceb58fe6d7004a35b44334ecd",
+    "--work-tree", "<checkout>", "diff-files",
+    "--name-only", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+[23:40:25.048] INFO (#972): spawning process {
+  command: "git",
+  args: [ "--git-dir", "/var/folders/h4/87l_mw_s4m78z0nn21sffv6h0000gn/T/opencode-test-data-44343/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/05c9593d716e633ceb58fe6d7004a35b44334ecd",
+    "--work-tree", "<checkout>", "ls-files", "--others",
+    "--exclude-standard", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+[23:40:25.088] INFO (#1002): spawning process {
+  command: "git",
+  args: [ "rev-parse", "--git-dir", "--git-common-dir", "--show-toplevel" ],
+  cwd: "<checkout>",
+}
+[23:40:25.104] INFO (#1002): spawning process {
+  command: "git",
+  args: [ "remote", "get-url", "origin" ],
+  cwd: "<checkout>",
+}
+[23:40:25.118] INFO (#1002): spawning process {
+  command: "git",
+  args: [ "worktree", "list", "--porcelain" ],
+  cwd: "<checkout>",
+}
+[23:40:25.158] INFO (#1069): spawning process {
+  command: "git",
+  args: [ "--git-dir", "/var/folders/h4/87l_mw_s4m78z0nn21sffv6h0000gn/T/opencode-test-data-44343/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/05c9593d716e633ceb58fe6d7004a35b44334ecd",
+    "--work-tree", "<checkout>", "diff-files",
+    "--name-only", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+[23:40:25.159] INFO (#1070): spawning process {
+  command: "git",
+  args: [ "--git-dir", "/var/folders/h4/87l_mw_s4m78z0nn21sffv6h0000gn/T/opencode-test-data-44343/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/05c9593d716e633ceb58fe6d7004a35b44334ecd",
+    "--work-tree", "<checkout>", "ls-files", "--others",
+    "--exclude-standard", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+[23:40:25.181] INFO (#1102): spawning process {
+  command: "git",
+  args: [ "--git-dir", "/var/folders/h4/87l_mw_s4m78z0nn21sffv6h0000gn/T/opencode-test-data-44343/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/05c9593d716e633ceb58fe6d7004a35b44334ecd",
+    "--work-tree", "<checkout>", "ls-files", "--others",
+    "--exclude-standard", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+[23:40:25.182] INFO (#1101): spawning process {
+  command: "git",
+  args: [ "--git-dir", "/var/folders/h4/87l_mw_s4m78z0nn21sffv6h0000gn/T/opencode-test-data-44343/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/05c9593d716e633ceb58fe6d7004a35b44334ecd",
+    "--work-tree", "<checkout>", "diff-files",
+    "--name-only", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+[23:40:25.215] INFO (#1132): spawning process {
+  command: "git",
+  args: [ "--git-dir", "/var/folders/h4/87l_mw_s4m78z0nn21sffv6h0000gn/T/opencode-test-data-44343/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/05c9593d716e633ceb58fe6d7004a35b44334ecd",
+    "--work-tree", "<checkout>", "ls-files", "--others",
+    "--exclude-standard", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+[23:40:25.216] INFO (#1131): spawning process {
+  command: "git",
+  args: [ "--git-dir", "/var/folders/h4/87l_mw_s4m78z0nn21sffv6h0000gn/T/opencode-test-data-44343/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/05c9593d716e633ceb58fe6d7004a35b44334ecd",
+    "--work-tree", "<checkout>", "diff-files",
+    "--name-only", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+[23:40:25.247] INFO (#1179): spawning process {
+  command: "git",
+  args: [ "--git-dir", "/var/folders/h4/87l_mw_s4m78z0nn21sffv6h0000gn/T/opencode-test-data-44343/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/05c9593d716e633ceb58fe6d7004a35b44334ecd",
+    "--work-tree", "<checkout>", "diff-files",
+    "--name-only", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+[23:40:25.248] INFO (#1180): spawning process {
+  command: "git",
+  args: [ "--git-dir", "/var/folders/h4/87l_mw_s4m78z0nn21sffv6h0000gn/T/opencode-test-data-44343/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/05c9593d716e633ceb58fe6d7004a35b44334ecd",
+    "--work-tree", "<checkout>", "ls-files", "--others",
+    "--exclude-standard", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+[23:40:25.271] INFO (#1211): spawning process {
+  command: "git",
+  args: [ "--git-dir", "/var/folders/h4/87l_mw_s4m78z0nn21sffv6h0000gn/T/opencode-test-data-44343/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/05c9593d716e633ceb58fe6d7004a35b44334ecd",
+    "--work-tree", "<checkout>", "diff-files",
+    "--name-only", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+[23:40:25.273] INFO (#1212): spawning process {
+  command: "git",
+  args: [ "--git-dir", "/var/folders/h4/87l_mw_s4m78z0nn21sffv6h0000gn/T/opencode-test-data-44343/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/05c9593d716e633ceb58fe6d7004a35b44334ecd",
+    "--work-tree", "<checkout>", "ls-files", "--others",
+    "--exclude-standard", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+[23:40:25.311] INFO (#1267): spawning process {
+  command: "git",
+  args: [ "--git-dir", "/var/folders/h4/87l_mw_s4m78z0nn21sffv6h0000gn/T/opencode-test-data-44343/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/05c9593d716e633ceb58fe6d7004a35b44334ecd",
+    "--work-tree", "<checkout>", "diff-files",
+    "--name-only", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+[23:40:25.312] INFO (#1268): spawning process {
+  command: "git",
+  args: [ "--git-dir", "/var/folders/h4/87l_mw_s4m78z0nn21sffv6h0000gn/T/opencode-test-data-44343/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/05c9593d716e633ceb58fe6d7004a35b44334ecd",
+    "--work-tree", "<checkout>", "ls-files", "--others",
+    "--exclude-standard", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+[23:40:25.339] INFO (#1302): spawning process {
+  command: "git",
+  args: [ "--git-dir", "/var/folders/h4/87l_mw_s4m78z0nn21sffv6h0000gn/T/opencode-test-data-44343/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/05c9593d716e633ceb58fe6d7004a35b44334ecd",
+    "--work-tree", "<checkout>", "diff-files",
+    "--name-only", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+[23:40:25.340] INFO (#1303): spawning process {
+  command: "git",
+  args: [ "--git-dir", "/var/folders/h4/87l_mw_s4m78z0nn21sffv6h0000gn/T/opencode-test-data-44343/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/05c9593d716e633ceb58fe6d7004a35b44334ecd",
+    "--work-tree", "<checkout>", "ls-files", "--others",
+    "--exclude-standard", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+[23:40:25.382] INFO (#1351): spawning process {
+  command: "git",
+  args: [ "--git-dir", "/var/folders/h4/87l_mw_s4m78z0nn21sffv6h0000gn/T/opencode-test-data-44343/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/05c9593d716e633ceb58fe6d7004a35b44334ecd",
+    "--work-tree", "<checkout>", "ls-files", "--others",
+    "--exclude-standard", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+[23:40:25.383] INFO (#1350): spawning process {
+  command: "git",
+  args: [ "--git-dir", "/var/folders/h4/87l_mw_s4m78z0nn21sffv6h0000gn/T/opencode-test-data-44343/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/05c9593d716e633ceb58fe6d7004a35b44334ecd",
+    "--work-tree", "<checkout>", "diff-files",
+    "--name-only", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+[23:40:25.405] INFO (#1382): spawning process {
+  command: "git",
+  args: [ "--git-dir", "/var/folders/h4/87l_mw_s4m78z0nn21sffv6h0000gn/T/opencode-test-data-44343/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/05c9593d716e633ceb58fe6d7004a35b44334ecd",
+    "--work-tree", "<checkout>", "diff-files",
+    "--name-only", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+[23:40:25.406] INFO (#1383): spawning process {
+  command: "git",
+  args: [ "--git-dir", "/var/folders/h4/87l_mw_s4m78z0nn21sffv6h0000gn/T/opencode-test-data-44343/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/05c9593d716e633ceb58fe6d7004a35b44334ecd",
+    "--work-tree", "<checkout>", "ls-files", "--others",
+    "--exclude-standard", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+[23:40:25.440] INFO (#1436): spawning process {
+  command: "git",
+  args: [ "--git-dir", "/var/folders/h4/87l_mw_s4m78z0nn21sffv6h0000gn/T/opencode-test-data-44343/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/05c9593d716e633ceb58fe6d7004a35b44334ecd",
+    "--work-tree", "<checkout>", "diff-files",
+    "--name-only", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+[23:40:25.441] INFO (#1437): spawning process {
+  command: "git",
+  args: [ "--git-dir", "/var/folders/h4/87l_mw_s4m78z0nn21sffv6h0000gn/T/opencode-test-data-44343/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/05c9593d716e633ceb58fe6d7004a35b44334ecd",
+    "--work-tree", "<checkout>", "ls-files", "--others",
+    "--exclude-standard", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+[23:40:28.371] INFO (#1487): spawning process {
+  command: "git",
+  args: [ "--git-dir", "/var/folders/h4/87l_mw_s4m78z0nn21sffv6h0000gn/T/opencode-test-data-44343/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/05c9593d716e633ceb58fe6d7004a35b44334ecd",
+    "--work-tree", "<checkout>", "ls-files", "--others",
+    "--exclude-standard", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+[23:40:28.372] INFO (#1486): spawning process {
+  command: "git",
+  args: [ "--git-dir", "/var/folders/h4/87l_mw_s4m78z0nn21sffv6h0000gn/T/opencode-test-data-44343/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/05c9593d716e633ceb58fe6d7004a35b44334ecd",
+    "--work-tree", "<checkout>", "diff-files",
+    "--name-only", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+[23:40:28.397] INFO (#1519): spawning process {
+  command: "git",
+  args: [ "--git-dir", "/var/folders/h4/87l_mw_s4m78z0nn21sffv6h0000gn/T/opencode-test-data-44343/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/05c9593d716e633ceb58fe6d7004a35b44334ecd",
+    "--work-tree", "<checkout>", "ls-files", "--others",
+    "--exclude-standard", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+[23:40:28.398] INFO (#1518): spawning process {
+  command: "git",
+  args: [ "--git-dir", "/var/folders/h4/87l_mw_s4m78z0nn21sffv6h0000gn/T/opencode-test-data-44343/share/opencode/snapshot/04fc964b69bbcfafbefe9a5552ccc68717608d23/05c9593d716e633ceb58fe6d7004a35b44334ecd",
+    "--work-tree", "<checkout>", "diff-files",
+    "--name-only", "-z", "--", ":(literal)arena-backend/packages/opencode/test/arena"
+  ],
+  cwd: "<checkout>",
+}
+(pass) Arena v2 engine runtime > executes a real Core Session prompt through the in-memory Arena fetch [5515.35ms]
+
+ 6 pass
+ 0 fail
+ 68 expect() calls
+Ran 6 tests across 1 file. [6.36s]
+
+Core: bun run typecheck
+-----------------------
+$ tsgo -b tsconfig.json tsconfig.tests.json
+
+OpenCode: bun run typecheck
+---------------------------
+$ tsgo --noEmit
+
+Root: npm run typecheck
+-----------------------
+
+> paseo@0.4.0-beta.13 typecheck
+> npm run typecheck --workspaces --if-present
+
+
+> @getpaseo/expo-two-way-audio@0.4.0-beta.13 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/highlight@0.4.0-beta.13 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/plugin@0.4.0-beta.13 typecheck
+> tsgo --noEmit && npm run typecheck:examples
+
+
+> @getpaseo/plugin@0.4.0-beta.13 typecheck:examples
+> npm --prefix ../../plugin-examples/markdown-panel install --ignore-scripts --no-audit --no-fund && tsgo -p tsconfig.examples.json --noEmit
+
+
+up to date in 240ms
+
+> @getpaseo/protocol@0.4.0-beta.13 pretypecheck
+> npm run generate:validators
+
+
+> @getpaseo/protocol@0.4.0-beta.13 generate:validators
+> node scripts/generate-validation-aot.mjs
+
+generated src/generated/validation/ws-outbound.aot.ts: envelope + 260 session message validators
+
+> @getpaseo/protocol@0.4.0-beta.13 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/client@0.4.0-beta.13 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/server@0.4.0-beta.13 typecheck
+> tsgo -p tsconfig.server.typecheck.json --noEmit
+
+
+> @getpaseo/app@0.4.0-beta.13 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/relay@0.4.0-beta.13 typecheck
+> tsgo --noEmit
+
+
+> @getpaseo/desktop@0.4.0-beta.13 typecheck
+> tsgo --noEmit -p tsconfig.json
+
+
+> @getpaseo/cli@0.4.0-beta.13 typecheck
+> tsgo --noEmit
+
+
+Root: npm run lint
+------------------
+
+> paseo@0.4.0-beta.13 lint
+> oxlint --disable-nested-config
+
+Found 0 warnings and 0 errors.
+Finished in 1.0s on 4779 files with 177 rules using 18 threads.
+
+Isolated branch: npm run format
+-------------------------------
+
+> paseo@0.4.0-beta.13 format
+> oxfmt .
+
+Finished in 787ms on 5024 files using 18 threads.
+
+Existing live macOS Electron BYOK battle: recorded tool outputs
+---------------------------------------------------------------
+{
+  "state": "awaiting_vote",
+  "comparison": "complete",
+  "runs": [
+    {
+      "side": "a",
+      "state": "complete",
+      "tools": [
+        {
+          "tool": "shell",
+          "status": "completed",
+          "command": "node --test greeting.test.js && git diff && git status --short",
+          "output": "✔ nonblank name (0.508ms)\n✔ padded name is trimmed (0.041083ms)\n✔ blank name uses friend (0.036542ms)\n✔ absent name uses friend (0.031959ms)\nℹ tests 4\nℹ suites 0\nℹ pass 4\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 62.638875\n?? greeting.js\n?? greeting.test.js\n"
+        }
+      ]
+    },
+    {
+      "side": "b",
+      "state": "complete",
+      "tools": [
+        {
+          "tool": "shell",
+          "status": "completed",
+          "command": "node --test greeting.test.js && git diff && git status",
+          "output": "✔ nonblank name (0.533542ms)\n✔ padded name (0.045875ms)\n✔ blank name (0.039709ms)\n✔ absent name (0.032958ms)\nℹ tests 4\nℹ suites 0\nℹ pass 4\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 72.555833\nOn branch main\nUntracked files:\n  (use \"git add <file>...\" to include in what will be committed)\n\tgreeting.js\n\tgreeting.test.js\n\nnothing added to commit but untracked files present (use \"git add\" to track)\n"
+        }
+      ]
+    }
+  ]
+}

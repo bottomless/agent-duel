@@ -803,6 +803,9 @@ function streamPartEvents(
         }),
       ])
     case "tool-input-delta":
+      // OpenRouter can emit empty argument chunks after announcing a complete tool call.
+      // They carry no input; forwarding them violates Core's ended-input lifecycle.
+      if (event.delta === "") return Effect.succeed([])
       return Effect.succeed([
         LLMEvent.toolInputDelta({ id: event.id, name: state.toolNames[event.id] ?? "unknown", text: event.delta }),
       ])

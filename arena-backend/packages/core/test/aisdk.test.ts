@@ -561,11 +561,19 @@ it.effect("normalizes file data across AI SDK prompt parts", () =>
           Message.user([
             { type: "media", media: Media.bytes(bytes, "image/png"), filename: "bytes.png" },
             { type: "media", media: Media.base64("AAAA", "image/png"), filename: "base64.png" },
-            { type: "media", media: Media.fromDataUrl("data:image/png;charset=utf-8;base64,AQID"), filename: "inline.png" },
+            {
+              type: "media",
+              media: Media.fromDataUrl("data:image/png;charset=utf-8;base64,AQID"),
+              filename: "inline.png",
+            },
             { type: "media", media: Media.url("https://example.com/image.png", { mediaType: "image/png" }) },
             { type: "media", media: Media.base64("s3://bucket/image.png", "image/png") },
           ]),
-          Message.assistant({ type: "media", media: Media.url("http://example.com/document.pdf", { mediaType: "application/pdf" }), filename: "document.pdf" }),
+          Message.assistant({
+            type: "media",
+            media: Media.url("http://example.com/document.pdf", { mediaType: "application/pdf" }),
+            filename: "document.pdf",
+          }),
           Message.tool({
             id: "call_1",
             name: "screenshot",
@@ -748,12 +756,7 @@ it.effect("routes AI SDK requests and responses through HTTP hook middleware", (
     expect(sent[0]?.headers.get("x-hook")).toBe("applied")
     expect(sent[0]?.headers.get("authorization")).toBe("Bearer test")
     expect(JSON.parse(sent[0]?.body ?? "")).toMatchObject({ model: "api-model" })
-    expect(seen).toEqual([
-      "POST https://example.test/v1/chat/completions",
-      sent[0]?.body,
-      sent[0]?.body,
-      "status 200",
-    ])
+    expect(seen).toEqual(["POST https://example.test/v1/chat/completions", sent[0]?.body, sent[0]?.body, "status 200"])
     expect(response.events.filter(LLMEvent.is.textDelta).map((event) => event.text)).toEqual(["rewritten"])
   }),
 )
@@ -815,6 +818,38 @@ it.effect("fails with a retryable transport error when response headers time out
       message: "Response headers timed out",
     })
     expect(SessionRunnerRetry.isRetryable(error)).toBeTrue()
+  }),
+)
+
+it.effect("ignores empty SDK tool deltas after a completed call without losing argument whitespace", () =>
+  Effect.gen(function* () {
+    const aisdk = yield* AISDK.Service
+    const chunks = ['{"query":"', " ", 'result"}']
+    const raw = chunks.join("")
+    yield* aisdk.hook.sdk((event) => {
+      event.sdk = {
+        languageModel: () =>
+          streamModel([
+            { type: "tool-input-start", id: "call_1", toolName: "lookup" },
+            { type: "tool-input-delta", id: "call_1", delta: "" },
+            ...chunks.map((delta) => ({ type: "tool-input-delta" as const, id: "call_1", delta })),
+            { type: "tool-input-end", id: "call_1" },
+            { type: "tool-call", toolCallId: "call_1", toolName: "lookup", input: raw },
+            { type: "tool-input-delta", id: "call_1", delta: "" },
+            { type: "finish", finishReason: { unified: "tool-calls", raw: "tool_calls" }, usage },
+          ]),
+      }
+    })
+    const resolved = yield* aisdk.model(model("test-ai-sdk"))
+    const response = yield* LLMClient.generate(LLM.request({ model: resolved, prompt: "Lookup" })).pipe(
+      Effect.provide(client),
+    )
+    expect(response.events.filter(LLMEvent.is.toolInputDelta).map((event) => event.text)).toEqual(chunks)
+    expect(response.events.filter(LLMEvent.is.toolInputEnd)).toHaveLength(1)
+    expect(response.events.filter(LLMEvent.is.toolCall)).toMatchObject([
+      { id: "call_1", name: "lookup", input: { query: " result" } },
+    ])
+    expect(response.finishReason).toEqual({ normalized: "tool-calls", raw: "tool_calls" })
   }),
 )
 
