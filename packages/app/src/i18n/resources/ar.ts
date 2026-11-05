@@ -1150,8 +1150,10 @@ export const ar: TranslationResources = {
   },
   battleRepository: {
     title: "يحتاج Agent Duel إلى commit",
-    notGitMessage: "هل تريد إنشاء مستودع Git مع commit أول فارغ؟",
-    noCommitMessage: "هل تريد إنشاء commit أول فارغ؟",
+    notGitMessage:
+      "يعمل كل وكيل في نسخته الخاصة من هذا المجلد، ويحتاج Git إلى commit لإنشاء هذه النسخ. سيضيف Agent Duel مستودع Git هنا (مجلد .git) مع commit واحد فارغ. لن تتغير ملفاتك ولن تُضاف إلى الـ commit.",
+    noCommitMessage:
+      "يعمل كل وكيل في نسخته الخاصة من هذا المجلد، ويحتاج Git إلى commit لإنشاء هذه النسخ. لا يحتوي هذا المستودع على أي commit بعد، لذلك سيضيف Agent Duel commit واحدًا فارغًا. لن تتغير ملفاتك ولن تُضاف إلى الـ commit.",
     confirm: "إنشاء commit",
     declined: "تحتاج المعركة إلى commit في Git.",
     failed: "تعذّر إنشاء الـ commit الأول: {{error}}",

@@ -11,7 +11,6 @@ import {
   connectNewWorkspaceDaemonClient,
   expectNewWorkspaceProjectSelected,
   openGlobalNewWorkspaceComposer,
-  submitNewWorkspaceEmpty,
   submitNewWorkspacePrompt,
 } from "../support/helpers/new-workspace";
 import { getServerId } from "../support/helpers/server-id";
@@ -351,7 +350,7 @@ test.describe("Workspace model regressions", () => {
 
       await openGlobalNewWorkspaceComposer(page);
       await expectNewWorkspaceProjectSelected(page, seeded.projectDisplayName);
-      await submitNewWorkspaceEmpty(page);
+      await submitNewWorkspacePrompt(page);
 
       const createdWorkspace = await assertNewWorkspaceSidebarAndHeader(page, {
         serverId,
@@ -466,7 +465,7 @@ test.describe("Workspace model regressions", () => {
 
       await openGlobalNewWorkspaceComposer(page);
       await expectNewWorkspaceProjectSelected(page, seeded.projectDisplayName);
-      await submitNewWorkspaceEmpty(page);
+      await submitNewWorkspacePrompt(page);
 
       const createdWorkspace = await assertNewWorkspaceSidebarAndHeader(page, {
         serverId,

@@ -5,7 +5,7 @@ import {
   connectNewWorkspaceDaemonClient,
   openGlobalNewWorkspaceComposer,
   selectNewWorkspaceProject,
-  submitNewWorkspaceEmpty,
+  submitNewWorkspacePrompt,
 } from "../support/helpers/new-workspace";
 import { seedWorkspace, type SeededWorkspace } from "../support/helpers/seed-client";
 import { getServerId } from "../support/helpers/server-id";
@@ -49,7 +49,7 @@ test.describe("New workspace isolation", () => {
           await expect(battleToggle).toHaveAttribute("aria-checked", "false");
         }
 
-        await submitNewWorkspaceEmpty(page);
+        await submitNewWorkspacePrompt(page);
         const created = await assertNewWorkspaceSidebarAndHeader(page, {
           serverId: getServerId(),
           client,

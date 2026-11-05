@@ -35,6 +35,7 @@ import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { ArenaRuntime } from "@/arena/runtime"
 import { ModelIdleError } from "@/arena/model-idle"
+import { ArenaResponseRecovery } from "@/arena/response-recovery"
 import { contestant, medium } from "@/arena/model-profile"
 import { ProviderTransform } from "@/provider/transform"
 import { DEFAULT_COMPACT_AT } from "@agent-duel/arena-service/pool"
@@ -1467,6 +1468,60 @@ describe("session.compaction.process", () => {
     },
     { git: true },
   )
+
+  for (const [shape, text] of [
+    ["with no text", undefined],
+    ["with partial text", "I can't help with summarizing this conversation."],
+  ] as const) {
+    itCompaction.instance(
+      `stops at a refused Arena summary ${shape} without sending it again`,
+      () => {
+        const routing = compactionRouting()
+        const stub = llm()
+        let requests = 0
+        const refused = () => {
+          requests++
+          return Stream.make(
+            ...(text
+              ? [
+                  LLMEvent.textStart({ id: "txt-0" }),
+                  LLMEvent.textDelta({ id: "txt-0", text }),
+                  LLMEvent.textEnd({ id: "txt-0" }),
+                ]
+              : []),
+            LLMEvent.stepFinish({ index: 0, reason: "content-filter", usage: basicUsage() }),
+            LLMEvent.finish({ reason: "content-filter", usage: basicUsage() }),
+          )
+        }
+        for (let i = 0; i < 4; i++) stub.push(refused)
+        return Effect.gen(function* () {
+          const { result, messages } = yield* arenaCompaction
+          expect(result).toBe("stop")
+          expect(requests).toBe(1)
+          const failed = summaries(messages)
+          expect(failed).toHaveLength(1)
+          const info = failed[0]!.info
+          expect(info.role === "assistant" && info.finish).toBe("content-filter")
+          // Not retryable: the voter gets no Retry that would pay for the same refusal again.
+          expect(info.role === "assistant" && info.error).toMatchObject({
+            name: "APIError",
+            data: { message: ArenaResponseRecovery.SUMMARY_REFUSED, isRetryable: false },
+          })
+          expect(continues(messages)).toHaveLength(0)
+          expect(MessageV2.filterCompacted(messages.toReversed()).map((message) => message.info.id)).toEqual(
+            messages.map((message) => message.info.id),
+          )
+        }).pipe(
+          withCompaction({
+            llm: stub.llmLayer,
+            provider: ProviderTest.fake({ model: routing.contestant }),
+            config: routing.config,
+          }),
+        )
+      },
+      { git: true },
+    )
+  }
 
   itCompaction.instance(
     "accepts an empty summary outside Arena, as upstream does",

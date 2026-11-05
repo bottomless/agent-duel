@@ -338,9 +338,7 @@ test.describe("Composer attachments", () => {
         projectDisplayName: workspace.projectDisplayName,
       });
       await fillComposerDraft(page, "lock test prompt");
-      const createButton = page
-        .getByTestId("message-input-root")
-        .getByRole("button", { name: "Create" });
+      const createButton = page.getByTestId("workspace-create-submit");
       await expect(createButton).toBeVisible({ timeout: 30_000 });
       await createButton.click();
 

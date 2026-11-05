@@ -17,6 +17,10 @@ export const IDLE_CONTINUE =
 export const IDLE_RESTART =
   "The previous response was cancelled because the model stopped sending output before it wrote anything. Start the response again. Do not repeat successful tool calls. Keep reasoning concise."
 
+/** A provider refused a compaction summary. Shown before the vote: any model can decline. */
+export const SUMMARY_REFUSED =
+  "The model declined to summarize this conversation, so this run stopped. Completed work has been preserved."
+
 export const MAX_RECOVERIES = 3
 export const RECOVERING = "Continuing after response limit"
 export const EXHAUSTED =

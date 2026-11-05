@@ -572,6 +572,23 @@ describe("ArenaProxy", () => {
     expect(JSON.stringify(payload)).toContain("domain-value")
   })
 
+  test("drops a refusal's text and keeps its finish reason", () => {
+    const refusal = "Blocked under example-provider terms"
+    const streamed = sanitizePayload(
+      { choices: [{ delta: { content: "", role: "assistant", refusal }, finish_reason: "content_filter" }] },
+      "gen_opaque",
+      true,
+    )
+    const complete = sanitizePayload(
+      { choices: [{ message: { content: null, role: "assistant", refusal }, finish_reason: "content_filter" }] },
+      "gen_opaque",
+    )
+    for (const payload of [streamed, complete]) {
+      expect(JSON.stringify(payload)).not.toContain(refusal)
+      expect(payload).toMatchObject({ choices: [{ finish_reason: "content_filter" }] })
+    }
+  })
+
   test("routes and sanitizes an OpenRouter event stream", async () => {
     const registry = new AssignmentRegistry()
     registry.assign("session-root", assignment)

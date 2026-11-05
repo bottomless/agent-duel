@@ -1569,6 +1569,8 @@ describe("OpenRouter proxy", () => {
           [
             "event: hidden-provider",
             'data: {"id":"provider-id","model":"provider/hidden-model","provider":"hidden-provider","choices":[{"delta":{"content":"done"}}]}',
+            'data: {"choices":[{"delta":{"content":"","role":"assistant","refusal":"Blocked under hidden-provider terms"}}]}',
+            'data: {"choices":[{"delta":{"content":""},"finish_reason":"content_filter"}]}',
             'data: {"usage":{"prompt_tokens":10,"completion_tokens":5,"cost":0,"cost_details":{"upstream_inference_cost":0.789}},"system_fingerprint":"hidden-fingerprint"}',
             'data: {"error":{"code":503,"message":"private hidden-provider outage"}}',
             'data: {"error":{"code":402,"message":"private hidden-provider billing"}}',
@@ -1598,6 +1600,8 @@ describe("OpenRouter proxy", () => {
     const body = await response.text()
     expect(response.headers.get("x-openrouter-provider")).toBeNull()
     expect(body).toContain('"content":"done"')
+    expect(body).toContain('"finish_reason":"content_filter"')
+    expect(body).not.toContain("refusal")
     expect(body).toContain('"prompt_tokens":10')
     expect(body).toContain('"type":"arena_retryable_stream_error"')
     expect(body).toContain('"type":"arena_upstream_error"')

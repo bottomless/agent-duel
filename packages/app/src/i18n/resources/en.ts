@@ -1160,8 +1160,10 @@ export const en = {
   },
   battleRepository: {
     title: "Agent Duel needs a commit",
-    notGitMessage: "Create a Git repository with an empty first commit?",
-    noCommitMessage: "Create an empty first commit?",
+    notGitMessage:
+      "Each agent works in its own copy of this folder, and Git needs a commit to make those copies. Agent Duel will add a Git repository here (a .git folder) with one empty commit. Your files stay as they are and aren't committed.",
+    noCommitMessage:
+      "Each agent works in its own copy of this folder, and Git needs a commit to make those copies. This repository has no commits yet, so Agent Duel will add one empty commit. Your files stay as they are and aren't committed.",
     confirm: "Create commit",
     declined: "A battle needs a Git commit.",
     failed: "Could not create the first commit: {{error}}",

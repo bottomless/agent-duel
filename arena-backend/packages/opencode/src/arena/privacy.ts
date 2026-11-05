@@ -279,7 +279,11 @@ function contains(value: unknown, blocked: ReadonlySet<string>): boolean {
 }
 
 // Messages the engine writes itself, which name no model and tell the voter what to do.
-const neutralMessages = new Set<unknown>([ArenaResponseRecovery.IDLE_EXHAUSTED, requestTooLargeMessage])
+const neutralMessages = new Set<unknown>([
+  ArenaResponseRecovery.IDLE_EXHAUSTED,
+  ArenaResponseRecovery.SUMMARY_REFUSED,
+  requestTooLargeMessage,
+])
 
 function apiError(input: ApiError): ApiError {
   return {

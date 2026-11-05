@@ -1159,8 +1159,10 @@ export const ko: TranslationResources = {
   },
   battleRepository: {
     title: "Agent Duel에는 커밋이 필요합니다",
-    notGitMessage: "빈 첫 커밋으로 Git 저장소를 만들까요?",
-    noCommitMessage: "빈 첫 커밋을 만들까요?",
+    notGitMessage:
+      "각 에이전트는 이 폴더의 자체 사본에서 작업하며, Git이 이 사본을 만들려면 커밋이 필요합니다. Agent Duel이 여기에 Git 저장소(.git 폴더)를 만들고 빈 커밋 하나를 추가합니다. 파일은 변경되지 않으며 커밋에도 포함되지 않습니다.",
+    noCommitMessage:
+      "각 에이전트는 이 폴더의 자체 사본에서 작업하며, Git이 이 사본을 만들려면 커밋이 필요합니다. 이 저장소에는 아직 커밋이 없으므로 Agent Duel이 빈 커밋 하나를 추가합니다. 파일은 변경되지 않으며 커밋에도 포함되지 않습니다.",
     confirm: "커밋 만들기",
     declined: "배틀에는 Git 커밋이 필요합니다.",
     failed: "첫 커밋을 만들 수 없습니다: {{error}}",

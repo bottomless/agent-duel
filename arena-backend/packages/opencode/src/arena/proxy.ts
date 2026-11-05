@@ -244,6 +244,15 @@ export function sanitizePayload(value: unknown, generationID: string, stream = f
       if (["length", "max_tokens", "max_output_tokens"].includes(String(native_finish_reason))) {
         safe.finish_reason = "length"
       }
+      // A refusal's text can name the provider ("Anthropic's Terms of Service"); its finish reason
+      // already marks the refusal. Desktops can meet a control plane that still sends the text.
+      for (const key of ["delta", "message"]) {
+        const value = safe[key]
+        if (record(value) && "refusal" in value) {
+          const { refusal: _, ...rest } = value
+          safe[key] = rest
+        }
+      }
       return safe
     })
   }

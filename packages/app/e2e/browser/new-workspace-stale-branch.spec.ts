@@ -13,7 +13,7 @@ import {
   selectBranchInPicker,
   selectNewWorkspaceIsolation,
   selectNewWorkspaceProject,
-  submitNewWorkspaceEmpty,
+  submitNewWorkspacePrompt,
 } from "../support/helpers/new-workspace";
 import { createTempGitRepo, switchRepoBranchOutsideApp } from "../support/helpers/workspace";
 import { waitForSidebarHydration } from "../support/helpers/workspace-ui";
@@ -36,7 +36,7 @@ for (const action of ["submit", "reopen menu"] as const) {
       await prompt.fill("Keep this prompt after the branch is deleted");
       switchRepoBranchOutsideApp(repo.path, "main");
       execFileSync("git", ["branch", "-D", "feature"], { cwd: repo.path });
-      if (action === "submit") await submitNewWorkspaceEmpty(page);
+      if (action === "submit") await submitNewWorkspacePrompt(page);
       else await openStartingRefPicker(page);
       await expect(
         page.getByText("This branch no longer exists. Choose another branch.").first(),
@@ -118,9 +118,7 @@ test("background reads keep the form usable, pause while hidden, and cannot over
     await expect.poll(() => release.length).toBe(1);
     const prompt = page.getByRole("textbox", { name: "Message agent..." });
     await prompt.fill("Typing while Git refresh is pending");
-    await expect(
-      page.getByTestId("message-input-root").getByRole("button", { name: "Create" }),
-    ).toBeEnabled();
+    await expect(page.getByTestId("workspace-create-submit")).toBeEnabled();
     await selectNewWorkspaceProject(page, secondProject);
     await expect(label).toContainText("second");
     hold = false;
@@ -135,9 +133,7 @@ test("background reads keep the form usable, pause while hidden, and cannot over
     await expect(label).toContainText("second");
     await openStartingRefPicker(page);
     await selectBranchInPicker(page, "second");
-    await expect(
-      page.getByTestId("message-input-root").getByRole("button", { name: "Create" }),
-    ).toBeEnabled();
+    await expect(page.getByTestId("workspace-create-submit")).toBeEnabled();
     const selectedCount = requests.length;
     switchRepoBranchOutsideApp(second.path, "main");
     await page.waitForTimeout(2_500);
@@ -168,7 +164,7 @@ test("follows an external branch switch before the project's first chat without 
     await expect(label).toContainText("main");
     switchRepoBranchOutsideApp(repo.path, "feature");
     await expect(label).toContainText("feature", { timeout: 10_000 });
-    await submitNewWorkspaceEmpty(page);
+    await submitNewWorkspacePrompt(page);
     await expect
       .poll(
         async () =>
@@ -204,7 +200,7 @@ test("reuses a branch created in Local mode after an external switch", async ({ 
     await submitNewBranchName(page, "test-branch");
     await expect(page.getByTestId("new-workspace-ref-picker-trigger")).toContainText("test-branch");
     switchRepoBranchOutsideApp(repo.path, "main");
-    await submitNewWorkspaceEmpty(page);
+    await submitNewWorkspacePrompt(page);
     await expect
       .poll(
         async () =>
@@ -243,7 +239,7 @@ test("keeps the prompt when untracked files block a switch and retries from deta
     await prompt.fill("Keep my prompt");
     switchRepoBranchOutsideApp(repo.path, "feature");
     writeFileSync(join(repo.path, "untracked.txt"), "keep me\n");
-    await submitNewWorkspaceEmpty(page);
+    await submitNewWorkspacePrompt(page);
     await expect(page.getByText(/Working directory has uncommitted changes/).first()).toBeVisible();
     await expect(prompt).toHaveValue("Keep my prompt");
     expect(readFileSync(join(repo.path, "untracked.txt"), "utf8")).toBe("keep me\n");
@@ -256,7 +252,7 @@ test("keeps the prompt when untracked files block a switch and retries from deta
     execFileSync("git", ["checkout", "--detach"], { cwd: repo.path, stdio: "pipe" });
     // No model call is needed to verify checkout preparation on retry.
     await prompt.fill("");
-    await submitNewWorkspaceEmpty(page);
+    await submitNewWorkspacePrompt(page);
     await expect
       .poll(
         async () =>
@@ -291,7 +287,7 @@ test("keeps the displayed Worktree base after the source branch changes external
     await selectNewWorkspaceIsolation(page, "worktree");
     await expect(page.getByTestId("new-workspace-ref-picker-trigger")).toContainText("main");
     switchRepoBranchOutsideApp(repo.path, "feature");
-    await submitNewWorkspaceEmpty(page);
+    await submitNewWorkspacePrompt(page);
     await expect
       .poll(
         async () =>
@@ -361,7 +357,7 @@ test("honors a selected branch after external switches and refuses an unsafe swi
 
     switchRepoBranchOutsideApp(repo.path, "dev");
     writeFileSync(join(repo.path, "README.md"), "unsaved local edits\n");
-    await submitNewWorkspaceEmpty(page);
+    await submitNewWorkspacePrompt(page);
     await expect(page.getByText(/Working directory has uncommitted changes/).first()).toBeVisible();
     expect(currentBranch()).toBe("dev");
     expect(
@@ -372,7 +368,7 @@ test("honors a selected branch after external switches and refuses an unsafe swi
     await page.screenshot({ path: testInfo.outputPath("switch-blocked.png") });
 
     execFileSync("git", ["restore", "README.md"], { cwd: repo.path });
-    await submitNewWorkspaceEmpty(page);
+    await submitNewWorkspacePrompt(page);
     await expect.poll(currentBranch).toBe("main");
     await expect
       .poll(
@@ -402,7 +398,7 @@ test("keeps local edits when selecting the branch already checked out", async ({
     await selectNewWorkspaceIsolation(page, "local");
     await openStartingRefPicker(page);
     await selectBranchInPicker(page, "main");
-    await submitNewWorkspaceEmpty(page);
+    await submitNewWorkspacePrompt(page);
     await expect
       .poll(
         async () =>

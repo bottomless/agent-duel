@@ -84,10 +84,6 @@ export async function selectWorkspaceHost(page: Page, hostName: string): Promise
   await expect(page.getByRole("button", { name: "Host", exact: true })).toContainText(hostName);
 }
 
-export async function createWorkspaceWithoutAgent(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "Create", exact: true }).click();
-}
-
 export async function expectProjectWorkspaceCountForHost(
   page: Page,
   input: { projectName: string; hostName: string; count: number },

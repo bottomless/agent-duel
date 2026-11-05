@@ -30,7 +30,6 @@ import {
   captureStartingRefPicker,
   expectStartingRefRows,
   startingRefRow,
-  submitNewWorkspaceEmpty,
   searchAndSelectBranchInPicker,
   selectBranchInPicker,
   selectNewWorkspaceIsolation,
@@ -205,14 +204,6 @@ async function expectWorkspaceStatusGroupEvents(input: {
       createdWorkspaceEvents.filter((event) => event.indicatorTestId === input.excludesIndicator),
     ).toEqual([]);
   }
-}
-
-async function submitNewWorkspaceWithoutPrompt(page: import("@playwright/test").Page) {
-  const createButton = page
-    .getByTestId("message-input-root")
-    .getByRole("button", { name: "Create" });
-  await expect(createButton).toBeVisible({ timeout: 30_000 });
-  await createButton.click();
 }
 
 test.describe("New workspace flow", () => {
@@ -524,9 +515,7 @@ test.describe("New workspace flow", () => {
       await expect(composer).toBeVisible({ timeout: 30_000 });
       await composer.fill("Hello from e2e");
 
-      const createButton = page
-        .getByTestId("message-input-root")
-        .getByRole("button", { name: "Create" });
+      const createButton = page.getByTestId("workspace-create-submit");
       await expect(createButton).toBeVisible({ timeout: 30_000 });
       await createButton.click();
 
@@ -653,7 +642,7 @@ test.describe("New workspace flow", () => {
 
       await openGlobalNewWorkspaceComposer(page);
       await expectNewWorkspaceProjectSelected(page, openedProject.projectDisplayName);
-      await submitNewWorkspaceWithoutPrompt(page);
+      await submitNewWorkspacePrompt(page);
 
       const createdWorkspace = await assertNewWorkspaceSidebarAndHeader(page, {
         serverId,
@@ -715,11 +704,7 @@ test.describe("New workspace flow", () => {
       await openStartingRefPicker(page);
       await selectBranchInPicker(page, "dev");
 
-      const createButton = page
-        .getByTestId("message-input-root")
-        .getByRole("button", { name: "Create" });
-      await expect(createButton).toBeVisible({ timeout: 30_000 });
-      await createButton.click();
+      await submitNewWorkspacePrompt(page);
 
       const createdWorkspace = await assertNewWorkspaceSidebarAndHeader(page, {
         serverId,
@@ -851,7 +836,7 @@ test.describe("New workspace flow", () => {
       await openNewBranchDialog(page, "main");
       await submitNewBranchName(page, "feature/first-chat");
 
-      await submitNewWorkspaceEmpty(page);
+      await submitNewWorkspacePrompt(page);
 
       const workspaceId = await getCurrentWorkspaceIdFromRoute(page);
       localWorkspaceIds.add(workspaceId);
@@ -949,7 +934,7 @@ test.describe("New workspace flow", () => {
       await openNewBranchDialog(page, "main");
       await submitNewBranchName(page, "feature/worktree-from-shown-base");
 
-      await submitNewWorkspaceEmpty(page);
+      await submitNewWorkspacePrompt(page);
       const createdWorkspace = await assertNewWorkspaceSidebarAndHeader(page, {
         serverId,
         client,
@@ -1048,7 +1033,7 @@ test.describe("New workspace flow", () => {
         "feature/from-dev",
       );
 
-      await submitNewWorkspaceEmpty(page);
+      await submitNewWorkspacePrompt(page);
       const createdWorkspace = await assertNewWorkspaceSidebarAndHeader(page, {
         serverId,
         client,
@@ -1095,7 +1080,7 @@ test.describe("New workspace flow", () => {
       page: import("@playwright/test").Page,
       openedProject: Awaited<ReturnType<typeof openProjectViaDaemon>>,
     ) {
-      await submitNewWorkspaceEmpty(page);
+      await submitNewWorkspacePrompt(page);
       const createdWorkspace = await assertNewWorkspaceSidebarAndHeader(page, {
         serverId: getServerId(),
         client,
@@ -1357,7 +1342,7 @@ test.describe("New workspace flow", () => {
       headRef: pr.branch,
     });
 
-    await submitNewWorkspaceWithoutPrompt(page);
+    await submitNewWorkspacePrompt(page);
 
     const worktree = await assertNewWorkspaceSidebarAndHeader(page, {
       serverId: getServerId(),
@@ -1404,7 +1389,7 @@ test.describe("New workspace flow", () => {
     await expectPickerSelected(page, "main");
     await fillNewWorkspaceDraft(page, `${pr.url}\nKeep this checkout on main`);
     await expectPickerSelected(page, "main");
-    await submitNewWorkspaceWithoutPrompt(page);
+    await submitNewWorkspacePrompt(page);
 
     const worktree = await assertNewWorkspaceSidebarAndHeader(page, {
       serverId: getServerId(),
@@ -1441,7 +1426,7 @@ test.describe("New workspace flow", () => {
       });
       await openStartingRefPicker(page);
       await selectGitHubPrInPicker(page, pr.number);
-      await submitNewWorkspaceWithoutPrompt(page);
+      await submitNewWorkspacePrompt(page);
 
       const worktree = await assertNewWorkspaceSidebarAndHeader(page, {
         serverId: getServerId(),

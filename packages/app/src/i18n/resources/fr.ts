@@ -1184,8 +1184,10 @@ export const fr: TranslationResources = {
   },
   battleRepository: {
     title: "Agent Duel a besoin d'un commit",
-    notGitMessage: "Créer un dépôt Git avec un premier commit vide ?",
-    noCommitMessage: "Créer un premier commit vide ?",
+    notGitMessage:
+      "Chaque agent travaille dans sa propre copie de ce dossier, et Git a besoin d'un commit pour créer ces copies. Agent Duel va ajouter ici un dépôt Git (un dossier .git) avec un commit vide. Vos fichiers ne sont ni modifiés ni inclus dans le commit.",
+    noCommitMessage:
+      "Chaque agent travaille dans sa propre copie de ce dossier, et Git a besoin d'un commit pour créer ces copies. Ce dépôt n'a pas encore de commit, Agent Duel va donc ajouter un commit vide. Vos fichiers ne sont ni modifiés ni inclus dans le commit.",
     confirm: "Créer le commit",
     declined: "Un duel a besoin d'un commit Git.",
     failed: "Impossible de créer le premier commit : {{error}}",

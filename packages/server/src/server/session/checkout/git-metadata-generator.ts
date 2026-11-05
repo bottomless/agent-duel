@@ -146,7 +146,8 @@ export function createGitMetadataGenerator(deps: {
       } catch (error) {
         logger.warn({ err: error, cwd }, "Could not read changes for a branch name suggestion");
       }
-      const work = [chatTitle ? `Chat: ${chatTitle}` : null, changes].filter(Boolean).join("\n\n");
+      // The title goes in bare: a "Chat:" label made models put "chat" in the branch name.
+      const work = [chatTitle, changes].filter(Boolean).join("\n\n");
       if (!work) {
         return null;
       }

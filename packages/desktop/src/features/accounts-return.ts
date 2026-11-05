@@ -27,7 +27,9 @@ interface ReturnToken {
 
 function writeNotFound(response: ServerResponse): void {
   response.writeHead(404, { "cache-control": "no-store" });
-  response.end("This return link is no longer available. Switch to Agent Duel to continue.");
+  response.end(
+    "This sign-in link has expired or was already used. Switch to Agent Duel to continue.",
+  );
 }
 
 function writeMethodNotAllowed(response: ServerResponse): void {

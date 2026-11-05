@@ -19,7 +19,7 @@ import {
   expectNewWorkspaceProjectSelected,
   openGlobalNewWorkspaceComposer,
   selectNewWorkspaceProject,
-  submitNewWorkspaceEmpty,
+  submitNewWorkspacePrompt,
 } from "../support/helpers/new-workspace";
 import { selectSidebarStatusGrouping } from "../support/helpers/sidebar";
 import { waitForSidebarHydration } from "../support/helpers/workspace-ui";
@@ -482,7 +482,7 @@ test.describe("Workspace model restart regressions", () => {
         projectDisplayName: seeded.projectDisplayName,
       });
       await expectNewWorkspaceProjectSelected(page, seeded.projectDisplayName);
-      await submitNewWorkspaceEmpty(page);
+      await submitNewWorkspacePrompt(page);
 
       await expect
         .poll(() => {

@@ -1138,8 +1138,10 @@ export const zhCN: TranslationResources = {
   },
   battleRepository: {
     title: "Agent Duel 需要一个提交",
-    notGitMessage: "要创建一个带空初始提交的 Git 仓库吗？",
-    noCommitMessage: "要创建一个空的初始提交吗？",
+    notGitMessage:
+      "每个代理都在此文件夹的独立副本中工作，Git 需要一个提交才能创建这些副本。Agent Duel 将在这里添加一个 Git 仓库（.git 文件夹），并创建一个空提交。你的文件不会被修改，也不会被提交。",
+    noCommitMessage:
+      "每个代理都在此文件夹的独立副本中工作，Git 需要一个提交才能创建这些副本。此仓库还没有任何提交，因此 Agent Duel 将添加一个空提交。你的文件不会被修改，也不会被提交。",
     confirm: "创建提交",
     declined: "对战需要一个 Git 提交。",
     failed: "无法创建初始提交：{{error}}",

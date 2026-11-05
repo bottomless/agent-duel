@@ -9,7 +9,7 @@ import {
   openStartingRefPicker,
   selectBranchInPicker,
   selectNewWorkspaceIsolation,
-  submitNewWorkspaceEmpty,
+  submitNewWorkspacePrompt,
 } from "../support/helpers/new-workspace";
 import { createTempGitRepo, switchRepoBranchOutsideApp } from "../support/helpers/workspace";
 import { waitForSidebarHydration } from "../support/helpers/workspace-ui";
@@ -98,7 +98,7 @@ test("rejects a local workspace when the checkout changes after validation", asy
   try {
     await openLocalWorkspaceComposer(page, project);
     await selectBranch(page, "main");
-    await submitNewWorkspaceEmpty(page);
+    await submitNewWorkspacePrompt(page);
 
     const request = await gate.waitForRequest();
     expect(request).toMatchObject({
@@ -152,14 +152,14 @@ test("two windows cannot both create local workspaces after choosing different b
     await openLocalWorkspaceComposer(secondPage, project);
     await selectBranch(secondPage, "dev");
 
-    await submitNewWorkspaceEmpty(page);
+    await submitNewWorkspacePrompt(page);
     const firstRequest = await firstGate.waitForRequest();
     expect(firstRequest).toMatchObject({
       source: { kind: "directory", expectedBranch: "main" },
     });
     expect(currentBranch(repo.path)).toBe("main");
 
-    await submitNewWorkspaceEmpty(secondPage);
+    await submitNewWorkspacePrompt(secondPage);
     const secondRequest = await secondGate.waitForRequest();
     expect(secondRequest).toMatchObject({
       source: { kind: "directory", expectedBranch: "dev" },

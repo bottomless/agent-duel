@@ -221,6 +221,16 @@ describe("ArenaPublic", () => {
     },
   )
 
+  test.each([false, true])("says a summary was refused without naming the model, revealed=%s", (revealed) => {
+    const input = snapshot(revealed)
+    input.runs[0]!.runState = "error"
+    input.runs[0]!.error = JSON.stringify({
+      name: "APIError",
+      data: { message: ArenaResponseRecovery.SUMMARY_REFUSED, isRetryable: false },
+    })
+    expect(project(input).runs[0]?.error).toBe(ArenaResponseRecovery.SUMMARY_REFUSED)
+  })
+
   test.each([false, true])("asks the voter to shorten a request no model call can take, revealed=%s", (revealed) => {
     const input = snapshot(revealed)
     input.runs[0]!.runState = "error"

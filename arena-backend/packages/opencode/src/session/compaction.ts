@@ -42,6 +42,7 @@ const MAX_PRESERVE_RECENT_TOKENS = 8_000
 const ARENA_MEDIA_TOKEN_ALLOWANCE = 4_000
 const COMPACTION_EXHAUSTED =
   "The conversation could not be summarized after three recovery attempts. Completed work has been preserved. Retry to continue."
+const COMPACTION_REFUSED = ArenaResponseRecovery.SUMMARY_REFUSED
 const ARENA_ROLLING_MAX_BATCHES = 64
 const ARENA_ROLLING_OUTPUT_LIMIT = 4_096
 const ARENA_ROLLING_EXHAUSTED =
@@ -559,7 +560,10 @@ const layer = Layer.effect(
       // A finished summary replaces the history before it, so one that timed out, hit its output cap
       // or came back empty would leave the contestant with no memory of its task. Retry an Arena
       // summary within the recovery budget, then fail it visibly with the history intact.
+      // A provider refusal (content-filter) is never kept, even with partial text, and never sent
+      // again: the same transcript is refused again, and every summary call pays full input.
       const unusable = Effect.fnUntraced(function* (message: SessionV1.Assistant) {
+        if (message.finish === "content-filter") return "refused" as const
         const reason = ArenaResponseRecovery.reason(message.finish)
         if (reason) return reason
         const stored = yield* session
@@ -586,10 +590,10 @@ const layer = Layer.effect(
           failure,
           attempt,
         })
-        if (attempt > ArenaResponseRecovery.MAX_RECOVERIES) {
+        if (failure === "refused" || attempt > ArenaResponseRecovery.MAX_RECOVERIES) {
           processor.message.error = new SessionV1.APIError({
-            message: COMPACTION_EXHAUSTED,
-            isRetryable: true,
+            message: failure === "refused" ? COMPACTION_REFUSED : COMPACTION_EXHAUSTED,
+            isRetryable: failure !== "refused",
           }).toObject()
           yield* session.updateMessage(processor.message)
           yield* events.publish(Session.Event.Error, { sessionID: input.sessionID, error: processor.message.error })
@@ -620,7 +624,7 @@ const layer = Layer.effect(
         const batches: ModelMessage[][] = [serializeRollingTranscript(modelMessages)]
         let rollingSummary: string | undefined
         let processed = 0
-        let terminal: { processor: typeof processor; reason: string } | undefined
+        let terminal: { processor: typeof processor; reason: string; retryable?: false } | undefined
 
         while (batches.length > 0 && !terminal) {
           if (processed >= ARENA_ROLLING_MAX_BATCHES) {
@@ -645,6 +649,10 @@ const layer = Layer.effect(
           for (let attempt = 1; pass.result === "continue" && !pass.processor.message.error; attempt++) {
             const failure = yield* unusable(pass.processor.message)
             if (!failure) break
+            if (failure === "refused") {
+              terminal = { processor: pass.processor, reason: COMPACTION_REFUSED, retryable: false }
+              break
+            }
             if (attempt > ArenaResponseRecovery.MAX_RECOVERIES) {
               terminal = { processor: pass.processor, reason: COMPACTION_EXHAUSTED }
               break
@@ -700,7 +708,7 @@ const layer = Layer.effect(
           if (!terminal.processor.message.error) {
             terminal.processor.message.error = new SessionV1.APIError({
               message: terminal.reason,
-              isRetryable: true,
+              isRetryable: terminal.retryable ?? true,
             }).toObject()
             terminal.processor.message.finish = "error"
           }

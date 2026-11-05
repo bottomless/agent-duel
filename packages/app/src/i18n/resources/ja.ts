@@ -1164,8 +1164,10 @@ export const ja: TranslationResources = {
   },
   battleRepository: {
     title: "Agent Duel にはコミットが必要です",
-    notGitMessage: "空の最初のコミットで Git リポジトリを作成しますか？",
-    noCommitMessage: "空の最初のコミットを作成しますか？",
+    notGitMessage:
+      "各エージェントはこのフォルダーの専用コピーで作業します。コピーを作るには Git のコミットが必要です。Agent Duel はここに Git リポジトリ（.git フォルダー）を作成し、空のコミットを 1 つ追加します。ファイルは変更されず、コミットにも含まれません。",
+    noCommitMessage:
+      "各エージェントはこのフォルダーの専用コピーで作業します。コピーを作るには Git のコミットが必要です。このリポジトリにはまだコミットがないため、Agent Duel が空のコミットを 1 つ追加します。ファイルは変更されず、コミットにも含まれません。",
     confirm: "コミットを作成",
     declined: "バトルには Git コミットが必要です。",
     failed: "最初のコミットを作成できませんでした: {{error}}",

@@ -185,7 +185,7 @@ describe("createGitMetadataGenerator", () => {
       kind: "branch_name",
       instructions: "Prefix with feat/",
     });
-    expect(requests[0]?.request.changes).toMatch(/^Chat: Add retries\n\nFiles changed:\n/);
+    expect(requests[0]?.request.changes).toMatch(/^Add retries\n\nFiles changed:\n/);
   });
 
   it("offers no branch name without a title or changes, or when the answer is unusable", async () => {

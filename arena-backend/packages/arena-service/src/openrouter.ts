@@ -131,6 +131,19 @@ function metricsCollector(generationID: string, startedAt: number) {
   }
 }
 
+function withoutRefusal(choice: unknown): unknown {
+  if (!record(choice)) return choice
+  const safe = { ...choice }
+  for (const key of ["delta", "message"]) {
+    const value = safe[key]
+    if (record(value) && "refusal" in value) {
+      const { refusal: _, ...rest } = value
+      safe[key] = rest
+    }
+  }
+  return safe
+}
+
 function sanitizePayload(value: unknown, generationID: string, stream = false): unknown {
   if (!record(value)) return value
   if (value.error !== undefined) {
@@ -143,6 +156,9 @@ function sanitizePayload(value: unknown, generationID: string, stream = false): 
   }
   const sanitized = { ...value }
   if ("id" in sanitized) sanitized.id = generationID
+  // A refusal's text can name the provider ("Anthropic's Terms of Service"); its finish reason
+  // already tells the engine the request was refused.
+  if (Array.isArray(sanitized.choices)) sanitized.choices = sanitized.choices.map(withoutRefusal)
   for (const key of [
     "model",
     "model_id",

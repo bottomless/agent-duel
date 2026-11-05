@@ -1174,8 +1174,10 @@ export const ptBR: TranslationResources = {
   },
   battleRepository: {
     title: "O Agent Duel precisa de um commit",
-    notGitMessage: "Criar um repositório Git com um primeiro commit vazio?",
-    noCommitMessage: "Criar um primeiro commit vazio?",
+    notGitMessage:
+      "Cada agente trabalha na própria cópia desta pasta, e o Git precisa de um commit para criar essas cópias. O Agent Duel vai adicionar aqui um repositório Git (uma pasta .git) com um commit vazio. Seus arquivos não são alterados nem incluídos no commit.",
+    noCommitMessage:
+      "Cada agente trabalha na própria cópia desta pasta, e o Git precisa de um commit para criar essas cópias. Este repositório ainda não tem commits, então o Agent Duel vai adicionar um commit vazio. Seus arquivos não são alterados nem incluídos no commit.",
     confirm: "Criar commit",
     declined: "Uma batalha precisa de um commit do Git.",
     failed: "Não foi possível criar o primeiro commit: {{error}}",

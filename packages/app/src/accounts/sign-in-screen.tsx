@@ -214,7 +214,8 @@ export function SignInScreen({ endpoint, methods, documents }: SignInScreenProps
                 <Text style={styles.address}>{state.email}</Text>
               </View>
               <Text style={styles.hint}>
-                It expires in 15 minutes. You&apos;ll be signed in automatically.
+                Click the link in that email and Agent Duel signs you in automatically. The link
+                expires in 15 minutes.
               </Text>
             </View>
             <Button

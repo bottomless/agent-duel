@@ -1517,7 +1517,11 @@ A compaction summary that ends idle, at its output cap, or empty must never beco
 finished summary hides everything before it, so the contestant continues with no memory of its task
 and asks what it was working on. `session/compaction.ts` removes the unusable summary and asks again,
 three more times, then fails the step with a retryable error and the history intact; Retry
-compacts again.
+compacts again. A summary the provider refuses (`content-filter`, such as Anthropic's filter on
+condensing model output) is different: the same transcript is refused again, and a summary call has
+no cache, so each attempt pays the full input. Keep none of it, even partial text, and do not ask
+again: the step fails at once with a neutral, non-retryable error that the pane shows. Both proxies
+drop a refusal's text, which can name the provider, and keep its finish reason.
 
 A connection can also die without closing. On some mobile networks the hosted function finishes the
 response while the desktop never receives another byte or a close, and only the 150-second deadline

@@ -1184,8 +1184,10 @@ export const es: TranslationResources = {
   },
   battleRepository: {
     title: "Agent Duel necesita un commit",
-    notGitMessage: "¿Crear un repositorio Git con un primer commit vacío?",
-    noCommitMessage: "¿Crear un primer commit vacío?",
+    notGitMessage:
+      "Cada agente trabaja en su propia copia de esta carpeta, y Git necesita un commit para crear esas copias. Agent Duel añadirá aquí un repositorio Git (una carpeta .git) con un commit vacío. Tus archivos no cambian y no se incluyen en el commit.",
+    noCommitMessage:
+      "Cada agente trabaja en su propia copia de esta carpeta, y Git necesita un commit para crear esas copias. Este repositorio aún no tiene commits, así que Agent Duel añadirá un commit vacío. Tus archivos no cambian y no se incluyen en el commit.",
     confirm: "Crear commit",
     declined: "Una batalla necesita un commit de Git.",
     failed: "No se pudo crear el primer commit: {{error}}",

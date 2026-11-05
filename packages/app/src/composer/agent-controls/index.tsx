@@ -109,6 +109,9 @@ type AgentControlSelector = "provider" | "mode" | "model" | "thinking" | `featur
 
 const EMPTY_AGENT_PROVIDER_DEFINITIONS: AgentProviderDefinition[] = [];
 
+const BATTLE_TOGGLE_HINT =
+  "On: two agents answer each message without showing their names, and you keep the better one. Off: one agent answers.";
+
 interface ControlledAgentControlsProps {
   provider: string;
   providerOptions?: AgentControlOption[];
@@ -402,16 +405,23 @@ function ArenaModeControls({
   return (
     <View style={styles.arenaControls} testID="arena-agent-controls">
       {!battleToggleHidden ? (
-        <View style={styles.battleToggle}>
-          <Text style={styles.battleLabel}>Battle</Text>
-          <Switch
-            value={battleMode}
-            onValueChange={onBattleModeChange}
-            disabled={controlsDisabled || battleModeDisabled}
-            accessibilityLabel="Battle mode"
-            testID="arena-battle-toggle"
-          />
-        </View>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <View style={styles.battleToggle}>
+              <Text style={styles.battleLabel}>Battle</Text>
+              <Switch
+                value={battleMode}
+                onValueChange={onBattleModeChange}
+                disabled={controlsDisabled || battleModeDisabled}
+                accessibilityLabel="Battle mode"
+                testID="arena-battle-toggle"
+              />
+            </View>
+          </TooltipTrigger>
+          <TooltipContent side="top" align="center" offset={8}>
+            <Text style={styles.tooltipText}>{BATTLE_TOGGLE_HINT}</Text>
+          </TooltipContent>
+        </Tooltip>
       ) : null}
       {showSingleAgent ? (
         <SingleAgentSizeControl

@@ -311,11 +311,10 @@ export async function submitNewWorkspacePrompt(
   const composer = page.getByRole("textbox", { name: "Message agent..." });
   await expect(composer).toBeVisible({ timeout: 30_000 });
   await composer.fill(prompt);
-  const createButton = page
-    .getByTestId("message-input-root")
-    .getByRole("button", { name: "Create" });
-  await expect(createButton).toBeVisible({ timeout: 30_000 });
-  await createButton.click();
+  // Send appears only once the draft has text: a new chat cannot start empty.
+  const sendButton = page.getByTestId("workspace-create-submit");
+  await expect(sendButton).toBeVisible({ timeout: 30_000 });
+  await sendButton.click();
 }
 
 export async function clickNewWorkspaceButton(
@@ -340,14 +339,6 @@ export async function selectNewWorkspaceProject(
   await option.click();
 
   await expectNewWorkspaceProjectSelected(page, input.projectDisplayName);
-}
-
-export async function submitNewWorkspaceEmpty(page: Page): Promise<void> {
-  const createButton = page
-    .getByTestId("message-input-root")
-    .getByRole("button", { name: "Create" });
-  await expect(createButton).toBeVisible({ timeout: 30_000 });
-  await createButton.click();
 }
 
 export async function openStartingRefPicker(page: Page): Promise<void> {

@@ -417,16 +417,18 @@ export function project(snapshot: BattleSnapshot) {
         ...(run.runState === "interrupted"
           ? { error: INTERRUPTED_RUN_MESSAGE }
           : run.error
-          ? {
-              error: run.error.includes(ArenaResponseRecovery.EXHAUSTED)
-                ? ArenaResponseRecovery.EXHAUSTED
-                : run.error.includes(ArenaResponseRecovery.IDLE_EXHAUSTED)
-                  ? ArenaResponseRecovery.IDLE_EXHAUSTED
-                  : run.error.includes(requestTooLargeMessage)
-                    ? requestTooLargeMessage
-                    : (runPaymentMessage(run.error) ?? (revealed ? run.error : "Contestant run failed")),
-            }
-          : {}),
+            ? {
+                error: run.error.includes(ArenaResponseRecovery.EXHAUSTED)
+                  ? ArenaResponseRecovery.EXHAUSTED
+                  : run.error.includes(ArenaResponseRecovery.IDLE_EXHAUSTED)
+                    ? ArenaResponseRecovery.IDLE_EXHAUSTED
+                    : run.error.includes(ArenaResponseRecovery.SUMMARY_REFUSED)
+                      ? ArenaResponseRecovery.SUMMARY_REFUSED
+                      : run.error.includes(requestTooLargeMessage)
+                        ? requestTooLargeMessage
+                        : (runPaymentMessage(run.error) ?? (revealed ? run.error : "Contestant run failed")),
+              }
+            : {}),
         ...(run.startedAt ? { startedAt: run.startedAt } : {}),
         ...(run.firstEventAt ? { firstEventAt: run.firstEventAt } : {}),
         ...(run.lastEventAt ? { lastEventAt: run.lastEventAt } : {}),
