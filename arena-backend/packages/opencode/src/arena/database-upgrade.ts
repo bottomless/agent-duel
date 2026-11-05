@@ -10,7 +10,7 @@ import { removeImportedLegacyTables, type CleanupInput } from "./database-cleanu
 import { engineDatabaseLease } from "./database-lease"
 import { Global } from "@opencode/util/global"
 import { sql } from "drizzle-orm"
-import { Effect, Fiber, Layer, Option } from "effect"
+import { Effect, Exit, Fiber, Layer, Option } from "effect"
 
 /**
  * The name the 1.x `session` table takes once its rows are in `session_v2`. A released 1.x engine
@@ -232,11 +232,26 @@ export function waitForLegacyImport(
     }
     const log = options.log ?? console.log
     log("[arena-upgrade] Importing OpenCode 1.x chats")
-    const fiber = yield* fence.pipe(Effect.forkScoped({ startImmediately: true }))
+    let background = false
+    let ended: "finished" | "failed" | undefined
+    const fiber = yield* fenceLegacyEngines.pipe(
+      Effect.onExit((exit) =>
+        Effect.sync(() => {
+          ended = Exit.isSuccess(exit) ? "finished" : "failed"
+          if (background) log(`[arena-upgrade] Background import ${ended}`)
+        }),
+      ),
+      Effect.catchCause((cause) => Effect.logError("could not fence the database against 1.x engines", { cause })),
+      Effect.forkScoped({ startImmediately: true }),
+    )
     const remaining = Math.max(0, Math.min(options.deadline ?? UPGRADE_DEADLINE, UPGRADE_DEADLINE) - Date.now())
     const result = yield* Fiber.join(fiber).pipe(Effect.timeoutOption(remaining))
-    if (Option.isNone(result))
+    if (Option.isNone(result)) {
+      background = true
       log("[arena-upgrade] Import startup budget exhausted; startup continues with import in the background")
+      // The fiber can finish as its timed join expires. Publish the end after the fallback in that case.
+      if (ended) log(`[arena-upgrade] Background import ${ended}`)
+    }
   }).pipe(
     Effect.catchCause((cause) =>
       Effect.logError("could not wait for the database import; startup continues", { cause }),

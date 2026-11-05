@@ -119,7 +119,8 @@ test.each([0, 1])(
         expect(count!.n).toBeLessThan(100)
         expect(lines).toEqual([pendingLine, fallbackLine])
         // The same scoped fiber must finish after the barrier times out, without another run().
-        while ((yield* V1Migration.status()).status !== "completed") yield* Effect.yieldNow
+        while (!lines.includes("[arena-upgrade] Background import finished")) yield* Effect.yieldNow
+        expect(lines).toEqual([pendingLine, fallbackLine, "[arena-upgrade] Background import finished"])
       }).pipe(Effect.provide(services(input.engineDatabase)), Effect.scoped),
     )
     expect(rows(input.engineDatabase, "SELECT COUNT(*) AS n FROM session_v2")).toEqual([{ n: 100 }])
@@ -127,6 +128,38 @@ test.each([0, 1])(
     expect(rows(input.engineDatabase, "SELECT DISTINCT visits FROM import_visit")).toEqual([{ visits: 1 }])
   },
 )
+
+test("a failed background import publishes its terminal line and releases readiness", async () => {
+  const input = await profile(100)
+  const lines: string[] = []
+  let finish!: () => void
+  const ended = new Promise<void>((resolve) => {
+    finish = resolve
+  })
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      yield* waitForLegacyImport({
+        deadline: 0,
+        log: (line) => {
+          lines.push(line)
+          if (line === fallbackLine) {
+            using database = new SQLite(input.engineDatabase)
+            database.run(
+              "CREATE TRIGGER fail_import BEFORE INSERT ON session_v2 BEGIN SELECT RAISE(ABORT, 'injected import failure'); END",
+            )
+          }
+          if (line === "[arena-upgrade] Background import failed") finish()
+        },
+      })
+      expect(lines).toContain(fallbackLine)
+      yield* Effect.promise(() => ended).pipe(Effect.timeout("3 seconds"))
+    }).pipe(Effect.provide(services(input.engineDatabase)), Effect.scoped),
+  )
+  expect(lines).toEqual([pendingLine, fallbackLine, "[arena-upgrade] Background import failed"])
+  expect(rows(input.engineDatabase, "SELECT name FROM sqlite_master WHERE name='session'")).toEqual([
+    { name: "session" },
+  ])
+})
 
 test("a SIGKILL during import preserves progress; the next start prints only the import marker and resumes", async () => {
   const input = await profile(2000)

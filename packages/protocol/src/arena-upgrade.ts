@@ -2,6 +2,8 @@ export interface ArenaDatabaseUpgrade {
   /** Engine spawn time and its absolute startup deadline, in Unix milliseconds. */
   startedAt: number;
   deadline: number;
+  /** Import continues after readiness; this state does not extend request deadlines. */
+  backgroundImport?: true;
 }
 
 export function waitsForArenaEngine(type: string): boolean {
@@ -45,7 +47,8 @@ export function arenaUpgradeTimeout(options: {
   const arm = () => {
     const upgrade = options.getUpgrade();
     // Keep the caller's ordinary budget after engine readiness (e.g. session.create).
-    if (upgrade) deadline = Math.max(deadline, upgrade.deadline + options.timeoutMs);
+    if (upgrade && !upgrade.backgroundImport)
+      deadline = Math.max(deadline, upgrade.deadline + options.timeoutMs);
     clearTimeout(timer);
     timer = setTimeout(options.onTimeout, Math.max(0, deadline - Date.now()));
   };

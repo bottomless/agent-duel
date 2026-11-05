@@ -15,3 +15,18 @@ export function openCodeStartupTimeoutMessage(upgrading: boolean): string {
   }
   return "OpenCode server startup timeout";
 }
+
+/** Only complete, exact engine stdout lines can change the background-import state. */
+export function arenaBackgroundImportLine(line: string): boolean | undefined {
+  if (
+    line ===
+    "[arena-upgrade] Import startup budget exhausted; startup continues with import in the background"
+  )
+    return true;
+  if (
+    line === "[arena-upgrade] Background import finished" ||
+    line === "[arena-upgrade] Background import failed"
+  )
+    return false;
+  return undefined;
+}

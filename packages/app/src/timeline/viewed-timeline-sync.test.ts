@@ -789,6 +789,21 @@ test("a failed catch-up reports once and retries through the explicit retry poli
   world.expectNoPendingMembership();
 });
 
+test("a not-yet-imported session opens via the existing backed-off timeline retry", async () => {
+  const world = new TimelineWorld();
+  world.sync.setConnected(true);
+  world.sync.replaceVisibleAgentIds("workspace", ["old"]);
+  (await world.nextMembership()).succeed();
+  (await world.nextFetch("old")).fail("Session not found: ses_old");
+  const [error, retry] = await Promise.all([world.nextError(), world.nextRetry(1_000)]);
+  expect(error).toBe("Session not found: ses_old");
+  world.expectNoPendingFetch();
+  retry();
+  (await world.nextFetch("old")).respond({ hasNewer: false });
+  await vi.waitFor(() => expect(world.sync.getAgentTimelineStatus("old")).toBe("ready"));
+  world.sync.dispose();
+});
+
 test("a missing agent is negative-cached until it leaves the viewed set", async () => {
   const world = new TimelineWorld();
   world.sync.setConnected(true);

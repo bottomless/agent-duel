@@ -3325,7 +3325,11 @@ export const SessionEventsSetSubscriptionResponseSchema = z.object({
     requestId: z.string(),
     subscriptionId: z.string().optional(),
     arenaDatabaseUpgrade: z
-      .object({ startedAt: z.number(), deadline: z.number() })
+      .object({
+        startedAt: z.number(),
+        deadline: z.number(),
+        backgroundImport: z.literal(true).optional(),
+      })
       .nullable()
       .optional(),
   }),
@@ -3751,7 +3755,11 @@ export const ServerInfoStatusPayloadSchema = z
   .object({
     status: z.literal("server_info"),
     arenaDatabaseUpgrade: z
-      .object({ startedAt: z.number(), deadline: z.number() })
+      .object({
+        startedAt: z.number(),
+        deadline: z.number(),
+        backgroundImport: z.literal(true).optional(),
+      })
       .nullable()
       .default(null),
     protocolVersion: z.number().int().optional(),
@@ -5274,7 +5282,11 @@ export const DaemonGetStatusResponseSchema = z.object({
     .object({
       requestId: z.string(),
       arenaDatabaseUpgrade: z
-        .object({ startedAt: z.number(), deadline: z.number() })
+        .object({
+          startedAt: z.number(),
+          deadline: z.number(),
+          backgroundImport: z.literal(true).optional(),
+        })
         .nullable()
         .default(null),
       serverId: z.string(),

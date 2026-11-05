@@ -813,6 +813,120 @@ describe("OpenCodeServerManager generations", () => {
     await acquired.release();
   });
 
+  test.each(["finished", "failed"])(
+    "background import survives ready and ends on an exact chunked %s line",
+    async (end) => {
+      vi.useFakeTimers();
+      installArenaCredentials({ mode: "byok", openRouterApiKey: "test-key" });
+      const { manager, runtime } = createTestManager([4480], {
+        autoAnnounce: false,
+        launchKind: "arena-source",
+      });
+      const pending = manager.acquireCurrent();
+      await vi.advanceTimersByTimeAsync(0);
+      const child = runtime.processForPort(4480);
+      const startedAt = Date.now();
+      child.stdout.emit("data", Buffer.from("[arena-upgrade] Importing OpenCode 1.x chats\n"));
+      await vi.advanceTimersByTimeAsync(480_000);
+      child.stdout.emit(
+        "data",
+        Buffer.from(
+          "[arena-upgrade] Import startup budget exhausted; startup continues with import in the back",
+        ),
+      );
+      child.stdout.emit("data", Buffer.from("ground\n"));
+      // Calls made before readiness still receive the original startup allowance.
+      expect(getArenaDatabaseUpgrade()).toEqual({ startedAt, deadline: startedAt + 600_000 });
+      child.stdout.emit("data", Buffer.from("listening on\n"));
+      const acquired = await pending;
+      expect(getArenaDatabaseUpgrade()).toEqual({
+        startedAt,
+        deadline: startedAt + 600_000,
+        backgroundImport: true,
+      });
+      // Ready stays ready; a current acquisition doesn't spawn or wait for the import.
+      const another = await manager.acquireCurrent();
+      expect(another.server.port).toBe(4480);
+      await vi.advanceTimersByTimeAsync(600_000);
+      expect(runtime.terminatedPorts).toEqual([]);
+      child.stdout.emit(
+        "data",
+        Buffer.from("noise\n[arena-upgrade] Background import " + end + " extra\n"),
+      );
+      expect(getArenaDatabaseUpgrade()?.backgroundImport).toBe(true);
+      child.stdout.emit("data", Buffer.from("[arena-upgrade] Background im"));
+      child.stdout.emit("data", Buffer.from("port " + end + "\r"));
+      expect(getArenaDatabaseUpgrade()?.backgroundImport).toBe(true);
+      child.stdout.emit("data", Buffer.from("\n"));
+      expect(getArenaDatabaseUpgrade()).toBeNull();
+      await another.release();
+      await acquired.release();
+      await manager.shutdown();
+    },
+  );
+
+  test("engine stop and restart clear a background import even without a terminal line", async () => {
+    vi.useFakeTimers();
+    installArenaCredentials({ mode: "byok", openRouterApiKey: "test-key" });
+    const { manager, runtime } = createTestManager([4480, 4481], {
+      autoAnnounce: false,
+      launchKind: "arena-source",
+    });
+    const pending = manager.acquireCurrent();
+    await vi.advanceTimersByTimeAsync(0);
+    const child = runtime.processForPort(4480);
+    child.stdout.emit(
+      "data",
+      Buffer.from(
+        "[arena-upgrade] Importing OpenCode 1.x chats\n[arena-upgrade] Import startup budget exhausted; startup continues with import in the background\nlistening on\n",
+      ),
+    );
+    const acquired = await pending;
+    expect(getArenaDatabaseUpgrade()?.backgroundImport).toBe(true);
+    await manager.shutdown();
+    expect(getArenaDatabaseUpgrade()).toBeNull();
+    const restarted = manager.acquireCurrent();
+    await vi.advanceTimersByTimeAsync(0);
+    runtime.processForPort(4481).stdout.emit("data", Buffer.from("listening on\n"));
+    const normal = await restarted;
+    expect(getArenaDatabaseUpgrade()).toBeNull();
+    await acquired.release();
+    await normal.release();
+    await manager.shutdown();
+  });
+
+  test("unexpected engine exit clears a ready-time background import", async () => {
+    vi.useFakeTimers();
+    installArenaCredentials({ mode: "byok", openRouterApiKey: "test-key" });
+    const { manager, runtime } = createTestManager([4480], {
+      autoAnnounce: false,
+      launchKind: "arena-source",
+    });
+    const pending = manager.acquireCurrent();
+    await vi.advanceTimersByTimeAsync(0);
+    const child = runtime.processForPort(4480);
+    child.stdout.emit(
+      "data",
+      Buffer.from(
+        "[arena-upgrade] Importing OpenCode 1.x chats\n[arena-upgrade] Import startup budget exhausted; startup continues with import in the background\nlistening on\n",
+      ),
+    );
+    const acquired = await pending;
+    expect(getArenaDatabaseUpgrade()?.backgroundImport).toBe(true);
+    child.exitNormally(1);
+    expect(getArenaDatabaseUpgrade()).toBeNull();
+    // Node can drain stdout after exit; it must not restore a dead generation's state.
+    child.stdout.emit(
+      "data",
+      Buffer.from(
+        "[arena-upgrade] Import startup budget exhausted; startup continues with import in the background\n",
+      ),
+    );
+    expect(getArenaDatabaseUpgrade()).toBeNull();
+    await acquired.release();
+    await manager.shutdown();
+  });
+
   test("dedicated starts wait for an ongoing upgrade before spawning", async () => {
     vi.useFakeTimers();
     installArenaCredentials({ mode: "byok", openRouterApiKey: "test-key" });
