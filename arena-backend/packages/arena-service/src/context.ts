@@ -27,6 +27,8 @@ export type ArenaContext = {
   readonly streamRecovery: boolean
   /** Keeps each battle call's request and response (`generation-capture.ts`). */
   readonly captureGenerations: boolean
+  /** Adds the endpoint catalog's label to each call's stored metrics (`endpoint-label.ts`). */
+  readonly recordEndpointLabels: boolean
 }
 
 type Failure = (message: string, status: number) => Response

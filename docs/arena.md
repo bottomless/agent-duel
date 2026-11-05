@@ -72,6 +72,11 @@ whole history. Single-agent chats, keep-alive pings and the service's own compar
 calls are not kept. BYOK leaves capture off: its store is on the voter's machine, and those fields
 name the model.
 
+The control plane also adds the endpoint's quantization to each stored request row, from a catalog of
+OpenRouter's endpoint lists that it saves itself (`arena-service/src/endpoint-label.ts`, `recordEndpointLabels`).
+OpenRouter never reports quantization for a call, so the label is what the catalog listed for that
+provider, and does not prove what ran. These fields stay on the server, like the provider name.
+
 `archiveComplete` means the local archive exists, not that research has uploaded. Reply resets keep
 the previous cloud archive until its replacement arrives. Transcript and image archives are kept
 whole without the per-call artifact size budgets; disk errors fail the local write rather than

@@ -48,6 +48,11 @@ export type ArenaServiceOptions = {
    * the battle.
    */
   readonly captureGenerations?: boolean
+  /**
+   * Adds the endpoint catalog's quantization label to each call's stored metrics
+   * (`endpoint-label.ts`). Off by default: only the control plane saves a catalog.
+   */
+  readonly recordEndpointLabels?: boolean
 }
 
 export type ArenaService = {
@@ -83,6 +88,7 @@ export function createArenaService(options: ArenaServiceOptions): ArenaService {
       options.metadataRateLimit === null ? undefined : (options.metadataRateLimit ?? defaultMetadataRateLimit),
     streamRecovery: options.streamRecovery ?? true,
     captureGenerations: options.captureGenerations ?? false,
+    recordEndpointLabels: options.recordEndpointLabels ?? false,
   }
   const assignments = (request: Request) => handleAssignmentsRequest(request, context)
   const openrouter = (request: Request) => handleOpenRouterRequest(request, context)

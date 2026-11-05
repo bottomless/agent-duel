@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test"
 import type { MongoClient } from "mongodb"
 import type { Caller } from "./context"
+import type { EndpointCatalog } from "./endpoint-label"
 import { loadGenerationCapture } from "./generation-capture"
 import { connectMongoDb, type MongoDb } from "./mongo"
 import { DEFAULT_MODEL_OUTPUT_LIMIT, type ModelPool } from "./pool"
@@ -61,6 +62,7 @@ beforeEach(async () => {
   await db.collection("arenaAssignmentGenerationMetrics").deleteMany({})
   await db.collection("arenaGenerationCaptures").deleteMany({})
   await db.collection("arenaGenerationParts").deleteMany({})
+  await db.collection("arenaEndpointCatalog").deleteMany({})
 })
 
 afterAll(async () => {
@@ -349,6 +351,106 @@ describe("Arena service", () => {
     expect(loaded!.capture.response?.body).toContain("hidden-provider")
     const media = await db.collection("arenaGenerationParts").findOne({ userId: "user-1", kind: "media" })
     expect(media).not.toBeNull()
+  })
+
+  const labelledPool = [
+    {
+      ...testPool[0],
+      routing: { ...testPool[0].routing, only: ["novita/fp8"], quantizations: ["fp8", "unknown"] },
+      endpointPolicy: { firstParty: ["z-ai"], trustedHosts: [], approved: ["novita/fp8"] },
+    },
+    testPool[1],
+    testPool[2],
+  ] as const satisfies ModelPool
+
+  async function callAssignmentA(service: ArenaService) {
+    await send(service, assignmentsRequest({ action: "create", kind: "battle", scopeID: "turn-1" }))
+    const request = new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer user-1",
+        "Content-Type": "application/json",
+        "X-Arena-Assignment-ID": "assignment-a",
+        "X-Arena-Scope-ID": "turn-1",
+        "X-Arena-Generation-ID": generationID,
+      },
+      body: JSON.stringify({ model: "contestant", messages: [{ role: "user", content: "hi" }], stream: false }),
+    })
+    expect((await send(service, request)).status).toBe(200)
+    return db.collection("arenaAssignmentGenerationMetrics").findOne({ assignmentID: "assignment-a" })
+  }
+
+  const servedByNovita = async (_input: string | URL | Request, init?: RequestInit) =>
+    Response.json({
+      id: "provider-generation",
+      provider: "Novita",
+      model: JSON.parse(new TextDecoder().decode(init?.body as ArrayBuffer)).model,
+      usage: { prompt_tokens: 10, completion_tokens: 5, cost: 0.1 },
+      choices: [{ message: { content: "done" }, finish_reason: "stop" }],
+    })
+
+  test("stores the catalog label on the request row and keeps it out of the reveal", async () => {
+    const capturedAt = new Date("2026-11-05T10:00:00.000Z")
+    const catalog = db.collection<EndpointCatalog>("arenaEndpointCatalog")
+    await catalog.insertOne({
+      _id: "older",
+      slug: testPool[0].slug,
+      capturedAt: new Date("2026-11-01T10:00:00.000Z"),
+      endpoints: [{ tag: "novita/fp8", providerName: "Novita", quantization: "bf16" }],
+    })
+    await catalog.insertOne({
+      _id: "latest",
+      slug: testPool[0].slug,
+      capturedAt,
+      endpoints: [{ tag: "novita/fp8", providerName: "Novita", quantization: "fp8" }],
+    })
+    const { service } = createService({ pool: labelledPool, recordEndpointLabels: true, fetch: servedByNovita })
+
+    const row = await callAssignmentA(service)
+
+    expect(row).toMatchObject({
+      provider: "Novita",
+      quantization: "fp8",
+      admittedBy: "label",
+      catalogAt: capturedAt,
+      startedAt: expect.any(Date),
+    })
+    const resolved = await send(
+      service,
+      assignmentsRequest({ action: "resolve", kind: "battle", scopeID: "turn-1", decision: "select:a" }),
+    )
+    const reveal = JSON.stringify(await resolved.json())
+    for (const hidden of ["quantization", "admittedBy", "catalogAt", "Novita"]) expect(reveal).not.toContain(hidden)
+  })
+
+  test("keeps the metrics of a call when the catalog cannot be read", async () => {
+    const realCollection = db.collection.bind(db)
+    const failing = Object.create(db) as MongoDb
+    failing.collection = ((name: string) => {
+      if (name === "arenaEndpointCatalog") throw new Error("catalog offline")
+      return realCollection(name)
+    }) as MongoDb["collection"]
+    const { service } = createService({
+      pool: labelledPool,
+      recordEndpointLabels: true,
+      fetch: servedByNovita,
+      db: async () => failing,
+    })
+
+    expect(await callAssignmentA(service)).toMatchObject({
+      provider: "Novita",
+      usage: { promptTokens: 10 },
+      quantization: "unresolved",
+      admittedBy: "unresolved",
+    })
+  })
+
+  test("leaves the label off the request row unless the deployment turns it on", async () => {
+    const { service } = createService({ pool: labelledPool, fetch: servedByNovita })
+    const row = await callAssignmentA(service)
+    expect(row).toMatchObject({ provider: "Novita", startedAt: expect.any(Date) })
+    expect(row).not.toHaveProperty("quantization")
+    expect(row).not.toHaveProperty("admittedBy")
   })
 
   test("closes the capture of a call whose answer cannot be read", async () => {

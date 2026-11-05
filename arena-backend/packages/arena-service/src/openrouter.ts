@@ -21,6 +21,7 @@ import {
   type CalibrationSample,
 } from "./request-calibration"
 import { generationCapture, type CaptureState, type GenerationCapture } from "./generation-capture"
+import { readEndpointLabel } from "./endpoint-label"
 import { createReasoningRedactor } from "./reasoning"
 import {
   HEARTBEAT_HEADER,
@@ -693,11 +694,14 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
     const recordGeneration = async (metrics: StoredGenerationMetrics | undefined) => {
       if (!metrics || !requestedGenerationID) return
       try {
+        const label = context.recordEndpointLabels
+          ? await readEndpointLabel(db, routeAssignment.model, metrics.provider)
+          : undefined
         await recordAssignmentGenerationMetrics(db, {
           userId: caller.id,
           scopeID: assignment.scopeID,
           assignmentID: assignment.assignmentID,
-          metrics,
+          metrics: { ...metrics, startedAt: new Date(startedAt), ...label },
         })
       } catch {
         console.error("[arena-service] Arena generation metrics could not be recorded")
