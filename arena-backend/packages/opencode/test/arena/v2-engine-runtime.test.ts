@@ -382,7 +382,7 @@ describe("Arena v2 engine runtime", () => {
             }
             if (delegateMode && toolCalls++ === 0) {
               return new Response(
-                'data: {"id":"resp-tool","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-subagent","type":"function","function":{"name":"subagent","arguments":"{\\"description\\":\\"child\\",\\"prompt\\":\\"reply\\",\\"agent\\":\\"general\\",\\"model\\":\\"openai/arbitrary\\"}"}}]},"finish_reason":null}]}\n\ndata: {"id":"resp-tool","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}\n\ndata: [DONE]\n',
+                'data: {"id":"resp-tool","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-subagent","type":"function","function":{"name":"subagent","arguments":"{\\"description\\":\\"child\\",\\"prompt\\":\\"reply\\",\\"agent\\":\\"general\\",\\"model\\":\\"openai/arbitrary\\"}"}}]},"finish_reason":null}]}\n\ndata: {"id":"resp-tool","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":""}}]},"finish_reason":null}]}\n\ndata: {"id":"resp-tool","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}\n\ndata: [DONE]\n',
                 { headers: { "content-type": "text/event-stream" } },
               )
             }
@@ -494,10 +494,18 @@ describe("Arena v2 engine runtime", () => {
       expect(request.headers.get("x-session-id")).toBe(info.id)
       expect(request.headers.get("authorization")).toBeNull()
 
+      // Some routed providers append an empty argument chunk after valid JSON. The SDK emits
+      // it after tool-input-end; it must not crash the turn or execute the subagent twice.
       delegateMode = true
       await Effect.runPromise(sessions.prompt({ sessionID: info.id, text: "delegate once", resume: true }))
       await Effect.runPromise(sessions.wait(info.id).pipe(Effect.timeout("30 seconds")))
-      expect(assignments.assignments.size).toBeGreaterThan(1)
+      const afterDelegate = await Effect.runPromise(sessions.messages({ sessionID: info.id, order: "asc" }))
+      expect(afterDelegate.at(-1)).toMatchObject({ type: "idle", outcome: "succeeded" })
+      expect(afterDelegate.findLast((message) => message.type === "assistant")).toMatchObject({
+        type: "assistant",
+        content: expect.arrayContaining([expect.objectContaining({ type: "text", text: "Arena core reply" })]),
+      })
+      expect(assignments.assignments.size).toBe(2)
       const delegated = requests.filter(
         (entry) => entry.headers.get("x-arena-generation-classification") === "generation",
       )
