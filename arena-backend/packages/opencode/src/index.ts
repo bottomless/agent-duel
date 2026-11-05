@@ -32,6 +32,16 @@ function port() {
 
 process.env.OPENCODE_ARENA ??= "1"
 
+if (args[0] !== "generate") {
+  const { prepareEngineDatabases } = await import("./arena/database-upgrade")
+  try {
+    await prepareEngineDatabases()
+  } catch (error) {
+    console.error(`Arena could not prepare its databases for startup: ${error}`)
+    process.exit(1)
+  }
+}
+
 {
   const { Global } = await import("@opencode/util/global")
   const { preferDirectGit } = await import("./util/direct-git")
@@ -44,16 +54,6 @@ if (args.includes("--arena-credentials-stdin") && args[0] !== "generate") {
     await initializeArenaCredentials(process.stdin)
   } catch {
     console.error("Arena startup credentials are missing or invalid")
-    process.exit(1)
-  }
-}
-
-if (args[0] !== "generate") {
-  const { backUpEngineDatabases } = await import("./arena/database-upgrade")
-  try {
-    await backUpEngineDatabases()
-  } catch (error) {
-    console.error(`Arena could not back up its databases before the upgrade: ${error}`)
     process.exit(1)
   }
 }

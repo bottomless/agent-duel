@@ -1702,21 +1702,16 @@ Stay on OpenCode 2.0 after the switch. Do not ship a 1.x rollback to people who 
 A released 1.x engine has no version check and would hide every turn since the upgrade. The fence
 makes it refuse the database instead. Installing 2.0 again keeps the work since the switch.
 
-Before the first import, the engine backs up its database and `arena.sqlite` to
-`$PASEO_HOME/arena/pre-opencode-2-backup/`. Keep this copy as protection against an accidental old
-build. Reserve space for both backup files and a second copy of the chat data inside the engine
-database during import. A 25 GB engine database can grow to about 50 GB, in addition to its 25 GB
-backup. Reclaiming that space later needs one compacted engine copy beside the database,
+The upgrade makes no pre-upgrade database copy. Reserve space for a second copy of the chat data
+inside the engine database during import: a 25 GB engine database can grow to about 50 GB.
+Reclaiming that space later needs one compacted engine copy beside the database,
 plus 64 MiB of filesystem headroom. Keep that free space on the engine database's volume.
-A failed backup stops an unfinished import. An already imported database can start without the
-backup, but cannot remove its old tables without it. The first engine start after 14 days removes
-the backup; a removal failure logs a warning and does not stop startup. This is elapsed time,
-even if the app was not used. Cleanup does not extend the retention period.
+There is no way back to 1.x without a new migration.
 
 Only the default `~/.paseo` home may upgrade the packaged engine's legacy database in
 `~/.local/share/opencode/`. Every other home must keep its engine database inside `PASEO_HOME`,
 including when `OPENCODE_DB` overrides its name. The engine refuses an outside path before opening
-it or cleaning backups. The repo's dev commands select an owned engine database without extra
+it. The repo's dev commands select an owned engine database without extra
 environment; see [Development](development.md#paseo_home) for the default and override paths.
 For a custom second-home launcher, set `OPENCODE_DB` to an absolute path inside that home's
 `PASEO_HOME`, or set `XDG_DATA_HOME` inside it before the first start. Setting `PASEO_HOME` alone
@@ -1730,13 +1725,12 @@ tables when every source session and projected message has a V2 counterpart and 
 were skipped. A durable deletion event for the same session explains an intentionally removed
 chat; an absent row alone does not. Completion checks coverage and retries missing sessions,
 including imports already marked complete by an older build. Older 2.0 imports receive the same
-audit. A count mismatch, skipped row or missing backup keeps all old chat tables and logs counts
+audit. A count mismatch or skipped row keeps all old chat tables and logs counts
 without chat content. Do not delete those rows by hand: they may be the only copy of work the
 import could not convert.
 
-Removing the tables keeps the 1.x refusal: `session` remains absent. There is no rollback path
-through the old tables after cleanup. Going back would require a new migration. Keep using 2.0;
-at each OpenCode update, check migrations against a database without `session`, `message` or
+Removing the tables keeps the 1.x refusal: `session` remains absent. At each OpenCode update,
+check migrations against a database without `session`, `message` or
 `part`. Fresh 2.0 databases lack these tables too.
 
 Cleanup uses VACUUM INTO after the drop, then atomically replaces the database with the checked,
@@ -1752,58 +1746,30 @@ An ordinary start after successful cleanup does not copy again.
 
 Interrupted audit work keeps its saved cursor; if V2 changed between starts, the audit starts
 again. Cleanup and waiting for the import share a deadline eight minutes after engine spawn,
-including module loading and backup time. Maintenance stops at that deadline, leaving two minutes
+including module loading and schema migrations. Maintenance stops at that deadline, leaving two minutes
 of the daemon's ten-minute allowance to reach readiness. A copy whose estimated duration does not
 fit the remaining window waits for a later start.
 
 The engine waits for the 1.x import before listening, so old chats have their history and composer
 when the engine becomes ready. Fresh and fully imported databases only need the import status check.
-An interrupted import continues from its saved cursor on the next start, keeping the original backup
-and import order. A complete backup is still required; there is no skip or partial-backup resume.
-If backup exceeds the ten-minute startup limit, startup stops and the next start retries.
+An interrupted import continues from its saved cursor on the next start, keeping the import order.
 
-During backup, import and old-table cleanup, the sidebar says "Upgrading your database. Keep the app
+Before schema migrations or other database maintenance, an unfinished upgrade announces itself to
+the daemon. During import and old-table cleanup, the sidebar says "Upgrading your database. Keep the app
 open until this finishes. This can take a few minutes." It stays until engine readiness. A first send
-waits for readiness too; its pending state can last through the upgrade. Backup, resumed import and
-cleanup all extend startup to the same ten-minute deadline; ordinary starts keep their 30-second limit.
+waits for readiness too; its pending state can last through the upgrade. Initial import, resumed import
+and cleanup use the same spawn-relative ten-minute deadline; ordinary starts keep their 30-second limit.
 
 If the shared eight-minute budget runs out before import completes, the engine logs the fallback and
 starts listening while import continues in the background. The notice clears at readiness. An old
 chat not yet imported can then show "Failed to load agent. Session not found" without a composer
 until its import finishes. Old-table removal waits for a subsequent start.
 
-For emergency file recovery from the backup, stop the app **and its daemon** first; quitting alone
-can leave the daemon running when Keep running after quit is on. Set `PASEO_HOME` to the affected
-home and `engine_database` to its engine database's full path. Confirm the backup still exists.
-The following moves the current files into a new `pre-recovery` directory, preserving the WAL
-and SHM beside each database under matching names, then copies the backup into place. It stops
-if `pre-recovery` already exists; preserve that directory before choosing another unused name.
-Never delete the moved-aside WAL: after a crash, it can hold committed 2.0 tables and turns that
-have not reached the main file. The backup does not include `arena/artifacts/`. Keep that directory
-in the affected home: its content-addressed files belong to both the restored and newer records.
-If recovering into another home, copy `arena/artifacts/` there separately before opening the chat.
-
-```sh
-set -e
-saved="$PASEO_HOME/arena/pre-recovery"
-mkdir "$saved"
-for database in "$engine_database" "$PASEO_HOME/arena/arena.sqlite"; do
-  for suffix in "" -wal -shm; do
-    if [ -e "$database$suffix" ]; then
-      mv "$database$suffix" "$saved/$(basename "$database")$suffix"
-    fi
-  done
-done
-cp "$PASEO_HOME/arena/pre-opencode-2-backup/$(basename "$engine_database")" "$engine_database"
-cp "$PASEO_HOME/arena/pre-opencode-2-backup/arena.sqlite" "$PASEO_HOME/arena/arena.sqlite"
-```
-
-The restored files contain only pre-upgrade work. Keep the moved-aside files for the work since
-the switch and any skipped legacy rows retained there. After cleanup, those moved-aside files
-contain V2 history without the old chat tables; recover recent work from V2, not by recreating a
-`session` table. If the 14-day backup has expired, these copy-back steps cannot run. Preserve the
-current database, WAL, SHM and artifacts for a recovery migration. These file-recovery steps do
-not make 1.x a supported continuation of a 2.0 chat.
+If recovery needs a new migration, stop the app **and its daemon** before preserving the affected
+home's current engine database, `arena/arena.sqlite`, their WAL and SHM files, and `arena/artifacts/`.
+Quitting alone can leave the daemon running when Keep running after quit is on. Never delete a WAL:
+after a crash, it can hold committed tables and turns that have not reached the main file.
+Keep using 2.0 while recovery is investigated; recreating a `session` table does not make 1.x safe.
 
 ## Gotchas
 

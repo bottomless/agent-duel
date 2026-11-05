@@ -6,7 +6,7 @@
 
 - The first start of this version imports your chats from 1.x, and they continue here.
 - After the import, a 1.x build refuses this database and shows `Database is not empty and has no session table`. Do not reinstall a 1.x build on an upgraded machine.
-- Before the import, this version saves a backup in `$PASEO_HOME/arena/pre-opencode-2-backup/`, and removes it after 14 days. The steps to restore it are in `docs/arena.md`.
+- The upgrade makes no pre-upgrade database copy. Going back to 1.x would require a new migration. See `docs/arena.md` for disk space and recovery requirements.
 - A 1.x install that you do not upgrade keeps its own data, and this change does not touch it.
 
 ## 0.13.0-beta.2 - 2026-10-23
