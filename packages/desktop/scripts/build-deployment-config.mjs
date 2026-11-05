@@ -14,7 +14,7 @@ function readFlag(env, name) {
 
 // The hosted Agent Duel control plane. A release build signs in to it unless both values are
 // overridden. The public key only verifies sessions, so it is safe to publish.
-const DEFAULT_CONTROL_PLANE_URL = "https://agent-duel-cloud.vercel.app";
+const DEFAULT_CONTROL_PLANE_URL = "https://agentduel.com";
 const DEFAULT_SESSION_PUBLIC_KEY = "MCowBQYDK2VwAyEA761o9AYhsOdLYkE082hwxAbPEmsQvmaeZ/jWaWVce0Q=";
 
 function resolveControlPlane(env, { byok, updatesEnabled }) {
