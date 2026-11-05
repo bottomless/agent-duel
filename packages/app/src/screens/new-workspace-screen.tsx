@@ -2585,6 +2585,7 @@ export function NewWorkspaceScreen({
             serverId={selectedServerId}
             isPaneFocused={true}
             onSubmitMessage={handleSubmitNewWorkspace}
+            keepSubmitWhenEmpty
             submitButtonTestID="workspace-create-submit"
             submitIcon="return"
             isSubmitLoading={isPending}

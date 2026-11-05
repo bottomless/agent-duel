@@ -311,7 +311,7 @@ export async function submitNewWorkspacePrompt(
   const composer = page.getByRole("textbox", { name: "Message agent..." });
   await expect(composer).toBeVisible({ timeout: 30_000 });
   await composer.fill(prompt);
-  // Send appears only once the draft has text: a new chat cannot start empty.
+  // Send stays disabled until the draft has text: a new chat cannot start empty.
   const sendButton = page.getByTestId("workspace-create-submit");
   await expect(sendButton).toBeVisible({ timeout: 30_000 });
   await sendButton.click();

@@ -777,6 +777,8 @@ interface ComposerProps {
   hasExternalContent?: boolean;
   /** When true, the composer can submit even with no text or attachments. */
   allowEmptySubmit?: boolean;
+  /** When true, the submit button stays visible but disabled while there is nothing to send. */
+  keepSubmitWhenEmpty?: boolean;
   /** Optional accessibility label for the primary submit button. */
   submitButtonAccessibilityLabel?: string;
   /** Optional testID for the primary submit button. */
@@ -927,6 +929,7 @@ export function Composer({
   onClientSlashCommand,
   hasExternalContent = false,
   allowEmptySubmit = false,
+  keepSubmitWhenEmpty = false,
   submitButtonAccessibilityLabel,
   submitButtonTestID,
   submitIcon = "arrow",
@@ -2088,6 +2091,7 @@ export function Composer({
                 onSubmitAction={handleSubmitAction}
                 hasExternalContent={hasExternalContent}
                 allowEmptySubmit={allowEmptySubmit}
+                keepSubmitWhenEmpty={keepSubmitWhenEmpty}
                 submitButtonAccessibilityLabel={submitButtonAccessibilityLabel}
                 submitButtonTestID={submitButtonTestID}
                 submitIcon={submitIcon}

@@ -89,6 +89,8 @@ export interface MessageInputProps {
   hasExternalContent?: boolean;
   /** When true, the submit button stays visible and can submit even with no content. */
   allowEmptySubmit?: boolean;
+  /** When true, the submit button stays visible but disabled while there is nothing to send. */
+  keepSubmitWhenEmpty?: boolean;
   /** Optional accessibility label for the primary submit button. */
   submitButtonAccessibilityLabel?: string;
   /** Optional testID for the primary submit button. */
@@ -704,12 +706,13 @@ function hasSendableComposerContent(input: {
 function resolvePrimaryActionKind(input: {
   hasSendableContent: boolean;
   allowEmptySubmit: boolean;
+  keepSubmitWhenEmpty: boolean;
   isAgentRunning: boolean;
   isSubmitLoading: boolean;
 }): PrimaryActionKind {
   if (input.hasSendableContent || input.allowEmptySubmit) return "send";
   if (input.isAgentRunning) return "active";
-  if (input.isSubmitLoading) return "send";
+  if (input.isSubmitLoading || input.keepSubmitWhenEmpty) return "send";
   return "none";
 }
 
@@ -966,6 +969,7 @@ interface ResolvedMessageInputProps {
   onSubmit: (payload: MessagePayload) => void;
   hasExternalContent: boolean;
   allowEmptySubmit: boolean;
+  keepSubmitWhenEmpty: boolean;
   submitButtonAccessibilityLabel: string | undefined;
   submitButtonTestID: string | undefined;
   submitIcon: "arrow" | "return";
@@ -1012,6 +1016,7 @@ function resolveMessageInputProps(props: MessageInputProps): ResolvedMessageInpu
     onSubmit: props.onSubmit,
     hasExternalContent: props.hasExternalContent ?? false,
     allowEmptySubmit: props.allowEmptySubmit ?? false,
+    keepSubmitWhenEmpty: props.keepSubmitWhenEmpty ?? false,
     submitButtonAccessibilityLabel: props.submitButtonAccessibilityLabel,
     submitButtonTestID: props.submitButtonTestID,
     submitIcon: props.submitIcon ?? "arrow",
@@ -1060,6 +1065,7 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
       onSubmit,
       hasExternalContent,
       allowEmptySubmit,
+      keepSubmitWhenEmpty,
       submitButtonAccessibilityLabel,
       submitButtonTestID,
       submitIcon,
@@ -1480,20 +1486,24 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
       });
     }
 
+    const hasSendableContent = hasSendableComposerContent({
+      value,
+      attachments,
+      hasExternalContent,
+    });
     const primaryActionKind = resolvePrimaryActionKind({
-      hasSendableContent: hasSendableComposerContent({
-        value,
-        attachments,
-        hasExternalContent,
-      }),
+      hasSendableContent,
       allowEmptySubmit,
+      keepSubmitWhenEmpty,
       isAgentRunning,
       isSubmitLoading,
     });
     const { canPressLoadingButton, isSendButtonDisabled, defaultActionQueues } =
       computeSendButtonState({
         disabled,
-        isSubmitDisabled,
+        // A kept button has nothing to send while the composer is empty.
+        isSubmitDisabled:
+          isSubmitDisabled || (keepSubmitWhenEmpty && !hasSendableContent && !allowEmptySubmit),
         isSubmitLoading,
         onSubmitLoadingPress,
         defaultSendBehavior,
