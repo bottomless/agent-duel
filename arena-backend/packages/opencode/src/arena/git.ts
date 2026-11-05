@@ -1072,17 +1072,26 @@ function parseSymbolicRefs(text: string) {
  */
 export const mirrorCanonicalRefs = Effect.fn("ArenaGit.mirrorCanonicalRefs")(function* (input: MirrorRefsInput) {
   const git = yield* Git.Service
-  const hostWorktrees = parseWorktrees(
-    yield* read(git, input.host, "read_host_worktrees", ["worktree", "list", "--porcelain"]),
+  const listArgs = ["for-each-ref", REF_LIST_FORMAT, ...MIRRORED_NAMESPACES]
+  // Every read goes out at once: each git process costs tens of milliseconds to start on Windows
+  // whatever it does, and none of these depends on another.
+  const [worktreeListing, sourceListing, existingListing, staleListing, sourceOrigin, hostOrigin] = yield* Effect.all(
+    [
+      read(git, input.host, "read_host_worktrees", ["worktree", "list", "--porcelain"]),
+      read(git, input.canonical, "read_canonical_refs", listArgs),
+      read(git, input.host, "read_host_refs", listArgs),
+      read(git, input.host, "read_host_excluded_refs", ["for-each-ref", REF_LIST_FORMAT, ...MIRROR_EXCLUDED_PREFIXES]),
+      readOriginConfig(git, input.canonical),
+      readOriginConfig(git, input.host),
+    ],
+    { concurrency: "unbounded" },
   )
+  const hostWorktrees = parseWorktrees(worktreeListing)
   const protectedRefs = new Set(hostWorktrees.flatMap((item) => (item.branch ? [`refs/heads/${item.branch}`] : [])))
   const mirrored = (ref: string) =>
     MIRRORED_NAMESPACES.some((namespace) => ref.startsWith(namespace)) &&
     !MIRROR_EXCLUDED_PREFIXES.some((prefix) => ref.startsWith(prefix)) &&
     !protectedRefs.has(ref)
-  const listArgs = ["for-each-ref", REF_LIST_FORMAT, ...MIRRORED_NAMESPACES]
-  const sourceListing = yield* read(git, input.canonical, "read_canonical_refs", listArgs)
-  const existingListing = yield* read(git, input.host, "read_host_refs", listArgs)
   const source = parseRefList(sourceListing)
   const existing = parseRefList(existingListing)
   // A symbolic ref is never updated, never deleted, and never fetched: it follows its target, so
@@ -1092,13 +1101,7 @@ export const mirrorCanonicalRefs = Effect.fn("ArenaGit.mirrorCanonicalRefs")(fun
   // the symref. The clone's own `origin/HEAD` is the case that arises in practice.
   for (const ref of parseSymbolicRefs(sourceListing).keys()) source.delete(ref)
   for (const ref of parseSymbolicRefs(existingListing).keys()) existing.delete(ref)
-  const stale = parseRefList(
-    yield* read(git, input.host, "read_host_excluded_refs", [
-      "for-each-ref",
-      REF_LIST_FORMAT,
-      ...MIRROR_EXCLUDED_PREFIXES,
-    ]),
-  )
+  const stale = parseRefList(staleListing)
   const wanted = [...(input.requiredRefs ?? [])]
   const updates: string[] = []
   const deletes: string[] = []
@@ -1144,35 +1147,90 @@ export const mirrorCanonicalRefs = Effect.fn("ArenaGit.mirrorCanonicalRefs")(fun
   // `refs/heads/foo/bar` in one `update-ref --stdin` transaction ("cannot lock ref").
   yield* updateRefs(git, input.host, "mirror_canonical_ref_deletes", deletes)
   yield* updateRefs(git, input.host, "mirror_canonical_ref_updates", updates)
-  const updated = updates.length
-  const deleted = deletes.length
+  // After the fetch, not beside it: every git process reads the host's config, and on Windows a
+  // config write cannot rename its lock over a file another process holds open.
+  const origin = yield* mirrorOrigin(git, input.host, sourceOrigin, hostOrigin)
+  return { updated: updates.length, deleted: deletes.length, origin } satisfies MirrorRefsResult
+})
 
-  const url = yield* git.run(["config", "--get", "remote.origin.url"], { cwd: input.canonical })
-  if (url.exitCode !== 0) return { updated, deleted, origin: false } satisfies MirrorRefsResult
-  yield* run(git, input.host, "mirror_origin_url", ["config", "remote.origin.url", output(url)])
-  const fetch = yield* git.run(["config", "--get-all", "remote.origin.fetch"], { cwd: input.canonical })
-  const specs =
-    fetch.exitCode === 0 ? output(fetch).split(/\r?\n/).filter(Boolean) : ["+refs/heads/*:refs/remotes/origin/*"]
-  // `--unset-all` exits 5 when the key is absent; a fresh host has no fetch spec yet.
-  yield* git.run(["config", "--unset-all", "remote.origin.fetch"], { cwd: input.host })
-  for (const spec of specs) {
-    yield* run(git, input.host, "mirror_origin_fetch", ["config", "--add", "remote.origin.fetch", spec])
+const DEFAULT_ORIGIN_FETCH = "+refs/heads/*:refs/remotes/origin/*"
+
+/** Every value of each `origin` key, in the order git reads them. */
+type OriginConfig = {
+  readonly url: readonly string[]
+  readonly fetch: readonly string[]
+  readonly pushurl: readonly string[]
+}
+
+/**
+ * `origin`'s url, fetch specs, and push url as git resolves them in `cwd`, in one process. A
+ * config git cannot read reads as no `origin`, as a failed `--get` did: the canonical then mirrors
+ * none, and a host gets every key written, which fails there if its config is broken.
+ */
+const readOriginConfig = Effect.fn("ArenaGit.readOriginConfig")(function* (git: Git.Interface, cwd: string) {
+  const listed = yield* git.run(["config", "-z", "--get-regexp", "^remote\\.origin\\.(url|fetch|pushurl)$"], { cwd })
+  const values = { url: [] as string[], fetch: [] as string[], pushurl: [] as string[] }
+  // Exit 1: none of the keys is set.
+  if (listed.exitCode !== 0) return values satisfies OriginConfig
+  for (const entry of listed.text().split("\0")) {
+    const newline = entry.indexOf("\n")
+    const key = entry.slice("remote.origin.".length, newline)
+    if (newline < 0 || (key !== "url" && key !== "fetch" && key !== "pushurl")) continue
+    values[key].push(entry.slice(newline + 1))
   }
-  const pushUrl = yield* git.run(["config", "--get", "remote.origin.pushurl"], { cwd: input.canonical })
-  if (pushUrl.exitCode === 0) {
-    yield* run(git, input.host, "mirror_origin_pushurl", ["config", "remote.origin.pushurl", output(pushUrl)])
-  } else {
-    yield* git.run(["config", "--unset", "remote.origin.pushurl"], { cwd: input.host })
+  return values satisfies OriginConfig
+})
+
+/** Whether a single-valued key already holds exactly `value` and nothing else. */
+function holdsOnly(values: readonly string[], value: string) {
+  return values.length === 1 && values[0] === value
+}
+
+/**
+ * Give the host the canonical `origin`, writing only what differs: a fresh host is a copy of the
+ * canonical git directory and already has it. The url and push url are the canonical's last
+ * value, as `git config --get` takes it, and a host holding more than one value is written, which
+ * git refuses as it always did. A canonical with no `origin` url leaves the host's remote config
+ * alone. Returns whether the canonical has one.
+ */
+const mirrorOrigin = Effect.fn("ArenaGit.mirrorOrigin")(function* (
+  git: Git.Interface,
+  host: string,
+  source: OriginConfig,
+  existing: OriginConfig,
+) {
+  const url = source.url.at(-1)
+  if (url === undefined) return false
+  if (!holdsOnly(existing.url, url)) {
+    yield* run(git, host, "mirror_origin_url", ["config", "remote.origin.url", url])
   }
-  return { updated, deleted, origin: true } satisfies MirrorRefsResult
+  const wanted = source.fetch.length > 0 ? source.fetch.filter(Boolean) : [DEFAULT_ORIGIN_FETCH]
+  if (existing.fetch.length !== wanted.length || existing.fetch.some((spec, index) => spec !== wanted[index])) {
+    // `--unset-all` exits 5 when the key is absent; a fresh host has no fetch spec yet.
+    yield* git.run(["config", "--unset-all", "remote.origin.fetch"], { cwd: host })
+    for (const spec of wanted) {
+      yield* run(git, host, "mirror_origin_fetch", ["config", "--add", "remote.origin.fetch", spec])
+    }
+  }
+  const pushUrl = source.pushurl.at(-1)
+  if (pushUrl !== undefined) {
+    if (!holdsOnly(existing.pushurl, pushUrl)) {
+      yield* run(git, host, "mirror_origin_pushurl", ["config", "remote.origin.pushurl", pushUrl])
+    }
+  } else if (existing.pushurl.length > 0) {
+    yield* git.run(["config", "--unset", "remote.origin.pushurl"], { cwd: host })
+  }
+  return true
 })
 
 const listHostRefs = Effect.fn("ArenaGit.listHostRefs")(function* (git: Git.Interface, host: string) {
-  const listing = yield* read(git, host, "read_host_mirrored_refs", [
-    "for-each-ref",
-    REF_LIST_FORMAT,
-    ...MIRRORED_NAMESPACES,
-  ])
+  const [listing, snapshot] = yield* Effect.all(
+    [
+      read(git, host, "read_host_mirrored_refs", ["for-each-ref", REF_LIST_FORMAT, ...MIRRORED_NAMESPACES]),
+      read(git, host, "read_ref_snapshot", ["for-each-ref", REF_LIST_FORMAT, REF_SNAPSHOT_ROOT]),
+    ],
+    { concurrency: "unbounded" },
+  )
   const live = parseRefList(listing)
   // A symbolic ref carries no object of its own; `refs/remotes/origin/HEAD` appears to move only
   // because `refs/remotes/origin/main` moved, and that is reported under its own name. Recording
@@ -1181,10 +1239,7 @@ const listHostRefs = Effect.fn("ArenaGit.listHostRefs")(function* (git: Git.Inte
   for (const ref of Array.from(live.keys())) {
     if (ref.startsWith(SIDE_BRANCH_PREFIX)) live.delete(ref)
   }
-  const start = parseRefList(
-    yield* read(git, host, "read_ref_snapshot", ["for-each-ref", REF_LIST_FORMAT, REF_SNAPSHOT_ROOT]),
-  )
-  return { live, start }
+  return { live, start: parseRefList(snapshot) }
 })
 
 /**
