@@ -37,6 +37,7 @@ import { FileDropZone } from "@/components/file-drop/file-drop-zone";
 import { ChatFeedbackCard } from "@/feedback/chat-feedback-card";
 import { useRetainedPanelActive } from "@/components/retained-panel";
 import { RetainedChatContent } from "./retained-chat-content";
+import { DatabaseUpgradeChat } from "./database-upgrade-chat";
 import { Composer } from "@/composer";
 import {
   dispatchComposerAgentMessage,
@@ -424,13 +425,15 @@ function AgentPanel() {
 
   return (
     <RetainedChatContent>
-      <AgentPanelContent
-        serverId={serverId}
-        workspaceId={workspaceId}
-        agentId={target.agentId}
-        isPaneFocused={isInteractive}
-        onOpenWorkspaceFile={openFileInWorkspace}
-      />
+      <DatabaseUpgradeChat serverId={serverId} agentId={target.agentId}>
+        <AgentPanelContent
+          serverId={serverId}
+          workspaceId={workspaceId}
+          agentId={target.agentId}
+          isPaneFocused={isInteractive}
+          onOpenWorkspaceFile={openFileInWorkspace}
+        />
+      </DatabaseUpgradeChat>
     </RetainedChatContent>
   );
 }

@@ -1704,7 +1704,7 @@ makes it refuse the database instead. Installing 2.0 again keeps the work since 
 
 The upgrade makes no pre-upgrade database copy. Reserve space for a second copy of the chat data
 inside the engine database during import: a 25 GB engine database can grow to about 50 GB.
-Reclaiming that space later needs one compacted engine copy beside the database,
+Reclaiming that space needs one compacted engine copy beside the database,
 plus 64 MiB of filesystem headroom. Keep that free space on the engine database's volume.
 There is no way back to 1.x without a new migration.
 
@@ -1719,11 +1719,10 @@ outside the repo's dev launch path does not isolate OpenCode's database. Do not 
 at a packaged database to get its history.
 
 After import, the fence renames the old `session` table to `_arena_v1_session`. A 1.x engine then
-refuses to start with `Database is not empty and has no session table`. On the next start after
-import finishes, before listening or running battles, the engine removes the duplicated old chat
-tables when every source session and projected message has a V2 counterpart and no source rows
-were skipped. A durable deletion event for the same session explains an intentionally removed
-chat; an absent row alone does not. Completion checks coverage and retries missing sessions,
+refuses to start with `Database is not empty and has no session table`. The same start removes the
+duplicated old chat tables before listening or running battles, when every source session and
+projected message has a V2 counterpart and no source rows were skipped. A durable deletion event for
+the same session explains an intentionally removed chat; an absent row alone does not. Completion checks coverage and retries missing sessions,
 including imports already marked complete by an older build. Older 2.0 imports receive the same
 audit. A count mismatch or skipped row keeps all old chat tables and logs counts
 without chat content. Do not delete those rows by hand: they may be the only copy of work the
@@ -1750,20 +1749,24 @@ including module loading and schema migrations. Maintenance stops at that deadli
 of the daemon's ten-minute allowance to reach readiness. A copy whose estimated duration does not
 fit the remaining window waits for a later start.
 
-The engine waits for the 1.x import before listening, so old chats have their history and composer
-when the engine becomes ready. Fresh and fully imported databases only need the import status check.
-An interrupted import continues from its saved cursor on the next start, keeping the import order.
+Import and cleanup run in maintenance children before the runtime opens SQLite. A connection held
+across replacement would keep writing to the old file. If cleanup is deferred, a later start resumes
+it before opening the runtime. Windows still imports; cleanup requires file leases and is skipped
+there. Fresh and finished databases spawn no maintenance child and print no upgrade line.
+An interrupted import continues from its saved cursor, keeping the import order.
 
 Before schema migrations or other database maintenance, an unfinished upgrade announces itself to
 the daemon. During import and old-table cleanup, the sidebar says "Upgrading your database. Keep the app
-open until this finishes. This can take a few minutes." It stays until engine readiness. A first send
-waits for readiness too; its pending state can last through the upgrade. Initial import, resumed import
-and cleanup use the same spawn-relative ten-minute deadline; ordinary starts keep their 30-second limit.
+open until this finishes. This can take a few minutes." It stays until engine readiness, across both
+steps. An existing chat waiting for history says "Upgrading your database. This chat opens when the
+upgrade finishes." It loads automatically at readiness. New-chat composers remain usable. Both notices
+currently use English in every locale. A first send waits for readiness too; its pending state can last
+through the upgrade. Initial import, resumed import and cleanup use the same spawn-relative ten-minute deadline; ordinary starts keep their 30-second limit.
 
 If the shared eight-minute budget runs out before import completes, the engine logs the fallback and
-starts listening while import continues in the background. The notice clears at readiness. An old
-chat not yet imported can then show "Failed to load agent. Session not found" without a composer
-until its import finishes. Old-table removal waits for a subsequent start.
+stops the import child, then starts listening while the runtime resumes import in the background.
+The notice clears at readiness. An old chat not yet imported can then show "Failed to load agent.
+Session not found" without a composer until its import finishes. Old-table removal waits for a subsequent start.
 
 If recovery needs a new migration, stop the app **and its daemon** before preserving the affected
 home's current engine database, `arena/arena.sqlite`, their WAL and SHM files, and `arena/artifacts/`.

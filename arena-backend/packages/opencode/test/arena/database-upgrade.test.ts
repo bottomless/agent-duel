@@ -15,6 +15,7 @@ import {
   FENCED_SESSION_TABLE,
   prepareDatabaseUpgrade,
   prepareEngineDatabases,
+  prepareDatabaseMaintenance,
   fenceLegacyEngines,
 } from "@/arena/database-upgrade"
 
@@ -54,7 +55,7 @@ describe("database upgrade preflight", () => {
     await Bun.write(arena, "not SQLite: preflight must not open this file")
     const before = await Bun.file(input.engineDatabase).arrayBuffer()
     const lines: string[] = []
-    expect(await prepareDatabaseUpgrade(input, (line) => lines.push(line))).toBe(false)
+    expect(await prepareDatabaseUpgrade(input, (line) => lines.push(line))).toBe("import")
     expect(lines).toEqual([pendingLine])
     expect(await Bun.file(input.engineDatabase).arrayBuffer()).toEqual(before)
     expect(await Bun.file(arena).text()).toBe("not SQLite: preflight must not open this file")
@@ -314,4 +315,33 @@ describe("fenceLegacyEngines", () => {
     await run(filename)
     expect(read(filename, `SELECT name FROM sqlite_master WHERE name = '${FENCED_SESSION_TABLE}'`)).toEqual([])
   })
+})
+
+test("one-start maintenance migrates the real 1.x schema before import and cleanup", async () => {
+  const input = await workspace()
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const db = yield* EffectDrizzleSqlite.makeWithDefaults()
+      yield* DatabaseMigration.applyOnly(
+        db,
+        migrations.filter((migration) => migration.id < "20260804233008"),
+      )
+    }).pipe(
+      Effect.provide(sqliteLayer({ filename: input.engineDatabase })),
+      Effect.provideService(Global.Service, Global.make({ data: input.root })),
+      Effect.scoped,
+    ),
+  )
+  write(
+    input.engineDatabase,
+    `INSERT INTO project (id, worktree, time_created, time_updated, sandboxes)
+    VALUES ('global', '/tmp', 1, 1, '[]');
+    INSERT INTO session (id,project_id,slug,directory,title,version,time_created,time_updated)
+    VALUES ('ses_legacy','global','old','/tmp','Old','1',1,1);`,
+  )
+  await prepareDatabaseMaintenance(input)
+  expect(read(input.engineDatabase, "SELECT id FROM session_v2")).toEqual([{ id: "ses_legacy" }])
+  expect(read(input.engineDatabase, "SELECT value FROM kv WHERE key='arena.v1-cleanup'")).toEqual([
+    { value: '{"phase":"done"}' },
+  ])
 })

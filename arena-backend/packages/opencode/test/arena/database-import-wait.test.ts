@@ -10,6 +10,9 @@ import os from "node:os"
 import path from "node:path"
 import {
   prepareDatabaseUpgrade,
+  prepareDatabaseMaintenance,
+  runDatabaseMaintenance,
+  importLegacyDatabase,
   fenceLegacyEngines,
   fenceLegacyEnginesLayer,
   waitForLegacyImport,
@@ -59,6 +62,7 @@ async function profile(count: number) {
 
 function rows<T>(filename: string, query: string) {
   using database = new SQLite(filename, { readonly: true })
+  database.run("PRAGMA busy_timeout = 1000")
   return database.query<T, []>(query).all()
 }
 
@@ -232,4 +236,157 @@ test("an import failure does not turn the readiness wait into a failed start", a
   expect(rows(input.engineDatabase, "SELECT name FROM sqlite_master WHERE name='session'")).toEqual([
     { name: "session" },
   ])
+})
+
+test("one start imports then cleans with no runtime connection across publication", async () => {
+  const input = await profile(30)
+  const steps: string[] = []
+  const deadlines: number[] = []
+  const deadline = Date.now() + 7 * 60_000
+  await prepareDatabaseMaintenance({ ...input, deadline }, async (bounded, step) => {
+    steps.push(step)
+    deadlines.push(bounded.deadline!)
+    if (step === "cleanup") {
+      expect(rows(input.engineDatabase, "SELECT COUNT(*) AS n FROM session_v2")).toEqual([{ n: 30 }])
+      // Both the preflight and import connections must have closed, including the child process.
+      const { databaseHasHolders } = await import("@/arena/database-lease")
+      expect(await databaseHasHolders(input.engineDatabase)).toBe(false)
+    }
+    return runDatabaseMaintenance(bounded, step)
+  })
+  expect(steps).toEqual(["import", "cleanup"])
+  expect(deadlines).toEqual([deadline, deadline])
+  expect(rows(input.engineDatabase, "SELECT value FROM kv WHERE key='arena.v1-cleanup'")).toEqual([
+    { value: '{"phase":"done"}' },
+  ])
+  expect(rows(input.engineDatabase, "SELECT COUNT(*) AS n FROM session_message")).toEqual([{ n: 30 }])
+  expect(
+    rows(
+      input.engineDatabase,
+      "SELECT name FROM sqlite_master WHERE name IN ('session','message','part','_arena_v1_session')",
+    ),
+  ).toEqual([])
+})
+
+test("fresh and fully cleaned starts print nothing and spawn no child", async () => {
+  for (const count of [0, 3]) {
+    const input = await profile(count)
+    if (count) await prepareDatabaseMaintenance(input)
+    const lines: string[] = []
+    const log = console.log
+    console.log = (line: string) => {
+      lines.push(line)
+    }
+    try {
+      await prepareDatabaseMaintenance(input, async () => {
+        throw new Error("unexpected child")
+      })
+    } finally {
+      console.log = log
+    }
+    expect(lines).toEqual([])
+  }
+})
+
+test("an expired import child leaves cleanup for later and runtime resumes in the background", async () => {
+  const input = await profile(100)
+  const steps: string[] = []
+  await prepareDatabaseMaintenance({ ...input, deadline: Date.now() + 50 }, async (bounded, step) => {
+    steps.push(step)
+    return runDatabaseMaintenance(bounded, step)
+  })
+  expect(steps).toEqual(["import"])
+  expect(rows(input.engineDatabase, "SELECT name FROM sqlite_master WHERE name='message'")).toHaveLength(1)
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      yield* waitForLegacyImport({ deadline: 0, log: () => {} })
+      const { db } = yield* Database.Service
+      while (!(yield* db.get(sql`SELECT name FROM sqlite_master WHERE name='_arena_v1_session'`)))
+        yield* Effect.sleep(1)
+    }).pipe(Effect.provide(services(input.engineDatabase)), Effect.scoped),
+  )
+  expect(rows(input.engineDatabase, "SELECT COUNT(*) AS n FROM session_message")).toEqual([{ n: 100 }])
+  expect(rows(input.engineDatabase, "SELECT name FROM sqlite_master WHERE name='message'")).toHaveLength(1)
+})
+
+test("import consumes the shared window; insufficient copy time defers cleanup to the next start", async () => {
+  const input = await profile(3)
+  const deadline = Date.now() + 30_000
+  await prepareDatabaseMaintenance({ ...input, deadline })
+  expect(rows(input.engineDatabase, "SELECT COUNT(*) AS n FROM session_message")).toEqual([{ n: 3 }])
+  expect(rows(input.engineDatabase, "SELECT value FROM kv WHERE key='arena.v1-cleanup'")).toEqual([
+    { value: '{"phase":"vacuum"}' },
+  ])
+  const steps: string[] = []
+  await prepareDatabaseMaintenance(input, async (bounded, step) => {
+    steps.push(step)
+    return runDatabaseMaintenance(bounded, step)
+  })
+  expect(steps).toEqual(["cleanup"])
+  expect(rows(input.engineDatabase, "SELECT value FROM kv WHERE key='arena.v1-cleanup'")).toEqual([
+    { value: '{"phase":"done"}' },
+  ])
+})
+
+test("missing lease support still imports and fences", async () => {
+  const input = await profile(3)
+  await importLegacyDatabase(input, async () => undefined)
+  expect(rows(input.engineDatabase, "SELECT COUNT(*) AS n FROM session_message")).toEqual([{ n: 3 }])
+  expect(rows(input.engineDatabase, "SELECT name FROM sqlite_master WHERE name='_arena_v1_session'")).toHaveLength(1)
+})
+
+test("a kill between the import and cleanup resumes with cleanup only", async () => {
+  const input = await profile(3)
+  const driver = path.join(input.root, "maintenance-driver.ts")
+  const module = new URL("../../src/arena/database-upgrade.ts", import.meta.url).pathname
+  await Bun.write(
+    driver,
+    `
+    import { prepareDatabaseMaintenance, runDatabaseMaintenance } from ${JSON.stringify(module)};
+    await prepareDatabaseMaintenance(${JSON.stringify(input)}, async (input, step) => {
+      if (step === "cleanup") process.kill(process.pid, "SIGKILL");
+      return runDatabaseMaintenance(input, step);
+    });
+  `,
+  )
+  const child = Bun.spawn([process.execPath, "--no-env-file", driver], { stdout: "pipe", stderr: "pipe" })
+  const out = new Response(child.stdout).text()
+  const err = new Response(child.stderr).text()
+  expect(await child.exited).not.toBe(0)
+  expect(child.signalCode).toBe("SIGKILL")
+  await out
+  await err
+  expect(rows(input.engineDatabase, "SELECT COUNT(*) AS n FROM session_message")).toEqual([{ n: 3 }])
+  await prepareDatabaseMaintenance(input)
+  expect(rows(input.engineDatabase, "SELECT value FROM kv WHERE key='arena.v1-cleanup'")).toEqual([
+    { value: '{"phase":"done"}' },
+  ])
+})
+
+test("the default import and cleanup budget is eight minutes from spawn, not from each child", async () => {
+  const input = await profile(3)
+  const spawnedAt = Date.now() - process.uptime() * 1000
+  const deadlines: number[] = []
+  await prepareDatabaseMaintenance(input, async (bounded) => {
+    deadlines.push(bounded.deadline!)
+    return true
+  })
+  expect(deadlines).toHaveLength(2)
+  expect(deadlines[0]).toBe(deadlines[1])
+  expect(Math.abs(deadlines[0] - (spawnedAt + 480_000))).toBeLessThan(100)
+})
+
+test("a completed import interrupted before fencing still cleans up in this start", async () => {
+  const input = await profile(3)
+  await importLegacyDatabase(input)
+  {
+    using db = new SQLite(input.engineDatabase)
+    db.run("ALTER TABLE _arena_v1_session RENAME TO session")
+  }
+  await prepareDatabaseMaintenance(input)
+  expect(rows(input.engineDatabase, "SELECT value FROM kv WHERE key='arena.v1-cleanup'")).toEqual([
+    { value: '{"phase":"done"}' },
+  ])
+  expect(rows(input.engineDatabase, "SELECT DISTINCT visits FROM import_visit")).toEqual([{ visits: 1 }])
+  expect(rows(input.engineDatabase, "SELECT COUNT(*) AS n FROM session_message")).toEqual([{ n: 3 }])
 })

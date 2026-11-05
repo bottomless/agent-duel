@@ -89,15 +89,18 @@ export async function prepareDatabaseUpgrade(
   const fenced = has(FENCED_SESSION_TABLE)
   if (!has("kv")) {
     if (legacy || fenced) log("[arena-upgrade] Importing OpenCode 1.x chats")
-    return false
+    return legacy || fenced ? "import" : false
   }
   const get = (key: string): { phase?: string; retryAfter?: number } | undefined => {
     const row = database.query<{ value: string }, [string]>("SELECT value FROM kv WHERE key=?").get(key)
     return row ? JSON.parse(row.value) : undefined
   }
-  if ((legacy || fenced) && get("migration.v1-v2")?.phase !== "completed") {
+  if (
+    ((legacy || fenced) && get("migration.v1-v2")?.phase !== "completed") ||
+    (legacy && !fenced && get("arena.v1-cleanup")?.phase !== "done")
+  ) {
     log("[arena-upgrade] Importing OpenCode 1.x chats")
-    return false
+    return "import"
   }
   const cleanup = get("arena.v1-cleanup")
   const pending = cleanup?.phase !== "done" && (fenced || cleanup?.phase === "vacuum")
@@ -118,39 +121,67 @@ export async function prepareEngineDatabases() {
     engineDatabase: filename === ":memory:" || isAbsolute(filename) ? filename : join(Global.Path.data, filename),
     arenaDirectory: arenaDirectory(),
   }
-  if (await prepareDatabaseUpgrade(input)) await finishLegacyCleanup(input)
+  await prepareDatabaseMaintenance(input)
   // Keep the shared lease until process exit, before any runtime connection opens.
   engineLease = input.engineDatabase === ":memory:" ? undefined : await engineDatabaseLease(input.engineDatabase)
 }
 
+/** All maintenance finishes (and closes SQLite) before the runtime acquires its shared lease. */
+export async function prepareDatabaseMaintenance(input: CleanupInput, maintenance = runDatabaseMaintenance) {
+  const action = await prepareDatabaseUpgrade(input)
+  if (!action) return
+  const bounded = { ...input, deadline: Math.min(input.deadline ?? UPGRADE_DEADLINE, UPGRADE_DEADLINE) }
+  if (action === "import" && !(await maintenance(bounded, "import"))) return
+  await maintenance(bounded, "cleanup")
+}
+
+/** The child owns the only import connection; exiting releases it before any inode swap. */
+export async function importLegacyDatabase(input: CleanupInput, acquireLease = engineDatabaseLease) {
+  await verifyDatabaseOwnership(input.engineDatabase, input.arenaDirectory)
+  using lease = await acquireLease(input.engineDatabase)
+  await Effect.runPromise(
+    fenceLegacyEngines.pipe(
+      Effect.provide(Database.layer({ path: input.engineDatabase })),
+      Effect.provideService(Global.Service, Global.make({ data: dirname(input.engineDatabase) })),
+      Effect.scoped,
+    ),
+  )
+}
+
 /** Bound synchronous SQLite work without blocking the engine's main thread or killing its startup. */
-export async function finishLegacyCleanup(input: CleanupInput, timeoutMs = Math.max(0, UPGRADE_DEADLINE - Date.now())) {
-  if (input.engineDatabase === ":memory:" || !existsSync(input.engineDatabase)) return
-  const deadline = Math.min(input.deadline ?? UPGRADE_DEADLINE, Date.now() + timeoutMs, UPGRADE_DEADLINE)
-  if (deadline <= Date.now()) return
+export async function runDatabaseMaintenance(input: CleanupInput, step: "import" | "cleanup") {
+  if (input.engineDatabase === ":memory:" || !existsSync(input.engineDatabase)) return false
+  const deadline = Math.min(input.deadline ?? UPGRADE_DEADLINE, UPGRADE_DEADLINE)
+  if (deadline <= Date.now()) return false
+  const label = step === "import" ? "Import" : "Cleanup"
   try {
     const child = Bun.spawn(
       [
         process.execPath,
         ...(Bun.main.endsWith(".ts") ? ["--no-env-file", fileURLToPath(new URL("../index.ts", import.meta.url))] : []),
-        "--arena-database-cleanup",
+        `--arena-database-${step}`,
       ],
       { stdin: "pipe", stdout: "inherit", stderr: "inherit" },
     )
     let timer: ReturnType<typeof setTimeout> | undefined
+    let expired = false
     try {
       child.stdin.write(JSON.stringify({ ...input, deadline }))
       child.stdin.end()
       timer = setTimeout(
         () => {
-          console.warn("[arena-upgrade] Cleanup startup budget exhausted; startup continues")
+          expired = true
+          console.warn(
+            `[arena-upgrade] ${label} startup budget exhausted; startup continues${step === "import" ? " with import in the background" : ""}`,
+          )
           child.kill("SIGKILL")
         },
         Math.max(0, deadline - Date.now()),
       )
       const code = await child.exited
-      if (code !== 0)
-        console.warn("[arena-upgrade] Cleanup interrupted; startup continues and a later start will resume")
+      if (code !== 0 && !expired)
+        console.warn(`[arena-upgrade] ${label} interrupted; startup continues and a later start will resume`)
+      return code === 0 && !expired
     } finally {
       clearTimeout(timer)
       if (child.exitCode === null && child.signalCode === null) {
@@ -159,8 +190,16 @@ export async function finishLegacyCleanup(input: CleanupInput, timeoutMs = Math.
       }
     }
   } catch {
-    console.warn("[arena-upgrade] Could not run cleanup maintenance; startup continues")
+    console.warn(`[arena-upgrade] Could not run ${step} maintenance; startup continues`)
+    return false
   }
+}
+
+export async function finishLegacyCleanup(input: CleanupInput, timeoutMs = Math.max(0, UPGRADE_DEADLINE - Date.now())) {
+  await runDatabaseMaintenance(
+    { ...input, deadline: Math.min(input.deadline ?? UPGRADE_DEADLINE, Date.now() + timeoutMs) },
+    "cleanup",
+  )
 }
 
 export { removeImportedLegacyTables }

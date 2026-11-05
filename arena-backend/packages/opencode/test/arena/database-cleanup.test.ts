@@ -639,3 +639,79 @@ test("a raw holder arriving during the copy prevents the final swap", async () =
   await removeImportedLegacyTables(input, { now: () => Date.now() + 24 * 60 * 60 * 1000 + 1 })
   expect(state(input).phase).toBe("done")
 })
+
+test("a SIGKILL during audit keeps source tables and resumes committed audit progress", async () => {
+  const input = await fixture()
+  const child = Bun.spawn(
+    [
+      process.execPath,
+      "--no-env-file",
+      "-e",
+      `
+    import { removeImportedLegacyTables } from "@/arena/database-cleanup";
+    await removeImportedLegacyTables(${JSON.stringify(input)}, {
+      afterAuditSession: () => process.kill(process.pid, "SIGKILL")
+    });
+  `,
+    ],
+    { stdout: "pipe", stderr: "pipe" },
+  )
+  const out = new Response(child.stdout).text()
+  const err = new Response(child.stderr).text()
+  await child.exited
+  await out
+  await err
+  expect(child.signalCode).toBe("SIGKILL")
+  expectKept(input)
+  expect(state(input)).toMatchObject({ phase: "audit", cursor: "ses_old" })
+  await removeImportedLegacyTables(input)
+  expect(state(input).phase).toBe("done")
+  expect(read(input.engineDatabase, "SELECT id FROM session_message")).toEqual([{ id: "msg_old" }])
+})
+
+test("SIGKILL while real VACUUM INTO writes its copy keeps the source and retries later", async () => {
+  const input = await fixture()
+  write(
+    input.engineDatabase,
+    "CREATE TABLE copy_payload (data BLOB); INSERT INTO copy_payload VALUES (randomblob(64000000))",
+  )
+  const child = Bun.spawn(
+    [
+      process.execPath,
+      "--no-env-file",
+      "-e",
+      `
+    import { removeImportedLegacyTables } from "@/arena/database-cleanup";
+    await removeImportedLegacyTables(${JSON.stringify(input)});
+  `,
+    ],
+    { stdout: "pipe", stderr: "pipe" },
+  )
+  const out = new Response(child.stdout).text()
+  const err = new Response(child.stderr).text()
+  try {
+    const until = Date.now() + 10_000
+    const temporary = `${input.engineDatabase}.vacuum-into.tmp`
+    while (Bun.file(temporary).size === 0) {
+      if (child.exitCode !== null || Date.now() > until) throw new Error("copy did not start before exit")
+      await Bun.sleep(1)
+    }
+    child.kill("SIGKILL")
+    await child.exited
+    expect(child.signalCode).toBe("SIGKILL")
+    expect(state(input).phase).toBe("vacuum")
+    expect(read(input.engineDatabase, "PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }])
+    expect(read(input.engineDatabase, "SELECT id FROM session_message")).toEqual([{ id: "msg_old" }])
+    expect(read(input.engineDatabase, "SELECT length(data) AS n FROM copy_payload")).toEqual([{ n: 64000000 }])
+    await removeImportedLegacyTables(input, { now: () => Date.now() + 24 * 60 * 60_000 + 1 })
+    expect(state(input).phase).toBe("done")
+    expect(read(input.engineDatabase, "SELECT length(data) AS n FROM copy_payload")).toEqual([{ n: 64000000 }])
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL")
+      await child.exited
+    }
+    await out
+    await err
+  }
+}, 20_000)

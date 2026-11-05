@@ -787,7 +787,7 @@ describe("OpenCodeServerManager generations", () => {
     expect(getArenaDatabaseUpgrade()).toBeNull();
   });
 
-  test("cleanup receives the same upgrade deadline and clears status at readiness", async () => {
+  test("same-start import and cleanup keep one deadline and uninterrupted status until readiness", async () => {
     vi.useFakeTimers();
     installArenaCredentials({ mode: "byok", openRouterApiKey: "test-key" });
     const { manager, runtime } = createTestManager([4480], {
@@ -798,10 +798,14 @@ describe("OpenCodeServerManager generations", () => {
     await vi.advanceTimersByTimeAsync(0);
     const child = runtime.processForPort(4480);
     const startedAt = Date.now();
+    child.stdout.emit("data", Buffer.from("[arena-upgrade] Importing OpenCode 1.x chats\n"));
+    expect(getArenaDatabaseUpgrade()).toEqual({ startedAt, deadline: startedAt + 600_000 });
+    await vi.advanceTimersByTimeAsync(180_000);
     child.stdout.emit("data", Buffer.from("[arena-upgrade] Removing imported OpenCode 1."));
     child.stdout.emit("data", Buffer.from("x tables\n"));
     expect(getArenaDatabaseUpgrade()).toEqual({ startedAt, deadline: startedAt + 600_000 });
-    await vi.advanceTimersByTimeAsync(480_000);
+    await vi.advanceTimersByTimeAsync(180_000);
+    expect(getArenaDatabaseUpgrade()).toEqual({ startedAt, deadline: startedAt + 600_000 });
     expect(runtime.terminatedPorts).toEqual([]);
     child.stdout.emit("data", Buffer.from("listening on"));
     const acquired = await pending;
