@@ -1,3 +1,5 @@
+import { isCarryNote } from "./carry-note"
+
 export function comparisonTimeline(
   messages: readonly unknown[],
   promptMessageID: string | undefined,
@@ -9,6 +11,16 @@ export function comparisonTimeline(
     if (typeof value.info.id !== "string" || value.info.id <= promptMessageID) return []
     const role = value.info.role
     if (role !== "user" && role !== "assistant") return []
+    // The previous turn's handoff sorts before the prompt and is excluded above; this guards the
+    // judge against a clock that stepped backwards between the two ids.
+    if (
+      role === "user" &&
+      value.parts.some(
+        (part) => record(part) && part.type === "text" && typeof part.text === "string" && isCarryNote(part.text),
+      )
+    ) {
+      return []
+    }
     const content = value.parts.flatMap((part): ComparisonTimelineEvent[] => {
       if (!record(part) || typeof part.type !== "string") return []
       // Reasoning is deliberately excluded. It is not part of the visible timeline this prompt claims
@@ -56,7 +68,9 @@ export function showedOutput(messages: readonly unknown[], promptMessageID: stri
     return value.parts.some((part) => {
       if (!record(part)) return false
       if (part.type === "tool") return true
-      return (part.type === "text" || part.type === "reasoning") && typeof part.text === "string" && part.text.trim() !== ""
+      return (
+        (part.type === "text" || part.type === "reasoning") && typeof part.text === "string" && part.text.trim() !== ""
+      )
     })
   })
 }

@@ -78,6 +78,15 @@ export type ArenaPromptInput = {
   readonly delivery?: "steer" | "queue"
   readonly messageID?: SessionV1.MessageID
   readonly noReply?: boolean
+  /**
+   * A hidden user-role note admitted just before the prompt, with an id that sorts before it: the
+   * model reads it first and the graft, which copies from the prompt boundary, never carries it.
+   */
+  readonly preface?: {
+    readonly id: SessionV1.MessageID
+    readonly text: string
+    readonly metadata?: Record<string, unknown>
+  }
 }
 
 export type ArenaStatus = SessionStatusEvent.Info

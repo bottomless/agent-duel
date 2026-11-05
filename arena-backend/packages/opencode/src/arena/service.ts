@@ -78,6 +78,8 @@ import { comparisonTimeline, showedOutput } from "./comparison-timeline"
 import { ArenaContestant, contestantPermissions } from "./contestant"
 import { createBattleAssignments, createSingleAssignment, resolveAssignments } from "./assignment-client"
 import type { BattleAssignmentDecision } from "@agent-duel/arena-service/assignment-decision"
+import { requestCarry } from "./carry"
+import { carryEnabled, carryNote } from "./carry-note"
 import { ArenaAttachments } from "./attachments"
 import { forkSessionInto, type ArenaFork } from "./fork"
 import {
@@ -183,6 +185,9 @@ import { Global } from "@opencode/util/global"
 import { Hash } from "@opencode/util/hash"
 import type {
   ApplyBaseChoice,
+  CarryInput,
+  CarryOutput,
+  CarryRecord,
   ChatDocument,
   CapturedService,
   CopyOmission,
@@ -494,8 +499,10 @@ function accountID(value?: string) {
 export type NormalTurnStart = {
   readonly model: { providerID: ProviderV2.ID; modelID: ModelV2.ID }
   readonly variant: "high" | "xhigh"
-  /** Sent as a synthetic part of the user's message: the model reads it, the chat does not show it. */
+  /** Sent as a synthetic row before the user's message: the model reads it, the chat does not show it. */
   readonly note?: string
+  /** The previous battle's handoff (`carry-note.ts`), as its own tagged row so later forks can drop it. */
+  readonly carry?: { readonly text: string; readonly metadata: Record<string, unknown> }
 }
 
 /**
@@ -829,6 +836,10 @@ const REPLY_SETTLE_TIMEOUT_MS = 30_000
  * It wants a signal from the app that a battle is being written before it is on by default.
  */
 const initialWarmEnabled = () => process.env.OPENCODE_ARENA_INITIAL_WARM === "1"
+/** How long a send waits for the previous battle's handoff when the vote was seconds ago. */
+const CARRY_WAIT_MS = 10_000
+/** A `pending` carry older than this belongs to an engine that died mid-replay; no send waits for it. */
+const CARRY_PENDING_STALE_MS = 240_000
 
 /**
  * How long a chat goes unwatched before its contestant worktrees unload. The app streams only the
@@ -1597,6 +1608,55 @@ export const layer: Layer.Layer<
       const turns = yield* promise(() => store.turnsForChat(chatID)).pipe(Effect.catch(() => Effect.succeed(undefined)))
       const start = turns ? lastTurnStart(turns, transcript) : undefined
       return start ? MessageID.make(start) : undefined
+    })
+    /**
+     * The previous battle's handoff for the turn about to start (`carry-note.ts`), or nothing. Read
+     * once per send, so both sides get the same bytes. The vote may be seconds old and the replay
+     * still running: wait a little for it, then start without it. A result the user did not take
+     * into the workspace describes files this turn does not see, so it is not carried either.
+     */
+    const carryForNextTurn = Effect.fn("Arena.carryForNextTurn")(function* (store: Store, chat: ChatDocument) {
+      if (!carryEnabled()) return undefined
+      // The chat's previous battle. A rewound one left the workspace, and its handoff with it.
+      const latest = (yield* promise(() =>
+        store.turns
+          .find({ chatID: chat._id, rewoundAt: { $exists: false } })
+          .sort({ turnIndex: -1 })
+          .limit(1)
+          .toArray(),
+      )).at(0)
+      // One turn only: the first send after the vote, battle or Battle off, takes the note or records
+      // that it went without. A replay that lands after that is never delivered.
+      if (!latest?.resolution || latest.carryOut) return undefined
+      const consume = (outcome: CarryOutput["outcome"]) =>
+        promise(() => store.updateTurn(latest._id, { carryOut: { at: new Date(), outcome } })).pipe(Effect.ignore)
+      const live = (candidate: TurnDocument | null) =>
+        candidate?.carry?.reason === "pending" &&
+        Date.now() - new Date(candidate.carry.requestedAt).getTime() < CARRY_PENDING_STALE_MS
+      const deadline = Date.now() + CARRY_WAIT_MS
+      let turn: TurnDocument | null = latest
+      while (live(turn) && Date.now() < deadline) {
+        yield* Effect.sleep("500 millis")
+        turn = yield* promise(() => store.turn(latest._id))
+      }
+      const carry = turn?.carry
+      if (carry?.source !== "replay" || !carry.note) {
+        yield* consume(carry?.reason === "pending" ? "expired" : "skipped")
+        return undefined
+      }
+      const application = turn?.gitApplication?.state
+      if (
+        application === "review" ||
+        application === "manual" ||
+        application === "blocked" ||
+        application === "discarded"
+      ) {
+        yield* consume("skipped")
+        return undefined
+      }
+      yield* consume("delivered")
+      const carryIn: CarryInput = { version: 1, fromTurnID: latest._id, text: carry.note }
+      return carryIn
     })
     const repositoryMutationLock = (commonGitDir: string) => {
       const existing = repositoryMutationLocks.get(commonGitDir)
@@ -4249,9 +4309,23 @@ export const layer: Layer.Layer<
           )
         }),
       ).pipe(Effect.onError(() => Effect.sync(() => activeNormalTurns.release(input.sessionID))))
+      const carried = yield* carryForNextTurn(store, current ?? chat).pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("Arena carry could not be read for the next turn", { chatID: chat._id, cause }).pipe(
+            Effect.as(undefined),
+          ),
+        ),
+        Effect.onError(() => Effect.sync(() => activeNormalTurns.release(input.sessionID))),
+      )
       const note = parked ? unappliedWinnerNote(parked) : undefined
+      const carry = carried
+        ? {
+            text: carryNote(carried.text),
+            metadata: { arenaCarry: { turnID: carried.fromTurnID, version: carried.version } },
+          }
+        : undefined
       return yield* assignModel.pipe(
-        Effect.map((start): NormalTurnStart => (note ? { ...start, note } : start)),
+        Effect.map((start): NormalTurnStart => ({ ...start, ...(note ? { note } : {}), ...(carry ? { carry } : {}) })),
         Effect.onError(() => Effect.sync(() => activeNormalTurns.release(input.sessionID))),
       )
     })
@@ -4730,6 +4804,10 @@ export const layer: Layer.Layer<
         (enabled) => inDirectory(run.worktree.directory, permissions.setAutoAccept(run.sessionID, enabled)),
       )
       const startedAt = new Date()
+      // The previous battle's handoff goes in once, with the first prompt, under an id that sorts
+      // before it: read first, and never grafted. A reply or a retry would sort after the boundary.
+      const carryIn = prompt && !preservePromptBoundary ? turn?.carryIn : undefined
+      const prefaceID = carryIn ? MessageID.ascending() : undefined
       const promptMessageID = MessageID.ascending()
       yield* promise(() =>
         store.updateRun(run.runID, {
@@ -4766,6 +4844,15 @@ export const layer: Layer.Layer<
                 variant: "high",
                 system,
                 parts: prompt.parts,
+                ...(carryIn && prefaceID
+                  ? {
+                      preface: {
+                        id: prefaceID,
+                        text: carryNote(carryIn.text),
+                        metadata: { arenaCarry: { turnID: carryIn.fromTurnID, version: carryIn.version } },
+                      },
+                    }
+                  : {}),
               })
             : // A retry adds no message: the loop answers the last user message again, from the
               // last step that finished.
@@ -6405,11 +6492,20 @@ export const layer: Layer.Layer<
         a: assignment(pair.a),
         b: assignment(pair.b),
       }
+      const carryIn = yield* carryForNextTurn(store, chat).pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("Arena carry could not be read for the next turn", { chatID: chat._id, cause }).pipe(
+            Effect.as(undefined),
+          ),
+        ),
+        Effect.onError(() => discardUnactivatedCopy.pipe(Effect.ignore)),
+      )
       const now = new Date()
       const turn: TurnDocument = {
         _id: turnID,
         chatID: chat._id,
         build,
+        ...(carryIn ? { carryIn } : {}),
         ...(admittedParticipantID ? { participantID: admittedParticipantID } : {}),
         turnIndex: chat.turnCount,
         userPrompt: prompt,
@@ -10362,6 +10458,48 @@ export const layer: Layer.Layer<
         Effect.forkIn(scope),
       )
 
+    /**
+     * Asks the service for the winner's handoff once the models are revealed (`carry.ts`). Runs
+     * after the vote is acknowledged and nothing waits for it: the next send reads whatever it
+     * stored. The replay needs the winner's final reply; a turn that ended on a stop or a failed
+     * call has none, and records that instead.
+     */
+    const startCarry = (store: Store, turn: TurnDocument, side: Side, decision: BattleAssignmentDecision) =>
+      Effect.gen(function* () {
+        if (!carryEnabled()) return
+        if (decision !== "select:a" && decision !== "select:b" && decision !== "tie") return
+        const requestedAt = new Date()
+        const pending: CarryRecord = { version: 1, source: "none", reason: "pending", requestedAt }
+        yield* promise(() => store.updateTurn(turn._id, { carry: pending }))
+        const generations = yield* promise(() => store.generationsForRuns([turn.runIDs[side]]))
+        const roots = generations
+          .filter((generation) => generation.classification === "root" && generation.requestKind !== "utility")
+          .sort((left, right) => left.callIndex - right.callIndex)
+        const last = roots.at(-1)
+        const terminal = last && last.finishReason === "stop" && !last.error ? last : undefined
+        const outcome = terminal
+          ? yield* promise(() => requestCarry({ scopeID: turn._id, decision, generationID: terminal._id }))
+          : ({ source: "none", reason: "no-final-reply" } as const)
+        const carry: CarryRecord = {
+          version: 1,
+          source: outcome.source,
+          ...(outcome.source === "replay" ? { note: outcome.note } : { reason: outcome.reason }),
+          ...(terminal ? { generationID: terminal._id } : {}),
+          requestedAt,
+          completedAt: new Date(),
+        }
+        yield* promise(() => store.updateTurn(turn._id, { carry }))
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.gen(function* () {
+            yield* Effect.logWarning("Arena carry failed", { turnID: turn._id, cause })
+            const carry: CarryRecord = { version: 1, source: "none", reason: "failed", requestedAt: new Date() }
+            yield* promise(() => store.updateTurn(turn._id, { carry })).pipe(Effect.ignore)
+          }),
+        ),
+        Effect.forkIn(scope),
+      )
+
     const promoteImpl = Effect.fn("Arena.promote")(function* (
       store: Store,
       turn: TurnDocument,
@@ -10406,6 +10544,7 @@ export const layer: Layer.Layer<
         )
         if (!recorded.recorded) return yield* respond(store, turn.chatID)
         yield* revealTelemetry(recorded.turn, revealed.metrics)
+        yield* startCarry(store, recorded.turn, side, revealed.decision)
         const acknowledged = yield* respond(store, turn.chatID)
         yield* applyInBackground(
           store,
@@ -10904,6 +11043,7 @@ export const layer: Layer.Layer<
           return yield* Effect.fail(new Error("Arena selected result is not ready for an early vote"))
         }
         yield* revealTelemetry(claimed.turn, revealed.metrics)
+        yield* startCarry(store, claimed.turn, committed.vote, revealed.decision)
         const other = committed.vote === "a" ? "b" : "a"
         const run = yield* promise(() => store.run(claimed.turn.runIDs[other]))
         if (run) {

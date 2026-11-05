@@ -27,6 +27,8 @@ export type ArenaContext = {
   readonly streamRecovery: boolean
   /** Keeps each battle call's request and response (`generation-capture.ts`). */
   readonly captureGenerations: boolean
+  /** Answers the post-vote handoff route (`carry.ts`); needs captures to have anything to replay. */
+  readonly carry: boolean
 }
 
 type Failure = (message: string, status: number) => Response

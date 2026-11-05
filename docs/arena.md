@@ -86,8 +86,9 @@ contestant call as OpenRouter received it, with the real model, routing, cache k
 reasoning, and its raw response (`arena-service/src/generation-capture.ts`, `captureGenerations`).
 Messages, tools and images are stored once per account by content, because each call resends the
 whole history. Single-agent chats, keep-alive pings and the service's own comparison and metadata
-calls are not kept. BYOK leaves capture off: its store is on the voter's machine, and those fields
-name the model.
+calls are not kept. BYOK leaves capture off, because its store is on the voter's machine and those
+fields name the model; with `OPENCODE_ARENA_CARRY=1` it captures into that store (`arena/backend.ts`),
+where the rows stay until something deletes them, so the carry replay has calls to rebuild.
 
 `archiveComplete` means the local archive exists, not that research has uploaded. Reply resets keep
 the previous cloud archive until its replacement arrives. Keep transcript and image archives whole,
@@ -1189,9 +1190,14 @@ field. Each layer has its own file:
   blocks on the next request; tool continuation must not see the marker in place of its reasoning.
   Envelopes are authenticated against the account, scope, and assignment using a key derived from the
   service's OpenRouter key. The service drops an envelope that does not open instead of failing the
-  request. Reasoning never carries into a later battle, even if both contestants have the same
-  opaque model ID. New-assignment forks and winner grafts remove expired envelopes from their
-  copies; the source keeps its state for recovery. This changes provider state in the copied rows
+  request. Envelopes never open in a later battle, even if both contestants have the same opaque
+  model ID: new-assignment forks and winner grafts remove expired envelopes from their copies, and
+  the source keeps its state for recovery. What can carry is text. With `OPENCODE_ARENA_CARRY=1`
+  (a proof of concept, off by default) the service replays the winner's last captured call after
+  the vote and asks the same model for a handoff summary, which both sides of the next battle read
+  as one hidden note before their prompt (`arena-service/src/carry.ts`, engine `arena/carry-note.ts`).
+  Nothing runs before the vote, both sides get the same bytes, and a replay that cannot run leaves
+  the next battle without a note. This changes provider state in the copied rows
   and the new canonical transcript hash recorded after promotion. Do not migrate existing stored
   history or strip envelopes when saving a message.
   Keep envelopes throughout one assignment's tool loop, retries, and Resume after an engine restart.

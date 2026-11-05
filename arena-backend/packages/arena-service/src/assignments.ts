@@ -47,6 +47,21 @@ function setID(userId: string, kind: AssignmentSetDocument["kind"], scopeID: str
   return createHash("sha256").update(`${userId.length}:${userId}|${kind}|${scopeID}`).digest("hex")
 }
 
+/** A decided battle's assignments, in placement order, or undefined while it is open or unknown. */
+export async function resolvedBattleSet(db: ArenaDb, userId: string, scopeID: string) {
+  const document = await collection(db).findOne({
+    _id: setID(userId, "battle", scopeID),
+    userId,
+    kind: "battle",
+    scopeID,
+  })
+  if (!document?.decision) return undefined
+  return {
+    decision: document.decision,
+    assignments: document.assignments.map(({ assignmentID, model }) => ({ assignmentID, model })),
+  }
+}
+
 function publicAssignments(document: AssignmentSetDocument): readonly PublicAssignment[] {
   return document.assignments.map(({ assignmentID }) => ({ assignmentID }))
 }

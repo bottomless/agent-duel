@@ -20,6 +20,8 @@ const allowedRoutes = new Set([
   "/api/arena/assignments",
   "/api/arena/comparison",
   "/api/arena/metadata",
+  // The previous battle's handoff for the next one (arena-service `carry.ts`).
+  "/api/arena/carry",
   "/api/research",
   "/api/openrouter/api/v1/chat/completions",
   "/api/openrouter/api/v1/responses",
