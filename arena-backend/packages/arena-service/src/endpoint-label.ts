@@ -20,6 +20,8 @@ export type EndpointCatalog = ArenaRecord & {
 }
 
 const READ_TIMEOUT_MS = 2_000
+// The catalog changes at most hourly, and `catalogAt` names the copy that gave each label.
+const CACHE_TTL_MS = 15 * 60_000
 
 const UNRESOLVED: EndpointLabel = { quantization: "unresolved", admittedBy: "unresolved" }
 
@@ -77,33 +79,44 @@ export function resolveEndpointLabel(
   }
 }
 
-/**
- * Never throws and never waits long: this runs before the metric write and the stream close, so a
- * stalled catalog read must not hold a finished call open or lose its row.
- */
-export async function readEndpointLabel(
+export type EndpointLabelReader = (
   db: ArenaDb,
   model: ModelProfile,
   provider: string | undefined,
-  timeoutMs = READ_TIMEOUT_MS,
-): Promise<EndpointLabel> {
-  if (!provider) return UNRESOLVED
-  let timer: ReturnType<typeof setTimeout> | undefined
-  const expired = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error("timed out")), timeoutMs)
-  })
-  try {
-    const read = db
-      .collection<EndpointCatalog>(CATALOG)
-      .find({ slug: model.slug })
-      .sort({ capturedAt: -1 })
-      .limit(1)
-      .next()
-    return resolveEndpointLabel(model, provider, await Promise.race([read, expired]))
-  } catch {
-    console.error("[arena-service] Arena endpoint catalog could not be read")
-    return UNRESOLVED
-  } finally {
-    clearTimeout(timer)
+) => Promise<EndpointLabel>
+
+/**
+ * Never throws and never waits long: this runs before the metric write and the stream close, so a
+ * stalled catalog read must not hold a finished call open or lose its row.
+ *
+ * Keeps the newest copy of each model for the life of the service. A failed read and a model with
+ * no copy yet stay out of the cache, so the next call reads again.
+ */
+export function endpointLabelReader(now: () => Date, timeoutMs = READ_TIMEOUT_MS): EndpointLabelReader {
+  const cache = new Map<string, { readonly catalog: EndpointCatalog; readonly expiresAt: number }>()
+  return async (db, model, provider) => {
+    if (!provider) return UNRESOLVED
+    const cached = cache.get(model.slug)
+    if (cached && now().getTime() < cached.expiresAt) return resolveEndpointLabel(model, provider, cached.catalog)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const expired = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("timed out")), timeoutMs)
+    })
+    try {
+      const read = db
+        .collection<EndpointCatalog>(CATALOG)
+        .find({ slug: model.slug })
+        .sort({ capturedAt: -1 })
+        .limit(1)
+        .next()
+      const catalog = await Promise.race([read, expired])
+      if (catalog) cache.set(model.slug, { catalog, expiresAt: now().getTime() + CACHE_TTL_MS })
+      return resolveEndpointLabel(model, provider, catalog)
+    } catch {
+      console.error("[arena-service] Arena endpoint catalog could not be read")
+      return UNRESOLVED
+    } finally {
+      clearTimeout(timer)
+    }
   }
 }

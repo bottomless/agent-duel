@@ -4,6 +4,7 @@ import { validateOpenRouter, type ModelPool } from "./pool"
 import { handleAssignmentsRequest } from "./assignments"
 import { handleComparisonRequest } from "./comparison"
 import { defaultMetadataRateLimit, handleMetadataRequest, type MetadataRateLimit } from "./metadata"
+import { endpointLabelReader } from "./endpoint-label"
 import { handleOpenRouterRequest } from "./openrouter"
 import { mediumModel } from "./default-pool"
 
@@ -67,6 +68,7 @@ export type ArenaService = {
 export function createArenaService(options: ArenaServiceOptions): ArenaService {
   const fetch = options.fetch ?? globalThis.fetch
   let validation: Promise<void> | undefined
+  const now = options.now ?? (() => new Date())
   const context: ArenaContext = {
     resolveCaller: options.resolveCaller,
     db: options.db,
@@ -75,7 +77,7 @@ export function createArenaService(options: ArenaServiceOptions): ArenaService {
     fetch,
     random: options.random ?? Math.random,
     uuid: options.uuid ?? (() => crypto.randomUUID()),
-    now: options.now ?? (() => new Date()),
+    now,
     validateModels:
       options.validateModels ??
       ((apiKey) =>
@@ -88,7 +90,7 @@ export function createArenaService(options: ArenaServiceOptions): ArenaService {
       options.metadataRateLimit === null ? undefined : (options.metadataRateLimit ?? defaultMetadataRateLimit),
     streamRecovery: options.streamRecovery ?? true,
     captureGenerations: options.captureGenerations ?? false,
-    recordEndpointLabels: options.recordEndpointLabels ?? false,
+    readEndpointLabel: options.recordEndpointLabels ? endpointLabelReader(now) : undefined,
   }
   const assignments = (request: Request) => handleAssignmentsRequest(request, context)
   const openrouter = (request: Request) => handleOpenRouterRequest(request, context)

@@ -1,6 +1,6 @@
 import { describe, expect, spyOn, test } from "bun:test"
 import type { ArenaDb } from "./collection"
-import { readEndpointLabel, resolveEndpointLabel } from "./endpoint-label"
+import { endpointLabelReader, resolveEndpointLabel } from "./endpoint-label"
 import type { ModelProfile } from "./pool"
 
 const capturedAt = new Date("2026-11-05T10:00:00.000Z")
@@ -103,31 +103,94 @@ describe("resolveEndpointLabel", () => {
   })
 })
 
-describe("readEndpointLabel", () => {
+function catalogDb(next: () => Promise<typeof catalog | null>) {
+  const reads = { count: 0 }
+  const cursor = {
+    sort: () => cursor,
+    limit: () => cursor,
+    next: () => {
+      reads.count += 1
+      return next()
+    },
+  }
+  return { reads, db: { collection: () => ({ find: () => cursor }) } as unknown as ArenaDb }
+}
+
+function clock() {
+  let time = capturedAt.getTime()
+  return {
+    now: () => new Date(time),
+    advanceMinutes: (minutes: number) => {
+      time += minutes * 60_000
+    },
+  }
+}
+
+const unresolved = { quantization: "unresolved", admittedBy: "unresolved" } as const
+const novita = { quantization: "fp8", admittedBy: "label", catalogAt: capturedAt } as const
+
+describe("endpointLabelReader", () => {
   test("gives up on a catalog read that stalls", async () => {
-    const stalled = new Promise<null>(() => {})
-    const cursor = { sort: () => cursor, limit: () => cursor, next: () => stalled }
-    const db = { collection: () => ({ find: () => cursor }) } as unknown as ArenaDb
+    const { db } = catalogDb(() => new Promise(() => {}))
     const errors = spyOn(console, "error").mockImplementation(() => {})
     try {
-      expect(await readEndpointLabel(db, model, "Novita", 5)).toEqual({
-        quantization: "unresolved",
-        admittedBy: "unresolved",
-      })
+      expect(await endpointLabelReader(clock().now, 5)(db, model, "Novita")).toEqual(unresolved)
     } finally {
       errors.mockRestore()
     }
   })
 
   test("skips the read for a call with no provider", async () => {
-    const db = {
-      collection: () => {
-        throw new Error("must not read")
-      },
-    } as unknown as ArenaDb
-    expect(await readEndpointLabel(db, model, undefined)).toEqual({
-      quantization: "unresolved",
-      admittedBy: "unresolved",
-    })
+    const { db, reads } = catalogDb(async () => catalog)
+    expect(await endpointLabelReader(clock().now)(db, model, undefined)).toEqual(unresolved)
+    expect(reads.count).toBe(0)
+  })
+
+  test("reads a model's catalog once until the copy expires", async () => {
+    const time = clock()
+    const { db, reads } = catalogDb(async () => catalog)
+    const read = endpointLabelReader(time.now)
+
+    expect(await read(db, model, "Novita")).toEqual(novita)
+    time.advanceMinutes(14)
+    expect(await read(db, model, "Maker")).toMatchObject({ admittedBy: "first-party" })
+    expect(reads.count).toBe(1)
+
+    time.advanceMinutes(1)
+    expect(await read(db, model, "Novita")).toEqual(novita)
+    expect(reads.count).toBe(2)
+  })
+
+  test("keeps each model's copy apart", async () => {
+    const { db, reads } = catalogDb(async () => catalog)
+    const read = endpointLabelReader(clock().now)
+
+    await read(db, model, "Novita")
+    await read(db, { ...model, slug: "maker/other" }, "Novita")
+    expect(reads.count).toBe(2)
+  })
+
+  test("reads again after a model had no copy", async () => {
+    const answers = [null, catalog]
+    const { db, reads } = catalogDb(async () => answers.shift() ?? null)
+    const read = endpointLabelReader(clock().now)
+
+    expect(await read(db, model, "Novita")).toEqual(unresolved)
+    expect(await read(db, model, "Novita")).toEqual(novita)
+    expect(reads.count).toBe(2)
+  })
+
+  test("reads again after a failed read", async () => {
+    const answers = [() => Promise.reject(new Error("catalog offline")), () => Promise.resolve(catalog)]
+    const { db, reads } = catalogDb(() => answers.shift()!())
+    const read = endpointLabelReader(clock().now)
+    const errors = spyOn(console, "error").mockImplementation(() => {})
+    try {
+      expect(await read(db, model, "Novita")).toEqual(unresolved)
+      expect(await read(db, model, "Novita")).toEqual(novita)
+      expect(reads.count).toBe(2)
+    } finally {
+      errors.mockRestore()
+    }
   })
 })

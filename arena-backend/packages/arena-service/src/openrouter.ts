@@ -21,7 +21,6 @@ import {
   type CalibrationSample,
 } from "./request-calibration"
 import { generationCapture, type CaptureState, type GenerationCapture } from "./generation-capture"
-import { readEndpointLabel } from "./endpoint-label"
 import { createReasoningRedactor } from "./reasoning"
 import {
   HEARTBEAT_HEADER,
@@ -694,9 +693,7 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
     const recordGeneration = async (metrics: StoredGenerationMetrics | undefined) => {
       if (!metrics || !requestedGenerationID) return
       try {
-        const label = context.recordEndpointLabels
-          ? await readEndpointLabel(db, routeAssignment.model, metrics.provider)
-          : undefined
+        const label = await context.readEndpointLabel?.(db, routeAssignment.model, metrics.provider)
         await recordAssignmentGenerationMetrics(db, {
           userId: caller.id,
           scopeID: assignment.scopeID,
