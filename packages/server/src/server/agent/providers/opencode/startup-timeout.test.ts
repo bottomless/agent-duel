@@ -2,19 +2,13 @@ import { describe, expect, test } from "vitest";
 import { hasArenaDatabaseUpgradeLine, openCodeStartupTimeoutMessage } from "./startup-timeout.js";
 
 describe("engine startup timeout", () => {
-  test("names the upgrade limit for backup and import", () => {
+  test("names the upgrade limit and tells the user how to resume", () => {
     expect(openCodeStartupTimeoutMessage(true)).toContain("10-minute database upgrade limit");
-    expect(openCodeStartupTimeoutMessage(true)).toContain("backup, import or cleanup");
+    expect(openCodeStartupTimeoutMessage(true)).toBe(
+      "Arena did not finish starting within the 10-minute database upgrade limit. " +
+        "Startup was stopped during database import or cleanup. Start again to resume the upgrade.",
+    );
     expect(openCodeStartupTimeoutMessage(false)).toBe("OpenCode server startup timeout");
-  });
-
-  test("accepts only a complete exact backup line", () => {
-    const line = "[arena-upgrade] Backing up databases before OpenCode 2.0";
-    expect(hasArenaDatabaseUpgradeLine(line)).toBe(false);
-    expect(hasArenaDatabaseUpgradeLine(line + "\n")).toBe(true);
-    expect(hasArenaDatabaseUpgradeLine("noise\n" + line + "\r\n")).toBe(true);
-    expect(hasArenaDatabaseUpgradeLine("prefix " + line + "\n")).toBe(false);
-    expect(hasArenaDatabaseUpgradeLine(line + " extra\n")).toBe(false);
   });
 });
 

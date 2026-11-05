@@ -9,8 +9,7 @@ import { mkdtemp, mkdir, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import {
-  BACKUP_DIRECTORY,
-  backUpBeforeUpgrade,
+  prepareDatabaseUpgrade,
   fenceLegacyEngines,
   fenceLegacyEnginesLayer,
   waitForLegacyImport,
@@ -70,7 +69,7 @@ afterEach(async () => {
 test("readiness waits for every session on a real SQLite profile and fences before returning", async () => {
   const input = await profile(100)
   const lines: string[] = []
-  await backUpBeforeUpgrade(input)
+  await prepareDatabaseUpgrade(input)
   await Effect.runPromise(
     waitForLegacyImport({ log: (line) => lines.push(line) }).pipe(
       Effect.provide(services(input.engineDatabase)),
@@ -131,9 +130,9 @@ test("a SIGKILL during import preserves progress; the next start prints only the
     import { Effect, Layer } from "effect";
     import { Database } from "@opencode/core/database/database";
     import { Global } from "@opencode/util/global";
-    import { backUpBeforeUpgrade, waitForLegacyImport } from "@/arena/database-upgrade";
+    import { prepareDatabaseUpgrade, waitForLegacyImport } from "@/arena/database-upgrade";
     const input = ${JSON.stringify(input)};
-    await backUpBeforeUpgrade(input);
+    await prepareDatabaseUpgrade(input);
     await Effect.runPromise(waitForLegacyImport().pipe(Effect.provide(Layer.provideMerge(
       Database.layer({path: input.engineDatabase}),
       Layer.succeed(Global.Service, Global.make({data: input.root}))
@@ -167,7 +166,7 @@ test("a SIGKILL during import preserves progress; the next start prints only the
     await first.exited
     expect(first.signalCode).toBe("SIGKILL")
     const output = await firstOut
-    expect(output).toContain("[arena-upgrade] Backing up databases before OpenCode 2.0\n")
+    expect(output.split(pendingLine + "\n")).toHaveLength(3)
     expect(output).toContain(pendingLine + "\n")
     const progress = rows<{ n: number }>(input.engineDatabase, "SELECT COUNT(*) AS n FROM session_v2")[0].n
     expect(progress).toBeGreaterThan(0)
@@ -177,7 +176,7 @@ test("a SIGKILL during import preserves progress; the next start prints only the
         JSON.parse(row.value),
       ),
     ).toEqual([{ phase: "sessions", cursor: `ses_${String(2001 - progress).padStart(6, "0")}` }])
-    expect(await Bun.file(path.join(input.arenaDirectory, BACKUP_DIRECTORY, "engine.db")).exists()).toBe(true)
+    expect(await Bun.file(path.join(input.arenaDirectory, "pre-opencode-2-backup")).exists()).toBe(false)
     const second = start()
     const secondOut = new Response(second.stdout).text()
     const secondErr = new Response(second.stderr).text()
@@ -186,7 +185,7 @@ test("a SIGKILL during import preserves progress; the next start prints only the
       expect(await secondErr).not.toContain("could not fence")
       const output = await secondOut
       expect(output).toContain(pendingLine + "\n")
-      expect(output).not.toContain("Backing up databases")
+      expect(output.split(pendingLine + "\n")).toHaveLength(3)
       expect(output).toContain("fixture import complete")
     } finally {
       if (second.exitCode === null) {

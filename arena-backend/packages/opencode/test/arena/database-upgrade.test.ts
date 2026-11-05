@@ -1,22 +1,25 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { Database as SQLite } from "bun:sqlite"
 import { Database } from "@opencode/core/database/database"
+import { DatabaseMigration } from "@opencode/core/database/migration"
+import { migrations } from "@opencode/core/database/migration.gen"
+import { EffectDrizzleSqlite } from "@opencode/core/database/drizzle"
+import { sqliteLayer } from "@opencode/core/database/sqlite.bun"
 import { Global } from "@opencode/util/global"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Logger } from "effect"
 import { existsSync } from "node:fs"
-import { chmod, link, mkdir, mkdtemp, rm, stat, symlink } from "node:fs/promises"
+import { link, mkdir, mkdtemp, readdir, rm, symlink, utimes } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import {
-  BACKUP_DIRECTORY,
-  BACKUP_RETENTION_MS,
   FENCED_SESSION_TABLE,
-  backUpBeforeUpgrade,
-  backUpEngineDatabases,
+  prepareDatabaseUpgrade,
+  prepareEngineDatabases,
   fenceLegacyEngines,
 } from "@/arena/database-upgrade"
 
 const roots: string[] = []
+const pendingLine = "[arena-upgrade] Importing OpenCode 1.x chats"
 
 async function workspace() {
   const root = await mkdtemp(path.join(os.tmpdir(), "arena-database-upgrade-"))
@@ -41,254 +44,210 @@ function read<T>(filename: string, query: string) {
   return database.query<T, []>(query).all()
 }
 
-const legacySessions = (ids: string) => `
-  CREATE TABLE IF NOT EXISTS session (id TEXT PRIMARY KEY);
-  INSERT INTO session VALUES ${ids};
-`
-const sessionIDs = (filename: string) => read<{ id: string }>(filename, "SELECT id FROM session").map((row) => row.id)
+const legacySessions = "CREATE TABLE session (id TEXT PRIMARY KEY); INSERT INTO session VALUES ('one');"
 
-describe("backUpBeforeUpgrade", () => {
-  test("the engine entrypoint refuses shared XDG data for a custom PASEO_HOME", async () => {
+describe("database upgrade preflight", () => {
+  test("first start writes no copy or directory and never opens arena.sqlite", async () => {
+    const input = await workspace()
+    write(input.engineDatabase, legacySessions)
+    const arena = path.join(input.arenaDirectory, "arena.sqlite")
+    await Bun.write(arena, "not SQLite: preflight must not open this file")
+    const before = await Bun.file(input.engineDatabase).arrayBuffer()
+    const lines: string[] = []
+    expect(await prepareDatabaseUpgrade(input, (line) => lines.push(line))).toBe(false)
+    expect(lines).toEqual([pendingLine])
+    expect(await Bun.file(input.engineDatabase).arrayBuffer()).toEqual(before)
+    expect(await Bun.file(arena).text()).toBe("not SQLite: preflight must not open this file")
+    expect(
+      (await readdir(input.root)).filter((name) => !name.endsWith("-wal") && !name.endsWith("-shm")).sort(),
+    ).toEqual(["arena", "opencode-local.db", "opencode-local.db.arena-lock"])
+    expect(await readdir(input.arenaDirectory)).toEqual(["arena.sqlite"])
+  })
+
+  test.each([false, true])(
+    "first upgrade line precedes real schema migrations, partially imported=%s",
+    async (partial) => {
+      const input = await workspace()
+      // Build the real lineage immediately before the V2 squash that introduces kv and session_v2.
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const db = yield* EffectDrizzleSqlite.makeWithDefaults()
+          yield* DatabaseMigration.applyOnly(
+            db,
+            migrations.filter((migration) => migration.id < "20260804233008"),
+          )
+        }).pipe(
+          Effect.provide(sqliteLayer({ filename: input.engineDatabase })),
+          Effect.provideService(Global.Service, Global.make({ data: input.root })),
+          Effect.scoped,
+        ),
+      )
+      if (partial) {
+        await Effect.runPromise(
+          Layer.build(Database.layer({ path: input.engineDatabase })).pipe(
+            Effect.provideService(Global.Service, Global.make({ data: input.root })),
+            Effect.scoped,
+          ),
+        )
+        write(
+          input.engineDatabase,
+          `INSERT INTO kv VALUES ('migration.v1-v2','{"phase":"sessions","cursor":"ses_2"}',1,1);
+        DELETE FROM migration WHERE id='20261010180456_project_time_archived';
+        ALTER TABLE project DROP COLUMN time_archived;`,
+        )
+      }
+      const events: string[] = []
+      await prepareDatabaseUpgrade(input, (line) => {
+        events.push(line)
+        expect(
+          read(input.engineDatabase, "SELECT id FROM migration WHERE id='20261010180456_project_time_archived'"),
+        ).toEqual([])
+      })
+      expect(events).toEqual([pendingLine])
+      await Effect.runPromise(
+        Layer.build(Database.layer({ path: input.engineDatabase })).pipe(
+          Effect.provideService(Global.Service, Global.make({ data: input.root })),
+          Effect.provide(
+            Logger.layer([
+              Logger.map(Logger.formatStructured, (entry) => {
+                events.push(JSON.stringify(entry.message))
+              }),
+            ]),
+          ),
+          Effect.scoped,
+        ),
+      )
+      expect(events[0]).toBe(pendingLine)
+      expect(events.findIndex((line) => line.includes("database schema bootstrap started"))).toBeGreaterThan(0)
+      expect(events.findIndex((line) => line.includes("database migration started"))).toBeGreaterThan(0)
+      expect(
+        read(input.engineDatabase, "SELECT id FROM migration WHERE id='20261010180456_project_time_archived'"),
+      ).toEqual([{ id: "20261010180456_project_time_archived" }])
+    },
+  )
+
+  test("leftover test-build directories stay untouched even when older than fourteen days", async () => {
+    const input = await workspace()
+    write(input.engineDatabase, legacySessions)
+    for (const name of ["pre-opencode-2-backup", "pre-opencode-2-backup.tmp"]) {
+      const directory = path.join(input.arenaDirectory, name)
+      await mkdir(directory)
+      await Bun.write(path.join(directory, "engine.db"), "invalid SQLite, keep exactly")
+      await utimes(directory, new Date(0), new Date(0))
+    }
+    await prepareDatabaseUpgrade(input, () => {})
+    for (const name of ["pre-opencode-2-backup", "pre-opencode-2-backup.tmp"]) {
+      expect(await Bun.file(path.join(input.arenaDirectory, name, "engine.db")).text()).toBe(
+        "invalid SQLite, keep exactly",
+      )
+    }
+  })
+
+  test("fresh, missing, memory and finished databases emit no upgrade line", async () => {
+    const input = await workspace()
+    const lines: string[] = []
+    const log = (line: string) => lines.push(line)
+    await prepareDatabaseUpgrade(input, log)
+    expect(existsSync(input.engineDatabase)).toBe(false)
+    await prepareDatabaseUpgrade({ ...input, engineDatabase: ":memory:" }, log)
+    write(input.engineDatabase, "CREATE TABLE session_v2 (id TEXT PRIMARY KEY);")
+    await prepareDatabaseUpgrade(input, log)
+    write(
+      input.engineDatabase,
+      `CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT);
+      INSERT INTO kv VALUES ('migration.v1-v2','{"phase":"completed"}');
+      INSERT INTO kv VALUES ('arena.v1-cleanup','{"phase":"done"}');`,
+    )
+    await prepareDatabaseUpgrade(input, log)
+    write(input.engineDatabase, "CREATE TABLE session (id TEXT PRIMARY KEY);")
+    await prepareDatabaseUpgrade(input, log)
+    expect(lines).toEqual([])
+  })
+
+  test("an unfinished fenced import is announced before Core can open the file", async () => {
+    const input = await workspace()
+    write(
+      input.engineDatabase,
+      `CREATE TABLE ${FENCED_SESSION_TABLE} (id TEXT PRIMARY KEY);
+      CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT);
+      INSERT INTO kv VALUES ('migration.v1-v2','{"phase":"sessions","cursor":"ses_2"}');`,
+    )
+    const lines: string[] = []
+    await prepareDatabaseUpgrade(input, (line) => lines.push(line))
+    expect(lines).toEqual([pendingLine])
+  })
+
+  test("pending cleanup is announced before maintenance opens the file", async () => {
+    const input = await workspace()
+    write(
+      input.engineDatabase,
+      `CREATE TABLE ${FENCED_SESSION_TABLE} (id TEXT PRIMARY KEY);
+      CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT);
+      INSERT INTO kv VALUES ('migration.v1-v2','{"phase":"completed"}');`,
+    )
+    const lines: string[] = []
+    expect(await prepareDatabaseUpgrade(input, (line) => lines.push(line))).toBe(true)
+    expect(lines).toEqual(["[arena-upgrade] Removing imported OpenCode 1.x tables"])
+  })
+
+  test.each(["done", "vacuum"])(
+    "a leftover compaction file still gets maintenance when cleanup is %s",
+    async (phase) => {
+      const input = await workspace()
+      write(
+        input.engineDatabase,
+        `CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT);
+      INSERT INTO kv VALUES ('arena.v1-cleanup','${JSON.stringify({ phase, retryAfter: Date.now() + 86400000 })}');`,
+      )
+      await Bun.write(input.engineDatabase + ".vacuum-into.tmp", "leftover compaction")
+      const lines: string[] = []
+      expect(await prepareDatabaseUpgrade(input, (line) => lines.push(line))).toBe(true)
+      expect(lines).toEqual([])
+    },
+  )
+
+  test("the engine entrypoint refuses shared XDG data before opening any database or lease", async () => {
     const other = await workspace()
     const previousHome = process.env.PASEO_HOME
     const previousDatabase = process.env.OPENCODE_DB
     const filename = "r71-shared.db"
     const shared = path.join(Global.Path.data, filename)
     await mkdir(Global.Path.data, { recursive: true })
-    write(shared, legacySessions("('shared')"))
-    const before = await Bun.file(shared).arrayBuffer()
+    await Bun.write(shared, "not SQLite: ownership must fail first")
     try {
       process.env.PASEO_HOME = other.root
       process.env.OPENCODE_DB = filename
-      await expect(backUpEngineDatabases()).rejects.toThrow("does not belong to PASEO_HOME")
-      expect(await Bun.file(shared).arrayBuffer()).toEqual(before)
-      expect(existsSync(path.join(other.arenaDirectory, BACKUP_DIRECTORY))).toBe(false)
+      await expect(prepareEngineDatabases()).rejects.toThrow("does not belong to PASEO_HOME")
+      expect(await Bun.file(shared).text()).toBe("not SQLite: ownership must fail first")
+      expect(existsSync(shared + ".arena-lock")).toBe(false)
+      expect(existsSync(shared + "-wal")).toBe(false)
+      expect(await readdir(other.arenaDirectory)).toEqual([])
     } finally {
       if (previousHome === undefined) delete process.env.PASEO_HOME
       else process.env.PASEO_HOME = previousHome
       if (previousDatabase === undefined) delete process.env.OPENCODE_DB
       else process.env.OPENCODE_DB = previousDatabase
       await rm(shared, { force: true })
-      await rm(`${shared}-wal`, { force: true })
-      await rm(`${shared}-shm`, { force: true })
     }
   })
 
-  test("refuses another home's engine database before changing either home", async () => {
+  test("refuses another home's file, absent path, symlink, dangling symlink and hard link", async () => {
     const owner = await workspace()
     const other = await workspace()
-    write(owner.engineDatabase, legacySessions("('owned-by-A')"))
-    write(path.join(owner.arenaDirectory, "arena.sqlite"), "CREATE TABLE turns (id TEXT);")
-    const before = await Bun.file(owner.engineDatabase).arrayBuffer()
-    const partial = path.join(other.arenaDirectory, `${BACKUP_DIRECTORY}.tmp`, "partial.db")
-    await Bun.write(partial, "do not clean another home's backup")
-
-    await expect(
-      backUpBeforeUpgrade({
-        engineDatabase: owner.engineDatabase,
-        arenaDirectory: other.arenaDirectory,
-      }),
-    ).rejects.toThrow("does not belong to PASEO_HOME")
-
-    expect(await Bun.file(owner.engineDatabase).arrayBuffer()).toEqual(before)
-    expect(sessionIDs(owner.engineDatabase)).toEqual(["owned-by-A"])
-    expect(await Bun.file(partial).text()).toBe("do not clean another home's backup")
-    expect(existsSync(path.join(other.arenaDirectory, BACKUP_DIRECTORY))).toBe(false)
-    await backUpBeforeUpgrade(owner)
-    expect(sessionIDs(path.join(owner.arenaDirectory, BACKUP_DIRECTORY, "opencode-local.db"))).toEqual(["owned-by-A"])
-    expect(read(path.join(owner.arenaDirectory, BACKUP_DIRECTORY, "arena.sqlite"), "SELECT id FROM turns")).toEqual([])
-  })
-
-  test("refuses a symlink from one home to another home's engine database", async () => {
-    const owner = await workspace()
-    const other = await workspace()
-    write(owner.engineDatabase, legacySessions("('owned-by-A')"))
-    await symlink(owner.engineDatabase, other.engineDatabase)
-    await expect(backUpBeforeUpgrade(other)).rejects.toThrow("does not belong to PASEO_HOME")
-    expect(sessionIDs(owner.engineDatabase)).toEqual(["owned-by-A"])
-  })
-
-  test("refuses an outside path for a new engine database without creating it", async () => {
-    const owner = await workspace()
-    const other = await workspace()
-    await expect(
-      backUpBeforeUpgrade({
-        engineDatabase: owner.engineDatabase,
-        arenaDirectory: other.arenaDirectory,
-      }),
-    ).rejects.toThrow("does not belong to PASEO_HOME")
+    const foreign = { ...other, engineDatabase: owner.engineDatabase }
+    await expect(prepareDatabaseUpgrade(foreign)).rejects.toThrow("does not belong to PASEO_HOME")
     expect(existsSync(owner.engineDatabase)).toBe(false)
-  })
-
-  test("refuses a dangling symlink and a hard link into another home", async () => {
-    const owner = await workspace()
-    const other = await workspace()
     await symlink(owner.engineDatabase, other.engineDatabase)
-    await expect(backUpBeforeUpgrade(other)).rejects.toThrow("does not belong to PASEO_HOME")
-    expect(existsSync(owner.engineDatabase)).toBe(false)
+    await expect(prepareDatabaseUpgrade(other)).rejects.toThrow("does not belong to PASEO_HOME")
+    await Bun.write(owner.engineDatabase, "not SQLite")
+    await expect(prepareDatabaseUpgrade(foreign)).rejects.toThrow("does not belong to PASEO_HOME")
+    await expect(prepareDatabaseUpgrade(other)).rejects.toThrow("does not belong to PASEO_HOME")
     await rm(other.engineDatabase)
-    write(owner.engineDatabase, legacySessions("('owned-by-A')"))
     await link(owner.engineDatabase, other.engineDatabase)
-    await expect(backUpBeforeUpgrade(other)).rejects.toThrow("does not belong to PASEO_HOME")
-    expect(sessionIDs(owner.engineDatabase)).toEqual(["owned-by-A"])
-  })
-
-  test("opens healthy WAL databases without sidecars, before and after import", async () => {
-    const { arenaDirectory, engineDatabase } = await workspace()
-    const arenaDatabase = path.join(arenaDirectory, "arena.sqlite")
-    write(engineDatabase, legacySessions("('one')"))
-    write(arenaDatabase, "CREATE TABLE arena_documents (id TEXT); INSERT INTO arena_documents VALUES ('turn');")
-    for (const file of [engineDatabase, arenaDatabase]) {
-      await rm(`${file}-wal`, { force: true })
-      await rm(`${file}-shm`, { force: true })
-    }
-
-    await backUpBeforeUpgrade({ engineDatabase, arenaDirectory })
-    const backup = path.join(arenaDirectory, BACKUP_DIRECTORY)
-    expect(sessionIDs(path.join(backup, "opencode-local.db"))).toEqual(["one"])
-    expect(read(path.join(backup, "arena.sqlite"), "SELECT id FROM arena_documents")).toEqual([{ id: "turn" }])
-
-    write(engineDatabase, `ALTER TABLE session RENAME TO ${FENCED_SESSION_TABLE};`)
-    await rm(`${engineDatabase}-wal`, { force: true })
-    await rm(`${engineDatabase}-shm`, { force: true })
-    await backUpBeforeUpgrade({ engineDatabase, arenaDirectory })
-    expect(sessionIDs(path.join(backup, "opencode-local.db"))).toEqual(["one"])
-  })
-
-  test("copies a 1.x engine database and arena.sqlite, with rows that are still in the WAL", async () => {
-    const { arenaDirectory, engineDatabase } = await workspace()
-    write(
-      path.join(arenaDirectory, "arena.sqlite"),
-      "CREATE TABLE arena_documents (id TEXT); INSERT INTO arena_documents VALUES ('turn');",
-    )
-    using open = new SQLite(engineDatabase)
-    open.run("PRAGMA journal_mode = WAL")
-    open.run(legacySessions("('one'), ('two')"))
-    expect(existsSync(`${engineDatabase}-wal`)).toBe(true)
-
-    await backUpBeforeUpgrade({ engineDatabase, arenaDirectory })
-
-    const backup = path.join(arenaDirectory, BACKUP_DIRECTORY)
-    expect(sessionIDs(path.join(backup, "opencode-local.db")).sort()).toEqual(["one", "two"])
-    expect(read(path.join(backup, "arena.sqlite"), "SELECT id FROM arena_documents")).toEqual([{ id: "turn" }])
-    expect(read(path.join(backup, "opencode-local.db"), "PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }])
-    expect((await stat(path.join(backup, "opencode-local.db"))).mode & 0o777).toBe(0o600)
-    expect(existsSync(`${backup}.tmp`)).toBe(false)
-  })
-
-  test("makes no backup for a missing, new, or imported database", async () => {
-    const missing = await workspace()
-    await backUpBeforeUpgrade(missing)
-    expect(existsSync(path.join(missing.arenaDirectory, BACKUP_DIRECTORY))).toBe(false)
-
-    const created = await workspace()
-    write(created.engineDatabase, "CREATE TABLE session_v2 (id TEXT PRIMARY KEY);")
-    await backUpBeforeUpgrade(created)
-    expect(existsSync(path.join(created.arenaDirectory, BACKUP_DIRECTORY))).toBe(false)
-
-    const imported = await workspace()
-    write(
-      imported.engineDatabase,
-      `CREATE TABLE session (id TEXT PRIMARY KEY);
-       CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT);
-       INSERT INTO kv VALUES ('migration.v1-v2', '{"phase":"completed"}');`,
-    )
-    await backUpBeforeUpgrade(imported)
-    expect(existsSync(path.join(imported.arenaDirectory, BACKUP_DIRECTORY))).toBe(false)
-  })
-
-  test("keeps the first copy when an interrupted import resumes", async () => {
-    const { arenaDirectory, engineDatabase } = await workspace()
-    write(engineDatabase, legacySessions("('before')"))
-    await backUpBeforeUpgrade({ engineDatabase, arenaDirectory })
-    write(
-      engineDatabase,
-      `INSERT INTO session VALUES ('during');
-       CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT);
-       INSERT INTO kv VALUES ('migration.v1-v2', '{"phase":"sessions"}');`,
-    )
-
-    await backUpBeforeUpgrade({ engineDatabase, arenaDirectory })
-
-    expect(sessionIDs(path.join(arenaDirectory, BACKUP_DIRECTORY, "opencode-local.db"))).toEqual(["before"])
-  })
-
-  test("replaces the copy when a restored database comes back with new 1.x work", async () => {
-    const { arenaDirectory, engineDatabase } = await workspace()
-    write(engineDatabase, legacySessions("('before')"))
-    await backUpBeforeUpgrade({ engineDatabase, arenaDirectory })
-    write(engineDatabase, legacySessions("('after-restore')"))
-
-    await backUpBeforeUpgrade({ engineDatabase, arenaDirectory })
-
-    expect(sessionIDs(path.join(arenaDirectory, BACKUP_DIRECTORY, "opencode-local.db")).sort()).toEqual([
-      "after-restore",
-      "before",
-    ])
-  })
-
-  test("removes the backup at the first start after the retention period", async () => {
-    const { arenaDirectory, engineDatabase } = await workspace()
-    write(engineDatabase, "CREATE TABLE session_v2 (id TEXT PRIMARY KEY);")
-    const backup = path.join(arenaDirectory, BACKUP_DIRECTORY)
-    await mkdir(backup)
-    const created = (await stat(backup)).mtimeMs
-
-    await backUpBeforeUpgrade({ engineDatabase, arenaDirectory, now: created + BACKUP_RETENTION_MS - 1000 })
-    expect(existsSync(backup)).toBe(true)
-
-    await backUpBeforeUpgrade({ engineDatabase, arenaDirectory, now: created + BACKUP_RETENTION_MS + 1000 })
-    expect(existsSync(backup)).toBe(false)
-  })
-
-  test("reports a failed copy and removes the partial folder", async () => {
-    const { arenaDirectory, engineDatabase } = await workspace()
-    write(engineDatabase, legacySessions("('one')"))
-    await Bun.write(path.join(arenaDirectory, "arena.sqlite"), "this is not a database, and it is long enough")
-
-    await expect(backUpBeforeUpgrade({ engineDatabase, arenaDirectory })).rejects.toThrow()
-
-    expect(existsSync(path.join(arenaDirectory, BACKUP_DIRECTORY))).toBe(false)
-    expect(existsSync(path.join(arenaDirectory, `${BACKUP_DIRECTORY}.tmp`))).toBe(false)
-  })
-
-  test("starts an imported database when the expired backup cannot be removed", async () => {
-    const { arenaDirectory, engineDatabase } = await workspace()
-    write(engineDatabase, "CREATE TABLE session_v2 (id TEXT PRIMARY KEY);")
-    const backup = path.join(arenaDirectory, BACKUP_DIRECTORY)
-    await mkdir(backup)
-    await Bun.write(path.join(backup, "keep.db"), "backup")
-    const created = (await stat(backup)).mtimeMs
-    await chmod(backup, 0o500)
-    try {
-      await backUpBeforeUpgrade({ engineDatabase, arenaDirectory, now: created + BACKUP_RETENTION_MS })
-      expect(await Bun.file(path.join(backup, "keep.db")).text()).toBe("backup")
-      expect(read(engineDatabase, "PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }])
-    } finally {
-      await chmod(backup, 0o700)
-    }
-  })
-
-  test("does not require backup files or writable backup cleanup after import", async () => {
-    const { arenaDirectory, engineDatabase } = await workspace()
-    write(
-      engineDatabase,
-      `CREATE TABLE session (id TEXT PRIMARY KEY);
-      CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT);
-      INSERT INTO kv VALUES ('migration.v1-v2', '{"phase":"completed"}');`,
-    )
-    await Bun.write(path.join(arenaDirectory, "arena.sqlite"), "unreadable as SQLite")
-    const temporary = path.join(arenaDirectory, `${BACKUP_DIRECTORY}.tmp`)
-    await mkdir(temporary)
-    await Bun.write(path.join(temporary, "partial.db"), "incomplete copy")
-    await chmod(temporary, 0o500)
-    try {
-      await backUpBeforeUpgrade({ engineDatabase, arenaDirectory })
-      expect(existsSync(path.join(arenaDirectory, BACKUP_DIRECTORY))).toBe(false)
-      expect(read(engineDatabase, "SELECT value FROM kv")).toEqual([{ value: '{"phase":"completed"}' }])
-    } finally {
-      await chmod(temporary, 0o700)
-    }
+    await expect(prepareDatabaseUpgrade(other)).rejects.toThrow("multiple hard links")
+    expect(await Bun.file(owner.engineDatabase).text()).toBe("not SQLite")
+    expect((await readdir(owner.root)).sort()).toEqual(["arena", "opencode-local.db"])
+    expect((await readdir(other.root)).sort()).toEqual(["arena", "opencode-local.db"])
   })
 })
 
@@ -355,54 +314,4 @@ describe("fenceLegacyEngines", () => {
     await run(filename)
     expect(read(filename, `SELECT name FROM sqlite_master WHERE name = '${FENCED_SESSION_TABLE}'`)).toEqual([])
   })
-})
-
-test("the documented emergency recovery preserves committed rows in both moved-aside WAL files", async () => {
-  const { root, arenaDirectory, engineDatabase } = await workspace()
-  const arenaDatabase = path.join(arenaDirectory, "arena.sqlite")
-  write(engineDatabase, legacySessions("('before')"))
-  write(arenaDatabase, "CREATE TABLE turns (id TEXT); INSERT INTO turns VALUES ('before');")
-  await backUpBeforeUpgrade({ engineDatabase, arenaDirectory })
-  // A SQLite fixture process, not an engine: die without checkpointing either connection.
-  const crashed = Bun.spawnSync(
-    [
-      process.execPath,
-      "--no-env-file",
-      "-e",
-      `
-    const { Database } = require("bun:sqlite");
-    const engine = new Database(process.argv[1]);
-    const arena = new Database(process.argv[2]);
-    engine.run("CREATE TABLE session_v2 (id TEXT); INSERT INTO session_v2 VALUES ('after-crash');");
-    arena.run("INSERT INTO turns VALUES ('after-crash');");
-    process.kill(process.pid, "SIGKILL");
-  `,
-      engineDatabase,
-      arenaDatabase,
-    ],
-    { env: {}, stdout: "pipe", stderr: "pipe" },
-  )
-  expect(crashed.signalCode).toBe("SIGKILL")
-  expect((await stat(`${engineDatabase}-wal`)).size).toBeGreaterThan(0)
-  expect((await stat(`${arenaDatabase}-wal`)).size).toBeGreaterThan(0)
-
-  const doc = await Bun.file(new URL("../../../../../docs/arena.md", import.meta.url)).text()
-  const command = doc.match(/```sh\n(set -e\nsaved="\$PASEO_HOME\/arena\/pre-recovery"[\s\S]*?)\n```/)
-  expect(command).not.toBeNull()
-  const recovered = Bun.spawnSync(["/bin/sh", "-c", command![1]], {
-    env: { PATH: "/usr/bin:/bin", PASEO_HOME: root, engine_database: engineDatabase },
-    stdout: "pipe",
-    stderr: "pipe",
-  })
-  expect(recovered.stderr.toString()).toBe("")
-  expect(recovered.exitCode).toBe(0)
-  expect(read(path.join(arenaDirectory, "pre-recovery", "opencode-local.db"), "SELECT id FROM session_v2")).toEqual([
-    { id: "after-crash" },
-  ])
-  expect(read(path.join(arenaDirectory, "pre-recovery", "arena.sqlite"), "SELECT id FROM turns ORDER BY id")).toEqual([
-    { id: "after-crash" },
-    { id: "before" },
-  ])
-  expect(sessionIDs(engineDatabase)).toEqual(["before"])
-  expect(read(arenaDatabase, "SELECT id FROM turns")).toEqual([{ id: "before" }])
 })

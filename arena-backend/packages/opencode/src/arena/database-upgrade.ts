@@ -1,6 +1,6 @@
 import { Database as SQLite } from "bun:sqlite"
 import { existsSync } from "node:fs"
-import { chmod, lstat, mkdir, readlink, realpath, rename, rm, stat } from "node:fs/promises"
+import { lstat, readlink, realpath, stat } from "node:fs/promises"
 import { homedir } from "node:os"
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -11,10 +11,6 @@ import { engineDatabaseLease } from "./database-lease"
 import { Global } from "@opencode/util/global"
 import { sql } from "drizzle-orm"
 import { Effect, Fiber, Layer, Option } from "effect"
-
-/** Holds the databases as 1.x left them; see the accidental-1.x guard in docs/arena.md. */
-export const BACKUP_DIRECTORY = "pre-opencode-2-backup"
-export const BACKUP_RETENTION_MS = 14 * 24 * 60 * 60 * 1000
 
 /**
  * The name the 1.x `session` table takes once its rows are in `session_v2`. A released 1.x engine
@@ -39,8 +35,6 @@ export function engineDatabaseFilename() {
       : `opencode-${channel}.db`)
   )
 }
-
-type ImportState = "not-started" | "started" | "done"
 
 async function canonicalPath(filename: string): Promise<string> {
   return realpath(filename).catch(async (error: NodeJS.ErrnoException) => {
@@ -79,89 +73,52 @@ export async function verifyDatabaseOwnership(engineDatabase: string, arena: str
   )
 }
 
-function v1ImportState(filename: string): ImportState {
-  // WAL databases may need SQLite to recreate missing sidecars even for a read.
-  using database = new SQLite(filename, { readwrite: true })
-  const hasTable = (name: string) =>
-    database.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) !== null
-  if (!hasTable("session")) return "done"
-  // The kv table arrives with the 2.0 migrations, so without it the file is as 1.x wrote it.
-  if (!hasTable("kv")) return "not-started"
-  const state = database.query<{ value: string }, []>("SELECT value FROM kv WHERE key = 'migration.v1-v2'").get()
-  return state && (JSON.parse(state.value) as { phase?: string }).phase === "completed" ? "done" : "started"
-}
-
-async function copyDatabase(source: string, target: string) {
-  // VACUUM INTO reads through the WAL, so the copy holds the committed state in one file.
-  using database = new SQLite(source, { readwrite: true })
-  database.query("VACUUM INTO ?").run(target)
-  await chmod(target, 0o600)
-}
-
-/**
- * Copies the engine database and arena.sqlite before the first 2.0 engine imports the 1.x rows.
- * Runs before the engine opens either file. A failed backup stops an unfinished import so an
- * accidental old build cannot require discarding the only pre-upgrade copy.
- */
-export async function backUpBeforeUpgrade(input: {
-  readonly engineDatabase: string
-  readonly arenaDirectory: string
-  readonly now?: number
-}) {
+/** Cheap preflight only: no schema migrations, transcript scans, or Arena store opens here. */
+export async function prepareDatabaseUpgrade(
+  input: { readonly engineDatabase: string; readonly arenaDirectory: string },
+  log: (line: string) => void = console.log,
+) {
   await verifyDatabaseOwnership(input.engineDatabase, input.arenaDirectory)
-  const directory = join(input.arenaDirectory, BACKUP_DIRECTORY)
-  const temporary = `${directory}.tmp`
-  const state =
-    input.engineDatabase === ":memory:" || !existsSync(input.engineDatabase)
-      ? "done"
-      : v1ImportState(input.engineDatabase)
-  await rm(temporary, { recursive: true, force: true }).catch((error) => {
-    if (state !== "done") throw error
-    console.warn(`[arena-upgrade] Could not remove the partial backup at ${temporary}: ${error}`)
-  })
-  let existing = await stat(directory).catch(() => undefined)
-  if (existing && (input.now ?? Date.now()) - existing.mtimeMs >= BACKUP_RETENTION_MS) {
-    try {
-      await rm(directory, { recursive: true, force: true })
-      existing = undefined
-      console.log(`[arena-upgrade] Removed the backup from before OpenCode 2.0: ${directory}`)
-    } catch (error) {
-      console.warn(`[arena-upgrade] Could not remove the expired backup at ${directory}: ${error}`)
-    }
+  if (input.engineDatabase === ":memory:" || !existsSync(input.engineDatabase)) return false
+  using lease = await engineDatabaseLease(input.engineDatabase)
+  // WAL databases may need SQLite to recreate missing sidecars even for a read.
+  using database = new SQLite(input.engineDatabase, { readwrite: true })
+  const has = (name: string) =>
+    database.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name) !== null
+  const legacy = has("session")
+  const fenced = has(FENCED_SESSION_TABLE)
+  if (!has("kv")) {
+    if (legacy || fenced) log("[arena-upgrade] Importing OpenCode 1.x chats")
+    return false
   }
-  if (state === "done") return
-  // A resumed import keeps the first copy. A file with no 2.0 tables was restored and then used on
-  // 1.x, so its copy replaces the old one.
-  if (state === "started" && existing) return
-  await mkdir(temporary, { recursive: true, mode: 0o700 })
-  try {
-    console.log("[arena-upgrade] Backing up databases before OpenCode 2.0")
-    await copyDatabase(input.engineDatabase, join(temporary, basename(input.engineDatabase)))
-    const arenaDatabase = join(input.arenaDirectory, "arena.sqlite")
-    if (existsSync(arenaDatabase)) await copyDatabase(arenaDatabase, join(temporary, "arena.sqlite"))
-    await rm(directory, { recursive: true, force: true })
-    await rename(temporary, directory)
-  } finally {
-    await rm(temporary, { recursive: true, force: true })
+  const get = (key: string): { phase?: string; retryAfter?: number } | undefined => {
+    const row = database.query<{ value: string }, [string]>("SELECT value FROM kv WHERE key=?").get(key)
+    return row ? JSON.parse(row.value) : undefined
   }
-  console.log(`[arena-upgrade] Backed up the 1.x databases to ${directory}`)
+  if ((legacy || fenced) && get("migration.v1-v2")?.phase !== "completed") {
+    log("[arena-upgrade] Importing OpenCode 1.x chats")
+    return false
+  }
+  const cleanup = get("arena.v1-cleanup")
+  const pending = cleanup?.phase !== "done" && (fenced || cleanup?.phase === "vacuum")
+  // A kill after publication can leave the compacted temporary filename behind. Maintenance
+  // removes it even when the completed marker or retry delay otherwise makes this start idle.
+  if (!pending || (cleanup?.retryAfter ?? 0) > Date.now()) return existsSync(`${input.engineDatabase}.vacuum-into.tmp`)
+  log("[arena-upgrade] Removing imported OpenCode 1.x tables")
+  return true
 }
 
 // Cleanup and import waiting share the spawn budget, leaving two minutes to finish startup.
 const UPGRADE_DEADLINE = Date.now() - process.uptime() * 1000 + 8 * 60_000
 let engineLease: Awaited<ReturnType<typeof engineDatabaseLease>>
 
-export async function backUpEngineDatabases() {
+export async function prepareEngineDatabases() {
   const filename = engineDatabaseFilename()
   const input = {
     engineDatabase: filename === ":memory:" || isAbsolute(filename) ? filename : join(Global.Path.data, filename),
     arenaDirectory: arenaDirectory(),
   }
-  {
-    using lease = existsSync(input.engineDatabase) ? await engineDatabaseLease(input.engineDatabase) : undefined
-    await backUpBeforeUpgrade(input)
-  }
-  await finishLegacyCleanup(input)
+  if (await prepareDatabaseUpgrade(input)) await finishLegacyCleanup(input)
   // Keep the shared lease until process exit, before any runtime connection opens.
   engineLease = input.engineDatabase === ":memory:" ? undefined : await engineDatabaseLease(input.engineDatabase)
 }

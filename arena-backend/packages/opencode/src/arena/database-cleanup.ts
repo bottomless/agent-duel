@@ -1,7 +1,7 @@
 import { Database as SQLite } from "bun:sqlite"
 import { existsSync, chmodSync, closeSync, fsyncSync, openSync, renameSync, rmSync } from "node:fs"
 import { statfs } from "node:fs/promises"
-import { basename, dirname, join } from "node:path"
+import { dirname } from "node:path"
 import { V1Migration } from "@opencode/core/database/v1-migration"
 import { databaseLease, databaseHasHolders } from "./database-lease"
 import { migrations } from "@opencode/core/database/migration.gen"
@@ -73,13 +73,14 @@ export async function removeImportedLegacyTables(input: CleanupInput, ports: Por
   if (state?.phase === "done") return
   if (state?.phase !== "vacuum" && (!has(FENCE) || get<{ phase: string }>("migration.v1-v2")?.phase !== "completed"))
     return
+  if (state?.phase === "vacuum" && (state.retryAfter ?? 0) > now()) return
+  console.log("[arena-upgrade] Removing imported OpenCode 1.x tables")
   const checkpoint = database.query<{ busy: number }, []>("PRAGMA wal_checkpoint(TRUNCATE)").get()
   if (checkpoint?.busy) return
   database.run("PRAGMA journal_mode=DELETE")
   database.run("PRAGMA locking_mode=EXCLUSIVE")
   database.run("BEGIN EXCLUSIVE; COMMIT")
   if (state?.phase !== "vacuum") {
-    console.log("[arena-upgrade] Removing imported OpenCode 1.x tables")
     // Never remove source tables ahead of a schema migration that might still read them.
     const applied = new Set(
       database
@@ -88,18 +89,6 @@ export async function removeImportedLegacyTables(input: CleanupInput, ports: Por
         .map((row) => row.id),
     )
     if (migrations.some((migration) => !applied.has(migration.id))) return
-    const backup = join(input.arenaDirectory, "pre-opencode-2-backup")
-    const backupEngine = join(backup, basename(input.engineDatabase))
-    if (
-      !existsSync(backupEngine) ||
-      (existsSync(join(input.arenaDirectory, "arena.sqlite")) && !existsSync(join(backup, "arena.sqlite")))
-    ) {
-      console.warn("[arena-upgrade] Keeping old tables: complete backup is missing")
-      return
-    }
-    // A published backup is atomic; also refuse a missing/corrupt engine copy.
-    using saved = new SQLite(backupEngine, { readonly: true })
-    if (!saved.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session'").get()) return
     if (!has("message") || !has("part") || !has("session_v2")) return
     // An audit may span starts. If V2 changed while the app was running between them, audit again:
     // an earlier match must not authorize dropping a message or session that has since disappeared.
@@ -277,9 +266,6 @@ export async function removeImportedLegacyTables(input: CleanupInput, ports: Por
       .immediate()
     database.run("PRAGMA foreign_keys=ON")
     ports.afterDrop?.()
-  } else {
-    if ((state.retryAfter ?? 0) > now()) return
-    console.log("[arena-upgrade] Removing imported OpenCode 1.x tables")
   }
   const copyMs = state?.phase === "vacuum" ? state.copyMs : undefined
   const copyReserve = Math.min(6 * 60_000, Math.max(MIN_COPY_MS, (copyMs ?? 0) * 2)) + 10_000

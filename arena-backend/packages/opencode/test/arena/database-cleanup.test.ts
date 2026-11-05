@@ -7,7 +7,7 @@ import { existsSync } from "node:fs"
 import { mkdtemp, mkdir, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, dirname } from "node:path"
-import { backUpBeforeUpgrade, fenceLegacyEngines, finishLegacyCleanup } from "@/arena/database-upgrade"
+import { fenceLegacyEngines, finishLegacyCleanup } from "@/arena/database-upgrade"
 import { removeImportedLegacyTables } from "@/arena/database-cleanup"
 import { databaseLease, engineDatabaseLease } from "@/arena/database-lease"
 
@@ -80,7 +80,6 @@ async function fixture(options: { skipped?: boolean; imported?: boolean } = {}) 
   db.query("INSERT INTO part VALUES ('prt_old','msg_old','ses_old',1,2,?)").run(
     JSON.stringify({ type: "text", text: "history ".repeat(150_000) }),
   )
-  await backUpBeforeUpgrade(input)
   if (options.imported !== false) await run(input.engineDatabase)
   return input
 }
@@ -193,16 +192,16 @@ test("orphan source rows block cleanup without inflating the count each restart"
   expect(state(input).skippedTotal).toBe(1)
 })
 
-test("a missing backup defers drop until a later start with a backup", async () => {
+test("a complete audit drops without a saved database, even with an invalid Arena store", async () => {
   const input = await fixture()
-  const backup = join(input.arenaDirectory, "pre-opencode-2-backup", "engine.db")
-  const bytes = await Bun.file(backup).arrayBuffer()
-  await rm(backup)
-  await removeImportedLegacyTables(input)
-  expectKept(input)
-  await Bun.write(backup, bytes)
+  await Bun.write(join(input.arenaDirectory, "arena.sqlite"), "not SQLite: must never be opened by cleanup")
+  expect(existsSync(join(input.arenaDirectory, "pre-opencode-2-backup"))).toBe(false)
   await removeImportedLegacyTables(input)
   expect(state(input).phase).toBe("done")
+  expect(tables(input)).not.toContain("_arena_v1_session")
+  expect(await Bun.file(join(input.arenaDirectory, "arena.sqlite")).text()).toBe(
+    "not SQLite: must never be opened by cleanup",
+  )
 })
 
 test("a real kill between drop and VACUUM leaves a durable pending step", async () => {
