@@ -26,12 +26,16 @@ function holdEndedToolCalls(activity?: () => void) {
   const held = new Map<string, HeldCall>()
   return new TransformStream<LanguageModelV3StreamPart, LanguageModelV3StreamPart>({
     transform(part, controller) {
+      // Any part the model sends is progress, as for the engine's own idle deadline (`model-idle.ts`).
+      // A sealed reasoning delta has no text, so nothing else reaches the run's activity time, and the
+      // pane read "No recent activity" for 8-11 minutes while a model reasoned (bench 2026-11-06).
+      // Qwen's empty chunk after a call's closing brace is not progress.
+      if (part.type !== "tool-input-delta" || part.delta.length > 0) activity?.()
       switch (part.type) {
         case "tool-input-end":
           held.set(part.id, { end: part, late: "" })
           return
         case "tool-input-delta": {
-          if (part.delta.length > 0) activity?.()
           const call = held.get(part.id)
           if (call) {
             if (part.delta.length === 0) return

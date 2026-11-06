@@ -325,10 +325,49 @@ test("long tool argument streams keep reporting activity without executing a hel
       source.enqueue({ type: "tool-input-delta", id: "call", delta: "bytes" })
       expect((await reader.read()).value?.type).toBe("tool-input-delta")
     }
-    expect(activity).toEqual(Array(60).fill("streaming-session"))
+    // The start counts too, then each delta at least 5 s after the last report.
+    expect(activity).toEqual(Array(61).fill("streaming-session"))
+    now += 6_000
     source.enqueue({ type: "tool-input-delta", id: "call", delta: "" })
     await reader.read()
-    expect(activity).toHaveLength(60)
+    expect(activity).toHaveLength(61)
+    source.close()
+    await reader.cancel()
+  } finally {
+    clock.mockRestore()
+  }
+})
+
+test("sealed reasoning with no text keeps reporting activity", async () => {
+  let now = 1_000
+  const clock = spyOn(Date, "now").mockImplementation(() => now)
+  let source!: ReadableStreamDefaultController<LanguageModelV3StreamPart>
+  const activity: string[] = []
+  try {
+    const language = withHeldToolCalls(
+      new MockLanguageModelV3({
+        doStream: async () => ({
+          stream: new ReadableStream({
+            start(controller) {
+              source = controller
+            },
+          }),
+        }),
+      }),
+      (sessionID) => activity.push(sessionID),
+    )
+    const result = await language.doStream({ prompt: [], headers: { "x-arena-session-id": "reasoning-session" } })
+    const reader = result.stream.getReader()
+    source.enqueue({ type: "reasoning-start", id: "r" })
+    await reader.read()
+    // Ten minutes of empty reasoning deltas, one a second, as a sealed-reasoning provider sends them.
+    for (let seconds = 0; seconds < 600; seconds++) {
+      now += 1_000
+      source.enqueue({ type: "reasoning-delta", id: "r", delta: "" })
+      expect((await reader.read()).value?.type).toBe("reasoning-delta")
+    }
+    // One report at the start, then one every 5 s: never 90 s of silence.
+    expect(activity).toHaveLength(121)
     source.close()
     await reader.cancel()
   } finally {
