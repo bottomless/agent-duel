@@ -4,6 +4,7 @@ import { validateOpenRouter, type ModelPool } from "./pool"
 import { handleAssignmentsRequest } from "./assignments"
 import { handleComparisonRequest } from "./comparison"
 import { defaultMetadataRateLimit, handleMetadataRequest, type MetadataRateLimit } from "./metadata"
+import { endpointLabelReader } from "./endpoint-label"
 import { handleOpenRouterRequest } from "./openrouter"
 import { defaultWebSearchRateLimit, handleWebSearchRequest, type WebSearchRateLimit } from "./websearch"
 import { mediumModel } from "./default-pool"
@@ -51,6 +52,11 @@ export type ArenaServiceOptions = {
    * the battle.
    */
   readonly captureGenerations?: boolean
+  /**
+   * Adds the endpoint catalog's quantization label to each call's stored metrics
+   * (`endpoint-label.ts`). Off by default: only the control plane saves a catalog.
+   */
+  readonly recordEndpointLabels?: boolean
 }
 
 export type ArenaService = {
@@ -66,6 +72,7 @@ export type ArenaService = {
 export function createArenaService(options: ArenaServiceOptions): ArenaService {
   const fetch = options.fetch ?? globalThis.fetch
   let validation: Promise<void> | undefined
+  const now = options.now ?? (() => new Date())
   const context: ArenaContext = {
     resolveCaller: options.resolveCaller,
     db: options.db,
@@ -74,7 +81,7 @@ export function createArenaService(options: ArenaServiceOptions): ArenaService {
     fetch,
     random: options.random ?? Math.random,
     uuid: options.uuid ?? (() => crypto.randomUUID()),
-    now: options.now ?? (() => new Date()),
+    now,
     validateModels:
       options.validateModels ??
       ((apiKey) =>
@@ -89,6 +96,7 @@ export function createArenaService(options: ArenaServiceOptions): ArenaService {
       options.webSearchRateLimit === null ? undefined : (options.webSearchRateLimit ?? defaultWebSearchRateLimit),
     streamRecovery: options.streamRecovery ?? true,
     captureGenerations: options.captureGenerations ?? false,
+    readEndpointLabel: options.recordEndpointLabels ? endpointLabelReader(now) : undefined,
   }
   const assignments = (request: Request) => handleAssignmentsRequest(request, context)
   const openrouter = (request: Request) => handleOpenRouterRequest(request, context)

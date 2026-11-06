@@ -10,6 +10,7 @@ import type { TurnDocument } from "@/arena/records"
 import * as CopySnapshot from "@/arena/copy-snapshot"
 import { ArenaContestant } from "@/arena/contestant"
 import { hostRepoPath, isolatedRoot } from "@/worktree"
+import { watcherBackendUnavailable } from "@/arena/environment-watch"
 import { registry, setStoreForTest } from "@/arena/runtime"
 import { SERVICE_OWNER_ENV, serviceOwnerID } from "@/arena/services"
 import { resetDatabase } from "../fixture/db"
@@ -130,13 +131,52 @@ function holdIgnoredResync() {
   return { spy, entered, release: signalRelease }
 }
 
-async function waitForCondition(condition: () => Promise<boolean>, message: string) {
-  const deadline = Date.now() + 20_000
+async function waitForCondition(condition: () => Promise<boolean>, message: string, timeoutMs = 20_000) {
+  const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     if (await condition()) return
     await Bun.sleep(10)
   }
   throw new Error(message)
+}
+
+const WATCHERLESS = watcherBackendUnavailable() !== undefined
+
+/** The generation a chat's warm-pair seal was written for, or undefined when it has none. */
+async function sealGeneration(store: Store, chatID: string) {
+  const artifact = await store.artifacts.findOne({ _id: `${chatID}|warm-seal` })
+  if (!artifact) return undefined
+  return (JSON.parse(Buffer.from(artifact.data).toString("utf8")) as { generation: number }).generation
+}
+
+/** The seal is written once the pair's instances are ready, after the pair itself. */
+async function waitForSeal(store: Store, chatID: string, generation: number) {
+  await waitForCondition(
+    async () => (await sealGeneration(store, chatID)) === generation,
+    `Arena did not seal the warm pair for generation ${generation}`,
+  )
+}
+
+/**
+ * A contestant worktree starts with the checkout's tracked and ignored files, and nothing else.
+ * Tracked files are compared through git, which checks them out under the host's line-ending
+ * rules; ignored files are copies and compared byte for byte.
+ */
+async function expectCheckoutContent(root: string, worktree: string) {
+  expect(await git(worktree, ["status", "--porcelain=v1", "--untracked-files=all"])).toBe(
+    await git(root, ["status", "--porcelain=v1", "--untracked-files=all"]),
+  )
+  expect(await git(worktree, ["rev-parse", "HEAD"])).toBe(await git(root, ["rev-parse", "HEAD"]))
+  expect(await git(worktree, ["ls-files", "-v"])).toBe(await git(root, ["ls-files", "-v"]))
+  expect(await git(worktree, ["config", "--get", "arena.seal"])).toBe(
+    await git(root, ["config", "--get", "arena.seal"]),
+  )
+  expect(await exists(path.join(hostRepoPath(worktree), "hooks", "pre-commit"))).toBe(
+    await exists(path.join(root, ".git", "hooks", "pre-commit")),
+  )
+  for (const file of ["cache.txt", "deps/pkg/index.js"]) {
+    expect(await readFile(path.join(worktree, file), "utf8")).toBe(await readFile(path.join(root, file), "utf8"))
+  }
 }
 
 async function battle(input: {
@@ -2174,6 +2214,13 @@ describe("persistent contestant worktrees", () => {
       const latestForks = [latestPair.worktrees.a!.forkedSessionID!, latestPair.worktrees.b!.forkedSessionID!]
       const session = (id: string) => arenaRequest(`/session/${id}`, { headers: headers(latestDirectory.path) })
       expect((await session(latestForks[0]!)).status).toBe(200)
+      // Pairs without a seal, as an engine that cannot seal leaves them ("warm pair seals" below).
+      if (WATCHERLESS) {
+        for (const chatID of [older.chatID, latest.chatID]) {
+          await waitForSeal(memory.store, chatID, 1)
+          await memory.store.artifacts.deleteOne({ _id: `${chatID}|warm-seal` })
+        }
+      }
       // Written while the engine is down, so the pair prepared again has to bring it over.
       await writeFile(path.join(latestDirectory.path, "cache.txt"), "cache v2\n")
 
@@ -2223,4 +2270,296 @@ describe("persistent contestant worktrees", () => {
       router.restore()
     }
   }, 180_000)
+})
+
+/**
+ * A pair prepared on a platform without a watch is sealed, and a restarted engine trusts it again
+ * from the seal instead of rebuilding it. Only a scanned pair is sealed, so these run where the
+ * engine has no watcher backend (Windows).
+ */
+describe.skipIf(!WATCHERLESS)("warm pair seals", () => {
+  test("a restart trusts a sealed pair again and the next send reuses it as it stands", async () => {
+    await using directory = await fixture()
+    const root = directory.path
+    const memory = memoryStore()
+    const router = installOpenRouterStub()
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(memory.store)
+    let archive: (() => Promise<unknown>) | undefined
+    try {
+      const chat = await openChat(root)
+      archive = chat.archive
+      const turn1 = await battle({ store: memory.store, directory: root, chatID: chat.chatID, prompt: "seal turn one" })
+      const pair = (await waitForWarmPair(memory.store, turn1, 1)).warmPreparation!
+      await waitForSeal(memory.store, chat.chatID, 1)
+
+      setStoreForTest(memory.restart())
+      const turn2 = await battle({
+        store: memory.store,
+        directory: root,
+        chatID: chat.chatID,
+        prompt: "seal turn two",
+        beforeVote: async (turnID) => {
+          const runs = await memory.store.runsForTurn(turnID)
+          expect(runs.map((run) => run.worktree).toSorted()).toEqual(
+            [pair.worktrees.a!.directory, pair.worktrees.b!.directory].toSorted(),
+          )
+          for (const run of runs) await expectCheckoutContent(root, run.worktree)
+          // The pair the previous process prepared, not one the restart built again: that would
+          // have forked again at warm-up. Read before the vote, which warms the next pair.
+          const used = (await memory.store.turn(turnID))?.warmPreparation
+          expect(used?.worktrees.a?.forkedSessionID).toBe(pair.worktrees.a!.forkedSessionID)
+          expect(used?.worktrees.b?.forkedSessionID).toBe(pair.worktrees.b!.forkedSessionID)
+        },
+      })
+      expect((await memory.store.turn(turn2))?.setupTimings?.warmPath).toBe("reused")
+      // The send took the pair, so its seal went with it.
+      expect(await sealGeneration(memory.store, chat.chatID)).toBeUndefined()
+    } finally {
+      await archive?.()
+      router.restore()
+    }
+  }, 180_000)
+
+  test("after a restart, a chat other than the latest has its sealed pair trusted at its next send", async () => {
+    await using olderDirectory = await nestedFixture()
+    await using latestDirectory = await nestedFixture()
+    const memory = memoryStore()
+    const router = installOpenRouterStub()
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(memory.store)
+    const archives: (() => Promise<unknown>)[] = []
+    try {
+      const older = await openChat(olderDirectory.path)
+      archives.push(older.archive)
+      const olderTurn = await battle({
+        store: memory.store,
+        directory: olderDirectory.path,
+        chatID: older.chatID,
+        prompt: "sealed older turn one",
+      })
+      const olderPair = (await waitForWarmPair(memory.store, olderTurn, 1)).warmPreparation!
+      const latest = await openChat(latestDirectory.path)
+      archives.push(latest.archive)
+      const latestTurn = await battle({
+        store: memory.store,
+        directory: latestDirectory.path,
+        chatID: latest.chatID,
+        prompt: "sealed latest turn one",
+      })
+      await waitForWarmPair(memory.store, latestTurn, 1)
+      await waitForSeal(memory.store, older.chatID, 1)
+      await waitForSeal(memory.store, latest.chatID, 1)
+
+      setStoreForTest(memory.restart())
+      const olderNext = await battle({
+        store: memory.store,
+        directory: olderDirectory.path,
+        chatID: older.chatID,
+        prompt: "sealed older turn two",
+        beforeVote: async (turnID) => {
+          const runs = await memory.store.runsForTurn(turnID)
+          expect(runs.map((run) => run.worktree).toSorted()).toEqual(
+            [olderPair.worktrees.a!.directory, olderPair.worktrees.b!.directory].toSorted(),
+          )
+          for (const run of runs) {
+            expect(await readFile(path.join(run.worktree, "cache.txt"), "utf8")).toBe("cache v1\n")
+            expect(await readFile(path.join(run.worktree, "pkg/node_modules/dep/index.js"), "utf8")).toBe(
+              "module.exports = 1\n",
+            )
+            // Forked again at the send: the warm forks were localized against a port bank only the
+            // previous process had reserved.
+            expect([olderPair.worktrees.a!.forkedSessionID, olderPair.worktrees.b!.forkedSessionID]).not.toContain(
+              run.sessionID,
+            )
+          }
+        },
+      })
+      // Only the latest chat's pair is looked at after a restart; without its seal this one would
+      // have been refreshed at the send.
+      expect((await memory.store.turn(olderNext))?.setupTimings?.warmPath).toBe("reused")
+    } finally {
+      for (const archive of archives) await archive()
+      router.restore()
+    }
+  }, 240_000)
+
+  test("a restart refreshes a sealed pair when anything it covers changed, whichever check sees it", async () => {
+    await using directory = await fixture()
+    const root = directory.path
+    const memory = memoryStore()
+    const router = installOpenRouterStub()
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(memory.store)
+    let archive: (() => Promise<unknown>) | undefined
+    const processes: number[] = []
+    type Pair = { readonly a: string; readonly b: string }
+    const rewriteSeal = async (chatID: string, change: (data: string) => string) => {
+      const id = `${chatID}|warm-seal`
+      const artifact = (await memory.store.artifacts.findOne({ _id: id }))!
+      await memory.store.artifacts.deleteOne({ _id: id })
+      const { _id: _ignored, ...rest } = artifact
+      await memory.store.storeArtifact({
+        ...rest,
+        _id: id,
+        data: new TextEncoder().encode(change(Buffer.from(artifact.data).toString("utf8"))),
+      })
+    }
+    // Each change is made while the engine is "down", and names what has to notice it: the seal,
+    // and the latest chat's pair is then prepared again in the background (new forks), or, for what
+    // the seal leaves to the send's own checks, the send, which then refreshes the pair it trusted.
+    const cases: readonly {
+      readonly name: string
+      readonly change: (pair: Pair, chatID: string) => Promise<void>
+      readonly kind: "seal" | "send"
+      /** Windows will not remove a directory a process works in, so preparing it again fails. */
+      readonly holdsWorktree?: true
+    }[] = [
+      {
+        name: "a tracked file edited in a worktree",
+        change: (pair) => writeFile(path.join(pair.a, "README.md"), "edited while down\n"),
+        kind: "seal",
+      },
+      {
+        name: "an untracked file added to a worktree",
+        change: (pair) => writeFile(path.join(pair.b, "stray.txt"), "left while down\n"),
+        kind: "seal",
+      },
+      {
+        name: "an ignored file root edited in a worktree",
+        change: (pair) => writeFile(path.join(pair.b, "cache.txt"), "cache edited while down\n"),
+        kind: "seal",
+      },
+      {
+        name: "a file deep in an ignored tree edited in a worktree",
+        change: (pair) => writeFile(path.join(pair.a, "deps/pkg/index.js"), "module.exports = 2\n"),
+        kind: "send",
+      },
+      {
+        name: "a worktree's repository config changed",
+        change: async (pair) => {
+          await $`git config --file ${path.join(hostRepoPath(pair.a), "config")} arena.seal changed`.quiet()
+        },
+        kind: "seal",
+      },
+      {
+        name: "a hook added to a worktree's repository",
+        change: (pair) => writeFile(path.join(hostRepoPath(pair.b), "hooks", "pre-commit"), "#!/bin/sh\nexit 0\n"),
+        kind: "seal",
+      },
+      {
+        name: "an index flag set in a worktree",
+        change: async (pair) => {
+          await $`git update-index --skip-worktree README.md`.cwd(pair.a).quiet()
+        },
+        kind: "seal",
+      },
+      {
+        name: "a tracked file edited in the checkout",
+        change: () => writeFile(path.join(root, "README.md"), "checkout edited while down\n"),
+        kind: "send",
+      },
+      {
+        name: "a file deep in an ignored tree edited in the checkout",
+        change: () => writeFile(path.join(root, "deps/pkg/index.js"), "module.exports = 3\n"),
+        kind: "send",
+      },
+      {
+        name: "an ignored file root edited in the checkout",
+        change: () => writeFile(path.join(root, "cache.txt"), "cache v2\n"),
+        kind: "send",
+      },
+      {
+        name: "the checkout's config changed",
+        change: async () => {
+          await $`git config arena.seal checkout`.cwd(root).quiet()
+        },
+        kind: "send",
+      },
+      {
+        name: "a seal another release wrote",
+        change: (_pair, chatID) => rewriteSeal(chatID, (data) => data.replace(/"build":"[^"]*"/, '"build":"0.0.0+0"')),
+        kind: "seal",
+      },
+      {
+        name: "a seal that cannot be read",
+        change: (_pair, chatID) => rewriteSeal(chatID, (data) => data.slice(0, data.length / 2)),
+        kind: "seal",
+      },
+      {
+        name: "no seal",
+        change: async (_pair, chatID) => {
+          await memory.store.artifacts.deleteOne({ _id: `${chatID}|warm-seal` })
+        },
+        kind: "seal",
+      },
+      {
+        name: "a process working in a worktree",
+        change: async (pair) => {
+          const child = spawnProcess(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+            cwd: pair.a,
+            stdio: "ignore",
+          })
+          if (child.pid) processes.push(child.pid)
+        },
+        kind: "seal",
+        holdsWorktree: true,
+      },
+    ]
+    try {
+      const chat = await openChat(root)
+      archive = chat.archive
+      let turnID = await battle({ store: memory.store, directory: root, chatID: chat.chatID, prompt: "seal changes 0" })
+      for (const [index, item] of cases.entries()) {
+        const generation = index + 1
+        const warm = (await waitForWarmPair(memory.store, turnID, generation)).warmPreparation!
+        await waitForSeal(memory.store, chat.chatID, generation)
+        const pair = { a: warm.worktrees.a!.directory, b: warm.worktrees.b!.directory }
+        const forks = [warm.worktrees.a!.forkedSessionID, warm.worktrees.b!.forkedSessionID]
+        const warmTurn = turnID
+        await item.change(pair, chat.chatID)
+        setStoreForTest(memory.restart())
+        // Recovery runs on the first request; the latest chat's pair is checked right after it.
+        await arenaRequest(`/arena/chats/${chat.chatID}`, { headers: headers(root) })
+        if (item.kind === "seal") {
+          await waitForCondition(
+            async () => {
+              const record = (await memory.store.turn(warmTurn))?.warmPreparation
+              if (record?.state === "failed" && !item.holdsWorktree) {
+                throw new Error(`${item.name}: re-warm failed: ${record.error}`)
+              }
+              if (item.holdsWorktree) return record?.state === "failed"
+              return record?.state === "ready" && !forks.includes(record.worktrees.a?.forkedSessionID)
+            },
+            `${item.name}: the seal was trusted, the pair was not prepared again`,
+            90_000,
+          )
+        }
+        for (const pid of processes.splice(0)) killQuietly(pid)
+        turnID = await battle({
+          store: memory.store,
+          directory: root,
+          chatID: chat.chatID,
+          prompt: `seal changes ${generation}`,
+          beforeVote: async (current) => {
+            for (const run of await memory.store.runsForTurn(current)) await expectCheckoutContent(root, run.worktree)
+          },
+        })
+        const record = (await memory.store.turn(turnID))!
+        // Prepared again from scratch, the pair is reused; trusted from its seal, the send's own
+        // checks see the change and refresh it. A pair that could not be prepared again is not used.
+        if (item.holdsWorktree) expect(record.setupTimings?.warmPath).not.toBe("reused")
+        else {
+          expect([item.name, record.setupTimings?.warmPath]).toEqual([
+            item.name,
+            item.kind === "seal" ? "reused" : "refreshed",
+          ])
+        }
+      }
+    } finally {
+      for (const pid of processes) killQuietly(pid)
+      await archive?.()
+      router.restore()
+    }
+  }, 900_000)
 })

@@ -22,6 +22,21 @@ export type GenerationMetrics = {
  * What the control plane stores for a call. The provider that served it stays here: no response or
  * reveal returns it, and the engine shares `GenerationMetrics`, which has no field to hold it.
  */
-export type StoredGenerationMetrics = GenerationMetrics & {
-  readonly provider?: string
+export type StoredGenerationMetrics = GenerationMetrics &
+  Partial<EndpointLabel> & {
+    readonly provider?: string
+    readonly startedAt?: Date
+  }
+
+/** What the endpoint catalog says about the provider that served a call (`endpoint-label.ts`). */
+export type EndpointLabel = {
+  /**
+   * The catalog's label, including its own "unknown". "ambiguous" means the provider's endpoints
+   * disagree, and "unresolved" means no catalog entry could be matched.
+   */
+  readonly quantization: string
+  readonly quantizationCandidates?: ReadonlyArray<string>
+  /** Why the policy stored on the assignment let this endpoint serve the model. */
+  readonly admittedBy: "first-party" | "trusted-host" | "label" | "unresolved"
+  readonly catalogAt?: Date
 }
