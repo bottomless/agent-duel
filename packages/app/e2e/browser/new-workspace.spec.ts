@@ -36,6 +36,8 @@ import {
   submitNewBranchName,
   selectGitHubPrInPicker,
   selectPickerOptionByKeyboard,
+  newWorkspaceSendButton,
+  submitNewWorkspaceDraft,
   submitNewWorkspacePrompt,
 } from "../support/helpers/new-workspace";
 import {
@@ -515,7 +517,7 @@ test.describe("New workspace flow", () => {
       await expect(composer).toBeVisible({ timeout: 30_000 });
       await composer.fill("Hello from e2e");
 
-      const createButton = page.getByTestId("workspace-create-submit");
+      const createButton = newWorkspaceSendButton(page);
       await expect(createButton).toBeVisible({ timeout: 30_000 });
       await createButton.click();
 
@@ -613,65 +615,6 @@ test.describe("New workspace flow", () => {
     }
   });
 
-  test("new workspace without an initial agent appears in the Done status group", async ({
-    page,
-  }) => {
-    const serverId = getServerId();
-
-    const tempRepo = await createTempGitRepo("new-workspace-status-empty-");
-
-    try {
-      const openedProject = await openProjectViaDaemon(client, tempRepo.path);
-      localWorkspaceIds.add(openedProject.workspaceId);
-
-      await gotoAppShell(page);
-      await waitForSidebarHydration(page);
-
-      await switchWorkspaceViaSidebar({
-        page,
-        serverId,
-        workspaceId: openedProject.workspaceId,
-      });
-      await expectWorkspaceHeader(page, {
-        title: openedProject.workspaceName,
-        subtitle: openedProject.projectDisplayName,
-      });
-
-      await switchSidebarToStatusGrouping(page);
-      await startTrackingSidebarStatusGroups(page);
-
-      await openGlobalNewWorkspaceComposer(page);
-      await expectNewWorkspaceProjectSelected(page, openedProject.projectDisplayName);
-      await submitNewWorkspacePrompt(page);
-
-      const createdWorkspace = await assertNewWorkspaceSidebarAndHeader(page, {
-        serverId,
-        client,
-        previousWorkspaceId: openedProject.workspaceId,
-        projectDisplayName: openedProject.projectDisplayName,
-      });
-      createdWorktreeDirectories.add(createdWorkspace.workspaceDirectory);
-
-      const rowTestId = `sidebar-workspace-row-${serverId}:${createdWorkspace.workspaceId}`;
-      await expectWorkspaceStatusGroupEvents({
-        page,
-        rowTestId,
-        includes: "done",
-        excludes: "running",
-        excludesIndicator: "workspace-status-indicator-loading",
-      });
-      await expectWorkspaceStatusGroupEvents({
-        page,
-        rowTestId,
-        includes: "done",
-        excludes: "running",
-        excludesIndicator: "workspace-status-indicator-running",
-      });
-    } finally {
-      await tempRepo.cleanup();
-    }
-  });
-
   test("selected branch becomes the base of a new workspace worktree", async ({ page }) => {
     const serverId = getServerId();
 
@@ -704,7 +647,7 @@ test.describe("New workspace flow", () => {
       await openStartingRefPicker(page);
       await selectBranchInPicker(page, "dev");
 
-      await submitNewWorkspacePrompt(page);
+      await submitNewWorkspaceDraft(page);
 
       const createdWorkspace = await assertNewWorkspaceSidebarAndHeader(page, {
         serverId,
@@ -836,7 +779,7 @@ test.describe("New workspace flow", () => {
       await openNewBranchDialog(page, "main");
       await submitNewBranchName(page, "feature/first-chat");
 
-      await submitNewWorkspacePrompt(page);
+      await submitNewWorkspaceDraft(page);
 
       const workspaceId = await getCurrentWorkspaceIdFromRoute(page);
       localWorkspaceIds.add(workspaceId);
@@ -934,7 +877,7 @@ test.describe("New workspace flow", () => {
       await openNewBranchDialog(page, "main");
       await submitNewBranchName(page, "feature/worktree-from-shown-base");
 
-      await submitNewWorkspacePrompt(page);
+      await submitNewWorkspaceDraft(page);
       const createdWorkspace = await assertNewWorkspaceSidebarAndHeader(page, {
         serverId,
         client,
@@ -1033,7 +976,7 @@ test.describe("New workspace flow", () => {
         "feature/from-dev",
       );
 
-      await submitNewWorkspacePrompt(page);
+      await submitNewWorkspaceDraft(page);
       const createdWorkspace = await assertNewWorkspaceSidebarAndHeader(page, {
         serverId,
         client,
@@ -1080,7 +1023,7 @@ test.describe("New workspace flow", () => {
       page: import("@playwright/test").Page,
       openedProject: Awaited<ReturnType<typeof openProjectViaDaemon>>,
     ) {
-      await submitNewWorkspacePrompt(page);
+      await submitNewWorkspaceDraft(page);
       const createdWorkspace = await assertNewWorkspaceSidebarAndHeader(page, {
         serverId: getServerId(),
         client,
@@ -1342,7 +1285,7 @@ test.describe("New workspace flow", () => {
       headRef: pr.branch,
     });
 
-    await submitNewWorkspacePrompt(page);
+    await submitNewWorkspaceDraft(page);
 
     const worktree = await assertNewWorkspaceSidebarAndHeader(page, {
       serverId: getServerId(),
@@ -1389,7 +1332,7 @@ test.describe("New workspace flow", () => {
     await expectPickerSelected(page, "main");
     await fillNewWorkspaceDraft(page, `${pr.url}\nKeep this checkout on main`);
     await expectPickerSelected(page, "main");
-    await submitNewWorkspacePrompt(page);
+    await submitNewWorkspaceDraft(page);
 
     const worktree = await assertNewWorkspaceSidebarAndHeader(page, {
       serverId: getServerId(),
@@ -1426,7 +1369,7 @@ test.describe("New workspace flow", () => {
       });
       await openStartingRefPicker(page);
       await selectGitHubPrInPicker(page, pr.number);
-      await submitNewWorkspacePrompt(page);
+      await submitNewWorkspaceDraft(page);
 
       const worktree = await assertNewWorkspaceSidebarAndHeader(page, {
         serverId: getServerId(),

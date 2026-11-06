@@ -1,4 +1,4 @@
-import { expect, type BrowserContext, type Page } from "@playwright/test";
+import { expect, type BrowserContext, type Locator, type Page } from "@playwright/test";
 import type { DaemonClient as InternalDaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { decodeWorkspaceIdFromPathSegment } from "@/utils/host-routes";
 import { connectDaemonClient } from "./daemon-client-loader";
@@ -311,9 +311,31 @@ export async function submitNewWorkspacePrompt(
   const composer = page.getByRole("textbox", { name: "Message agent..." });
   await expect(composer).toBeVisible({ timeout: 30_000 });
   await composer.fill(prompt);
-  // Send stays disabled until the draft has text: a new chat cannot start empty.
-  const sendButton = page.getByTestId("workspace-create-submit");
-  await expect(sendButton).toBeVisible({ timeout: 30_000 });
+  await clickNewWorkspaceSend(page);
+}
+
+/** Sends what the test already typed, so a prompt the test checks afterwards stays its own. */
+export async function submitNewWorkspaceDraft(page: Page): Promise<void> {
+  const composer = page
+    .getByRole("textbox", { name: "Message agent..." })
+    .filter({ visible: true });
+  await expect(composer).toBeVisible({ timeout: 30_000 });
+  // A new chat cannot start empty, so an empty draft gets a prompt.
+  if (!(await composer.inputValue()).trim()) {
+    await composer.fill("Hello from e2e");
+  }
+  await clickNewWorkspaceSend(page);
+}
+
+/** Retained screens keep hidden copies of the new-chat composer; only the visible Send counts. */
+export function newWorkspaceSendButton(page: Page): Locator {
+  return page.getByTestId("workspace-create-submit").filter({ visible: true });
+}
+
+async function clickNewWorkspaceSend(page: Page): Promise<void> {
+  // Send stays disabled until the draft has text.
+  const sendButton = newWorkspaceSendButton(page);
+  await expect(sendButton).toBeEnabled({ timeout: 30_000 });
   await sendButton.click();
 }
 
