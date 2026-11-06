@@ -683,7 +683,13 @@ it.effect("candidate summarizes the complete snapshot without writing lifecycle 
       summary: summaryText,
       recent: expect.stringContaining("Finished latest turn"),
     })
-    expect(JSON.stringify(requests[0]?.messages)).toContain("Finished native reasoning")
+    // The finished reasoning stays in its native assistant part. Appending it
+    // again as user text would change the compaction request and duplicate it.
+    expect(JSON.stringify(requests[0]?.messages).match(/Finished native reasoning/g)).toHaveLength(1)
+    expect(requests[0]?.messages.at(-1)).toMatchObject({
+      role: "user",
+      content: [{ type: "text", text: SessionCompaction.buildPrompt(false) }],
+    })
     expect(yield* store.context(session.id)).toEqual(original)
     expect(
       yield* db.db
