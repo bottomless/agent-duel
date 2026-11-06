@@ -3814,6 +3814,55 @@ describe("ArenaGit", () => {
     }),
   )
 
+  it.live("names the Git operation a linked worktree is part way through, not its checkout's", () =>
+    Effect.gen(function* () {
+      const repo = yield* scopedTmpdir({ git: true })
+      const linked = yield* scopedTmpdir()
+      yield* Effect.promise(() => fs.writeFile(`${repo.path}/a.txt`, "base\n", "utf8"))
+      yield* Effect.promise(() => $`git add a.txt && git commit -qm base`.cwd(repo.path).quiet())
+      yield* Effect.promise(() => $`git branch side`.cwd(repo.path).quiet())
+      yield* Effect.promise(() => fs.writeFile(`${repo.path}/a.txt`, "main\n", "utf8"))
+      yield* Effect.promise(() => $`git commit -qam main`.cwd(repo.path).quiet())
+      yield* Effect.promise(() => $`git worktree add -q ${linked.path} side`.cwd(repo.path).quiet())
+      yield* Effect.addFinalizer(() =>
+        Effect.promise(() => $`git worktree remove --force ${linked.path}`.cwd(repo.path).quiet().nothrow()).pipe(
+          Effect.ignore,
+        ),
+      )
+      yield* Effect.promise(() => fs.writeFile(`${linked.path}/a.txt`, "side\n", "utf8"))
+      yield* Effect.promise(() => $`git commit -qam side`.cwd(linked.path).quiet())
+      const main = (yield* Effect.promise(() => $`git branch --show-current`.cwd(repo.path).quiet().text())).trim()
+      // MERGE_HEAD lives in the linked worktree's own git directory, not the checkout's.
+      yield* Effect.promise(() => $`git merge ${main}`.cwd(linked.path).quiet().nothrow())
+      expect(yield* repositoryOperation(linked.path)).toBe("merge")
+      expect(yield* repositoryOperation(repo.path)).toBeUndefined()
+    }),
+  )
+
+  it.live("deletes a promotion's safety refs together or not at all", () =>
+    Effect.gen(function* () {
+      const repo = yield* scopedTmpdir({ git: true })
+      yield* Effect.promise(() => $`git commit -q --allow-empty -m base`.cwd(repo.path).quiet())
+      const safetyRef = "refs/battles/atomic/turn-0/public-safety"
+      yield* Effect.promise(() => $`git update-ref ${safetyRef} HEAD`.cwd(repo.path).quiet())
+      yield* Effect.promise(() => $`git update-ref ${`${safetyRef}-index`} HEAD`.cwd(repo.path).quiet())
+      const listed = () =>
+        Effect.promise(() =>
+          $`git for-each-ref ${"--format=%(refname)"} refs/battles/atomic/`.cwd(repo.path).quiet().text(),
+        ).pipe(Effect.map((text) => text.split(/\r?\n/).filter(Boolean)))
+      // A lock on one ref fails the whole transaction: the safety ref is still there to recover from.
+      const lock = path.join(repo.path, ".git", `${safetyRef}-index.lock`)
+      yield* Effect.promise(() => fs.writeFile(lock, ""))
+      const refused = yield* Effect.exit(finishWinnerPromotion({ canonical: repo.path, safetyRef }))
+      expect(Exit.isFailure(refused)).toBe(true)
+      expect(yield* listed()).toEqual([safetyRef, `${safetyRef}-index`])
+      // The marker and target refs were never written; deleting them is no error.
+      yield* Effect.promise(() => fs.rm(lock))
+      yield* finishWinnerPromotion({ canonical: repo.path, safetyRef })
+      expect(yield* listed()).toEqual([])
+    }),
+  )
+
   it.live("reports where a branch the trunk may switch to stands", () =>
     Effect.gen(function* () {
       const repo = yield* scopedTmpdir({ git: true })
