@@ -7599,6 +7599,85 @@ describe("Arena service vertical slice", () => {
     }
   }, 30_000)
 
+  test("a vote ends a rate-limited summary's retries, and a summary retry after the vote does nothing", async () => {
+    await using directory = await tmpdir({
+      git: true,
+      config: { formatter: false, lsp: false, watcher: { ignore: [".git"] } },
+    })
+    await $`git add opencode.json`.cwd(directory.path).quiet()
+    await $`git commit -m "test: configure arena fixture"`.cwd(directory.path).quiet()
+    const memory = memoryStore()
+    // A long Retry-After keeps the engine waiting between attempts when the vote lands.
+    const router = installOpenRouterStub({
+      utilityResponse: async () =>
+        Response.json(
+          { error: { message: "Provider returned error", code: 429 } },
+          { status: 429, headers: { "retry-after": "30" } },
+        ),
+    })
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(memory.store)
+
+    try {
+      const headers = {
+        "content-type": "application/json",
+        "x-opencode-directory": directory.path,
+      }
+      const source = await json<{ id: string }>(
+        await request("/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ title: "Arena summary after the vote" }),
+        }),
+      )
+      const attached = await json<PublicSnapshot>(await request(`/arena/sessions/${source.id}`, { headers }))
+      const admitted = await json<PublicSnapshot>(
+        await request(`/arena/chats/${attached.chat.id}/turns`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "Create evidence for a summary cut off by the vote." }),
+        }),
+      )
+      const turnID = admitted.turn?.id
+      if (!turnID) throw new Error("Arena did not return an admitted turn")
+      await waitForTurn(memory.store, turnID, "awaiting_vote", (turn) => turn.comparisonState === "running")
+      const deadline = Date.now() + 10_000
+      while (router.utilityCalls() === 0 && Date.now() < deadline) await Bun.sleep(10)
+      const calls = router.utilityCalls()
+      expect(calls).toBe(1)
+
+      await json<PublicSnapshot>(
+        await request(`/arena/turns/${turnID}/vote`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ vote: "a" }),
+        }),
+      )
+      const voted = Date.now()
+      let turn = await memory.store.turn(turnID)
+      while (turn?.comparisonState !== "failed" && Date.now() - voted < 10_000) {
+        await Bun.sleep(10)
+        turn = await memory.store.turn(turnID)
+      }
+      expect(turn?.comparisonState).toBe("failed")
+      expect(Date.now() - voted).toBeLessThan(5_000)
+      const comparison = await memory.store.comparisons.findOne({ turnID })
+      expect(comparison?.state).toBe("failed")
+      expect(comparison?.error).toBe("Utility request failed with status 429")
+      expect(router.utilityCalls()).toBe(calls)
+
+      const pressed = await request(`/arena/turns/${turnID}/retry-comparison`, { method: "POST", headers })
+      expect(pressed.status).toBe(200)
+      const afterPress = await json<PublicSnapshot>(pressed)
+      expect(afterPress.comparison?.state).toBe("failed")
+      await Bun.sleep(200)
+      expect((await memory.store.turn(turnID))?.comparisonState).toBe("failed")
+      expect(router.utilityCalls()).toBe(calls)
+    } finally {
+      router.restore()
+    }
+  }, 30_000)
+
   test("copies the winner's subagent session under the chat, so the chat keeps its transcript", async () => {
     await using directory = await tmpdir({
       git: true,

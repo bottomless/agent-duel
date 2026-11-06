@@ -200,7 +200,10 @@ that long; permanent failures such as payment or credentials remain actionable. 
 the failed summary and marks both the turn and its record `running` before it answers
 (`claimComparisonRetry`): the app reads the record's state first, and a record left `failed` kept
 the button up for the whole retry while every further press failed. A press that loses to a running
-retry gets the current snapshot, not an error.
+retry gets the current snapshot, not an error. A decision (vote, early pick, stop) closes the
+summary's scope and the control plane answers every later call with 403, so the generator stops
+retrying once the turn has a resolution, and a decided turn's failed summary shows neither the error
+nor Retry summary. A summary already on its way when the vote lands still shows.
 Identical file results say nothing about whether the contestants' text answers agree. The threads
 are the headline and the review is their complement, so the review must never outweigh the agent
 headings above it: the tabs are text in a strip across the

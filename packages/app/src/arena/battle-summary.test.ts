@@ -665,12 +665,12 @@ describe("battleSummaryStatus", () => {
   });
 
   it("counts a summary as coming before the engine writes its record", () => {
-    expect(battleSummaryStatus(undefined, "pending")).toEqual({
+    expect(battleSummaryStatus(undefined, "pending", false)).toEqual({
       available: true,
       pending: true,
       failed: false,
     });
-    expect(battleSummaryStatus(undefined, "running")).toEqual({
+    expect(battleSummaryStatus(undefined, "running", false)).toEqual({
       available: true,
       pending: true,
       failed: false,
@@ -678,7 +678,7 @@ describe("battleSummaryStatus", () => {
   });
 
   it("offers a retry for a summary that failed before its record was written", () => {
-    expect(battleSummaryStatus(undefined, "failed")).toEqual({
+    expect(battleSummaryStatus(undefined, "failed", false)).toEqual({
       available: true,
       pending: false,
       failed: true,
@@ -686,27 +686,44 @@ describe("battleSummaryStatus", () => {
   });
 
   it("follows the record once it exists", () => {
-    expect(battleSummaryStatus(record("running"), "running")).toEqual({
+    expect(battleSummaryStatus(record("running"), "running", false)).toEqual({
       available: true,
       pending: true,
       failed: false,
     });
-    expect(battleSummaryStatus(record("complete", "report"), "complete")).toEqual({
+    expect(battleSummaryStatus(record("complete", "report"), "complete", false)).toEqual({
       available: true,
       pending: false,
       failed: false,
     });
-    expect(battleSummaryStatus(record("failed"), "failed")).toEqual({
+    expect(battleSummaryStatus(record("failed"), "failed", false)).toEqual({
       available: true,
       pending: false,
       failed: true,
     });
   });
 
+  it("leaves out a failed summary once the turn is decided, but keeps one still on its way", () => {
+    expect(battleSummaryStatus(record("failed"), "failed", true)).toEqual({
+      available: false,
+      pending: false,
+      failed: false,
+    });
+    expect(battleSummaryStatus(undefined, "failed", true).failed).toBe(false);
+    expect(battleSummaryStatus(record("running"), "running", true)).toEqual({
+      available: true,
+      pending: true,
+      failed: false,
+    });
+    expect(battleSummaryStatus(record("complete", "report"), "complete", true).available).toBe(
+      true,
+    );
+  });
+
   it("has nothing to show for identical results or a stopped battle", () => {
-    expect(battleSummaryStatus(record("complete"), "complete").available).toBe(false);
-    expect(battleSummaryStatus(undefined, "skipped").available).toBe(false);
-    expect(battleSummaryStatus(record("running"), "skipped").available).toBe(false);
+    expect(battleSummaryStatus(record("complete"), "complete", false).available).toBe(false);
+    expect(battleSummaryStatus(undefined, "skipped", false).available).toBe(false);
+    expect(battleSummaryStatus(record("running"), "skipped", false).available).toBe(false);
   });
 });
 

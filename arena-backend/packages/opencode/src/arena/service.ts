@@ -10759,7 +10759,9 @@ export const layer: Layer.Layer<
       // current snapshot: the summary in progress or the summary itself, not an error.
       const superseded = (state: TurnDocument["comparisonState"]) =>
         state === "pending" || state === "running" || state === "complete"
-      if (superseded(turn.comparisonState)) return yield* respond(store, turn.chatID)
+      // A decided turn gets no new summary: the decision closed the summary's scope, so the control
+      // plane refuses every call with 403, and the app no longer offers the press.
+      if (turn.resolution || superseded(turn.comparisonState)) return yield* respond(store, turn.chatID)
       if (turn.comparisonState !== "failed") {
         return yield* Effect.fail(new Error("Arena comparison is not in a failed state"))
       }
