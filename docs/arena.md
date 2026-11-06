@@ -89,6 +89,11 @@ whole history. Single-agent chats, keep-alive pings and the service's own compar
 calls are not kept. BYOK leaves capture off: its store is on the voter's machine, and those fields
 name the model.
 
+The control plane also adds the endpoint's quantization to each stored request row, from a catalog of
+OpenRouter's endpoint lists that it saves itself (`arena-service/src/endpoint-label.ts`, `recordEndpointLabels`).
+OpenRouter never reports quantization for a call, so the label is what the catalog listed for that
+provider, and does not prove what ran. These fields stay on the server, like the provider name.
+
 `archiveComplete` means the local archive exists, not that research has uploaded. Reply resets keep
 the previous cloud archive until its replacement arrives. Keep transcript and image archives whole,
 without per-call artifact budgets; a disk error must fail the local write rather than produce an
@@ -584,17 +589,29 @@ patch. Ignored paths the checkout does not have go to trash.
 
 The per-slot records, journal marks and tracked-file keys live only in the engine process. After an
 engine restart the first sync of each kept slot re-clones every copied root, file roots included,
-and rewrites every tracked file. To keep that cost off a send, startup recovery takes the most
-recently updated chat and, when it is idle with a ready pair and no single-agent pass since its last
-battle, prepares that pair again in the background (`rewarmLatestPair`), adopting the same two
-worktrees in place under the start lock. A send that arrives meanwhile waits for it and then reuses
-the pair. A prompt to the chat's agent that arrives before the build claims the two worktrees makes
-it stand down, since the agent's edits would leave the pair stale. Every other chat's pair is
-refreshed at its next send: an older chat is less likely to be sent to than to hold up, while its
-host copies take the repository lock, a vote or a prompt in the chat the user is in. Background
-cleanup (checkout eviction, its release, and environment release) leaves `updatedAt` alone, so the
-chat cleaned up last is not taken for the chat worked in last. A slot that cannot be verified is
-retired and a new one created.
+and rewrites every tracked file. Without a watcher backend (Windows) a ready pair is also sealed: once
+its instances are booted, the store gets both slots' records plus stat digests of each worktree
+outside its copied directory roots and of its host outside `objects/`, the checkout rules, and the
+release that wrote them (`sealWarmPair`). A restarted engine trusts the pair again only when the seal
+was written by this release for this generation and copy, no process works in either slot, both are
+still pool worktrees, and every digest matches (`restoreSealedPair`); the records then become this
+process's, and the send checks the pair against the checkout as it would one prepared here. Anything
+else, an unreadable seal included, drops the seal and leaves the pair to the refresh below. A watch
+ends with the process, so a pair a watch vouched for is never sealed. The send forks again rather
+than reuse a restored pair's forks: their port bank was reserved only in the previous process. A
+seal goes whenever its chat's warm record is written or a send takes the pair.
+
+To keep the refresh off a send, startup recovery takes the most recently updated chat and, when it is
+idle with a ready pair and no single-agent pass since its last battle, trusts the pair from its seal
+or else prepares it again in the background (`rewarmLatestPair`), adopting the same two worktrees in
+place under the start lock. A send that arrives meanwhile waits for it and then reuses the pair. A
+prompt to the chat's agent that arrives before the build claims the two worktrees makes it stand
+down, since the agent's edits would leave the pair stale. Every other chat's pair is checked against
+its seal at its next send and refreshed when that fails: an older chat is less likely to be sent to
+than to hold up, while its host copies take the repository lock, a vote or a prompt in the chat the
+user is in. Background cleanup (checkout eviction, its release, and environment release) leaves
+`updatedAt` alone, so the chat cleaned up last is not taken for the chat worked in last. A slot that
+cannot be verified is retired and a new one created.
 
 The loser's slot is released after the vote, and the retained winner's at the next send: services
 stopped, sessions and the OpenCode instance disposed, the run marked `worktreeRemovedAt`. The files
