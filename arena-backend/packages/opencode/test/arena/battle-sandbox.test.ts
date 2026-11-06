@@ -636,6 +636,113 @@ describe("fb3 Git and battle-folder regressions", () => {
   })
 })
 
+describe("battle shell writes are the forms that write (bench 2026-11-06)", () => {
+  // Commands that contestants ran in the bench, and v2 refused although they write nothing outside
+  // their own worktree and temp directory.
+  const safe = [
+    `curl -sSf -X POST http://127.0.0.1:22015/api/plan -H "Content-Type: application/json" -d '{"job":"Engineer","pain":["wrist","/neck"],"url":"http://127.0.0.1:1/x"}'`,
+    `node --input-type=module -e "const r=await fetch('http://127.0.0.1:1/'); console.log(r.status)"`,
+    `node -e "require('fs').writeFileSync(process.env.TMPDIR+'/anim.js','x')"`,
+    `npm view expo@58.0.23 --json | node -e 'let s="";process.stdin.on("data",d=>s+=d)'`,
+    "cd /tmp && npm view express version 2>&1 | tail -3",
+    "sed -n '1,120p' /tmp/gully-test.log",
+    "awk '/FAIL|Error:/{print}' /tmp/gully-test.log | head -40",
+    `cd "$(pwd)" && perl -0pi -e 's/decideResult\\(first, /decideResult(/g' src/scoring.test.ts`,
+    "git status --short; curl -s -o /dev/null -w 'preview %{http_code}\\n' http://turn1-a--b40be60e.localhost:6771/",
+    `python3 -c "print('a/b'.split('/'))"`,
+    "curl -s -o $TMPDIR/page.html https://example.com/",
+    "tar -czf $TMPDIR/out.tgz src",
+  ]
+  it.each(safe)("runs %s", async (command) => {
+    using f = fixture()
+    const h = harness(f)
+    await run(
+      h,
+      Effect.gen(function* () {
+        yield* h.execute("shell", { command })
+        expect(h.executions).toHaveLength(1)
+        expect(h.cards).toEqual([])
+      }),
+    )
+  })
+  const writes = (f: ReturnType<typeof fixture>) => [
+    `echo x > ${f.checkout}/escape.txt`,
+    `npm install --prefix ${f.checkout}/deps left-pad`,
+    `curl -o ${f.checkout}/page.html https://example.com/`,
+    `curl -sSo ${f.checkout}/page.html https://example.com/`,
+    `wget -O ${f.checkout}/page.html https://example.com/`,
+    `sed -i 's/a/b/' ${f.checkout}/file.txt`,
+    `sed -i.bak -e 's/a/b/' ${f.checkout}/file.txt`,
+    `perl -pi -e 's/a/b/' ${f.checkout}/file.txt`,
+    `cp own.txt ${f.checkout}/copy.txt`,
+    `mv ${f.checkout}/file.txt own.txt`,
+    `tar -xzf own.tgz -C ${f.checkout}`,
+    `tar czf ${f.checkout}/out.tgz src`,
+    `dd if=/dev/zero of=${f.checkout}/zero bs=1 count=1`,
+    `rm -rf ${f.checkout}/src`,
+    `find ${f.checkout} -name '*.log' -delete`,
+    `bash -c 'touch ${f.checkout}/nested.txt'`,
+    `gcc main.c -o ${f.checkout}/a.out`,
+  ]
+  it("still refuses each write outside the contestant's folders", async () => {
+    using f = fixture()
+    const h = harness(f)
+    await run(
+      h,
+      Effect.gen(function* () {
+        for (const command of writes(f))
+          expect({
+            command,
+            result: yield* h.execute("shell", { command }).pipe(Effect.result),
+          }).toMatchObject({
+            command,
+            result: { _tag: "Failure", failure: { message: expect.stringContaining("write only") } },
+          })
+        expect(h.executions).toEqual([])
+      }),
+    )
+  })
+  it("names the way out of a shared temp write and of a checkout write", async () => {
+    using f = fixture()
+    const h = harness(f)
+    const own = realpathSync(path.dirname(tmpDirectory(rootID)))
+    mkdirSync(tmpDirectory(rootID), { recursive: true })
+    await run(
+      h,
+      Effect.gen(function* () {
+        const shared = yield* h.execute("shell", { command: "npm test > /tmp/gully-test.log 2>&1" }).pipe(Effect.result)
+        expect(shared).toMatchObject({
+          _tag: "Failure",
+          failure: {
+            message: `Arena contestants cannot change files in ${realpathSync("/tmp")}, which both sides use while they run. They write only in their own worktree and their own $TMPDIR: use the same name under $TMPDIR (${path.join(own, path.basename(tmpDirectory(rootID)))}) instead.`,
+          },
+        })
+        const checkout = yield* h.execute("shell", { command: `touch ${f.checkout}/x.txt` }).pipe(Effect.result)
+        expect(checkout).toMatchObject({
+          _tag: "Failure",
+          failure: {
+            message: expect.stringMatching(
+              new RegExp(
+                `write only in their own worktree \\(${f.side}\\) and their own \\$TMPDIR \\(.+\\)\\. ${f.checkout}/x\\.txt is outside them\\.$`,
+              ),
+            ),
+          },
+        })
+        expect(h.executions).toEqual([])
+      }),
+    )
+  })
+  it("keeps a computed word a read for a reader and a write for a redirect", async () => {
+    expect(await shellPaths(`grep -r foo "$(pwd)/src"`, "/side", "write")).toEqual([])
+    expect(await shellPaths(`echo x > "$(mktemp)"`, "/side", "write")).toEqual([])
+  })
+  it("leaves the ask-before-tools scan of a normal chat as it was", async () => {
+    const etc = realpathSync("/etc")
+    expect(await shellPaths(`node -e "require('fs').writeFileSync('/etc/x','x')"`, "/side")).toContain(`${etc}/x`)
+    expect(await shellPaths("sed -n '1p' /etc/hosts", "/side")).toContain(`${etc}/hosts`)
+  })
+})
+
 it("winner promotion retargets a native background-shell file before its temp is released", async () => {
   const file = path.join(tmpDirectory("ses_abc123"), "sh_example.out")
   const part = {

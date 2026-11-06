@@ -53,7 +53,7 @@ export function spellings(directory: string): string[] {
 }
 
 /** Temp directories every process on the machine shares; both sides of a battle run at once. */
-const sharedTmp = () => [...new Set(["/tmp", "/var/tmp", os.tmpdir()].flatMap(spellings))]
+export const sharedTmp = () => [...new Set(["/tmp", "/var/tmp", os.tmpdir()].flatMap(spellings))]
 
 /** Where every contestant temp directory lives; see `tmpDirectory`. */
 export function tmpParent() {
