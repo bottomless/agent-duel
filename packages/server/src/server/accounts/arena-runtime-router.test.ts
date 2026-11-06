@@ -540,6 +540,30 @@ describe("Arena runtime proxy", () => {
     expect(new Headers(init?.headers).get("authorization")).toBe("Bearer account-session-token");
   });
 
+  it("forwards a web search to the control plane's web search route", async () => {
+    installArenaCredentials({
+      mode: "hosted",
+      researchPartition: "test-research-partition",
+      researchAccountID: "test-account",
+      token: "account-session-token",
+      controlPlaneUrl: "https://control.agentduel.test",
+    });
+    const runtime = issueRuntimeCapability();
+    upstream.mockResolvedValue(Response.json({ results: [{ url: "https://docs.expo.dev/" }] }));
+
+    const response = await fetch(`${baseUrl}/api/arena-runtime/api/arena/websearch`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${runtime.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ query: "latest expo sdk" }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ results: [{ url: "https://docs.expo.dev/" }] });
+    const [url, init] = upstream.mock.calls[0]!;
+    expect(url).toBe("https://control.agentduel.test/api/arena/websearch");
+    expect(new Headers(init?.headers).get("authorization")).toBe("Bearer account-session-token");
+  });
+
   it("forwards a contestant replay and the heartbeat period the engine times out on", async () => {
     installArenaCredentials({
       mode: "hosted",
