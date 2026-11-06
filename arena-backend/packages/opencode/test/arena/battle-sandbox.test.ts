@@ -723,11 +723,13 @@ describe("battle shell writes are the forms that write (bench 2026-11-06)", () =
           failure: {
             message: expect.stringMatching(
               new RegExp(
-                `write only in their own worktree \\(${f.side}\\) and their own \\$TMPDIR \\(.+\\)\\. ${f.checkout}/x\\.txt is outside them\\.$`,
+                `write only in their own worktree and their own \\$TMPDIR \\(.+\\)\\. ${f.checkout}/x\\.txt is outside them\\.$`,
               ),
             ),
           },
         })
+        // The worktree path names the home directory, so the message leaves it out.
+        expect(checkout).not.toMatchObject({ failure: { message: expect.stringContaining(`(${f.side})`) } })
         expect(h.executions).toEqual([])
       }),
     )

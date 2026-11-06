@@ -60,7 +60,7 @@ export function battlePathDenial(
 
   if (own.some((root) => contains(root, resolved))) return
   // Name the way out, as 1.x did: a model told only "write only in your own folders" tries the same
-  // write again in other forms (bench 2026-11-06). Both folders are already the contestant's own.
+  // write again in other forms (bench 2026-11-06). The temp directory is the contestant's own.
   const temps = spellings(tmpParent())
   const tmp = own.find((root) => temps.some((parent) => contains(parent, root)))
   const cwd = resolveExistingPrefix(directory)
@@ -75,7 +75,8 @@ export function battlePathDenial(
     .find(inside)
   if (shared && tmp && !(checkout && inside(checkout)))
     return `Arena contestants cannot change files in ${shared}, which both sides use while they run. They write only in their own worktree and their own $TMPDIR: use the same name under $TMPDIR (${tmp}) instead.`
-  const folders = `their own worktree${worktree ? ` (${worktree})` : ""} and their own $TMPDIR${tmp ? ` (${tmp})` : ""}`
+  // The worktree path stays out: it names the home directory in transcripts and research uploads.
+  const folders = `their own worktree and their own $TMPDIR${tmp ? ` (${tmp})` : ""}`
   return `Arena contestants can read the main checkout but write only in ${folders}. ${target} is outside them.`
 }
 
