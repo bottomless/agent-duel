@@ -130,7 +130,6 @@ export function CrashReportReview({ endpoint, sessionToken }: CrashReportReviewP
       footer={footer}
       desktopMaxWidth={480}
       snapPoints={["72%", "90%"]}
-      sizeContentToCurrentSnapPoint
       testID="crash-report-review"
     >
       <View style={styles.reports}>
@@ -183,8 +182,8 @@ const styles = StyleSheet.create((theme) => ({
   },
   reportDetail: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.xs,
-    lineHeight: Math.round(theme.fontSize.xs * 1.45),
+    fontSize: theme.fontSize.sm,
+    lineHeight: Math.round(theme.fontSize.sm * 1.45),
   },
   messageInput: {
     minHeight: 96,
@@ -193,8 +192,8 @@ const styles = StyleSheet.create((theme) => ({
   },
   note: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.xs,
-    lineHeight: Math.round(theme.fontSize.xs * 1.45),
+    fontSize: theme.fontSize.sm,
+    lineHeight: Math.round(theme.fontSize.sm * 1.45),
   },
   errorText: {
     color: theme.colors.destructive,
