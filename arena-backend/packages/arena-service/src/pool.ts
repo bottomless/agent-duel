@@ -12,6 +12,15 @@ export type ModelProfile = {
   }
   /** Sent to OpenRouter as `provider`. */
   readonly routing: Readonly<Record<string, unknown>>
+  /**
+   * Why `routing.only` lists each host, in OpenRouter's provider slugs. A hosted assignment stores
+   * this with the model so a call's `admittedBy` follows the policy of its draw. Never public.
+   */
+  readonly endpointPolicy?: {
+    readonly firstParty: ReadonlyArray<string>
+    readonly trustedHosts: ReadonlyArray<string>
+    readonly approved: ReadonlyArray<string>
+  }
   /** Null enables reasoning without an effort level for models that do not expose one. */
   readonly reasoningEffort?: "high" | "xhigh" | null
 }
