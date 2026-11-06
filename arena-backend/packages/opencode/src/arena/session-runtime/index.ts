@@ -869,8 +869,14 @@ const promptLayer: Layer.Layer<
     })
     // Admission is durable once it returns. `wake` starts the runner, or rings the doorbell of the
     // one already running so it drains again before it goes idle.
-    const admit = Effect.fn("ArenaSessionPrompt.admit")(function* (input: ArenaPromptInput, wake: boolean) {
-      yield* arena.compactions.accept(input.sessionID).pipe(Effect.catchCause(() => Effect.succeed(false)))
+    const admit = Effect.fn("ArenaSessionPrompt.admit")(function* (
+      input: ArenaPromptInput,
+      wake: boolean,
+      kind: "handoff" | "steer" = "handoff",
+    ) {
+      yield* arena.compactions
+        .accept(input.sessionID, undefined, kind)
+        .pipe(Effect.catchCause(() => Effect.succeed(false)))
       const metadata = {
         ...(input.metadata ?? {}),
         ...(input.system !== undefined ? { arenaSystem: input.system } : {}),
@@ -926,7 +932,7 @@ const promptLayer: Layer.Layer<
             return yield* loop({ sessionID: input.sessionID }, admittedAt)
           }),
         ),
-      steer: (input) => normalizeError(admit(input, true).pipe(Effect.asVoid)),
+      steer: (input) => normalizeError(admit(input, true, "steer").pipe(Effect.asVoid)),
       loop: (input) => normalizeError(loop(input)),
       join: (input) => normalizeError(join(input)),
       cancel: (sessionID, options) =>

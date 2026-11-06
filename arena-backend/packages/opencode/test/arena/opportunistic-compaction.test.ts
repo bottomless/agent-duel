@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { createCompactions, shouldCompact } from "../../src/arena/opportunistic-compaction"
+import { createCompactions, shouldCompact, shouldUseCompactionForSteer } from "../../src/arena/opportunistic-compaction"
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -238,6 +238,16 @@ describe("opportunistic compaction coordinator", () => {
     expect(coordinator.metrics().used).toBe(0)
     expect(coordinator.commitUsed(selection!)).toBe(true)
     expect(coordinator.metrics().used).toBe(1)
+  })
+
+  test("steering uses a summary only at two-thirds of the runtime context threshold", () => {
+    expect(shouldUseCompactionForSteer(181_333)).toBe(false)
+    expect(shouldUseCompactionForSteer((272_000 * 2) / 3)).toBe(true)
+    expect(shouldUseCompactionForSteer(181_334)).toBe(true)
+    expect(shouldUseCompactionForSteer(272_000)).toBe(true)
+    expect(shouldUseCompactionForSteer(undefined)).toBe(false)
+    expect(shouldUseCompactionForSteer(NaN)).toBe(false)
+    expect(shouldUseCompactionForSteer(Infinity)).toBe(false)
   })
 
   test("compaction thresholds handle unknown usage and context pressure", () => {

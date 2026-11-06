@@ -6800,7 +6800,7 @@ export const layer: Layer.Layer<
         selectedRuns,
         (run) =>
           sessions.compactions
-            .accept(SessionID.make(run.rootSessionID), receivedAt)
+            .accept(SessionID.make(run.rootSessionID), receivedAt, "steer")
             .pipe(Effect.catchCause(() => Effect.succeed(false))),
         { discard: true },
       )

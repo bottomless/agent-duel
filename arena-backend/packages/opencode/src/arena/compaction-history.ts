@@ -11,6 +11,7 @@ import { Session } from "@opencode/schema/session"
 import {
   createCompactions,
   shouldCompact,
+  shouldUseCompactionForSteer,
   type CompactionSnapshot,
   type CompactionEntry,
 } from "./opportunistic-compaction"
@@ -26,6 +27,8 @@ export function historyVersion(messages: readonly SessionMessage.Info[]) {
 
 export interface Candidate {
   readonly id: string
+  /** Estimate of the source history, before summarization; follows the candidate across a vote. */
+  readonly contextTokens?: number
   readonly checkpoint: SessionMessage.CompactionCompleted
 }
 
@@ -47,7 +50,11 @@ export interface HistoryCompactionTransfer {
 export interface HistoryCompaction {
   readonly admission: (sessionID: Session.ID) => number
   readonly start: (input: HistoryCompactionInput) => Effect.Effect<void, Error>
-  readonly accept: (sessionID: Session.ID, receivedAt?: number) => Effect.Effect<boolean, Error>
+  readonly accept: (
+    sessionID: Session.ID,
+    receivedAt?: number,
+    kind?: "handoff" | "steer",
+  ) => Effect.Effect<boolean, Error>
   readonly transfer: (input: HistoryCompactionTransfer) => Effect.Effect<void, Error>
   readonly invalidate: (sessionID: Session.ID) => void
   readonly dispose: () => void
@@ -102,7 +109,7 @@ export function createHistoryCompaction(ports: HistoryCompactionPorts): HistoryC
     const id = randomUUID()
     const generate = ports
       .generate({ sessionID: input.sessionID, id })
-      .pipe(Effect.map((checkpoint) => ({ id, checkpoint })))
+      .pipe(Effect.map((checkpoint) => ({ id, checkpoint, contextTokens: input.usage?.contextTokens })))
     let entry: CompactionEntry<Candidate>
     startingID = id
     try {
@@ -131,7 +138,12 @@ export function createHistoryCompaction(ports: HistoryCompactionPorts): HistoryC
     }
   })
 
-  const accept = Effect.fn("ArenaCompaction.accept")(function* (sessionID: Session.ID, receivedAt = Date.now()) {
+  const accept = Effect.fn("ArenaCompaction.accept")(function* (
+    sessionID: Session.ID,
+    // Match the coordinator's clock so a candidate published earlier in this millisecond is ready.
+    receivedAt = performance.timeOrigin + performance.now(),
+    kind: "handoff" | "steer" = "handoff",
+  ) {
     const acceptedAdmission = admission(sessionID) + 1
     admissions.set(sessionID, acceptedAdmission)
     const pending = candidates.inspect(sessionID)
@@ -141,6 +153,10 @@ export function createHistoryCompaction(ports: HistoryCompactionPorts): HistoryC
     const transform = transforms.get(sessionID)
     transforms.delete(sessionID)
     if (!selected) return false
+    if (kind === "steer" && !shouldUseCompactionForSteer(selected.candidate.contextTokens)) {
+      candidates.discard(selected)
+      return false
+    }
     const candidate = selected.candidate.checkpoint
     const checkpoint = transform
       ? yield* transform(candidate).pipe(Effect.onError(() => Effect.sync(() => candidates.discard(selected))))
@@ -229,8 +245,8 @@ export function createHistoryCompaction(ports: HistoryCompactionPorts): HistoryC
     admission,
     start: (input) =>
       start(input).pipe(Effect.mapError((cause) => (cause instanceof Error ? cause : new Error(String(cause))))),
-    accept: (sessionID, receivedAt) =>
-      accept(sessionID, receivedAt).pipe(
+    accept: (sessionID, receivedAt, kind) =>
+      accept(sessionID, receivedAt, kind).pipe(
         Effect.mapError((cause) => (cause instanceof Error ? cause : new Error(String(cause)))),
       ),
     transfer: (input) =>

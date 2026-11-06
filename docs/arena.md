@@ -1652,11 +1652,17 @@ compaction lifecycle rows into the source history.
 
 Publish a completed candidate only after checking its source version and empty inbox in one
 transaction. The vote carries the candidate to the winner's canonical history without waiting.
-At the next prompt, reserve an already published candidate or invalidate pending work and request
-cancellation without waiting. Verify the history again before atomically appending the selected
-checkpoint; keep all original rows. An intervening prompt, rewind, stale graft, failure, or late
-completion cannot replace newer history. A restart discards unpublished candidates. Ordinary
-handoff and mandatory context-limit recovery still run after this choice.
+At the next post-vote prompt, reserve an already published candidate. Steering a finished contestant
+uses a ready summary only when its original history has reached two-thirds of the 272,000-token
+runtime threshold (181,334 whole tokens). Below that threshold, or when the estimate is unknown,
+keep the original transcript and discard the candidate. This selection rule does not change when
+background summaries are generated.
+
+For every prompt, invalidate pending work and request cancellation without waiting, including above
+the steering threshold. Verify the history again before atomically appending a selected checkpoint;
+keep all original rows. An intervening prompt, rewind, stale graft, failure, or late completion cannot
+replace newer history. A restart discards unpublished candidates. Ordinary handoff and mandatory
+context-limit recovery still run after this choice.
 
 The control plane owns model-specific compaction limits (`arena-service/src/openrouter.ts`), since
 only it knows the contestant's context window and output cap. `X-Arena-Compaction: auto` marks a

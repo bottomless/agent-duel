@@ -1331,6 +1331,15 @@ describe("shell stop notice on Resume", () => {
 describe("opportunistic history compaction", () => {
   const location = Location.Ref.make({ directory: AbsolutePath.make("/arena-history-compaction-test") })
   const nativeModel = { providerID: Provider.ID.make("arena"), id: Model.ID.make("native") }
+  const usageAt = (sessionID: string, contextTokens: number | undefined) => ({
+    engagementID: "engagement_context_threshold",
+    runID: "run_context_threshold",
+    sessionID,
+    rootCalls: 0,
+    compactionCalls: 0,
+    calls: [],
+    contextTokens,
+  })
 
   const checkpoint = (summary: string): SessionMessage.CompactionCompleted => ({
     id: SessionMessage.ID.create(),
@@ -1384,7 +1393,7 @@ describe("opportunistic history compaction", () => {
     return { compactions, snapshots }
   }
 
-  it.effect("keeps native rows byte-for-byte intact until a ready checkpoint is accepted", () =>
+  it.effect("keeps native rows intact and accepts a ready checkpoint below the steering threshold on handoff", () =>
     Effect.gen(function* () {
       const sessions = yield* CoreSession.Service
       const database = yield* Database.Service
@@ -1396,7 +1405,7 @@ describe("opportunistic history compaction", () => {
         Deferred.await(gate).pipe(Effect.as(checkpoint("candidate summary"))),
       )
 
-      yield* compactions.start({ sessionID: session.id, runID: "run_pending", usage: undefined })
+      yield* compactions.start({ sessionID: session.id, runID: "run_pending", usage: usageAt(session.id, 50_000) })
       expect(yield* rows(database, session.id)).toEqual(before)
       yield* Deferred.succeed(gate, undefined)
       yield* waitFor(snapshots, "ready")
@@ -1408,7 +1417,43 @@ describe("opportunistic history compaction", () => {
     }),
   )
 
-  it.effect("cancels a pending candidate immediately while admitting a normal prompt", () =>
+  for (const [label, contextTokens, accepted] of [
+    ["below", 181_333, false],
+    ["at", 181_334, true],
+    ["above", 272_000, true],
+    ["unknown", undefined, false],
+  ] as const) {
+    it.effect(`selects the correct steering history with ${label} threshold usage`, () =>
+      Effect.gen(function* () {
+        const sessions = yield* CoreSession.Service
+        const database = yield* Database.Service
+        const session = yield* sessions.create({ location })
+        yield* seedGraftMessage({ sessionID: session.id, message: sourceMessage(`msg_steer_${label}`), seq: 0 })
+        const before = yield* rows(database, session.id)
+        const { compactions, snapshots } = makeCompaction(sessions, database, () =>
+          Effect.succeed(checkpoint("ready steering summary")),
+        )
+        yield* compactions.start({
+          sessionID: session.id,
+          runID: `run_steer_${label}`,
+          usage: usageAt(session.id, contextTokens),
+        })
+        yield* waitFor(snapshots, "ready")
+
+        expect(yield* compactions.accept(session.id, undefined, "steer")).toBe(accepted)
+        expect(snapshots.at(-1)?.status).toBe(accepted ? "used" : "discarded")
+        const after = yield* rows(database, session.id)
+        expect(after.slice(0, before.length)).toEqual(before)
+        expect(after).toHaveLength(before.length + Number(accepted))
+        // The later runPrompt admission must not consume a summary rejected by steering.
+        expect(yield* compactions.accept(session.id)).toBe(false)
+        yield* sessions.prompt({ sessionID: session.id, text: "new steer" })
+        expect(yield* sessions.inbox(session.id)).toHaveLength(1)
+      }),
+    )
+  }
+
+  it.effect("cancels a pending candidate immediately while admitting a steer above the threshold", () =>
     Effect.gen(function* () {
       const sessions = yield* CoreSession.Service
       const database = yield* Database.Service
@@ -1420,8 +1465,12 @@ describe("opportunistic history compaction", () => {
         Deferred.await(gate).pipe(Effect.as(checkpoint("late candidate"))),
       )
 
-      yield* compactions.start({ sessionID: session.id, runID: "run_pending_cancel", usage: undefined })
-      expect(yield* compactions.accept(session.id)).toBe(false)
+      yield* compactions.start({
+        sessionID: session.id,
+        runID: "run_pending_cancel",
+        usage: usageAt(session.id, 272_000),
+      })
+      expect(yield* compactions.accept(session.id, undefined, "steer")).toBe(false)
       yield* sessions.prompt({ sessionID: session.id, text: "normal prompt admitted" })
       expect(yield* sessions.inbox(session.id)).toHaveLength(1)
       yield* Deferred.succeed(gate, undefined)
@@ -1595,9 +1644,10 @@ describe("opportunistic history compaction", () => {
       const { compactions, snapshots } = makeCompaction(sessions, database, () =>
         Effect.succeed(checkpoint("late ready")),
       )
+      const receivedAt = performance.timeOrigin + performance.now()
       yield* compactions.start({ sessionID: session.id, runID: "run_received_at_cutoff", usage: undefined })
       yield* waitFor(snapshots, "ready")
-      expect(yield* compactions.accept(session.id, Date.now() - 1)).toBe(false)
+      expect(yield* compactions.accept(session.id, receivedAt)).toBe(false)
       expect(
         (yield* sessions.messages({ sessionID: session.id })).some((message) => message.type === "compaction"),
       ).toBe(false)
