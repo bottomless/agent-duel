@@ -3657,6 +3657,8 @@ export const layer: Layer.Layer<
       const a = preparation.worktrees.a
       const b = preparation.worktrees.b
       if (preparation.state !== "ready" || preparation.generation !== generation || !a || !b) return false
+      // A pair is sealed only where no watcher backend exists, so elsewhere there is nothing to read.
+      if (watcherBackendUnavailable() === undefined) return false
       const checked = yield* Effect.exit(
         Effect.gen(function* () {
           const artifact = yield* promise(() => store.artifacts.findOne({ _id: warmSealID(chat._id) }))
@@ -3676,7 +3678,6 @@ export const layer: Layer.Layer<
           if (seal.sides?.a?.directory !== a.directory || seal.sides?.b?.directory !== b.directory) {
             return "the seal names other worktrees"
           }
-          if (watcherBackendUnavailable() === undefined) return "a watched pair is not trusted from a seal"
           const manifest = yield* copyManifestByID(
             store,
             seal.copyManifestID,
