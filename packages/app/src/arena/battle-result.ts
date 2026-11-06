@@ -18,7 +18,11 @@ export function battleChoiceLabel(item: ArenaHistoryItem): string {
     if (item.resolution?.kind === "stopped") return "Battle discarded";
     return "Battle resolved";
   }
-  return `Chose ${arenaModelDisplayName(item.identities?.[side].name)} (Agent ${side.toUpperCase()})`;
+  const model = arenaModelDisplayName(item.identities?.[side].name);
+  if (item.acceptedFailedSide === side) {
+    return `Accepted ${model}'s failed work (Agent ${side.toUpperCase()})`;
+  }
+  return `Chose ${model} (Agent ${side.toUpperCase()})`;
 }
 
 export function battleWinnerSide(item: ArenaHistoryItem): ArenaSide | undefined {

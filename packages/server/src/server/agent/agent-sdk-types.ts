@@ -14,6 +14,7 @@ import type {
 import type { AgentMessage } from "@getpaseo/protocol/agent-message";
 import type { AgentAttachment } from "@getpaseo/protocol/messages";
 import type {
+  ArenaDiscardReason,
   ArenaRetryMode,
   ArenaReviewAnswer,
   ArenaComparisonDiff,
@@ -809,7 +810,12 @@ export interface AgentSession {
     discardSteer(runId: string, messageIds: string[]): Promise<ArenaSnapshot>;
     retryRun(runId: string): Promise<ArenaSnapshot>;
     resumeBattle(turnId: string): Promise<ArenaSnapshot>;
-    vote(turnId: string, vote: ArenaVote, participantId: string): Promise<ArenaSnapshot>;
+    vote(
+      turnId: string,
+      vote: ArenaVote,
+      participantId: string,
+      acceptFailed?: boolean,
+    ): Promise<ArenaSnapshot>;
     /**
      * Append what a voter did while reviewing. Idempotent on event id, so the
      * app may replay a flush it could not confirm.
@@ -825,6 +831,7 @@ export interface AgentSession {
     resolveStop(
       turnId: string,
       resolution: "discard" | "apply_a" | "apply_b",
+      discardReason?: ArenaDiscardReason,
     ): Promise<ArenaSnapshot>;
     retryComparison(turnId: string): Promise<ArenaSnapshot>;
     retryResolution(

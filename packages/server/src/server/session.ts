@@ -5502,7 +5502,7 @@ export class Session {
           return;
         }
         case "arena.turn.vote.request": {
-          const result = await arena.vote(msg.turnId, msg.vote, this.clientId);
+          const result = await arena.vote(msg.turnId, msg.vote, this.clientId, msg.acceptFailed);
           this.syncArenaPreviewRoutes(result);
           this.emit({
             type: "arena.turn.vote.response",
@@ -5535,7 +5535,7 @@ export class Session {
           return;
         }
         case "arena.turn.resolve_stop.request": {
-          const result = await arena.resolveStop(msg.turnId, msg.resolution);
+          const result = await arena.resolveStop(msg.turnId, msg.resolution, msg.discardReason);
           this.syncArenaPreviewRoutes(result);
           await this.agentManager.hydrateArenaWinner(msg.agentId, result);
           this.emit({

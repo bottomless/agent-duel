@@ -2,7 +2,12 @@ import { JSDOM } from "jsdom";
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { confirmDialog, useConfirmDialogStore } from "@/utils/confirm-dialog";
+import {
+  confirmDialog,
+  confirmDialogWithChoice,
+  useConfirmDialogStore,
+  type ConfirmDialogAnswer,
+} from "@/utils/confirm-dialog";
 import { ConfirmDialogHost } from "./confirm-dialog-host";
 
 vi.mock("react-native-unistyles", () => ({
@@ -115,6 +120,16 @@ function ask(input: Parameters<typeof confirmDialog>[0]): Promise<boolean> {
   return answer;
 }
 
+function askWithChoice(
+  input: Parameters<typeof confirmDialogWithChoice>[0],
+): Promise<ConfirmDialogAnswer> {
+  let answer: Promise<ConfirmDialogAnswer> = Promise.resolve({ confirmed: false });
+  act(() => {
+    answer = confirmDialogWithChoice(input);
+  });
+  return answer;
+}
+
 async function waitForExit(): Promise<void> {
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 200));
@@ -144,6 +159,34 @@ describe("ConfirmDialogHost", () => {
     await expect(answer).resolves.toBe(true);
     await waitForExit();
     expect(byTestId("confirm-dialog")).toBeNull();
+  });
+
+  it("sends the optional choice with the confirm, and a second press clears it", async () => {
+    const choices = {
+      label: "Why? (optional)",
+      options: [
+        { id: "both_wrong", label: "Both wrong" },
+        { id: "other", label: "Other" },
+      ],
+    };
+    const picked = askWithChoice({ title: "Discard?", message: "Gone.", choices });
+    click("confirm-dialog-choice-both_wrong");
+    click("confirm-dialog-choice-other");
+    click("confirm-dialog-confirm");
+    await expect(picked).resolves.toEqual({ confirmed: true, choice: "other" });
+    await waitForExit();
+
+    const cleared = askWithChoice({ title: "Discard?", message: "Gone.", choices });
+    click("confirm-dialog-choice-other");
+    click("confirm-dialog-choice-other");
+    click("confirm-dialog-confirm");
+    await expect(cleared).resolves.toEqual({ confirmed: true });
+    await waitForExit();
+
+    const fresh = askWithChoice({ title: "Discard?", message: "Gone.", choices });
+    click("confirm-dialog-confirm");
+    await expect(fresh).resolves.toEqual({ confirmed: true });
+    await waitForExit();
   });
 
   it("resolves false on Cancel", async () => {

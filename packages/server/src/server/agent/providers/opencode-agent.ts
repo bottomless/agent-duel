@@ -4422,10 +4422,10 @@ class OpenCodeAgentSession implements AgentSession {
             method: "POST",
           },
         ),
-      vote: (turnId, vote, participantId) =>
+      vote: (turnId, vote, participantId, acceptFailed) =>
         this.arenaRequest(`/arena/turns/${encodeURIComponent(turnId)}/vote`, {
           method: "POST",
-          body: { vote, participantID: participantId },
+          body: { vote, participantID: participantId, ...(acceptFailed ? { acceptFailed } : {}) },
         }),
       recordReview: (turnId, events, participantId, ipAddress) =>
         this.arenaFetch(
@@ -4444,10 +4444,10 @@ class OpenCodeAgentSession implements AgentSession {
         this.arenaRequest(`/arena/turns/${encodeURIComponent(turnId)}/stop`, {
           method: "POST",
         }),
-      resolveStop: (turnId, resolution) =>
+      resolveStop: (turnId, resolution, discardReason) =>
         this.arenaRequest(`/arena/turns/${encodeURIComponent(turnId)}/stop-resolution`, {
           method: "POST",
-          body: { resolution },
+          body: { resolution, ...(discardReason ? { discardReason } : {}) },
         }),
       retryComparison: (turnId) =>
         this.arenaRequest(`/arena/turns/${encodeURIComponent(turnId)}/retry-comparison`, {

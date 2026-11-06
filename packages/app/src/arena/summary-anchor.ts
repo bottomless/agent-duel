@@ -9,6 +9,11 @@ export function isArenaBattleUnresolved(snapshot: ArenaSnapshot | undefined): bo
   return snapshot?.chat.status === "battle_active" && snapshot.turn?.resolution === undefined;
 }
 
+/** The battle that shows its own prompt, while it is on screen. */
+export function arenaOnScreenTurnId(snapshot: ArenaSnapshot | undefined): string | null {
+  return isArenaBattleOnScreen(snapshot) ? (snapshot?.turn?.id ?? null) : null;
+}
+
 /** Whether the chat can take a new battle now: none is on screen and the chat is ready. */
 export function arenaChatCanStartBattle(
   snapshot: ArenaSnapshot | undefined,
@@ -84,18 +89,49 @@ export interface ArenaPresentedStream {
   head: StreamItem[];
 }
 
+/** The presentation-only row that stands for a battle's prompt before, or instead of, its graft. */
+export function arenaPromptRowId(turnId: string): string {
+  return `arena-prompt:${turnId}`;
+}
+
 /** A presentation-only row: never put this projection back into the session store. */
 export function projectPendingArenaPrompt(
   stream: ArenaPresentedStream,
   turn: ArenaSnapshot["turn"] | null,
 ): ArenaPresentedStream {
   if (!turn || turn.state !== "complete") return stream;
-  const timestamp = new Date(turn.createdAt);
-  const prompt = createUserMessage({
-    id: `arena-prompt:${turn.id}`,
-    text: turn.prompt,
-    timestamp,
-  });
+  return insertPromptRow(stream, turn.id, turn.prompt, new Date(turn.createdAt));
+}
+
+/**
+ * Discarded turns' prompts, as presentation-only rows. A discard grafts nothing into the session,
+ * so without them the chat lost the prompt and the discarded card had no row to sit under.
+ * A turn older than the first loaded row waits for its page, rather than landing at its top.
+ */
+export function projectDiscardedArenaPrompts(
+  stream: ArenaPresentedStream,
+  history: readonly ArenaHistoryItem[],
+  options: { onScreenTurnId: string | null; hasOlderTimeline: boolean },
+): ArenaPresentedStream {
+  let projected = stream;
+  for (const item of history) {
+    if (item.prompt === undefined || item.canonicalUserMessageID) continue;
+    if (item.id === options.onScreenTurnId) continue;
+    const timestamp = new Date(item.createdAt);
+    const first = [...projected.tail, ...projected.head][0];
+    if (options.hasOlderTimeline && (!first || first.timestamp > timestamp)) continue;
+    projected = insertPromptRow(projected, item.id, item.prompt, timestamp);
+  }
+  return projected;
+}
+
+function insertPromptRow(
+  stream: ArenaPresentedStream,
+  turnId: string,
+  text: string,
+  timestamp: Date,
+): ArenaPresentedStream {
+  const prompt = createUserMessage({ id: arenaPromptRowId(turnId), text, timestamp });
   const { tail, head } = stream;
   // Assistant timestamps can refresh during replay. Use the next user prompt as
   // the boundary so the previous answer stays with its original turn.
@@ -138,7 +174,9 @@ function lastBattlePromptIndex(
   streamItems: ReadonlyArray<ArenaAnchorItem>,
 ): number {
   const first = item.canonicalUserMessageID;
-  if (!first) return -1;
+  // A discarded turn has only its projected prompt (`projectDiscardedArenaPrompts`).
+  if (!first)
+    return streamItems.findIndex((streamItem) => streamItem.id === arenaPromptRowId(item.id));
   const last = item.canonicalLastMessageID;
   if (!last) return streamItems.findIndex((streamItem) => isCanonicalPrompt(item, streamItem));
   return streamItems.findLastIndex(

@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import {
   abortedResolution,
+  acceptedFailedSide,
+  canAcceptFailed,
   canDiscardBattle,
   canReopenInterruptedBattle,
   canResumeBattle,
@@ -16,6 +18,7 @@ import {
   isVoteReady,
   operationID,
   requireTransition,
+  RESULT_NOT_SAVED_MESSAGE,
   stoppedResolution,
   turnID,
   isParkedPromotion,
@@ -273,10 +276,63 @@ describe("canTie and canDiscardBattle", () => {
     expect(canTie({ state: "awaiting_vote" }, [chosen("a")])).toBe(false)
   })
 
-  test("discards a finished battle only when neither result can be chosen", () => {
+  test("discards a battle at its vote whatever its results", () => {
     expect(canDiscardBattle({ state: "awaiting_vote" }, neither)).toBe(true)
-    expect(canDiscardBattle({ state: "awaiting_vote" }, one)).toBe(false)
-    expect(canDiscardBattle({ state: "awaiting_vote" }, both)).toBe(false)
+    expect(canDiscardBattle({ state: "awaiting_vote" }, one)).toBe(true)
+    expect(canDiscardBattle({ state: "awaiting_vote" }, both)).toBe(true)
+  })
+
+  describe("canAcceptFailed", () => {
+    const awaiting = { state: "awaiting_vote" as const }
+    const saved = {
+      side: "a" as const,
+      runState: "error",
+      selectable: false,
+      finalizedAt: new Date(0),
+      applicability: "applicable",
+      finalCommit: "commit",
+      finalIndexTree: "tree",
+    }
+    const finished = { side: "b" as const, selectable: true, runState: "complete", finalizedAt: new Date(0) }
+
+    test("accepts a failed side whose result was saved, beside a finished or a failed side", () => {
+      expect(canAcceptFailed(awaiting, [saved, finished], "a")).toBe(true)
+      expect(canAcceptFailed(awaiting, [saved, { ...saved, side: "b" }], "b")).toBe(true)
+    })
+
+    test("refuses a side that did not fail", () => {
+      expect(canAcceptFailed(awaiting, [saved, finished], "b")).toBe(false)
+      expect(canAcceptFailed(awaiting, [{ ...saved, runState: "stopped" }, finished], "a")).toBe(false)
+    })
+
+    test("refuses a side with no usable result", () => {
+      const { finalCommit: _commit, ...noCommit } = saved
+      const { finalIndexTree: _tree, ...noIndex } = saved
+      expect(canAcceptFailed(awaiting, [noCommit, finished], "a")).toBe(false)
+      expect(canAcceptFailed(awaiting, [noIndex, finished], "a")).toBe(false)
+      expect(canAcceptFailed(awaiting, [{ ...saved, applicability: "blocked" }, finished], "a")).toBe(false)
+      // The commit is an earlier attempt's: this attempt's work never reached it.
+      expect(canAcceptFailed(awaiting, [{ ...saved, error: `${RESULT_NOT_SAVED_MESSAGE}\nboom` }, finished], "a")).toBe(
+        false,
+      )
+    })
+
+    test("refuses outside an open vote", () => {
+      expect(canAcceptFailed({ state: "running" }, [saved, finished], "a")).toBe(false)
+      expect(canAcceptFailed({ ...awaiting, resolution: voteResolution("a") }, [saved, finished], "a")).toBe(false)
+      const cutOff = { side: "b" as const, runState: "interrupted", finalizedAt: new Date(0) }
+      expect(canAcceptFailed(awaiting, [saved, cutOff], "a")).toBe(false)
+    })
+  })
+
+  test("names the applied side only when it had failed", () => {
+    const failedA = { side: "a" as const, runState: "error" }
+    const finishedB = { side: "b" as const, runState: "complete" }
+    expect(acceptedFailedSide(voteResolution("a"), [failedA, finishedB])).toBe("a")
+    expect(acceptedFailedSide(stoppedResolution("apply_a"), [failedA, finishedB])).toBe("a")
+    expect(acceptedFailedSide(voteResolution("b"), [failedA, finishedB])).toBeUndefined()
+    expect(acceptedFailedSide(stoppedResolution("discard"), [failedA, finishedB])).toBeUndefined()
+    expect(acceptedFailedSide(undefined, [failedA, finishedB])).toBeUndefined()
   })
 
   test("votes only for a result that can be chosen", () => {

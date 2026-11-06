@@ -125,6 +125,8 @@ export const en = {
     discard: "Discard",
     retryResolution: "Retry resolution",
     stoppedChoose: "Battle stopped · choose what to keep",
+    stoppedFailedSide: "Agent {{side}} failed · keeping either won't count as a vote",
+    stoppedBothFailed: "Both agents failed · keeping either won't count as a vote",
     closedBattle: "Agent Duel closed during the battle · resume or discard",
     bothFailedRetry: "Both agents failed · retry or discard",
     bothFailed: "Both agents failed",
@@ -427,6 +429,18 @@ export const en = {
     discardBattleHelp:
       "Both agents' work from this turn will be discarded. Your previous chat history and project stay unchanged.",
     discardBattle: "Discard battle",
+    acceptSide: "Accept {{side}}",
+    acceptedFailedNote: "(failed, accepted)",
+    acceptFailedTitle: "Accept Agent {{side}}'s failed work?",
+    acceptFailedHelp:
+      "Agent {{side}} failed before it finished, so its work can be partial. Its files and conversation become this chat's history, and the other agent's work is discarded. This does not count as a vote.",
+    failedSideAccept: "Agent {{side}} failed · choosing either won't count as a vote",
+    bothFailedAccept: "Both agents failed · accepting either won't count as a vote",
+    acceptedFailedModel: "Accepted {{model}}'s failed work (Agent {{side}})",
+    discardReasonLabel: "Why? (optional)",
+    discardReasonBothWrong: "Both wrong",
+    discardReasonChangedMind: "Changed my mind",
+    discardReasonOther: "Other",
     chatTooLarge:
       "This battle is too large to show. Start a new chat to keep going. Your code changes are already in your project.",
     comparisonTooLarge: "This comparison is too large to show.",

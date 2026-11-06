@@ -246,11 +246,13 @@ export class OpenCodeV2Session implements AgentSession {
       discardSteer: (runId, messageIds) => api().discardSteer(runId, messageIds),
       retryRun: (runId) => api().retryRun(runId),
       resumeBattle: (turnId) => api().resumeBattle(turnId),
-      vote: (turnId, vote, participantId) => api().vote(turnId, vote, participantId),
+      vote: (turnId, vote, participantId, acceptFailed) =>
+        api().vote(turnId, vote, participantId, acceptFailed),
       recordReview: (turnId, events, participantId, ipAddress) =>
         api().recordReview(turnId, events, participantId, ipAddress),
       stop: (turnId) => api().stop(turnId),
-      resolveStop: (turnId, resolution) => api().resolveStop(turnId, resolution),
+      resolveStop: (turnId, resolution, discardReason) =>
+        api().resolveStop(turnId, resolution, discardReason),
       retryComparison: (turnId) => api().retryComparison(turnId),
       retryResolution: (turnId, mode, answers) => api().retryResolution(turnId, mode, answers),
       diff: (turnId) => api().diff(turnId),

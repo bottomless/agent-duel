@@ -117,7 +117,9 @@ export const arenaHandlers = HttpApiBuilder.group(ArenaApi, "arena", (handlers) 
       .handle("reply", (ctx) =>
         map(arena.reply(ctx.params.turnID, ctx.payload.prompt, ctx.payload.target, ctx.payload.attachments)),
       )
-      .handle("vote", (ctx) => map(arena.vote(ctx.params.turnID, ctx.payload.vote, ctx.payload.participantID)))
+      .handle("vote", (ctx) =>
+        map(arena.vote(ctx.params.turnID, ctx.payload.vote, ctx.payload.participantID, ctx.payload.acceptFailed)),
+      )
       .handle("recordReview", (ctx) =>
         map(
           arena.recordReview(ctx.params.turnID, ctx.payload.events, ctx.payload.participantID, ctx.payload.ipAddress),
@@ -128,7 +130,9 @@ export const arenaHandlers = HttpApiBuilder.group(ArenaApi, "arena", (handlers) 
       )
       .handle("retryComparison", (ctx) => map(arena.retryComparison(ctx.params.turnID)))
       .handle("stop", (ctx) => map(arena.stop(ctx.params.turnID)))
-      .handle("resolveStop", (ctx) => map(arena.resolveStop(ctx.params.turnID, ctx.payload.resolution)))
+      .handle("resolveStop", (ctx) =>
+        map(arena.resolveStop(ctx.params.turnID, ctx.payload.resolution, ctx.payload.discardReason)),
+      )
       .handle("inspectCheckout", (ctx) => map(arena.inspectCheckout(ctx.payload.root)))
       .handle("prepareCheckout", (ctx) =>
         map(arena.prepareCheckout(ctx.payload.root).pipe(Effect.as(HttpApiSchema.NoContent.make()))),

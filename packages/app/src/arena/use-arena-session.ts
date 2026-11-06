@@ -9,6 +9,7 @@ import {
   type QueryClient,
 } from "@tanstack/react-query";
 import type {
+  ArenaDiscardReason,
   ArenaRetryMode,
   ArenaReviewAnswer,
   ArenaReplyTarget,
@@ -225,12 +226,13 @@ export type ArenaTurnAction =
   | { kind: "discard_steer"; runId: string; messageIds: string[] }
   | { kind: "retry_run"; runId: string }
   | { kind: "resume_battle"; turnId: string }
-  | { kind: "vote"; turnId: string; vote: ArenaVote }
+  | { kind: "vote"; turnId: string; vote: ArenaVote; acceptFailed?: boolean }
   | { kind: "stop"; turnId: string }
   | {
       kind: "resolve_stop";
       turnId: string;
       resolution: "discard" | "apply_a" | "apply_b";
+      discardReason?: ArenaDiscardReason;
     }
   | { kind: "retry_comparison"; turnId: string }
   | {
@@ -321,11 +323,16 @@ async function runArenaTurnAction(client: DaemonClient, agentId: string, action:
     case "resume_battle":
       return client.arenaResumeBattle(agentId, action.turnId);
     case "vote":
-      return client.arenaVote(agentId, action.turnId, action.vote);
+      return client.arenaVote(agentId, action.turnId, action.vote, action.acceptFailed);
     case "stop":
       return client.arenaStop(agentId, action.turnId);
     case "resolve_stop":
-      return client.arenaResolveStop(agentId, action.turnId, action.resolution);
+      return client.arenaResolveStop(
+        agentId,
+        action.turnId,
+        action.resolution,
+        action.discardReason,
+      );
     case "retry_comparison":
       return client.arenaRetryComparison(agentId, action.turnId);
     case "retry_resolution":

@@ -1,4 +1,4 @@
-import { Side, voteDiscardedReason } from "./domain"
+import { acceptedFailedSide, Side, voteDiscardedReason } from "./domain"
 import {
   battleMetricsSchemaVersion,
   type BattleMetricsDocument,
@@ -337,6 +337,7 @@ export function computeBattleMetrics(input: BattleMetricsInput): BattleMetricsDo
   // Derived from the runs rather than read from the turn, so a recompute marks battles voted on
   // before the turn recorded it.
   const voteDiscarded = turn.voteDiscardedReason ?? voteDiscardedReason(turn.resolution, runs)
+  const acceptedFailed = turn.acceptedFailedSide ?? acceptedFailedSide(turn.resolution, runs)
   const base = turn.createdAt
   const bySide = new Map(runs.map((run) => [run.side, run]))
   const completions: Partial<Record<Side, number>> = {}
@@ -459,6 +460,9 @@ export function computeBattleMetrics(input: BattleMetricsInput): BattleMetricsDo
     modelPair,
     ...(turn.vote ? { vote: turn.vote } : {}),
     ...(voteDiscarded ? { voteDiscardedReason: voteDiscarded } : {}),
+    ...(acceptedFailed ? { acceptedFailedSide: acceptedFailed } : {}),
+    ...(turn.discardStage ? { discardStage: turn.discardStage } : {}),
+    ...(turn.discardReason ? { discardReason: turn.discardReason } : {}),
     ...(turn.resolution?.kind ? { resolutionKind: turn.resolution.kind } : {}),
     selectedEarly: turn.selectedEarly === true,
     steerCount: turn.steerCount ?? 0,

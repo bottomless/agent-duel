@@ -16,6 +16,7 @@ import {
   registerConfirmDialogHost,
   selectActiveConfirmDialog,
   useConfirmDialogStore,
+  type ConfirmDialogChoices,
   type ConfirmDialogRequest,
 } from "@/utils/confirm-dialog";
 import { PressHighlight } from "@/components/ui/press-highlight";
@@ -54,15 +55,79 @@ export function ConfirmDialogHost() {
   return createPortal(<ConfirmDialog request={shown} open={active !== null} />, getOverlayRoot());
 }
 
+/** Pressing the picked option again clears it, because the answer is optional. */
+function ConfirmDialogChoiceRow({
+  choices,
+  selected,
+  onChange,
+}: {
+  choices: ConfirmDialogChoices;
+  selected: string | undefined;
+  onChange: (choice: string | undefined) => void;
+}) {
+  return (
+    <View style={styles.choices}>
+      <Text style={styles.choicesLabel}>{choices.label}</Text>
+      <View style={styles.choiceRow}>
+        {choices.options.map((option) => (
+          <ConfirmDialogChoiceButton
+            key={option.id}
+            id={option.id}
+            label={option.label}
+            selected={selected === option.id}
+            onChange={onChange}
+          />
+        ))}
+      </View>
+    </View>
+  );
+}
+
+function ConfirmDialogChoiceButton({
+  id,
+  label,
+  selected,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  selected: boolean;
+  onChange: (choice: string | undefined) => void;
+}) {
+  const handlePress = useCallback(
+    () => onChange(selected ? undefined : id),
+    [id, onChange, selected],
+  );
+  const accessibilityState = useMemo(() => ({ selected }), [selected]);
+  return (
+    <Button
+      variant={selected ? "secondary" : "outline"}
+      size="xs"
+      accessibilityState={accessibilityState}
+      onPress={handlePress}
+      testID={`confirm-dialog-choice-${id}`}
+    >
+      {label}
+    </Button>
+  );
+}
+
 function ConfirmDialog({ request, open }: { request: ConfirmDialogRequest; open: boolean }) {
   const { t } = useTranslation();
   const titleId = useId();
   const messageId = useId();
   const layer = useGlobalWebOverlayLayer("modal", true);
   const { id, destructive } = request;
+  // Held with the request it was picked for, so the next question starts with nothing picked.
+  const [picked, setPicked] = useState<{ id: number; choice: string | undefined } | null>(null);
+  const choice = picked?.id === id ? picked.choice : undefined;
+  const handleChoiceChange = useCallback(
+    (next: string | undefined) => setPicked({ id, choice: next }),
+    [id],
+  );
 
   const cancel = useCallback(() => answerConfirmDialog(id, false), [id]);
-  const confirm = useCallback(() => answerConfirmDialog(id, true), [id]);
+  const confirm = useCallback(() => answerConfirmDialog(id, true, choice), [choice, id]);
   const handleKeyDown = useCallback(
     (event: KeyboardEvent) => {
       if (event.key !== "Escape") return false;
@@ -115,6 +180,13 @@ function ConfirmDialog({ request, open }: { request: ConfirmDialogRequest; open:
             <Text nativeID={messageId} style={styles.message} testID="confirm-dialog-message">
               {request.message}
             </Text>
+            {request.choices ? (
+              <ConfirmDialogChoiceRow
+                choices={request.choices}
+                selected={choice}
+                onChange={handleChoiceChange}
+              />
+            ) : null}
           </View>
         </ScrollView>
         {/* Keyed per request so each new question remounts its buttons and takes focus again. */}
@@ -179,6 +251,19 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.foreground,
     fontSize: theme.fontSize.base,
     fontWeight: theme.fontWeight.medium,
+  },
+  choices: {
+    gap: theme.spacing[1.5],
+    marginTop: theme.spacing[2],
+  },
+  choicesLabel: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.sm,
+  },
+  choiceRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: theme.spacing[1.5],
   },
   message: {
     color: theme.colors.foregroundMuted,

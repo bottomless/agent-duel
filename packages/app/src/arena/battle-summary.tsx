@@ -101,10 +101,13 @@ function chosenLabel(item: ArenaHistoryItem): string {
     if (item.resolution?.kind === "stopped") return i18n.t("arena.battleDiscarded");
     return i18n.t("arena.battleResolved");
   }
-  return i18n.t("arena.choseModel", {
-    model: arenaModelDisplayName(item.identities?.[side].name),
-    side: side.toUpperCase(),
-  });
+  return i18n.t(
+    item.acceptedFailedSide === side ? "arena.acceptedFailedModel" : "arena.choseModel",
+    {
+      model: arenaModelDisplayName(item.identities?.[side].name),
+      side: side.toUpperCase(),
+    },
+  );
 }
 
 /**
@@ -223,38 +226,42 @@ function ThreadTitle({ side, model }: { side: "a" | "b"; model: string | undefin
 }
 
 /** One side's model, as revealed by the vote: its vendor's mark and its name. */
+function winnerNote(counted: boolean, acceptedFailed: boolean): string {
+  if (acceptedFailed) return i18n.t("arena.acceptedFailedNote");
+  if (counted) return i18n.t("arena.winnerNote");
+  return i18n.t("arena.chosenNote", { defaultValue: "(chosen)" });
+}
+
 function RevealedIdentity({
   side,
   model,
   winner,
   counted,
+  acceptedFailed,
 }: {
   side: "a" | "b";
   model: string | undefined;
   winner: boolean;
   /** False when a side failed: the chosen side applied, but nobody won the vote. */
   counted: boolean;
+  /** This side had failed and the voter took its work anyway. */
+  acceptedFailed: boolean;
 }) {
-  const { t } = useTranslation();
+  useTranslation();
   return (
     <View style={styles.identity}>
       <Text style={styles.identities}>{side.toUpperCase()}:</Text>
       <ArenaModelVendorIcon model={model} size={ICON_SIZE.xs} tone="muted" />
       <Text style={styles.identities}>{arenaModelDisplayName(model)}</Text>
-      {winner ? (
-        <Text style={styles.identities}>
-          {counted
-            ? t("arena.winnerNote")
-            : i18n.t("arena.chosenNote", { defaultValue: "(chosen)" })}
-        </Text>
-      ) : null}
+      {winner ? <Text style={styles.identities}>{winnerNote(counted, acceptedFailed)}</Text> : null}
     </View>
   );
 }
 
 function BattleOutcome({ item }: { item: ArenaHistoryItem }) {
   const { t } = useTranslation();
-  const winner = battleWinnerSide(item);
+  // A failed side kept after Stop has no vote, but it is named the way an accepted one is.
+  const winner = battleWinnerSide(item) ?? item.acceptedFailedSide;
   const showOutcome = !winner || item.gitApplication?.state === "discarded";
   const gitNotice = gitApplicationNotice(item);
   return (
@@ -267,6 +274,7 @@ function BattleOutcome({ item }: { item: ArenaHistoryItem }) {
               model={item.identities.a.name}
               winner={winner === "a"}
               counted={!item.voteDiscardedReason}
+              acceptedFailed={item.acceptedFailedSide === "a"}
             />
             <Text style={styles.identities}>·</Text>
             <RevealedIdentity
@@ -274,6 +282,7 @@ function BattleOutcome({ item }: { item: ArenaHistoryItem }) {
               model={item.identities.b.name}
               winner={winner === "b"}
               counted={!item.voteDiscardedReason}
+              acceptedFailed={item.acceptedFailedSide === "b"}
             />
             {showOutcome ? <Text style={styles.identities}>· {chosenLabel(item)}</Text> : null}
           </View>
