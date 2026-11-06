@@ -230,7 +230,7 @@ jobs:
       # the engine would crash at start on older CPUs. The baseline build runs on any x64 CPU.
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-download-url: https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-windows-x64-baseline.zip
+          bun-download-url: https://github.com/oven-sh/bun/releases/download/bun-v1.4.2/bun-windows-x64-baseline.zip
 
       - name: Validate release version
         env:
