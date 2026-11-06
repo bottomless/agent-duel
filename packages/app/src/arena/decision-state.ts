@@ -55,7 +55,14 @@ export type ArenaDecisionPhase =
        */
       canResume: boolean;
     }
-  | { kind: "awaiting_stop_resolution"; canKeepA: boolean; canKeepB: boolean }
+  | {
+      kind: "awaiting_stop_resolution";
+      canKeepA: boolean;
+      canKeepB: boolean;
+      /** Sides that failed before the stop. Keeping either side then does not count as a vote. */
+      failedA: boolean;
+      failedB: boolean;
+    }
   | { kind: "retry_resolution"; detail: string }
   | { kind: "transitional"; label: string; busy: boolean };
 
@@ -181,6 +188,8 @@ export function arenaDecisionPhase(snapshot: ArenaSnapshot): ArenaDecisionPhase 
         kind: "awaiting_stop_resolution",
         canKeepA: canKeepStoppedArenaRun(turn.state, runA),
         canKeepB: canKeepStoppedArenaRun(turn.state, runB),
+        failedA: runA?.runState === "error",
+        failedB: runB?.runState === "error",
       };
     case "creation_failed":
       return transitional(i18n.t("arena.failedStart"), false);

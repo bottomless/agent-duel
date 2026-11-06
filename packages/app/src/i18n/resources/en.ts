@@ -125,6 +125,8 @@ export const en = {
     discard: "Discard",
     retryResolution: "Retry resolution",
     stoppedChoose: "Battle stopped · choose what to keep",
+    stoppedFailedSide: "Agent {{side}} failed · keeping either won't count as a vote",
+    stoppedBothFailed: "Both agents failed · keeping either won't count as a vote",
     closedBattle: "Agent Duel closed during the battle · resume or discard",
     bothFailedRetry: "Both agents failed · retry or discard",
     bothFailed: "Both agents failed",

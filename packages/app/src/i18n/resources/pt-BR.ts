@@ -135,6 +135,8 @@ export const ptBR: TranslationResources = {
     discard: "Descartar",
     retryResolution: "Tentar resolução novamente",
     stoppedChoose: "Batalha parada · escolha o que manter",
+    stoppedFailedSide: "O agente {{side}} falhou · manter qualquer um não contará como voto",
+    stoppedBothFailed: "Ambos os agentes falharam · manter qualquer um não contará como voto",
     closedBattle: "Agent Duel fechou durante a batalha · retome ou descarte",
     bothFailedRetry: "Ambos os agentes falharam · tente novamente ou descarte",
     bothFailed: "Ambos os agentes falharam",

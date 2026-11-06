@@ -140,6 +140,32 @@ export function useArenaBattleActions(
     [mutateTurn, showError, t, turnId],
   );
 
+  // Keep after a stop applies a failed side the same way, so it asks the same question.
+  const keepFailed = useCallback(
+    async (side: ArenaSide) => {
+      if (!turnId) return;
+      const label = sideLabel(side);
+      const confirmed = await confirmDialog({
+        title: t("arena.acceptFailedTitle", { side: label }),
+        message: t("arena.acceptFailedHelp", { side: label }),
+        confirmLabel: t("arena.keepSide", { side: label }),
+        cancelLabel: t("arena.cancel"),
+        destructive: true,
+      });
+      if (!confirmed) return;
+      try {
+        await mutateTurn({
+          kind: "resolve_stop",
+          turnId,
+          resolution: side === "a" ? "apply_a" : "apply_b",
+        });
+      } catch (error) {
+        showError(error);
+      }
+    },
+    [mutateTurn, showError, t, turnId],
+  );
+
   const tie = useCallback(async () => {
     if (!turnId) return;
     try {
@@ -279,6 +305,7 @@ export function useArenaBattleActions(
       choose,
       pickEarly,
       acceptFailed,
+      keepFailed,
       tie,
       stop,
       resolveStop,
@@ -293,6 +320,7 @@ export function useArenaBattleActions(
     }),
     [
       acceptFailed,
+      keepFailed,
       choose,
       actionError,
       pending,

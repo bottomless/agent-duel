@@ -131,6 +131,10 @@ export const ja: TranslationResources = {
     discard: "破棄",
     retryResolution: "解決を再試行",
     stoppedChoose: "バトル停止 · 保持する内容を選択",
+    stoppedFailedSide:
+      "エージェント {{side}} が失敗しました · どちらを残しても投票として数えられません",
+    stoppedBothFailed:
+      "両方のエージェントが失敗しました · どちらを残しても投票として数えられません",
     closedBattle: "バトル中にAgent Duelが閉じられました · 再開または破棄",
     bothFailedRetry: "両エージェントが失敗 · 再試行または破棄",
     bothFailed: "両エージェントが失敗",

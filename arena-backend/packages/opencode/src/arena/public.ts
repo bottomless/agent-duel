@@ -375,6 +375,10 @@ export function project(snapshot: BattleSnapshot) {
       ...(item.vote ? { vote: item.vote } : {}),
       ...(item.voteDiscardedReason ? { voteDiscardedReason: item.voteDiscardedReason } : {}),
       ...(item.acceptedFailedSide ? { acceptedFailedSide: item.acceptedFailedSide } : {}),
+      // A discard grafts nothing, so the chat has no row for its prompt but this one.
+      ...(item.resolution?.kind === "stopped" && !item.appliedSide && item.userPrompt
+        ? { prompt: item.userPrompt }
+        : {}),
       ...(item.selectedEarly === undefined ? {} : { selectedEarly: item.selectedEarly }),
       ...(item.appliedSide ? { appliedSide: item.appliedSide } : {}),
       ...(item.canonicalUserMessageID ? { canonicalUserMessageID: item.canonicalUserMessageID } : {}),

@@ -128,6 +128,8 @@ export const ar: TranslationResources = {
     discard: "تجاهل",
     retryResolution: "إعادة محاولة الحسم",
     stoppedChoose: "توقفت المعركة · اختر ما ستحتفظ به",
+    stoppedFailedSide: "فشل الوكيل {{side}} · لن يُحتسب الاحتفاظ بأي منهما تصويتًا",
+    stoppedBothFailed: "فشل الوكيلان · لن يُحتسب الاحتفاظ بأي منهما تصويتًا",
     closedBattle: "أُغلق Agent Duel أثناء المعركة · استأنف أو تجاهل",
     bothFailedRetry: "فشل كلا الوكيلين · أعد المحاولة أو تجاهل",
     bothFailed: "فشل كلا الوكيلين",

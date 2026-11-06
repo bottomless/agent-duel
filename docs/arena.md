@@ -1311,7 +1311,7 @@ Use one utility request; increase evidence quality before adding model passes.
   winner and carries `voteDiscardedReason` too, so it does not count. The turn and metrics also name
   the side in `acceptedFailedSide`, because `voteDiscardedReason` alone also marks a vote for the
   finished side. While the other side still works, the same result is reached through Stop and Keep,
-  which sets the same field.
+  which sets the same field, asks the same confirmation, and says first that it will not count.
 - **Early vote** while still `running` claims the resolution, then cancels the loser in the
   background until it reports terminal. Ties are rejected here — a tie needs both results. The
   early choice asks before sending one, since the other side's work is gone the moment it lands.
@@ -1323,8 +1323,11 @@ Use one utility request; increase evidence quality before adding model passes.
   `resolution` wherever it happened, so the turn and its metrics row carry `discardStage` (`vote`,
   `stop`, `recovery`, `archive`) and, when the voter gave one, `discardReason`. The last two stages
   are not the voter's verdict on the results; drop them when reading discards as one. A discard
-  writes its metrics row at once. The service refuses the report of a battle it holds as discarded, so
-  a comparison still generating reads as `skipped`.
+  writes its metrics row at once. A comparison that finishes keeps its report. One the service refuses,
+  because it already holds the battle as discarded, reads as `skipped` rather than as a failure to
+  retry. A discard grafts nothing, so the chat's session never holds its prompt: the history item
+  carries it, and the app shows it as a prompt row with the discarded card under it
+  (`projectDiscardedArenaPrompts`). The next battle's agents do not see the discarded turn.
 - **Stop** moves to `awaiting_stop_resolution`, where the choice is discard, keep A, or keep B
   (`stop` in `arena/service.ts`). Keeping a side when the other had already failed, rather than
   merely stopped, carries the same `voteDiscardedReason`, so metrics do not file it as a win.

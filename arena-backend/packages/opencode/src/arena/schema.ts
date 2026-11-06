@@ -208,6 +208,7 @@ const HistoryItem = Schema.Struct({
   vote: Schema.optional(Schema.Literals(Vote)),
   voteDiscardedReason: Schema.optional(Schema.Literals(VoteDiscardedReason)),
   acceptedFailedSide: Schema.optional(Schema.Literals(Side)),
+  prompt: Schema.optional(Schema.String),
   selectedEarly: Schema.optional(Schema.Boolean),
   appliedSide: Schema.optional(Schema.Literals(Side)),
   canonicalUserMessageID: Schema.optional(Schema.String),

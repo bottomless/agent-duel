@@ -83,6 +83,8 @@ const historyProjection = {
   vote: 1,
   voteDiscardedReason: 1,
   acceptedFailedSide: 1,
+  // Only a discarded turn sends its prompt: it is in no session for the chat to show.
+  userPrompt: 1,
   selectedEarly: 1,
   appliedSide: 1,
   canonicalUserMessageID: 1,

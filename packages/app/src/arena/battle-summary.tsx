@@ -260,7 +260,8 @@ function RevealedIdentity({
 
 function BattleOutcome({ item }: { item: ArenaHistoryItem }) {
   const { t } = useTranslation();
-  const winner = battleWinnerSide(item);
+  // A failed side kept after Stop has no vote, but it is named the way an accepted one is.
+  const winner = battleWinnerSide(item) ?? item.acceptedFailedSide;
   const showOutcome = !winner || item.gitApplication?.state === "discarded";
   const gitNotice = gitApplicationNotice(item);
   return (

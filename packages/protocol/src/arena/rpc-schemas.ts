@@ -319,6 +319,10 @@ export const ArenaHistoryItemSchema = z
     vote: ArenaVoteSchema.optional(),
     // The chosen side applied, but the vote does not count because a side failed.
     voteDiscardedReason: z.enum(["contestant_failed"]).optional(),
+    // The applied side had failed and the voter took its work anyway.
+    acceptedFailedSide: ArenaSideSchema.optional(),
+    // A discarded turn's prompt, which no session holds for the chat to show.
+    prompt: z.string().optional(),
     selectedEarly: z.boolean().optional(),
     appliedSide: ArenaSideSchema.optional(),
     canonicalUserMessageID: z.string().optional(),

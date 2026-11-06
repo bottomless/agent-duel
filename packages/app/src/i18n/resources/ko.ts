@@ -131,6 +131,8 @@ export const ko: TranslationResources = {
     discard: "삭제",
     retryResolution: "해결 다시 시도",
     stoppedChoose: "배틀 중지됨 · 유지할 작업 선택",
+    stoppedFailedSide: "에이전트 {{side}} 실패 · 어느 쪽을 유지해도 투표로 집계되지 않습니다",
+    stoppedBothFailed: "두 에이전트 모두 실패 · 어느 쪽을 유지해도 투표로 집계되지 않습니다",
     closedBattle: "배틀 중 Agent Duel이 닫혔습니다 · 재개 또는 삭제",
     bothFailedRetry: "두 에이전트 실패 · 다시 시도 또는 삭제",
     bothFailed: "두 에이전트 실패",

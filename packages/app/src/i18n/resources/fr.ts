@@ -136,6 +136,10 @@ export const fr: TranslationResources = {
     discard: "Abandonner",
     retryResolution: "Réessayer la résolution",
     stoppedChoose: "Bataille arrêtée · choisissez quoi conserver",
+    stoppedFailedSide:
+      "L'agent {{side}} a échoué · conserver l'un ou l'autre ne comptera pas comme un vote",
+    stoppedBothFailed:
+      "Les deux agents ont échoué · conserver l'un ou l'autre ne comptera pas comme un vote",
     closedBattle: "Agent Duel s’est fermé pendant la bataille · reprendre ou abandonner",
     bothFailedRetry: "Les deux agents ont échoué · réessayer ou abandonner",
     bothFailed: "Les deux agents ont échoué",

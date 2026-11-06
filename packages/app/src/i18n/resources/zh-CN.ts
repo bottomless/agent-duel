@@ -127,6 +127,8 @@ export const zhCN: TranslationResources = {
     discard: "放弃",
     retryResolution: "重试解决",
     stoppedChoose: "对战已停止 · 选择要保留的内容",
+    stoppedFailedSide: "智能体 {{side}} 失败 · 保留任一方都不计为投票",
+    stoppedBothFailed: "两个智能体都失败了 · 保留任一方都不计为投票",
     closedBattle: "Agent Duel 在对战中关闭 · 继续或放弃",
     bothFailedRetry: "两个智能体均失败 · 重试或放弃",
     bothFailed: "两个智能体均失败",

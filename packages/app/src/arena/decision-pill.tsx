@@ -100,9 +100,11 @@ function BattlePaneKeepDecision({
   const { pending, pendingAction } = actions;
   const resolution = side === "a" ? "apply_a" : "apply_b";
   const canKeep = side === "a" ? phase.canKeepA : phase.canKeepB;
+  const failed = side === "a" ? phase.failedA : phase.failedB;
   const handleKeep = useCallback(() => {
-    void actions.resolveStop(resolution);
-  }, [actions, resolution]);
+    // A failed side's work can be partial, so it asks first, as Accept does.
+    void (failed ? actions.keepFailed(side) : actions.resolveStop(resolution));
+  }, [actions, failed, resolution, side]);
   return (
     <ArenaSideChoiceButton
       side={side}
@@ -139,10 +141,18 @@ function BattleStopDecision({
   );
 }
 
+function stoppedHint(phase: Extract<ArenaDecisionPhase, { kind: "awaiting_stop_resolution" }>) {
+  if (phase.failedA && phase.failedB) return i18n.t("arena.stoppedBothFailed");
+  if (phase.failedA || phase.failedB) {
+    return i18n.t("arena.stoppedFailedSide", { side: phase.failedA ? "A" : "B" });
+  }
+  return i18n.t("arena.stoppedChoose");
+}
+
 /** The line above the pill that says why the usual choices changed, if they did. */
 function decisionHint(phase: ArenaDecisionPhase): string | null {
   if (phase.kind === "running") return arenaRunningDecisionHint(phase);
-  if (phase.kind === "awaiting_stop_resolution") return i18n.t("arena.stoppedChoose");
+  if (phase.kind === "awaiting_stop_resolution") return stoppedHint(phase);
   if (phase.kind !== "awaiting_vote") return null;
   if (phase.canResume) return i18n.t("arena.closedBattle");
   if (phase.failedSide) {

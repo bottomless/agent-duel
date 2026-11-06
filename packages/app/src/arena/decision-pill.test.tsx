@@ -265,4 +265,28 @@ describe("ArenaDecisionPill", () => {
     expect(view.queryByTestId("arena-choose-a")).toBeNull();
     expect(view.queryByTestId("arena-choose-tie")).toBeNull();
   });
+
+  it("says first that keeping either side after a failure will not count", () => {
+    const view = render(
+      <ArenaDecisionPill
+        serverId="server"
+        agentId="agent"
+        snapshot={STOPPED_AFTER_FAILURE}
+        onHeightChange={noop}
+      />,
+    );
+    expect(view.getByText("Agent A failed · keeping either won't count as a vote")).toBeTruthy();
+    expect(view.queryByTestId("arena-stopped-keep-b")).not.toBeNull();
+  });
 });
+
+const STOPPED_AFTER_FAILURE: ArenaSnapshot = (() => {
+  const snapshot = awaitingVote(
+    [
+      failed("a", false),
+      run({ id: "run-b", side: "b", runState: "stopped", selectable: false, applicable: true }),
+    ],
+    { canTie: false, canDiscardBattle: true },
+  );
+  return { ...snapshot, turn: { ...snapshot.turn!, state: "awaiting_stop_resolution" } };
+})();

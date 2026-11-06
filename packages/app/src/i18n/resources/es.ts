@@ -135,6 +135,8 @@ export const es: TranslationResources = {
     discard: "Descartar",
     retryResolution: "Reintentar resolución",
     stoppedChoose: "Batalla detenida · elige qué conservar",
+    stoppedFailedSide: "El agente {{side}} falló · conservar cualquiera no contará como voto",
+    stoppedBothFailed: "Ambos agentes fallaron · conservar cualquiera no contará como voto",
     closedBattle: "Agent Duel se cerró durante la batalla · reanuda o descarta",
     bothFailedRetry: "Ambos agentes fallaron · reintenta o descarta",
     bothFailed: "Ambos agentes fallaron",

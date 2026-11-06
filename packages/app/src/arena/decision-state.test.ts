@@ -277,7 +277,13 @@ describe("arenaDecisionPhase", () => {
           ],
         }),
       ),
-    ).toEqual({ kind: "awaiting_stop_resolution", canKeepA: true, canKeepB: false });
+    ).toEqual({
+      kind: "awaiting_stop_resolution",
+      canKeepA: true,
+      canKeepB: false,
+      failedA: false,
+      failedB: false,
+    });
   });
 
   it.each([
@@ -296,7 +302,7 @@ describe("arenaDecisionPhase", () => {
 
     expect(isArenaBattleOnScreen(pending)).toBe(true);
     expect(showsArenaDecisionBar(pending)).toBe(true);
-    expect(arenaDecisionPhase(pending)).toEqual({
+    expect(arenaDecisionPhase(pending)).toMatchObject({
       kind: "awaiting_stop_resolution",
       canKeepA,
       canKeepB,

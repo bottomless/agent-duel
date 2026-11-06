@@ -1033,6 +1033,7 @@ export type BattleHistoryTurn = Pick<
   | "vote"
   | "voteDiscardedReason"
   | "acceptedFailedSide"
+  | "userPrompt"
   | "selectedEarly"
   | "appliedSide"
   | "canonicalUserMessageID"
