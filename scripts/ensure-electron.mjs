@@ -1,8 +1,9 @@
-// Electron's own postinstall extracts its binary with extract-zip, which stops
-// partway on newer Node releases (seen on Node 26): the app bundle is left
-// without its frameworks and without path.txt, and `npm run dev:desktop` fails
-// with "Electron failed to install correctly". Re-extract the zip Electron
-// already downloaded with the platform's own unzip tool when that happens.
+// Installs Electron's binary when node_modules/electron has none. Electron 44
+// dropped its postinstall, so on a fresh install this script is what puts the
+// binary in place, on every platform. Older Electron postinstalls used
+// extract-zip, which stops partway on newer Node releases (seen on Node 26) and
+// leaves the app bundle without its frameworks or path.txt. Either way, unpack
+// the downloaded zip with the platform's own unzip tool.
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -48,9 +49,13 @@ const zipPath = await downloadArtifact({
 
 rmSync(dist, { recursive: true, force: true });
 mkdirSync(dist, { recursive: true });
+// Windows' own tar.exe (bsdtar) unpacks zips. A bare `tar` can resolve to Git's GNU tar, which is
+// first on PATH under Git Bash (the release workflow's shell) and reads the `C:` in the zip path as
+// a remote host: "Cannot connect to C: resolve failed".
+const windowsTar = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe");
 const unzipCommand = {
   darwin: ["ditto", ["-x", "-k", zipPath, dist]],
-  win32: ["tar", ["-xf", zipPath, "-C", dist]],
+  win32: [windowsTar, ["-xf", zipPath, "-C", dist]],
 }[process.platform] ?? ["unzip", ["-q", "-o", zipPath, "-d", dist]];
 const unzip = spawnSync(...unzipCommand, { stdio: "inherit" });
 if (unzip.status !== 0) {
