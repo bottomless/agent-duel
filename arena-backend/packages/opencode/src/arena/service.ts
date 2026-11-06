@@ -10755,24 +10755,34 @@ export const layer: Layer.Layer<
       const store = yield* available()
       const turn = yield* promise(() => store.turn(id))
       if (!turn) return yield* Effect.fail(new Error(`Arena turn not found: ${id}`))
+      // A press that lost to a retry already running, or to one that already landed, gets the
+      // current snapshot: the summary in progress or the summary itself, not an error.
+      const superseded = (state: TurnDocument["comparisonState"]) =>
+        state === "pending" || state === "running" || state === "complete"
+      // A decided turn gets no new summary: the decision closed the summary's scope, so the control
+      // plane refuses every call with 403, and the app no longer offers the press.
+      if (turn.resolution || superseded(turn.comparisonState)) return yield* respond(store, turn.chatID)
       if (turn.comparisonState !== "failed") {
         return yield* Effect.fail(new Error("Arena comparison is not in a failed state"))
       }
       const chat = yield* promise(() => store.chat(turn.chatID))
       if (!chat) return yield* Effect.fail(new Error(`Arena chat not found: ${turn.chatID}`))
       const inputs = yield* Effect.forEach(["a", "b"] as const, (side) => comparisonInput(store, turn, side))
-      yield* startUtility(store, turn, inputs[0], inputs[1], chat.repository.root).pipe(
+      const claimed = yield* promise(() => store.claimComparisonRetry(turn._id))
+      if (!claimed.claimed) {
+        if (superseded(claimed.turn.comparisonState)) return yield* respond(store, turn.chatID)
+        return yield* Effect.fail(new Error("Arena comparison is not in a failed state"))
+      }
+      yield* startUtility(store, claimed.turn, inputs[0], inputs[1], chat.repository.root).pipe(
         Effect.catchCause((cause) =>
           // Keep the existing comparisonID: it still points at the failed record and its request and
           // response artifacts, which are the only forensic trace of why the utility model failed.
-          promise(() => store.updateTurn(turn._id, { comparisonState: "failed" })).pipe(
+          promise(() => store.releaseComparisonRetry(turn._id, claimed.turn.comparisonID)).pipe(
             Effect.andThen(Effect.logWarning("Arena comparison retry failed", { turnID: turn._id, cause })),
           ),
         ),
         Effect.forkIn(scope),
       )
-      // startUtility flips the turn to "running" before its first await, so the snapshot the caller
-      // receives already reflects the retry rather than the stale failure.
       return yield* respond(store, turn.chatID)
     })
 

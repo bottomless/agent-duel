@@ -13,8 +13,31 @@ export const promptVersion = "arena-comparison-v12"
 // Timelines carry only visible text and tool calls, so a real one runs a few thousand characters.
 // The cap is a guard against a runaway contestant, not a working budget.
 const MAX_TRANSCRIPT_CHARS = 12_000
+// Waits between attempts at a transient failure. Each attempt already tries every utility model in
+// turn, but a shared upstream pool can refuse both with 429 for tens of seconds, which three
+// attempts a second or two apart never outlasted. A refused call costs nothing, and the vote never
+// waits on the summary, so the attempts spread over about a minute.
+const RETRY_DELAYS_MS = [2_000, 4_000, 8_000, 16_000, 30_000]
+const MAX_RETRY_AFTER_MS = 30_000
+// How often a wait between attempts checks whether the turn was decided meanwhile.
+const DECIDED_POLL_MS = 1_000
 const MAX_TITLE_CHARS = 80
 const encoder = new TextEncoder()
+
+/**
+ * Waits out a retry delay unless the turn is decided first, and says whether it was. A decision
+ * closes the summary's scope, so the control plane refuses every later call with 403, and the app
+ * no longer offers a summary that has not landed. Retrying on would only end in a 403.
+ */
+async function decidedBeforeRetry(store: Store, turnID: string, delayMs: number) {
+  const until = Date.now() + delayMs
+  for (;;) {
+    if ((await store.turn(turnID))?.resolution) return true
+    const left = until - Date.now()
+    if (left <= 0) return false
+    await new Promise((resolve) => setTimeout(resolve, Math.min(left, DECIDED_POLL_MS)))
+  }
+}
 
 type Input = {
   readonly store: Store
@@ -370,8 +393,8 @@ export async function generate(input: Input) {
           }),
         })
       } catch (error) {
-        if (!(error instanceof TypeError) || attempts >= 3) throw error
-        await new Promise((resolve) => setTimeout(resolve, 1000 * attempts))
+        if (!(error instanceof TypeError) || attempts > RETRY_DELAYS_MS.length) throw error
+        if (await decidedBeforeRetry(input.store, input.turnID, RETRY_DELAYS_MS[attempts - 1])) throw error
         continue
       }
       raw = await response.text()
@@ -390,13 +413,17 @@ export async function generate(input: Input) {
       if (response.ok) break
       // Retry transient service failures here, once per generation rather than once per UI window.
       // Invalid credentials, payment and malformed requests need intervention, not more calls.
-      if (![408, 429, 500, 502, 503, 504].includes(response.status) || attempts >= 3) {
-        throw new Error(`Utility request failed with status ${response.status}`)
+      const failure = new Error(`Utility request failed with status ${response.status}`)
+      if (![408, 429, 500, 502, 503, 504].includes(response.status) || attempts > RETRY_DELAYS_MS.length) {
+        throw failure
       }
       const retryAfter = Number(response.headers.get("retry-after"))
       const delay =
-        Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter * 1000, 10_000) : 1000 * attempts
-      await new Promise((resolve) => setTimeout(resolve, delay))
+        Number.isFinite(retryAfter) && retryAfter > 0
+          ? Math.min(retryAfter * 1000, MAX_RETRY_AFTER_MS)
+          : RETRY_DELAYS_MS[attempts - 1]
+      // The record keeps this failure, not the 403 a retry after the decision would get.
+      if (await decidedBeforeRetry(input.store, input.turnID, delay)) throw failure
     }
     const parsed = JSON.parse(raw) as unknown
     const content = output(parsed)
