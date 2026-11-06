@@ -413,9 +413,10 @@ async function probeClone(canonical: string, clone: Clone) {
  * digests of a tree taken at different times stand in for a watch that saw no write in between:
  * a write moves the change time even when it puts the size and modification time back. Reading a
  * file changes nothing here. One `lstat` per entry, all at once: about 0.1s for a 12,000-entry
- * `node_modules` on Windows, where copying it again takes seconds.
+ * `node_modules` on Windows, where copying it again takes seconds. `skip` names paths, relative to
+ * `root` with `/` between names, that are left out together with everything under them.
  */
-export async function treeDigest(root: string): Promise<string> {
+export async function treeDigest(root: string, skip: ReadonlySet<string> = new Set()): Promise<string> {
   const lines: string[] = []
   const walk = async (directory: string, relativePath: string): Promise<void> => {
     const children = await readdir(directory)
@@ -423,6 +424,7 @@ export async function treeDigest(root: string): Promise<string> {
       children.map(async (name) => {
         const path = join(directory, name)
         const child = relativePath ? `${relativePath}/${name}` : name
+        if (skip.has(child)) return
         const stats = await lstat(path, { bigint: true })
         lines.push(digestLine(child, stats))
         if (stats.isDirectory()) await walk(path, child)

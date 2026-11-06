@@ -160,7 +160,7 @@ import { ArenaMetrics } from "./metrics"
 import { jsonValue, parseSnapshot, project } from "./public"
 import { ArenaSchema } from "./schema"
 import { ArenaPrivacy } from "./privacy"
-import { resolveBuildMetadata } from "./provenance"
+import { buildIdentity, resolveBuildMetadata } from "./provenance"
 import { ArenaTranscriptArtifact } from "./transcript-artifact"
 import { readRecord, withPartPreviews } from "./live"
 import { ArenaTranscript } from "./transcript"
@@ -708,6 +708,43 @@ type SlotState = {
   /** The checkout's git metadata at the moment its host was copied. */
   readonly metadataFingerprint?: string
 }
+
+/**
+ * A warm pair's state as the process that prepared it left it, kept in the store so a restarted
+ * engine can trust the pair again instead of rebuilding it (`restoreSealedPair`). Each side carries
+ * its `SlotState` and stat digests of everything the state does not already vouch for: the
+ * worktree outside its copied directory roots (whose own digests are in `ignored`) and its host
+ * outside `objects/`. A write moves a file's change time even when it puts its size and
+ * modification time back, so equal digests stand in for a watch that saw nothing.
+ */
+type WarmSeal = {
+  readonly version: number
+  /** The release that wrote it: another one may sync differently, so its seal is not trusted. */
+  readonly build: string
+  readonly chatID: string
+  readonly generation: number
+  readonly copyManifestID: string
+  readonly sides: Readonly<Record<Side, SealedSlot>>
+}
+
+type SealedSlot = {
+  readonly directory: string
+  readonly ignored: readonly (readonly [string, SlotRootRecord])[]
+  readonly synced?: ContestantBase & { readonly rules: string }
+  readonly files?: readonly string[]
+  readonly metadataFingerprint: string
+  readonly rules: string
+  readonly tree: string
+  readonly host: string
+}
+
+/** Bumped whenever what a seal records, or what a sync leaves behind, changes. */
+const WARM_SEAL_VERSION = 1
+
+/** A host's objects only grow, and the send's ref mirror fetches whatever a mirrored ref lacks. */
+const SEALED_HOST_SKIP: ReadonlySet<string> = new Set(["objects"])
+
+const warmSealID = (chatID: string) => `${chatID}|warm-seal`
 
 /**
  * Config that decides how a blob becomes bytes on disk. A kept index skips every file whose stat
@@ -1410,6 +1447,12 @@ export const layer: Layer.Layer<
     // Aborted by Stop, so a stopped battle resolves without waiting for the rest of its copy.
     const environmentCopyStops = new Map<string, AbortController>()
     const trustedWarmPairs = new WeakMap<Store, Set<string>>()
+    // Pairs trusted again from their seal after a restart. Their forks were localized against a
+    // port bank an earlier process reserved, so a send forks again rather than reuse them.
+    const restoredWarmPairs = new WeakMap<Store, Set<string>>()
+    // Raised each time a chat's seal is discarded, so a seal being written for a pair the chat has
+    // since let go of is dropped instead of stored.
+    const sealEpochs = new Map<string, number>()
     // The checkout's ignored directory roots, one journal per chat for its whole life. A mark is
     // a moment in it, so "has this root been written since that clone" is one lookup.
     const journal = createIgnoredJournal()
@@ -1621,10 +1664,16 @@ export const layer: Layer.Layer<
       trusted.add(warmPairKey(chatID, generation))
       trustedWarmPairs.set(store, trusted)
     }
-    const distrustWarmPair = (store: Store, chatID: string, generation: number) =>
-      trustedWarmPairs.get(store)?.delete(warmPairKey(chatID, generation))
+    const distrustWarmPair = (store: Store, chatID: string, generation: number) => {
+      restoredWarmPairs.get(store)?.delete(warmPairKey(chatID, generation))
+      return trustedWarmPairs.get(store)?.delete(warmPairKey(chatID, generation))
+    }
     const isWarmPairTrusted = (store: Store, chatID: string, generation: number) =>
       trustedWarmPairs.get(store)?.has(warmPairKey(chatID, generation)) === true
+    /** Trusted because this process prepared the pair, not because a seal vouched for it. */
+    const isWarmPairPreparedHere = (store: Store, chatID: string, generation: number) =>
+      isWarmPairTrusted(store, chatID, generation) &&
+      restoredWarmPairs.get(store)?.has(warmPairKey(chatID, generation)) !== true
 
     /**
      * The warm record for the chat's next turn, in whatever state, and where it is kept. Every
@@ -1648,8 +1697,25 @@ export const layer: Layer.Layer<
       return { owner, preparation: turn.warmPreparation }
     })
 
-    /** Record a warm pair's progress where `warmRecordFor` finds it; `undefined` removes the record. */
+    /**
+     * Drop the chat's seal: its pair is no longer the one it describes, or is about to be written
+     * into. A seal being written meanwhile is dropped too (`sealEpochs`).
+     */
+    const discardWarmSeal = (store: Store, chatID: string) =>
+      Effect.sync(() => sealEpochs.set(chatID, (sealEpochs.get(chatID) ?? 0) + 1)).pipe(
+        Effect.andThen(promise(() => store.artifacts.deleteOne({ _id: warmSealID(chatID) }))),
+        Effect.ignore,
+      )
+
+    /**
+     * Record a warm pair's progress where `warmRecordFor` finds it; `undefined` removes the record.
+     * Any record written replaces the pair a seal could describe, so the chat's seal goes first.
+     */
     const writeWarmRecord = (store: Store, owner: WarmOwner, preparation: WarmPreparation | undefined) =>
+      discardWarmSeal(store, owner.kind === "turn" ? owner.turn.chatID : owner.chatID).pipe(
+        Effect.andThen(writeWarmRecordNow(store, owner, preparation)),
+      )
+    const writeWarmRecordNow = (store: Store, owner: WarmOwner, preparation: WarmPreparation | undefined) =>
       promise(async () => {
         if (owner.kind === "turn") {
           if (preparation) await store.updateTurn(owner.turn._id, { warmPreparation: preparation })
@@ -3487,6 +3553,192 @@ export const layer: Layer.Layer<
         { concurrency: "unbounded" },
       )
       return moved.some(Boolean) ? `an ignored file in ${basename(directory)} changed since warm-up` : undefined
+    })
+
+    /** The parts of a kept worktree a seal digests, besides the records its `SlotState` holds. */
+    const sealDigests = (directory: string, skip: ReadonlySet<string>) =>
+      Effect.all(
+        [
+          checkoutRules(directory),
+          promise(() => treeDigest(directory, skip)),
+          promise(() => treeDigest(hostRepoPath(directory), SEALED_HOST_SKIP)),
+        ],
+        { concurrency: "unbounded" },
+      ).pipe(Effect.map(([rules, tree, host]) => ({ rules, tree, host })))
+
+    /**
+     * Write the seal of a pair this process just prepared and trusts, once the instances booting
+     * in it, the last writers there, are ready. Only a scanned pair is sealed: elsewhere a watch,
+     * which ends with the process, vouches for its copied roots. Nothing waits on it; a pair
+     * without a seal is refreshed after a restart, as every pair was before.
+     */
+    const sealWarmPair = Effect.fnUntraced(function* (
+      store: Store,
+      chatID: string,
+      generation: number,
+      manifest: CopyManifest,
+      slots: Readonly<Record<Side, WarmWorktreeRecord>>,
+    ) {
+      const epoch = sealEpochs.get(chatID) ?? 0
+      if (!manifest.scan) return
+      yield* Effect.forEach(
+        [slots.a.directory, slots.b.directory],
+        (directory) => {
+          const fiber = preparations.get(resolvePath(directory))
+          return fiber ? Fiber.await(fiber) : Effect.void
+        },
+        { discard: true },
+      )
+      const current = () => (sealEpochs.get(chatID) ?? 0) === epoch && isWarmPairPreparedHere(store, chatID, generation)
+      if (!current()) return
+      const skip = new Set(copiedDirectoryRoots(manifest))
+      const sealed = yield* Effect.forEach(
+        [slots.a, slots.b],
+        (slot) =>
+          Effect.gen(function* () {
+            const state = slotStates.get(slotKey(slot.directory))
+            if (!state?.synced || !state.metadataFingerprint) return undefined
+            const digests = yield* sealDigests(slot.directory, skip)
+            return {
+              directory: slot.directory,
+              ignored: Array.from(state.ignored),
+              synced: state.synced,
+              ...(state.files ? { files: Array.from(state.files, String) } : {}),
+              metadataFingerprint: state.metadataFingerprint,
+              ...digests,
+            } satisfies SealedSlot
+          }),
+        { concurrency: 2 },
+      )
+      const [a, b] = sealed
+      if (!a || !b || !current()) return
+      const seal: WarmSeal = {
+        version: WARM_SEAL_VERSION,
+        build: buildIdentity(),
+        chatID,
+        generation,
+        copyManifestID: manifest.manifestID,
+        sides: { a, b },
+      }
+      const id = warmSealID(chatID)
+      // A store keeps the first artifact written under an ID.
+      yield* promise(() => store.artifacts.deleteOne({ _id: id }))
+      yield* promise(() =>
+        store.storeArtifact({
+          _id: id,
+          kind: "other",
+          mimeType: "application/json",
+          encoding: "json",
+          compression: "none",
+          data: encoder.encode(JSON.stringify(seal)),
+          createdAt: new Date(),
+        }),
+      )
+      // The pair may have been let go of while the seal was being stored.
+      if (!current()) yield* promise(() => store.artifacts.deleteOne({ _id: id }))
+    })
+
+    /**
+     * Trust a ready pair a restart left untrusted when its seal still describes it exactly: written
+     * by this release for this generation and copy, both worktrees still Arena's, no process in
+     * either, and every digest the same. The `SlotState`s it carries are then this process's, as
+     * they were the previous one's, so the send checks the pair against the checkout as it would a
+     * pair prepared here (`reuseWarmPairForTurn`), and a refresh keeps what still matches. Anything
+     * else, a seal that cannot be read included, leaves the pair untrusted and drops the seal.
+     */
+    const restoreSealedPair = Effect.fnUntraced(function* (
+      store: Store,
+      chat: ChatDocument,
+      found: { readonly owner: WarmOwner; readonly preparation: WarmPreparation },
+    ) {
+      const generation = chat.turnCount
+      if (isWarmPairTrusted(store, chat._id, generation)) return true
+      const { preparation } = found
+      const a = preparation.worktrees.a
+      const b = preparation.worktrees.b
+      if (preparation.state !== "ready" || preparation.generation !== generation || !a || !b) return false
+      // A pair is sealed only where no watcher backend exists, so elsewhere there is nothing to read.
+      if (watcherBackendUnavailable() === undefined) return false
+      const checked = yield* Effect.exit(
+        Effect.gen(function* () {
+          const artifact = yield* promise(() => store.artifacts.findOne({ _id: warmSealID(chat._id) }))
+          if (!artifact) return "the pair has no seal"
+          if (artifact.truncated) return "the seal was cut short"
+          const seal = yield* Effect.try({
+            try: () => JSON.parse(Buffer.from(artifact.data).toString("utf8")) as WarmSeal,
+            catch: error,
+          })
+          if (seal.version !== WARM_SEAL_VERSION || seal.build !== buildIdentity()) {
+            return "the seal was written by another release"
+          }
+          if (seal.chatID !== chat._id || seal.generation !== generation) return "the seal describes another pair"
+          if (a.copyManifestID !== seal.copyManifestID || b.copyManifestID !== seal.copyManifestID) {
+            return "the seal describes another copy"
+          }
+          if (seal.sides?.a?.directory !== a.directory || seal.sides?.b?.directory !== b.directory) {
+            return "the seal names other worktrees"
+          }
+          const manifest = yield* copyManifestByID(
+            store,
+            seal.copyManifestID,
+            found.owner.kind === "turn" ? found.owner.turn._id : undefined,
+          )
+          if (!manifest.scan) return "the pair's copy was not scanned"
+          const working = yield* promise(() => processDirectories())
+          if (!working) return "the processes' working directories could not be listed"
+          const skip = new Set(copiedDirectoryRoots(manifest))
+          const differences = yield* Effect.forEach(
+            [seal.sides.a, seal.sides.b],
+            (sealed) =>
+              Effect.gen(function* () {
+                const directory = sealed.directory
+                const name = basename(directory)
+                const identities = [directory, hostRepoPath(directory)].flatMap((path) => [
+                  resolvePath(path),
+                  directoryIdentity(path),
+                ])
+                if (working.some((entry) => identities.some((id) => namesBelow(id, entry.directory) !== undefined))) {
+                  return `a process works in ${name}`
+                }
+                if (!(yield* promise(() => isPoolWorktree(directory)))) return `${name} is not one of Arena's worktrees`
+                const digests = yield* sealDigests(directory, skip)
+                if (digests.rules !== sealed.rules) return `the checkout rules of ${name} changed`
+                if (digests.tree !== sealed.tree) return `${name} changed since it was sealed`
+                if (digests.host !== sealed.host) return `the repository of ${name} changed since it was sealed`
+                return undefined
+              }),
+            { concurrency: 2 },
+          )
+          return differences.find((difference) => difference !== undefined) ?? seal
+        }),
+      )
+      if (Exit.isFailure(checked) || typeof checked.value === "string") {
+        yield* Effect.logInfo("Arena warm pair cannot be trusted from its seal", {
+          chatID: chat._id,
+          generation,
+          reason: Exit.isFailure(checked) ? Cause.pretty(checked.cause) : checked.value,
+        })
+        yield* discardWarmSeal(store, chat._id)
+        return false
+      }
+      const stoppedAt = Date.now() - SLOT_WATCH_SETTLE_MS
+      for (const sealed of [checked.value.sides.a, checked.value.sides.b]) {
+        slotStates.set(slotKey(sealed.directory), {
+          ignored: new Map(sealed.ignored),
+          marks: new Map(),
+          ...(sealed.synced ? { synced: sealed.synced } : {}),
+          ...(sealed.files ? { files: new Set(sealed.files.map((key) => BigInt(key))) } : {}),
+          metadataFingerprint: sealed.metadataFingerprint,
+          syncedAt: stoppedAt,
+          stoppedAt,
+        })
+      }
+      trustWarmPair(store, chat._id, generation)
+      const restored = restoredWarmPairs.get(store) ?? new Set<string>()
+      restored.add(warmPairKey(chat._id, generation))
+      restoredWarmPairs.set(store, restored)
+      yield* Effect.logInfo("Arena warm pair trusted from its seal", { chatID: chat._id, generation })
+      return true
     })
 
     const logSlotSync = (
@@ -6093,7 +6345,7 @@ export const layer: Layer.Layer<
       ).pipe(Effect.onError(() => discardUnactivatedCopy.pipe(Effect.ignore)))
       // Refresh invalidates environment trust, but the session and its process-local port bank
       // can still be reused after the fork's own transcript and port checks.
-      const warmForksTrusted = isWarmPairTrusted(store, chat._id, chat.turnCount)
+      const warmForksTrusted = isWarmPairPreparedHere(store, chat._id, chat.turnCount)
       const warmPreparation =
         reused?.warmPreparation ??
         (yield* claimWarmPairForRefresh(store, warmChat).pipe(
@@ -6119,6 +6371,7 @@ export const layer: Layer.Layer<
       // Whatever the pair became, this turn owns it now; nothing is left to keep warm. The
       // worktrees' own watches keep running: they cover the battle too, up to the next sync.
       warmMarks.delete(warmPairKey(chat._id, chat.turnCount))
+      yield* discardWarmSeal(store, chat._id)
       const assignmentWaitStartedAt = Date.now()
       const pair = yield* promise(() => pairDraw).pipe(Effect.onError(() => discardUnactivatedCopy.pipe(Effect.ignore)))
       const assignmentWaitMs = Date.now() - assignmentWaitStartedAt
@@ -7011,6 +7264,7 @@ export const layer: Layer.Layer<
                 distrustWarmPair(store, chatID, generation)
                 warmMarks.delete(warmPairKey(chatID, generation))
               }
+              yield* discardWarmSeal(store, chatID)
             }
             const warmSlots = unusedWarmSlots(
               warmRecords.flatMap((chat) => chat.records),
@@ -7781,6 +8035,9 @@ export const layer: Layer.Layer<
       const b = preparation?.worktrees.b
       if (!found || !preparation || !a || !b) return undefined
       const ownerTurnID = found.owner.kind === "turn" ? found.owner.turn._id : undefined
+      // A pair a restart left untrusted is trusted again when its seal still holds, and then
+      // checked against the checkout below like any other.
+      yield* restoreSealedPair(store, chat, { owner: found.owner, preparation })
       const decided = yield* Effect.exit(
         Effect.gen(function* () {
           // The whole starting point, not only the commit that encodes HEAD and the working tree:
@@ -8255,6 +8512,12 @@ export const layer: Layer.Layer<
           yield* writeWarmRecord(store, owner, { generation, state: "ready", worktrees: { a, b } })
           if (warmMark) warmMarks.set(key, warmMark)
           trustWarmPair(store, chat._id, generation)
+          yield* sealWarmPair(store, chat._id, generation, manifest, { a, b }).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Arena could not seal a warm pair", { chatID: chat._id, generation, cause }),
+            ),
+            Effect.forkIn(scope),
+          )
           yield* promise(() =>
             store.updateChat({ _id: chat._id }, { $set: { warmGeneration: generation, updatedAt: new Date() } }),
           )
@@ -8437,10 +8700,11 @@ export const layer: Layer.Layer<
     })
 
     /**
-     * A restart leaves every ready pair untrusted, and a send refreshes an untrusted pair: a new
-     * host, a new fork, and a clone of every ignored root this process has no record of. The
-     * chat worked in last is the one most likely to be sent to next, so its pair is prepared
-     * again in the background and that send reuses it. Only that chat: an older one is less
+     * A restart leaves every ready pair untrusted, and a send refreshes an untrusted pair its seal
+     * does not vouch for (`restoreSealedPair`): a new host, a new fork, and a clone of every
+     * ignored root this process has no record of. The chat worked in last is the one most likely
+     * to be sent to next, so its pair is trusted from its seal now, or else prepared again in the
+     * background, and that send reuses it. Only that chat: an older one is less
      * likely to be sent to than to hold up, while its host copies take the repository lock, a
      * vote or a prompt in the chat the user is in. The others keep their pairs for a refresh at
      * their next send. Like the warm-up after a vote it runs under the start lock, so a send
@@ -8462,6 +8726,14 @@ export const layer: Layer.Layer<
             const found = current ? yield* restartedWarmPair(store, current) : undefined
             if (!current || !found) return
             const generation = current.turnCount
+            if (yield* restoreSealedPair(store, current, found)) {
+              // Booted now, as a warm-up would have, so the send prompts contestants that are ready.
+              for (const side of ["a", "b"] as const) {
+                const directory = found.preparation.worktrees[side]?.directory
+                if (directory) yield* prepareContestant(directory, { chatID, side })
+              }
+              return
+            }
             yield* Effect.logInfo("Arena re-warming the latest pair after a restart", { chatID, generation })
             yield* prepareWarmPair(store, current, found.owner, true)
             // A stand-down leaves no record.
@@ -9120,10 +9392,10 @@ export const layer: Layer.Layer<
 
     /**
      * The next pair as the previous process left it. A ready pair was not watched while the
-     * daemon was down, so it is never reused as it stands; it is kept untrusted, and the next send
-     * brings it to its base where it stands (a fresh host and the same sync as warm-up), which
-     * writes only what changed and is exact whatever happened meanwhile. Only a pair that is
-     * structurally gone is removed.
+     * daemon was down, so it is kept untrusted: the next send trusts it again only when its seal
+     * still holds (`restoreSealedPair`), and otherwise brings it to its base where it stands (a
+     * fresh host and the same sync as warm-up), which is exact whatever happened meanwhile. Only a
+     * pair that is structurally gone is removed.
      */
     const reconcileWarmPair = Effect.fn("Arena.reconcileWarmPair")(function* (store: Store, chat: ChatDocument) {
       if (yield* clearInterruptedWarmPair(store, chat)) return

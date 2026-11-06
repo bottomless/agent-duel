@@ -39,6 +39,15 @@ export async function resolveBuildCommit(
   throw new Error("Arena build provenance is unavailable; set OPENCODE_ARENA_BUILD_SHA")
 }
 
+/**
+ * The release this engine was built as. Source runs all read the same, since they have no build
+ * number; packaged runtimes differ with every release.
+ */
+export function buildIdentity() {
+  const buildNumber = typeof AGENT_DUEL_BUILD_NUMBER === "number" ? AGENT_DUEL_BUILD_NUMBER : 0
+  return `${agentDuelVersion}+${buildNumber}`
+}
+
 export async function resolveBuildMetadata(
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): Promise<BuildMetadata> {
