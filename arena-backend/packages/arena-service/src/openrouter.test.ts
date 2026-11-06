@@ -3,6 +3,7 @@ import type { ArenaDb } from "./collection"
 import { defaultPool, mediumModel } from "./default-pool"
 import { probeRouting } from "./openrouter"
 import type { ModelPool } from "./pool"
+import { STEERING_COMPACTION_FIELD } from "./request-budget"
 import { createArenaService, type ArenaServiceOptions } from "./service"
 
 // The proxy never samples from the pool; the service still needs one.
@@ -100,6 +101,185 @@ function fakeDb(input: {
 }
 
 describe("OpenRouter proxy", () => {
+  test.each([false, true])("reports the assigned model's steering decision with stream=%s", async (stream) => {
+    const models = [
+      { model: { ...pool[0]!, contextWindow: 128_000 }, boundary: 54_400 },
+      { model: pool[1]!, boundary: 181_334 },
+      { model: { ...pool[2]!, limits: { compactAt: 450_000 } }, boundary: 300_000 },
+    ]
+    const db = fakeDb({
+      assignmentSets: () => [
+        {
+          userId: "user-1",
+          scopeID: "dynamic-threshold",
+          assignments: models.map(({ model }, index) => ({ assignmentID: `side-${index}`, model })),
+        },
+      ],
+    })
+    for (const [index, { model, boundary }] of models.entries()) {
+      for (const total of [boundary - 1, boundary]) {
+        const upstream = {
+          model: model.slug,
+          [STEERING_COMPACTION_FIELD]: true, // A provider cannot override the local decision.
+          choices: [],
+          usage: { prompt_tokens: total - 1_000, completion_tokens: 1_000 },
+        }
+        const response = await openrouter({
+          db: async () => db,
+          fetch: async () =>
+            stream
+              ? new Response(`data: ${JSON.stringify(upstream)}\n\ndata: [DONE]\n\n`, {
+                  headers: { "content-type": "text/event-stream" },
+                })
+              : Response.json(upstream),
+        })(
+          new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Arena-Assignment-ID": `side-${index}`,
+              "X-Arena-Scope-ID": "dynamic-threshold",
+            },
+            body: JSON.stringify({ model: "contestant", messages: [], stream }),
+          }),
+        )
+        expect(response.status).toBe(200)
+        const raw = await response.text()
+        const payload = JSON.parse(stream ? raw.split("\n")[0]!.slice(6) : raw)
+        expect(payload[STEERING_COMPACTION_FIELD]).toBe(total === boundary)
+        expect(payload).not.toHaveProperty("model")
+        expect(payload).not.toHaveProperty("limits")
+        expect(payload).not.toHaveProperty("compactAt")
+      }
+    }
+  })
+
+  test.each([false, true])("keeps an unknown steering decision unknown with stream=%s", async (stream) => {
+    const db = fakeDb({
+      assignmentSets: () => [
+        {
+          userId: "user-1",
+          scopeID: "unknown-threshold",
+          assignments: [{ assignmentID: "side", model: pool[0] }],
+        },
+      ],
+    })
+    for (const usage of [undefined, { prompt_tokens: 300_000 }, { completion_tokens: 5 }]) {
+      const upstream = { choices: [], usage, [STEERING_COMPACTION_FIELD]: true }
+      const response = await openrouter({
+        db: async () => db,
+        fetch: async () =>
+          stream
+            ? new Response(`data: ${JSON.stringify(upstream)}\n\ndata: [DONE]\n\n`, {
+                headers: { "content-type": "text/event-stream" },
+              })
+            : Response.json(upstream),
+      })(
+        new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Arena-Assignment-ID": "side",
+            "X-Arena-Scope-ID": "unknown-threshold",
+          },
+          body: JSON.stringify({ model: "contestant", messages: [], stream }),
+        }),
+      )
+      expect(response.status).toBe(200)
+      expect(await response.text()).toContain(`"${STEERING_COMPACTION_FIELD}":null`)
+    }
+  })
+
+  test("includes Anthropic cached input only after finalized usage when deciding steering", async () => {
+    const events = [
+      {
+        type: "message_start",
+        message: {
+          usage: {
+            input_tokens: 1_000,
+            cache_read_input_tokens: 50_000,
+            cache_creation_input_tokens: 2_000,
+            output_tokens: 1,
+          },
+        },
+      },
+      { type: "message_delta", usage: { output_tokens: 1_400 } },
+      { type: "message_stop" },
+    ]
+    const db = fakeDb({
+      assignmentSets: () => [
+        {
+          userId: "user-1",
+          scopeID: "anthropic-threshold",
+          assignments: [{ assignmentID: "side", model: { ...pool[0]!, contextWindow: 128_000 } }],
+        },
+      ],
+    })
+    const response = await openrouter({
+      db: async () => db,
+      fetch: async () =>
+        new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), {
+          headers: { "content-type": "text/event-stream" },
+        }),
+    })(
+      new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Arena-Assignment-ID": "side",
+          "X-Arena-Scope-ID": "anthropic-threshold",
+        },
+        body: JSON.stringify({ model: "contestant", messages: [], stream: true }),
+      }),
+    )
+    expect(response.status).toBe(200)
+    const payloads = (await response.text())
+      .split("\n")
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => JSON.parse(line.slice(6)))
+    expect(payloads[0]?.[STEERING_COMPACTION_FIELD]).toBeNull()
+    expect(payloads.at(-1)?.[STEERING_COMPACTION_FIELD]).toBe(true)
+  })
+
+  test("clears an earlier steering decision when the final usage omits generated tokens", async () => {
+    const db = fakeDb({
+      assignmentSets: () => [
+        {
+          userId: "user-1",
+          scopeID: "partial-final-usage",
+          assignments: [{ assignmentID: "side", model: pool[0] }],
+        },
+      ],
+    })
+    const events = [
+      { usage: { prompt_tokens: 200_000, completion_tokens: 1_000 } },
+      { usage: { prompt_tokens: 200_000 } },
+    ]
+    const response = await openrouter({
+      db: async () => db,
+      fetch: async () =>
+        new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), {
+          headers: { "content-type": "text/event-stream" },
+        }),
+    })(
+      new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Arena-Assignment-ID": "side",
+          "X-Arena-Scope-ID": "partial-final-usage",
+        },
+        body: JSON.stringify({ model: "contestant", messages: [], stream: true }),
+      }),
+    )
+    expect(response.status).toBe(200)
+    const decisions = (await response.text())
+      .split("\n")
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => JSON.parse(line.slice(6))[STEERING_COMPACTION_FIELD])
+    expect(decisions).toEqual([true, null])
+  })
+
   test.each([
     {
       route: "chat/completions",
@@ -994,7 +1174,9 @@ describe("OpenRouter proxy", () => {
       }),
     )
 
-    expect(await response.text()).not.toContain("Private Provider")
+    const responseBody = await response.text()
+    expect(responseBody).not.toContain("Private Provider")
+    expect(responseBody).toContain(`"${STEERING_COMPACTION_FIELD}":false`)
     expect(upstreamBodies[0]).toMatchObject({ session_id: "opaque-id", prompt_cache_key: "opaque-id" })
     expect(recorded).toHaveLength(1)
     expect(recorded[0]).toMatchObject({ provider: "Private Provider", finishReason: "stop" })
@@ -1084,7 +1266,7 @@ describe("OpenRouter proxy", () => {
           provider: "Private Provider",
           promptTokens: 20_000,
           cacheReadTokens: 19_990,
-          cacheWriteTokens: 0,
+          cacheWriteTokens: null,
         }),
       )
     } finally {
@@ -1252,7 +1434,9 @@ describe("OpenRouter proxy", () => {
       }),
     )
 
-    expect(await response.text()).not.toContain("Private Provider")
+    const responseBody = await response.text()
+    expect(responseBody).not.toContain("Private Provider")
+    expect(responseBody).toContain(`"${STEERING_COMPACTION_FIELD}":false`)
     expect(recordedMetrics).toMatchObject({
       usage: { promptTokens: 10, completionTokens: 5 },
       finishReason: "completed",

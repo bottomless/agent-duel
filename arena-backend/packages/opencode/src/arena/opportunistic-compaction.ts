@@ -579,15 +579,6 @@ export interface CompactUsage {
 
 const RUNTIME_COMPACTION_THRESHOLD = 272_000
 
-/** Steering keeps the original transcript until it is at least two-thirds of the runtime threshold. */
-export function shouldUseCompactionForSteer(contextTokens: number | undefined): boolean {
-  return (
-    contextTokens !== undefined &&
-    Number.isFinite(contextTokens) &&
-    contextTokens * 3 >= RUNTIME_COMPACTION_THRESHOLD * 2
-  )
-}
-
 export function shouldCompact(usage: CompactUsage): boolean {
   if (usage.reasoningTokens === null || usage.generatedTokens === null) return true
   if (usage.contextTokens >= RUNTIME_COMPACTION_THRESHOLD) return true

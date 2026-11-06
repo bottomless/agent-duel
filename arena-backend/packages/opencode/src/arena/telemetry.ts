@@ -4,6 +4,7 @@ import { ArenaWaitError, type RequestMetadata, type Telemetry } from "./proxy"
 import type { GenerationDocument, GenerationMetrics, UsageTotals } from "./records"
 import { ArenaPrivacy } from "./privacy"
 import { addUsageTotals, hasFinalProviderUsage, parseProviderUsage } from "@agent-duel/arena-service/usage"
+import { STEERING_COMPACTION_FIELD } from "@agent-duel/arena-service/request-budget"
 import { requestTokenEstimate } from "./engine-runtime/request"
 import { bind as bindEngagementUsage, finalize as finalizeEngagementUsage } from "./engagement-usage"
 import { resolveAssignments } from "./assignment-client"
@@ -48,6 +49,7 @@ function record(value: unknown): value is Record<string, unknown> {
 }
 
 const privateResponseKeys = new Set([
+  "arenasteeringcompaction",
   "cost",
   "costdetails",
   "model",
@@ -77,6 +79,13 @@ function sanitizeStoredValue(value: unknown): unknown {
       return [[key, sanitizeStoredValue(child)]]
     }),
   )
+}
+
+function steeringCompactionDecision(values: readonly unknown[]) {
+  const payload = values.findLast((value) => record(value) && STEERING_COMPACTION_FIELD in value)
+  if (!record(payload)) return undefined
+  const decision = payload[STEERING_COMPACTION_FIELD]
+  return typeof decision === "boolean" ? decision : undefined
 }
 
 /**
@@ -503,6 +512,7 @@ export function create(store: Store, options?: TelemetryOptions): Telemetry {
           ? { opportunisticCompactionID: metadata.opportunisticCompactionID }
           : {}),
         ...(measured ? { usage: measured } : {}),
+        useCompactionForSteer: measured ? steeringCompactionDecision(values) : undefined,
         contextTokens:
           measured?.completionTokens === null || measured === undefined
             ? generation.contextTokens
@@ -568,6 +578,7 @@ export function create(store: Store, options?: TelemetryOptions): Telemetry {
           ? { opportunisticCompactionID: metadata.opportunisticCompactionID }
           : {}),
         ...(measured ? { usage: measured } : {}),
+        useCompactionForSteer: measured ? steeringCompactionDecision(values) : undefined,
         contextTokens:
           measured?.completionTokens === null || measured === undefined
             ? generation.contextTokens

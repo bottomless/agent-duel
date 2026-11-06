@@ -9,6 +9,7 @@ import {
 
 export type EngagementUsageCall = RootUsageCall & {
   readonly contextTokens?: number
+  readonly useCompactionForSteer?: boolean
   readonly finalizedAt: Date
 }
 
@@ -23,6 +24,8 @@ export type EngagementUsageSnapshot = {
   readonly compactionCalls: number
   /** Last root request's estimated context, including provider usage when it is available. */
   readonly contextTokens?: number
+  /** Decision from the last root call, using its assignment's private compaction threshold. */
+  readonly useCompactionForSteer?: boolean
 }
 
 type Engagement = {
@@ -72,9 +75,7 @@ function snapshot(engagement: Engagement): EngagementUsageSnapshot {
   const compactions = calls.filter((call) => call.classification === "compaction" || call.requestKind === "compaction")
   const rootUsage = merge(roots.map((call) => call.usage ?? unknownCallUsage()))
   const compactionUsage = merge(compactions.map((call) => call.usage ?? unknownCallUsage()))
-  const contextTokens = roots
-    .toSorted((left, right) => left.finalizedAt.getTime() - right.finalizedAt.getTime())
-    .at(-1)?.contextTokens
+  const lastRoot = roots.toSorted((left, right) => left.finalizedAt.getTime() - right.finalizedAt.getTime()).at(-1)
   return {
     engagementID: engagement.id,
     runID: engagement.runID,
@@ -84,7 +85,8 @@ function snapshot(engagement: Engagement): EngagementUsageSnapshot {
     calls,
     rootCalls: roots.length,
     compactionCalls: compactions.length,
-    ...(contextTokens === undefined ? {} : { contextTokens }),
+    ...(lastRoot?.contextTokens === undefined ? {} : { contextTokens: lastRoot.contextTokens }),
+    ...(lastRoot?.useCompactionForSteer === undefined ? {} : { useCompactionForSteer: lastRoot.useCompactionForSteer }),
   }
 }
 

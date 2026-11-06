@@ -1653,10 +1653,13 @@ compaction lifecycle rows into the source history.
 Publish a completed candidate only after checking its source version and empty inbox in one
 transaction. The vote carries the candidate to the winner's canonical history without waiting.
 At the next post-vote prompt, reserve an already published candidate. Steering a finished contestant
-uses a ready summary only when its original history has reached two-thirds of the 272,000-token
-runtime threshold (181,334 whole tokens). Below that threshold, or when the estimate is unknown,
-keep the original transcript and discard the candidate. This selection rule does not change when
-background summaries are generated.
+uses a ready summary only when its original context has reached two-thirds of the applicable model's
+compaction threshold, including endpoint overrides. The routing service compares the final root
+call's total usage (including reasoning and cached input) with the same private `compactAt` used for
+automatic compaction, and returns only the decision. Below that threshold, or when the decision is
+unknown, keep the original transcript and discard the candidate. Do not reuse an earlier call's
+decision when the latest root call has none. This selection rule does not change when background
+summaries are generated.
 
 For every prompt, invalidate pending work and request cancellation without waiting, including above
 the steering threshold. Verify the history again before atomically appending a selected checkpoint;

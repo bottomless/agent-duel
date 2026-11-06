@@ -33,6 +33,42 @@ function call(generationID: string, usageValue: UsageTotals | undefined, rest: R
 describe("engagement usage", () => {
   afterEach(reset)
 
+  test("keeps each contestant's latest root steering decision and never reuses a missing decision", () => {
+    const a = begin({ runID: "run", sessionID: "root" })
+    const b = begin({ runID: "run-b", sessionID: "root-b" })
+    finalize(call("root-a", usage(5, 2), { engagementID: a, useCompactionForSteer: true, finalizedAt: new Date(1) }))
+    finalize(
+      call("root-b", usage(5, 2), {
+        engagementID: b,
+        runID: "run-b",
+        sessionID: "root-b",
+        rootSessionID: "root-b",
+        useCompactionForSteer: false,
+      }),
+    )
+    finalize(
+      call("child", usage(5, 2), {
+        engagementID: a,
+        sessionID: "child",
+        classification: "subagent",
+        useCompactionForSteer: false,
+      }),
+    )
+    finalize(
+      call("summary", usage(5, 2), {
+        engagementID: a,
+        requestKind: "compaction",
+        classification: "compaction",
+        useCompactionForSteer: false,
+      }),
+    )
+    expect(read(a)?.useCompactionForSteer).toBe(true)
+    expect(read(b)?.useCompactionForSteer).toBe(false)
+    finalize(call("next-root-a", usage(5, 2), { engagementID: a, contextTokens: 300_000, finalizedAt: new Date(2) }))
+    expect(read(a)?.useCompactionForSteer).toBeUndefined()
+    expect(read(b)?.useCompactionForSteer).toBe(false)
+  })
+
   test("deduplicates finalized calls, filters non-root work, and keeps compactions", () => {
     const id = begin({ runID: "run", sessionID: "root" })
     bind("root-1", { runID: "run", sessionID: "root" })

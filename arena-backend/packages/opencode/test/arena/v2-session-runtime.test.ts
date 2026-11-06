@@ -1331,7 +1331,7 @@ describe("shell stop notice on Resume", () => {
 describe("opportunistic history compaction", () => {
   const location = Location.Ref.make({ directory: AbsolutePath.make("/arena-history-compaction-test") })
   const nativeModel = { providerID: Provider.ID.make("arena"), id: Model.ID.make("native") }
-  const usageAt = (sessionID: string, contextTokens: number | undefined) => ({
+  const usageAt = (sessionID: string, contextTokens: number | undefined, useCompactionForSteer?: boolean) => ({
     engagementID: "engagement_context_threshold",
     runID: "run_context_threshold",
     sessionID,
@@ -1339,6 +1339,7 @@ describe("opportunistic history compaction", () => {
     compactionCalls: 0,
     calls: [],
     contextTokens,
+    useCompactionForSteer,
   })
 
   const checkpoint = (summary: string): SessionMessage.CompactionCompleted => ({
@@ -1417,11 +1418,11 @@ describe("opportunistic history compaction", () => {
     }),
   )
 
-  for (const [label, contextTokens, accepted] of [
-    ["below", 181_333, false],
-    ["at", 181_334, true],
-    ["above", 272_000, true],
-    ["unknown", undefined, false],
+  for (const [label, contextTokens, decision, accepted] of [
+    ["below", 272_000, false, false],
+    ["at", 54_400, true, true],
+    ["above", 100_000, true, true],
+    ["unknown", 272_000, undefined, false],
   ] as const) {
     it.effect(`selects the correct steering history with ${label} threshold usage`, () =>
       Effect.gen(function* () {
@@ -1436,7 +1437,7 @@ describe("opportunistic history compaction", () => {
         yield* compactions.start({
           sessionID: session.id,
           runID: `run_steer_${label}`,
-          usage: usageAt(session.id, contextTokens),
+          usage: usageAt(session.id, contextTokens, decision),
         })
         yield* waitFor(snapshots, "ready")
 
@@ -1468,7 +1469,7 @@ describe("opportunistic history compaction", () => {
       yield* compactions.start({
         sessionID: session.id,
         runID: "run_pending_cancel",
-        usage: usageAt(session.id, 272_000),
+        usage: usageAt(session.id, 272_000, true),
       })
       expect(yield* compactions.accept(session.id, undefined, "steer")).toBe(false)
       yield* sessions.prompt({ sessionID: session.id, text: "normal prompt admitted" })

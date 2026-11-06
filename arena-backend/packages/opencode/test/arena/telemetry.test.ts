@@ -4,12 +4,73 @@ import { carriesModelOutput, create } from "@/arena/telemetry"
 import { Store } from "@/arena/mongo"
 import type { GenerationDocument, GenerationRetry } from "@/arena/records"
 import { ArenaWaitError, type RequestMetadata } from "@/arena/proxy"
+import { begin, read, reset } from "@/arena/engagement-usage"
+import { STEERING_COMPACTION_FIELD } from "@agent-duel/arena-service/request-budget"
 
 function store(value: object): Store {
   return Object.assign(Object.create(Store.prototype), value)
 }
 
 describe("ArenaTelemetry", () => {
+  test.each(["complete", "error"] as const)(
+    "carries only the final steering decision through %s telemetry",
+    async (outcome) => {
+      const artifacts: string[] = []
+      const arena = store({
+        generationsForRuns: async () => [],
+        saveGeneration: async (input: GenerationDocument) => input,
+        updateGeneration: async (_id: string, patch: Partial<GenerationDocument>) => patch,
+        storeArtifact: async (input: { data: Uint8Array }) => {
+          artifacts.push(new TextDecoder().decode(input.data))
+          return input
+        },
+        recordGenerationRetry: async () => undefined,
+      })
+      const telemetry = create(arena)
+      const engagement = begin({ runID: "decision-run", sessionID: "decision-root" })
+      try {
+        const decisions = [true, false, null, undefined, "true"]
+        for (const [index, decision] of decisions.entries()) {
+          const metadata: RequestMetadata = {
+            assignment: {
+              runID: "decision-run",
+              rootSessionID: "decision-root",
+              scopeID: "turn",
+              assignmentID: "assignment",
+              telemetry: true,
+            },
+            generationID: `decision-${outcome}-${index}`,
+            requestID: `request-${index}`,
+            sessionID: "decision-root",
+            requestedModel: "contestant",
+            enforcedReasoning: { effort: "high" },
+            requestKind: "generation",
+            startedAt: new Date(0),
+          }
+          await telemetry.start?.(metadata, { model: "contestant", messages: [] })
+          const payload = {
+            usage: { prompt_tokens: 54_000, completion_tokens: 400 },
+            [STEERING_COMPACTION_FIELD]: decision,
+          }
+          // A later unknown decision must clear an earlier true within the same stream.
+          const raw =
+            index === 2
+              ? `data: ${JSON.stringify({ ...payload, [STEERING_COMPACTION_FIELD]: true })}\n\ndata: ${JSON.stringify(payload)}\n\n`
+              : JSON.stringify(payload)
+          // HTTP chunks need not align with either JSON or SSE frames.
+          telemetry.rawChunk?.(metadata, raw.slice(0, 17))
+          telemetry.rawChunk?.(metadata, raw.slice(17))
+          if (outcome === "complete") await telemetry.complete?.(metadata, new Date(index + 1))
+          else await telemetry.error?.(metadata, new Error("stream ended"), new Date(index + 1))
+          expect(read(engagement)?.useCompactionForSteer).toBe(typeof decision === "boolean" ? decision : undefined)
+        }
+        expect(artifacts.every((artifact) => !artifact.includes(STEERING_COMPACTION_FIELD))).toBe(true)
+      } finally {
+        reset()
+      }
+    },
+  )
+
   test("persists a completed call with no usage as unknown, then accepts a late known reveal", async () => {
     let generation: GenerationDocument | undefined
     let runUsage: GenerationDocument["usage"]

@@ -11,7 +11,6 @@ import { Session } from "@opencode/schema/session"
 import {
   createCompactions,
   shouldCompact,
-  shouldUseCompactionForSteer,
   type CompactionSnapshot,
   type CompactionEntry,
 } from "./opportunistic-compaction"
@@ -27,8 +26,8 @@ export function historyVersion(messages: readonly SessionMessage.Info[]) {
 
 export interface Candidate {
   readonly id: string
-  /** Estimate of the source history, before summarization; follows the candidate across a vote. */
-  readonly contextTokens?: number
+  /** Source engagement's model-specific decision; follows the candidate across a vote. */
+  readonly useCompactionForSteer?: boolean
   readonly checkpoint: SessionMessage.CompactionCompleted
 }
 
@@ -109,7 +108,7 @@ export function createHistoryCompaction(ports: HistoryCompactionPorts): HistoryC
     const id = randomUUID()
     const generate = ports
       .generate({ sessionID: input.sessionID, id })
-      .pipe(Effect.map((checkpoint) => ({ id, checkpoint, contextTokens: input.usage?.contextTokens })))
+      .pipe(Effect.map((checkpoint) => ({ id, checkpoint, useCompactionForSteer: input.usage?.useCompactionForSteer })))
     let entry: CompactionEntry<Candidate>
     startingID = id
     try {
@@ -153,7 +152,7 @@ export function createHistoryCompaction(ports: HistoryCompactionPorts): HistoryC
     const transform = transforms.get(sessionID)
     transforms.delete(sessionID)
     if (!selected) return false
-    if (kind === "steer" && !shouldUseCompactionForSteer(selected.candidate.contextTokens)) {
+    if (kind === "steer" && selected.candidate.useCompactionForSteer !== true) {
       candidates.discard(selected)
       return false
     }

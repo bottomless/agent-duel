@@ -1,4 +1,5 @@
 import type { ModelLimits } from "./pool"
+import type { UsageTotals } from "./usage"
 
 /** Provider neutral allowance for each image or file part after its encoded bytes are removed. */
 export const MEDIA_TOKEN_ALLOWANCE = 4_000
@@ -8,6 +9,18 @@ export type RequestEndpoint = "chat" | "responses"
 /** The engine sends this header on a step it can summarize first; every hop forwards only `auto`. */
 export const COMPACTION_HEADER = "x-arena-compaction"
 export const COMPACTION_OFFER = "auto"
+/** Only the decision crosses the assignment boundary; the model's threshold stays private. */
+export const STEERING_COMPACTION_FIELD = "arena_steering_compaction"
+
+export function steeringCompaction(
+  usage: Pick<UsageTotals, "totalTokens"> | undefined,
+  limits: Pick<ModelLimits, "compactAt">,
+): boolean | undefined {
+  // Normalized total includes generated reasoning and Anthropic cache reads/writes.
+  const contextTokens = usage?.totalTokens
+  if (contextTokens === undefined || contextTokens === null || !Number.isFinite(contextTokens)) return undefined
+  return contextTokens * 3 >= limits.compactAt * 2
+}
 
 const MEDIA_TYPES = new Set([
   "file",
