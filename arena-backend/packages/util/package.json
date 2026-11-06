@@ -64,6 +64,7 @@
   "devDependencies": {
     "@tsconfig/bun": "catalog:",
     "@types/bun": "catalog:",
+    "@types/mime-types": "3.0.1",
     "@types/cross-spawn": "catalog:",
     "@types/node": "catalog:",
     "@types/npm-package-arg": "6.1.4",
