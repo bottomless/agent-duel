@@ -2903,6 +2903,70 @@ describe("ArenaGit", () => {
     }),
   )
 
+  // A copied host already holds the canonical's origin, so the mirror compares before it writes.
+  it.live("writes only the origin settings a host lacks, and leaves a matching host's config untouched", () =>
+    Effect.gen(function* () {
+      const canonical = yield* scopedTmpdir({ git: true })
+      const hostDir = yield* scopedTmpdir()
+      const host = `${hostDir.path}/host.git`
+      const config = (cwd: string, args: string) =>
+        Effect.promise(() => $`git config ${{ raw: args }}`.cwd(cwd).quiet().nothrow().text()).pipe(
+          Effect.map((text) => text.trim()),
+        )
+      yield* Effect.promise(() => $`git commit --allow-empty -m base`.cwd(canonical.path).quiet())
+      yield* Effect.promise(() => $`git remote add origin https://example.invalid/new.git`.cwd(canonical.path).quiet())
+      yield* Effect.promise(() => $`git config --add remote.origin.fetch ${"+refs/tags/*:refs/tags/*"}`.cwd(canonical.path).quiet())
+      yield* Effect.promise(() => $`git config remote.origin.pushurl https://example.invalid/push.git`.cwd(canonical.path).quiet())
+      yield* Effect.promise(() => $`git init --bare --quiet ${host}`.quiet())
+      yield* Effect.promise(() => fs.writeFile(`${host}/objects/info/alternates`, `${canonical.path}/.git/objects\n`, "utf8"))
+      // A host whose origin is stale in every key.
+      yield* Effect.promise(() => $`git config remote.origin.url https://example.invalid/old.git`.cwd(host).quiet())
+      yield* Effect.promise(() => $`git config remote.origin.fetch +refs/heads/main:refs/remotes/origin/main`.cwd(host).quiet())
+      yield* Effect.promise(() => $`git config remote.origin.pushurl https://example.invalid/old-push.git`.cwd(host).quiet())
+
+      expect((yield* mirrorCanonicalRefs({ canonical: canonical.path, host })).origin).toBe(true)
+      expect(yield* config(host, "--get-all remote.origin.url")).toBe("https://example.invalid/new.git")
+      expect(yield* config(host, "--get-all remote.origin.fetch")).toBe(
+        "+refs/heads/*:refs/remotes/origin/*\n+refs/tags/*:refs/tags/*",
+      )
+      expect(yield* config(host, "--get-all remote.origin.pushurl")).toBe("https://example.invalid/push.git")
+
+      // Nothing differs now, so nothing is written.
+      const before = (yield* Effect.promise(() => fs.stat(`${host}/config`))).mtimeMs
+      yield* mirrorCanonicalRefs({ canonical: canonical.path, host })
+      expect((yield* Effect.promise(() => fs.stat(`${host}/config`))).mtimeMs).toBe(before)
+
+      // A push url the canonical dropped goes from the host too.
+      yield* Effect.promise(() => $`git config --unset remote.origin.pushurl`.cwd(canonical.path).quiet())
+      yield* mirrorCanonicalRefs({ canonical: canonical.path, host })
+      expect(yield* config(host, "--get-all remote.origin.pushurl")).toBe("")
+      expect(yield* config(host, "--get-all remote.origin.url")).toBe("https://example.invalid/new.git")
+
+      // A host holding a second url is written, and git refuses that as it always did, rather
+      // than the mirror leaving the extra url for a contestant's push.
+      yield* Effect.promise(() => $`git config --add remote.origin.url https://example.invalid/new.git`.cwd(host).quiet())
+      const refused = yield* Effect.exit(mirrorCanonicalRefs({ canonical: canonical.path, host }))
+      expect(Exit.isFailure(refused)).toBe(true)
+    }),
+  )
+
+  it.live("mirrors no origin from a canonical without one and leaves the host's alone", () =>
+    Effect.gen(function* () {
+      const canonical = yield* scopedTmpdir({ git: true })
+      const hostDir = yield* scopedTmpdir()
+      const host = `${hostDir.path}/host.git`
+      yield* Effect.promise(() => $`git commit --allow-empty -m base`.cwd(canonical.path).quiet())
+      yield* Effect.promise(() => $`git init --bare --quiet ${host}`.quiet())
+      yield* Effect.promise(() => fs.writeFile(`${host}/objects/info/alternates`, `${canonical.path}/.git/objects\n`, "utf8"))
+      yield* Effect.promise(() => $`git config remote.origin.url https://example.invalid/kept.git`.cwd(host).quiet())
+
+      expect((yield* mirrorCanonicalRefs({ canonical: canonical.path, host })).origin).toBe(false)
+      expect((yield* Effect.promise(() => $`git config --get remote.origin.url`.cwd(host).quiet().text())).trim()).toBe(
+        "https://example.invalid/kept.git",
+      )
+    }),
+  )
+
   // A warm host is mirrored in full at warm-up, so the send fetches only what moved since. The
   // host owns its objects, as a copied git directory does, so a missed fetch shows as a missing
   // object rather than being covered by alternates.
