@@ -9,6 +9,7 @@ import { InstanceStore } from "@/project/instance-store"
 import { Worktree } from "@/worktree"
 import { ArenaService } from "./service"
 import { createArenaEnginePlugin } from "./engine-runtime/plugin"
+import { createArenaWebSearchPlugin } from "./websearch"
 import { Service as V2EventsService, layer as v2EventsLayer } from "./v2-events"
 import { SessionRuntime } from "./session-runtime"
 import { ArenaApi } from "@/server/routes/instance/httpapi/groups/arena"
@@ -20,6 +21,7 @@ export const enginePluginLayer = Layer.effectDiscard(
   Effect.gen(function* () {
     const plugins = yield* SdkPlugins.Service
     yield* plugins.register(createArenaEnginePlugin())
+    yield* plugins.register(createArenaWebSearchPlugin())
   }),
 )
 

@@ -1,6 +1,7 @@
 import type { ArenaDb } from "./collection"
 import type { MetadataRateLimit } from "./metadata"
 import type { ModelPool } from "./pool"
+import type { WebSearchRateLimit } from "./websearch"
 
 /** The only facts the battle routes read about whoever is calling. */
 export type Caller = {
@@ -23,6 +24,7 @@ export type ArenaContext = {
   readonly validateModels: (apiKey: string) => Promise<void>
   readonly networkUnavailable?: (error: unknown) => Promise<boolean>
   readonly metadataRateLimit?: MetadataRateLimit
+  readonly webSearchRateLimit?: WebSearchRateLimit
   /** Heartbeats and replayable responses on contestant streams (`stream-recovery.ts`). */
   readonly streamRecovery: boolean
 }

@@ -5,6 +5,7 @@ import { handleAssignmentsRequest } from "./assignments"
 import { handleComparisonRequest } from "./comparison"
 import { defaultMetadataRateLimit, handleMetadataRequest, type MetadataRateLimit } from "./metadata"
 import { handleOpenRouterRequest } from "./openrouter"
+import { defaultWebSearchRateLimit, handleWebSearchRequest, type WebSearchRateLimit } from "./websearch"
 import { mediumModel } from "./default-pool"
 
 export type ArenaServiceOptions = {
@@ -35,6 +36,8 @@ export type ArenaServiceOptions = {
    * `defaultMetadataRateLimit`; null turns the limit off, as a BYOK engine does for its own key.
    */
   readonly metadataRateLimit?: MetadataRateLimit | null
+  /** Web searches each account may make per window. Defaults to `defaultWebSearchRateLimit`; null turns it off. */
+  readonly webSearchRateLimit?: WebSearchRateLimit | null
   /**
    * Heartbeats on contestant streams and a replay route for a response whose connection died
    * (`stream-recovery.ts`). On by default for the control plane; a service on the user's machine has
@@ -48,6 +51,7 @@ export type ArenaService = {
   readonly openrouter: (request: Request) => Promise<Response>
   readonly comparison: (request: Request) => Promise<Response>
   readonly metadata: (request: Request) => Promise<Response>
+  readonly websearch: (request: Request) => Promise<Response>
   /** Answers any of the routes above by path, or undefined when the path is not one of them. */
   readonly route: (request: Request) => Promise<Response | undefined>
 }
@@ -74,22 +78,27 @@ export function createArenaService(options: ArenaServiceOptions): ArenaService {
     networkUnavailable: options.networkUnavailable,
     metadataRateLimit:
       options.metadataRateLimit === null ? undefined : (options.metadataRateLimit ?? defaultMetadataRateLimit),
+    webSearchRateLimit:
+      options.webSearchRateLimit === null ? undefined : (options.webSearchRateLimit ?? defaultWebSearchRateLimit),
     streamRecovery: options.streamRecovery ?? true,
   }
   const assignments = (request: Request) => handleAssignmentsRequest(request, context)
   const openrouter = (request: Request) => handleOpenRouterRequest(request, context)
   const comparison = (request: Request) => handleComparisonRequest(request, context)
   const metadata = (request: Request) => handleMetadataRequest(request, context)
+  const websearch = (request: Request) => handleWebSearchRequest(request, context)
   return {
     assignments,
     openrouter,
     comparison,
     metadata,
+    websearch,
     async route(request) {
       const path = new URL(request.url).pathname
       if (path === "/api/arena/assignments") return assignments(request)
       if (path === "/api/arena/comparison") return comparison(request)
       if (path === "/api/arena/metadata") return metadata(request)
+      if (path === "/api/arena/websearch") return websearch(request)
       if (path.startsWith("/api/openrouter/")) return openrouter(request)
       return undefined
     },
