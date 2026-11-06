@@ -4,12 +4,238 @@ import { carriesModelOutput, create } from "@/arena/telemetry"
 import { Store } from "@/arena/mongo"
 import type { GenerationDocument, GenerationRetry } from "@/arena/records"
 import { ArenaWaitError, type RequestMetadata } from "@/arena/proxy"
+import { begin, read, reset } from "@/arena/engagement-usage"
+import { STEERING_COMPACTION_FIELD } from "@agent-duel/arena-service/request-budget"
 
 function store(value: object): Store {
   return Object.assign(Object.create(Store.prototype), value)
 }
 
 describe("ArenaTelemetry", () => {
+  test.each(["complete", "error"] as const)(
+    "carries only the final steering decision through %s telemetry",
+    async (outcome) => {
+      const artifacts: string[] = []
+      const arena = store({
+        generationsForRuns: async () => [],
+        saveGeneration: async (input: GenerationDocument) => input,
+        updateGeneration: async (_id: string, patch: Partial<GenerationDocument>) => patch,
+        storeArtifact: async (input: { data: Uint8Array }) => {
+          artifacts.push(new TextDecoder().decode(input.data))
+          return input
+        },
+        recordGenerationRetry: async () => undefined,
+      })
+      const telemetry = create(arena)
+      const engagement = begin({ runID: "decision-run", sessionID: "decision-root" })
+      try {
+        const decisions = [true, false, null, undefined, "true"]
+        for (const [index, decision] of decisions.entries()) {
+          const metadata: RequestMetadata = {
+            assignment: {
+              runID: "decision-run",
+              rootSessionID: "decision-root",
+              scopeID: "turn",
+              assignmentID: "assignment",
+              telemetry: true,
+            },
+            generationID: `decision-${outcome}-${index}`,
+            requestID: `request-${index}`,
+            sessionID: "decision-root",
+            requestedModel: "contestant",
+            enforcedReasoning: { effort: "high" },
+            requestKind: "generation",
+            startedAt: new Date(0),
+          }
+          await telemetry.start?.(metadata, { model: "contestant", messages: [] })
+          const payload = {
+            usage: { prompt_tokens: 54_000, completion_tokens: 400 },
+            [STEERING_COMPACTION_FIELD]: decision,
+          }
+          // A later unknown decision must clear an earlier true within the same stream.
+          const raw =
+            index === 2
+              ? `data: ${JSON.stringify({ ...payload, [STEERING_COMPACTION_FIELD]: true })}\n\ndata: ${JSON.stringify(payload)}\n\n`
+              : JSON.stringify(payload)
+          // HTTP chunks need not align with either JSON or SSE frames.
+          telemetry.rawChunk?.(metadata, raw.slice(0, 17))
+          telemetry.rawChunk?.(metadata, raw.slice(17))
+          if (outcome === "complete") await telemetry.complete?.(metadata, new Date(index + 1))
+          else await telemetry.error?.(metadata, new Error("stream ended"), new Date(index + 1))
+          expect(read(engagement)?.useCompactionForSteer).toBe(typeof decision === "boolean" ? decision : undefined)
+        }
+        expect(artifacts.every((artifact) => !artifact.includes(STEERING_COMPACTION_FIELD))).toBe(true)
+      } finally {
+        reset()
+      }
+    },
+  )
+
+  test("persists a completed call with no usage as unknown, then accepts a late known reveal", async () => {
+    let generation: GenerationDocument | undefined
+    let runUsage: GenerationDocument["usage"]
+    const arena = store({
+      storeArtifact: async (input: { _id: string }) => input,
+      saveGeneration: async (input: GenerationDocument) => {
+        generation = input
+        return input
+      },
+      updateGeneration: async (_id: string, patch: Partial<GenerationDocument>) => {
+        generation = { ...generation!, ...patch }
+        return generation
+      },
+      generationsForRuns: async () => (generation ? [generation] : []),
+      updateRun: async (_id: string, patch: { usage?: GenerationDocument["usage"] }) => {
+        runUsage = patch.usage
+        return patch
+      },
+      recordGenerationRetry: async () => undefined,
+      addDescendant: async () => undefined,
+      run: async () => ({ _id: "run", turnID: "turn" }),
+      turn: async () => ({ _id: "turn", resolution: { kind: "vote", vote: "a", appliedSide: "a" } }),
+    })
+    const telemetry = create(arena)
+    const metadata: RequestMetadata = {
+      assignment: {
+        runID: "run",
+        rootSessionID: "root",
+        scopeID: "turn",
+        assignmentID: "assignment",
+        telemetry: true,
+      },
+      generationID: "gen_00000000000000000000000000000041",
+      requestID: "00000000-0000-4000-8000-000000000041",
+      sessionID: "root",
+      requestedModel: "contestant",
+      enforcedReasoning: { effort: "high" },
+      requestKind: "generation",
+      startedAt: new Date(Date.now() - 10),
+    }
+    await telemetry.start?.(metadata, { model: "contestant", messages: [] })
+    await telemetry.complete?.(metadata, new Date())
+    await telemetry.reveal?.({ runIDs: ["run"], metrics: [] })
+    expect(generation?.usage).toMatchObject({ promptTokens: null, completionTokens: null, reasoningTokens: null })
+    expect(runUsage).toMatchObject({ promptTokens: null, completionTokens: null, cost: null })
+    await telemetry.reveal?.({
+      runIDs: ["run"],
+      metrics: [
+        {
+          generationID: metadata.generationID,
+          usage: {
+            promptTokens: 10,
+            completionTokens: 3,
+            reasoningTokens: 1,
+            totalTokens: 13,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+            cost: 0,
+            attempts: 1,
+            latencyMs: 10,
+          },
+        },
+      ],
+    })
+    expect(generation?.usage).toMatchObject({ promptTokens: 10, completionTokens: 3, cost: 0 })
+  })
+
+  test("refreshes late revealed compaction metrics without delaying completion", async () => {
+    const generations = new Map<string, GenerationDocument>()
+    let resolverCalls = 0
+    const lateID = "gen_00000000000000000000000000000031"
+    const oldID = "gen_00000000000000000000000000000032"
+    const usage = (cost: number | null) => ({
+      promptTokens: 10,
+      completionTokens: 4,
+      reasoningTokens: 1,
+      totalTokens: 14,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      cost,
+      attempts: 1,
+      latencyMs: 1,
+      provenance: "provider" as const,
+      version: 2 as const,
+    })
+    const arena = store({
+      storeArtifact: async (input: { _id: string }) => input,
+      saveGeneration: async (input: GenerationDocument) => {
+        generations.set(input._id, input)
+        return input
+      },
+      updateGeneration: async (id: string, patch: Partial<GenerationDocument>) => {
+        const next = { ...generations.get(id)!, ...patch }
+        generations.set(id, next)
+        return next
+      },
+      generationsForRuns: async () => [...generations.values()],
+      updateRun: async () => undefined,
+      recordGenerationRetry: async () => undefined,
+      addDescendant: async () => undefined,
+      run: async () => ({ _id: "run", turnID: "turn" }),
+      turn: async () => ({
+        _id: "turn",
+        resolution: { kind: "vote", vote: "a", appliedSide: "a" },
+      }),
+    })
+    const telemetry = create(arena, {
+      resolveAssignments: async (_kind, _scopeID, decision) => {
+        resolverCalls += 1
+        expect(decision).toBe("select:a")
+        return {
+          decision,
+          assignments: [
+            {
+              assignmentID: "assignment-a",
+              model: "model-a",
+              metrics: [
+                { generationID: oldID, usage: usage(0.1) },
+                ...(resolverCalls > 1 ? [{ generationID: lateID, usage: usage(0.42) }] : []),
+              ],
+            },
+          ],
+        }
+      },
+    })
+    const metadata = (generationID: string, requestKind: "generation" | "compaction", classification?: "compaction") =>
+      ({
+        assignment: {
+          runID: "run",
+          rootSessionID: "root",
+          scopeID: "turn",
+          assignmentID: "assignment-a",
+          telemetry: true,
+        },
+        generationID,
+        requestID: generationID,
+        sessionID: "root",
+        requestedModel: "contestant",
+        enforcedReasoning: { effort: "high" as const },
+        requestKind,
+        ...(classification ? { classification } : {}),
+        ...(classification ? { opportunisticCompactionID: "compact-1" } : {}),
+        startedAt: new Date(Date.now() - 10),
+      }) satisfies RequestMetadata
+    const old = metadata(oldID, "generation")
+    const late = metadata(lateID, "compaction", "compaction")
+    const answer = async (input: RequestMetadata) => {
+      await telemetry.start?.(input, { model: "contestant", messages: [] })
+      telemetry.rawChunk?.(
+        input,
+        `data: ${JSON.stringify({ usage: { prompt_tokens: 10, completion_tokens: 4, total_tokens: 14 } })}\n`,
+      )
+      await telemetry.complete?.(input, new Date())
+    }
+    await answer(old)
+    await answer(late)
+    expect(resolverCalls).toBe(0)
+    await telemetry.reveal?.({ runIDs: ["run"], metrics: [{ generationID: oldID, usage: usage(0.1) }] })
+    for (let attempt = 0; attempt < 20 && resolverCalls < 2; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+    expect(resolverCalls).toBe(2)
+    expect(generations.get(lateID)?.usage?.cost).toBe(0.42)
+  })
+
   test("stores generation artifacts without model-fingerprinting metadata", async () => {
     let generation: GenerationDocument | undefined
     let runUsage: GenerationDocument["usage"]

@@ -1,6 +1,7 @@
 import type { Store } from "./mongo"
 import type { ComparisonDocument, UsageTotals } from "./records"
 import { backend } from "./runtime"
+import { parseProviderUsage } from "@agent-duel/arena-service/usage"
 import { utilityModels } from "@agent-duel/arena-service/utility-model"
 import { prepareEvidence, type ComparisonFileFact } from "./comparison-evidence"
 
@@ -51,30 +52,8 @@ function bounded(value: string, limit: number) {
   }
 }
 
-function number(value: unknown) {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0
-}
-
 function usage(value: unknown, latencyMs: number): UsageTotals | undefined {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined
-  const source = value as Record<string, unknown>
-  const details =
-    typeof source.completion_tokens_details === "object" && source.completion_tokens_details !== null
-      ? (source.completion_tokens_details as Record<string, unknown>)
-      : undefined
-  const prompt = number(source.prompt_tokens)
-  const completion = number(source.completion_tokens)
-  return {
-    promptTokens: prompt,
-    completionTokens: completion,
-    reasoningTokens: number(details?.reasoning_tokens),
-    totalTokens: number(source.total_tokens) || prompt + completion,
-    cacheReadTokens: 0,
-    cacheWriteTokens: 0,
-    cost: number(source.cost),
-    attempts: 1,
-    latencyMs,
-  }
+  return parseProviderUsage(value, latencyMs)
 }
 
 function output(value: unknown) {

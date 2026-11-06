@@ -75,6 +75,11 @@ function finite(value: unknown, name: string) {
   return value
 }
 
+function finiteNullable(value: unknown, name: string) {
+  if (value === null || value === undefined) return null
+  return finite(value, name)
+}
+
 function optionalNonNegative(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined
 }
@@ -85,17 +90,21 @@ function usage(value: unknown): UsageTotals {
   }
   const input = value as Record<string, unknown>
   const upstreamInferenceCost = optionalNonNegative(input.upstreamInferenceCost)
+  const provenance = input.provenance === "provider" ? "provider" : undefined
+  const version = input.version === 2 ? 2 : undefined
   return {
-    promptTokens: finite(input.promptTokens, "prompt tokens"),
-    completionTokens: finite(input.completionTokens, "completion tokens"),
-    reasoningTokens: finite(input.reasoningTokens, "reasoning tokens"),
-    totalTokens: finite(input.totalTokens, "total tokens"),
-    cacheReadTokens: finite(input.cacheReadTokens, "cache read tokens"),
-    cacheWriteTokens: finite(input.cacheWriteTokens, "cache write tokens"),
-    cost: finite(input.cost, "cost"),
+    promptTokens: finiteNullable(input.promptTokens, "prompt tokens"),
+    completionTokens: finiteNullable(input.completionTokens, "completion tokens"),
+    reasoningTokens: finiteNullable(input.reasoningTokens, "reasoning tokens"),
+    totalTokens: finiteNullable(input.totalTokens, "total tokens"),
+    cacheReadTokens: finiteNullable(input.cacheReadTokens, "cache read tokens"),
+    cacheWriteTokens: finiteNullable(input.cacheWriteTokens, "cache write tokens"),
+    cost: finiteNullable(input.cost, "cost"),
     ...(upstreamInferenceCost === undefined ? {} : { upstreamInferenceCost }),
     attempts: finite(input.attempts, "attempts"),
     latencyMs: finite(input.latencyMs, "latency"),
+    ...(provenance === undefined ? {} : { provenance }),
+    ...(version === undefined ? {} : { version }),
   }
 }
 

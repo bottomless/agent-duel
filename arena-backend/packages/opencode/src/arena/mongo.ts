@@ -1,3 +1,4 @@
+import { compactionMetrics, type CompactionObservation } from "./compaction-metrics"
 import { MongoClient, MongoServerError, type Db } from "mongodb"
 import {
   isDuplicateKeyError,
@@ -211,6 +212,7 @@ export class Store {
   readonly singleAgentRatings: ArenaCollection<SingleAgentRatingDocument>
   readonly portCursors: ArenaCollection<PortCursorDocument>
   readonly artifactQueues = new Map<string, Promise<void>>()
+  private readonly compactionMetricWrites = new Map<string, Promise<void>>()
 
   constructor(client: ArenaClient, db: ArenaDb | Db) {
     this.client = client
@@ -998,6 +1000,60 @@ export class Store {
     return insertIdempotent(this.generations, generation)
   }
 
+  async recordCompaction(observation: CompactionObservation) {
+    const updated = await this.runs.findOneAndUpdate(
+      { _id: observation.runID },
+      {
+        $set: { [`compactions.${observation.id}`]: observation },
+        ...(["pending", "ready"].includes(observation.status) ||
+        (observation.status === "canceled" && observation.finishedAt === undefined)
+          ? { $addToSet: { pendingCompactionIDs: observation.id } }
+          : { $pullAll: { pendingCompactionIDs: [observation.id] } }),
+      },
+      { returnDocument: "after" },
+    )
+    if (!updated) return
+    this.changed({ turnID: updated.turnID })
+    await this.refreshCompactionMetrics(updated)
+  }
+
+  async recoverCompactions() {
+    // Keep the filter portable to the local SQLite store, whose JSON-path
+    // adapter intentionally does not support Mongo's array-index syntax.
+    const runs = (await this.runs.find({ pendingCompactionIDs: { $exists: true } }).toArray()).filter(
+      (run) => (run.pendingCompactionIDs?.length ?? 0) > 0,
+    )
+    for (const run of runs) {
+      for (const id of run.pendingCompactionIDs ?? []) {
+        const observation = run.compactions?.[id]
+        if (!observation) continue
+        await this.recordCompaction({ ...observation, status: "discarded", finishedAt: Date.now() })
+      }
+    }
+  }
+
+  async refreshCompactionMetrics(run: RunDocument) {
+    const previous = this.compactionMetricWrites.get(run._id) ?? Promise.resolve()
+    const pending = previous
+      .catch(() => undefined)
+      .then(async () => {
+        const current = await this.run(run._id)
+        if (!current?.compactions) return
+        const generations = await this.generationsForRuns([run._id])
+        const metrics = compactionMetrics(current.compactions, generations)
+        await this.battleMetrics.updateOne(
+          { _id: current.turnID },
+          { $set: { [`sides.${current.side}.compactions`]: metrics } },
+        )
+      })
+    this.compactionMetricWrites.set(run._id, pending)
+    try {
+      await pending
+    } finally {
+      if (this.compactionMetricWrites.get(run._id) === pending) this.compactionMetricWrites.delete(run._id)
+    }
+  }
+
   async updateGeneration(
     generationID: string,
     patch: Partial<Omit<GenerationDocument, "_id" | "runID" | "callIndex">>,
@@ -1009,49 +1065,63 @@ export class Store {
     )
     if (!updated) throw new Error(`Arena generation not found: ${generationID}`)
     this.changed()
+    if (updated.opportunisticCompactionID) {
+      const run = await this.run(updated.runID)
+      if (run) await this.refreshCompactionMetrics(run)
+    }
     return updated
   }
 
   async accumulateRunUsage(runID: string, usage: NonNullable<GenerationDocument["usage"]>) {
-    const increments = {
-      "usage.promptTokens": usage.promptTokens,
-      "usage.completionTokens": usage.completionTokens,
-      "usage.reasoningTokens": usage.reasoningTokens,
-      "usage.totalTokens": usage.totalTokens,
-      "usage.cacheReadTokens": usage.cacheReadTokens,
-      "usage.cacheWriteTokens": usage.cacheWriteTokens,
-      "usage.cost": usage.cost,
+    const increments: Record<string, number> = {
       "usage.attempts": usage.attempts,
       "usage.latencyMs": usage.latencyMs,
     }
+    const nullable: Array<[string, number | null | undefined]> = [
+      ["usage.promptTokens", usage.promptTokens],
+      ["usage.cacheReadTokens", usage.cacheReadTokens],
+      ["usage.cacheWriteTokens", usage.cacheWriteTokens],
+      ["usage.completionTokens", usage.completionTokens],
+      ["usage.reasoningTokens", usage.reasoningTokens],
+      ["usage.totalTokens", usage.totalTokens],
+      ["usage.cost", usage.cost],
+      ["usage.upstreamInferenceCost", usage.upstreamInferenceCost],
+    ]
+    const known = nullable.filter((entry): entry is [string, number] => typeof entry[1] === "number")
+    const unknown = nullable.filter(([, value]) => value === null || value === undefined)
+    const unset = Object.fromEntries(unknown.map(([path]) => [path, ""] as const))
     const options = { returnDocument: "after" as const }
-    const unknownUpdate: ArenaUpdate<RunDocument> = {
+    const now = new Date()
+    const baseUpdate: ArenaUpdate<RunDocument> = {
       $inc: increments,
-      $set: { updatedAt: new Date() },
-      $unset: { "usage.upstreamInferenceCost": "" },
+      $set: { updatedAt: now },
+      ...(Object.keys(unset).length ? { $unset: unset } : {}),
     }
-    let updated =
-      usage.upstreamInferenceCost === undefined
-        ? await this.runs.findOneAndUpdate({ _id: runID }, unknownUpdate, options)
-        : await this.runs.findOneAndUpdate(
-            {
-              _id: runID,
-              $or: [
-                { usage: { $exists: false } },
-                { "usage.attempts": 0 },
-                { "usage.upstreamInferenceCost": { $exists: true } },
-              ],
-            },
-            {
-              $inc: { ...increments, "usage.upstreamInferenceCost": usage.upstreamInferenceCost },
-              $set: { updatedAt: new Date() },
-            },
-            options,
-          )
-    if (!updated && usage.upstreamInferenceCost !== undefined) {
-      updated = await this.runs.findOneAndUpdate({ _id: runID }, unknownUpdate, options)
-    }
+    // Initialize all known nullable fields together only when the aggregate
+    // has never received usage. Once a field was unset as unknown, later known
+    // calls must not recreate it with an $inc.
+    let updated = known.length
+      ? await this.runs.findOneAndUpdate(
+          { _id: runID, usage: { $exists: false } },
+          { ...baseUpdate, $inc: { ...increments, ...Object.fromEntries(known) } },
+          options,
+        )
+      : null
+    const initialized = updated !== null
+    if (!updated) updated = await this.runs.findOneAndUpdate({ _id: runID }, baseUpdate, options)
     if (!updated) throw new Error(`Arena run not found: ${runID}`)
+    // Each field is guarded independently. This keeps concurrent updates
+    // atomic while preserving an unknown field represented by its absence.
+    if (!initialized) {
+      for (const [path, value] of known) {
+        const next = await this.runs.findOneAndUpdate(
+          { _id: runID, [path]: { $exists: true, $ne: null } },
+          { $inc: { [path]: value }, $set: { updatedAt: now } },
+          options,
+        )
+        if (next) updated = next
+      }
+    }
     this.changed({ turnID: updated.turnID })
     return updated
   }
@@ -1258,7 +1328,11 @@ export class Store {
     /** Left out for a discard that names nobody (`identitiesRevealed`). */
     readonly models?: Readonly<Record<Side, string>>
     /** A failed state only for a discard the control plane already holds (`discardCommitted`). */
-    readonly expectedState: "awaiting_vote" | "awaiting_stop_resolution" | "finalization_failed" | "interrupted_recovery"
+    readonly expectedState:
+      | "awaiting_vote"
+      | "awaiting_stop_resolution"
+      | "finalization_failed"
+      | "interrupted_recovery"
     readonly at: Date
   }) {
     const candidate = await this.turns.findOne({ _id: input.turnID })

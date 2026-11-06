@@ -8,6 +8,13 @@ import { arenaCredentials, type ArenaCredentials } from "./credentials"
 import { createArenaBackend, type ArenaBackend } from "./backend"
 import { idleSession, KeepAlive } from "./keep-alive"
 import { GlobalBus } from "@/bus/global"
+export {
+  begin as beginEngagement,
+  clear as clearEngagement,
+  finish as finishEngagement,
+  onUpdate as onEngagementUpdate,
+  read as readEngagement,
+} from "./engagement-usage"
 
 export const providerID = "arena"
 export const registry = new AssignmentRegistry()

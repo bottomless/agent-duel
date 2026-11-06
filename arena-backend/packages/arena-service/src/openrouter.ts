@@ -2,7 +2,8 @@ import { createHash, createHmac, randomUUID } from "crypto"
 import { recordAssignmentGenerationMetrics, reserveRoutingAssignment, type SingleAgentModelSize } from "./assignments"
 import { authorize, type ArenaContext, type Fetch } from "./context"
 import { KEEP_ALIVE_HEADER, keepAliveAnswer, keepsCacheWarm } from "./keep-alive"
-import type { StoredGenerationMetrics, UsageTotals } from "./metrics"
+import type { StoredGenerationMetrics } from "./metrics"
+import { createProviderUsageParser } from "./usage"
 import {
   classifyPaymentError,
   compactionRequiredError,
@@ -11,7 +12,13 @@ import {
   retryableStreamError,
 } from "./request-error"
 import { modelLimits, type ModelLimits, type ModelPool, type ModelProfile } from "./pool"
-import { COMPACTION_HEADER, COMPACTION_OFFER, prepareRequest } from "./request-budget"
+import {
+  COMPACTION_HEADER,
+  COMPACTION_OFFER,
+  STEERING_COMPACTION_FIELD,
+  prepareRequest,
+  steeringCompaction,
+} from "./request-budget"
 import {
   calibrate,
   MAX_CALIBRATION_RATIO,
@@ -42,43 +49,6 @@ function sanitizeUsage(value: unknown) {
   return Object.fromEntries(Object.entries(value).filter(([key]) => !key.toLowerCase().includes("cost")))
 }
 
-function number(value: unknown) {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0
-}
-
-function nonNegativeNumber(value: unknown) {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined
-}
-
-function usage(value: unknown, latencyMs: number): UsageTotals | undefined {
-  if (!record(value)) return undefined
-  const source = record(value.usage)
-    ? value.usage
-    : record(value.data) && record(value.data.usage)
-      ? value.data.usage
-      : undefined
-  if (!source) return undefined
-  const promptDetails = record(source.prompt_tokens_details) ? source.prompt_tokens_details : undefined
-  const completionDetails = record(source.completion_tokens_details) ? source.completion_tokens_details : undefined
-  const cacheDetails = record(source.cache_tokens) ? source.cache_tokens : undefined
-  const promptTokens = number(source.prompt_tokens ?? source.input_tokens)
-  const completionTokens = number(source.completion_tokens ?? source.output_tokens)
-  const costDetails = record(source.cost_details) ? source.cost_details : undefined
-  const upstreamInferenceCost = nonNegativeNumber(costDetails?.upstream_inference_cost)
-  return {
-    promptTokens,
-    completionTokens,
-    reasoningTokens: number(completionDetails?.reasoning_tokens ?? source.reasoning_tokens),
-    totalTokens: number(source.total_tokens) || promptTokens + completionTokens,
-    cacheReadTokens: number(promptDetails?.cached_tokens ?? cacheDetails?.read ?? source.cache_read_tokens),
-    cacheWriteTokens: number(promptDetails?.cache_write_tokens ?? cacheDetails?.write ?? source.cache_write_tokens),
-    cost: number(source.cost ?? value.cost),
-    ...(upstreamInferenceCost === undefined ? {} : { upstreamInferenceCost }),
-    attempts: 1,
-    latencyMs,
-  }
-}
-
 function finishReason(value: unknown) {
   if (!record(value)) return undefined
   if (typeof value.status === "string" && ["completed", "incomplete", "failed"].includes(value.status)) {
@@ -99,20 +69,18 @@ function generation(value: unknown) {
 }
 
 function metricsCollector(generationID: string, startedAt: number) {
-  let usagePayload: unknown
+  const usage = createProviderUsageParser()
   let finished: string | undefined
   let provider: string | undefined
   return {
     observe(event: unknown) {
       const value = generation(event)
-      if (record(value) && (value.usage !== undefined || (record(value.data) && value.data.usage !== undefined))) {
-        usagePayload = value
-      }
+      usage.observe(value)
       finished = finishReason(value) ?? finished
       if (record(value) && typeof value.provider === "string" && value.provider) provider = value.provider
     },
     value(): StoredGenerationMetrics | undefined {
-      const measured = usage(usagePayload, Math.max(0, Date.now() - startedAt))
+      const measured = usage.final() ? usage.value(Math.max(0, Date.now() - startedAt)) : undefined
       if (!measured && !finished) return undefined
       return {
         generationID,
@@ -145,6 +113,7 @@ function sanitizePayload(value: unknown, generationID: string, stream = false): 
     "system_fingerprint",
     "cost",
     "cost_details",
+    STEERING_COMPACTION_FIELD,
   ]) {
     delete sanitized[key]
   }
@@ -154,11 +123,17 @@ function sanitizePayload(value: unknown, generationID: string, stream = false): 
   return sanitized
 }
 
+function withSteeringCompaction(value: unknown, decision: boolean | undefined) {
+  if (!record(value) || value.error !== undefined) return value
+  // Null clears an earlier decision if the final usage packet leaves context unknown.
+  return { ...value, [STEERING_COMPACTION_FIELD]: decision ?? null }
+}
+
 function sanitizeLine(
   line: string,
   generationID: string,
   reasoning: ReasoningRedactor,
-  observe?: (value: unknown) => void,
+  observe: (value: unknown) => boolean | undefined,
 ) {
   if (!line.startsWith("data:")) return ""
   const raw = line.slice("data:".length).trimStart()
@@ -170,8 +145,10 @@ function sanitizeLine(
       return tail ? `data: ${JSON.stringify({ id: generationID, ...tail })}\n\n${line}` : line
     }
     const value = JSON.parse(raw) as unknown
-    observe?.(value)
-    return `data: ${JSON.stringify(reasoning.redact(sanitizePayload(value, generationID, true), true))}`
+    const decision = observe(value)
+    return `data: ${JSON.stringify(
+      reasoning.redact(withSteeringCompaction(sanitizePayload(value, generationID, true), decision), true),
+    )}`
   } catch {
     reasoning.clear()
     return `data: ${JSON.stringify({
@@ -185,6 +162,7 @@ function sanitizeStream(
   generationID: string,
   reasoning: ReasoningRedactor,
   startedAt: number,
+  limits: ModelLimits,
   complete: (metrics: StoredGenerationMetrics | undefined) => Promise<void>,
   recovery?: ReplayRecorder,
 ) {
@@ -196,6 +174,10 @@ function sanitizeStream(
   let heartbeat: ReturnType<typeof setInterval> | undefined
   let lastWrite = Date.now()
   const metrics = metricsCollector(generationID, startedAt)
+  const observe = (value: unknown) => {
+    metrics.observe(value)
+    return steeringCompaction(metrics.value()?.usage, limits)
+  }
   const stopHeartbeat = () => {
     if (heartbeat) clearInterval(heartbeat)
     heartbeat = undefined
@@ -237,7 +219,7 @@ function sanitizeStream(
           if (cancelled) return
           if (next.done) {
             pending += decoder.decode()
-            if (pending) writeLine(controller, sanitizeLine(pending, generationID, reasoning, metrics.observe))
+            if (pending) writeLine(controller, sanitizeLine(pending, generationID, reasoning, observe))
             if (open) writeLine(controller, "")
             const tail = reasoning.flush()
             if (tail) write(controller, `\n\ndata: ${JSON.stringify({ id: generationID, ...tail })}\n\n`)
@@ -252,7 +234,7 @@ function sanitizeStream(
           const lines = pending.split("\n")
           pending = lines.pop() ?? ""
           if (!lines.length) continue
-          for (const line of lines) writeLine(controller, sanitizeLine(line, generationID, reasoning, metrics.observe))
+          for (const line of lines) writeLine(controller, sanitizeLine(line, generationID, reasoning, observe))
           return
         }
       } catch {
@@ -482,6 +464,7 @@ async function sanitizeAssignedResponse(
   refusal: RefusalContext,
   reasoning: ReasoningRedactor,
   startedAt: number,
+  limits: ModelLimits,
   complete: (metrics: StoredGenerationMetrics | undefined) => Promise<void>,
   recovery?: () => ReplayRecorder | undefined,
 ) {
@@ -510,7 +493,7 @@ async function sanitizeAssignedResponse(
   if ((response.headers.get("content-type") ?? "").includes("text/event-stream") && response.body) {
     const recorder = recovery?.()
     if (recorder) headers.set(HEARTBEAT_HEADER, String(HEARTBEAT_MS))
-    return new Response(sanitizeStream(response.body, generationID, reasoning, startedAt, complete, recorder), {
+    return new Response(sanitizeStream(response.body, generationID, reasoning, startedAt, limits, complete, recorder), {
       status: response.status,
       headers,
     })
@@ -519,7 +502,9 @@ async function sanitizeAssignedResponse(
   const metrics = metricsCollector(generationID, startedAt)
   metrics.observe(raw)
   await complete(metrics.value())
-  const payload = reasoning.redact(sanitizePayload(raw, generationID))
+  const payload = reasoning.redact(
+    withSteeringCompaction(sanitizePayload(raw, generationID), steeringCompaction(metrics.value()?.usage, limits)),
+  )
   headers.set("content-type", "application/json")
   return Response.json(payload, { status: response.status, headers })
 }
@@ -686,7 +671,7 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
       context.streamRecovery && requestedGenerationID
         ? replayRecorder(db, { userId: caller.id, ...assignment, generationID: requestedGenerationID }, context.now)
         : undefined
-    return await sanitizeAssignedResponse(response, refusal, reasoning, startedAt, recordMetrics, recovery)
+    return await sanitizeAssignedResponse(response, refusal, reasoning, startedAt, limits, recordMetrics, recovery)
   } catch (error) {
     if (await context.networkUnavailable?.(error)) return Response.json(networkUnavailableError(), { status: 503 })
     console.error("[arena-service] OpenRouter proxy failed")

@@ -33,14 +33,12 @@ describe("ArenaMetrics review effort", () => {
     // The gap after a tab.viewed belongs to the tab that just opened. Crediting
     // it to the previous pane silently moves every tab's reading time one tab
     // back and leaves the first one at zero.
-    const effort = reviewEffort(
-      [
-        event(0, { type: "battle.opened" }),
-        event(1000, { type: "tab.viewed", tab: "verdict" }),
-        event(4000, { type: "tab.viewed", tab: "changes" }),
-        event(9000, { type: "file.selected", file: "x.ts", index: 0 }),
-      ],
-    )
+    const effort = reviewEffort([
+      event(0, { type: "battle.opened" }),
+      event(1000, { type: "tab.viewed", tab: "verdict" }),
+      event(4000, { type: "tab.viewed", tab: "changes" }),
+      event(9000, { type: "file.selected", file: "x.ts", index: 0 }),
+    ])
     expect(effort?.dwellMsByPane).toEqual({ verdict: 3000, changes: 5000 })
     expect(effort?.panesOpened).toEqual(["verdict", "changes"])
     // The second before the first tab opened is not reading time; 3000 + 5000.
@@ -48,27 +46,23 @@ describe("ArenaMetrics review effort", () => {
   })
 
   test("does not count time with the window blurred", () => {
-    const effort = reviewEffort(
-      [
-        event(0, { type: "battle.opened" }),
-        event(1000, { type: "tab.viewed", tab: "verdict" }),
-        event(2000, { type: "window.blur" }),
-        event(5000, { type: "window.focus" }),
-        event(6000, { type: "verdict.expanded" }),
-      ],
-    )
+    const effort = reviewEffort([
+      event(0, { type: "battle.opened" }),
+      event(1000, { type: "tab.viewed", tab: "verdict" }),
+      event(2000, { type: "window.blur" }),
+      event(5000, { type: "window.focus" }),
+      event(6000, { type: "verdict.expanded" }),
+    ])
     expect(effort?.activeMs).toBe(2000)
     expect(effort?.dwellMsByPane.verdict).toBe(2000)
   })
 
   test("drops an idle gap rather than counting a lunch break as reading", () => {
-    const effort = reviewEffort(
-      [
-        event(0, { type: "battle.opened" }),
-        event(1000, { type: "tab.viewed", tab: "changes" }),
-        event(200_000, { type: "file.selected", file: "a.ts", index: 0 }),
-      ],
-    )
+    const effort = reviewEffort([
+      event(0, { type: "battle.opened" }),
+      event(1000, { type: "tab.viewed", tab: "changes" }),
+      event(200_000, { type: "file.selected", file: "a.ts", index: 0 }),
+    ])
     // The idle gap is dropped and the second before the tab opened never counted,
     // so a battle the voter opened and walked away from scores nothing.
     expect(effort?.activeMs).toBe(0)
@@ -78,53 +72,45 @@ describe("ArenaMetrics review effort", () => {
   test("does not count time with the review folded away", () => {
     // Folding hands the screen back to the threads. Opening the review again
     // brings back the same tab without a new tab.viewed, so its time resumes.
-    const effort = reviewEffort(
-      [
-        event(0, { type: "battle.opened" }),
-        event(1000, { type: "tab.viewed", tab: "changes" }),
-        event(3000, { type: "review.collapsed", on: true }),
-        event(60_000, { type: "review.collapsed", on: false }),
-        event(64_000, { type: "file.selected", file: "a.ts", index: 0 }),
-      ],
-    )
+    const effort = reviewEffort([
+      event(0, { type: "battle.opened" }),
+      event(1000, { type: "tab.viewed", tab: "changes" }),
+      event(3000, { type: "review.collapsed", on: true }),
+      event(60_000, { type: "review.collapsed", on: false }),
+      event(64_000, { type: "file.selected", file: "a.ts", index: 0 }),
+    ])
     expect(effort?.dwellMsByPane).toEqual({ changes: 6000 })
     expect(effort?.activeMs).toBe(6000)
     expect(effort?.interactionCount).toBe(4)
   })
 
   test("closes a review that ends while blurred", () => {
-    const effort = reviewEffort(
-      [
-        event(0, { type: "battle.opened" }),
-        event(1000, { type: "tab.viewed", tab: "changes" }),
-        event(2000, { type: "window.blur" }),
-        event(9000, { type: "file.selected", file: "a.ts", index: 0 }),
-      ],
-    )
+    const effort = reviewEffort([
+      event(0, { type: "battle.opened" }),
+      event(1000, { type: "tab.viewed", tab: "changes" }),
+      event(2000, { type: "window.blur" }),
+      event(9000, { type: "file.selected", file: "a.ts", index: 0 }),
+    ])
     expect(effort?.activeMs).toBe(1000)
   })
 
   test("orders by offset and counts a file once however often it is opened", () => {
-    const effort = reviewEffort(
-      [
-        event(3000, { type: "file.selected", file: "a.ts", index: 0 }),
-        event(0, { type: "battle.opened" }),
-        event(1000, { type: "tab.viewed", tab: "changes" }),
-        event(2000, { type: "file.selected", file: "a.ts", index: 0 }),
-      ],
-    )
+    const effort = reviewEffort([
+      event(3000, { type: "file.selected", file: "a.ts", index: 0 }),
+      event(0, { type: "battle.opened" }),
+      event(1000, { type: "tab.viewed", tab: "changes" }),
+      event(2000, { type: "file.selected", file: "a.ts", index: 0 }),
+    ])
     expect(effort?.filesViewed).toBe(1)
     expect(effort?.activeMs).toBe(2000)
   })
 
   test("measures the first interaction from the voter, not from the window", () => {
-    const effort = reviewEffort(
-      [
-        event(0, { type: "battle.opened" }),
-        event(500, { type: "window.focus" }),
-        event(1000, { type: "tab.viewed", tab: "changes" }),
-      ],
-    )
+    const effort = reviewEffort([
+      event(0, { type: "battle.opened" }),
+      event(500, { type: "window.focus" }),
+      event(1000, { type: "tab.viewed", tab: "changes" }),
+    ])
     expect(effort?.msToFirstInteraction).toBe(1000)
   })
 
@@ -183,10 +169,7 @@ describe("ArenaMetrics review effort", () => {
     ])
     expect(unfoldable?.verdictExpanded).toBeUndefined()
 
-    const leftFolded = reviewEffort([
-      event(0, { type: "battle.opened" }),
-      event(1000, { type: "verdict.folded" }),
-    ])
+    const leftFolded = reviewEffort([event(0, { type: "battle.opened" }), event(1000, { type: "verdict.folded" })])
     expect(leftFolded?.verdictExpanded).toBe(false)
 
     const opened = reviewEffort([
@@ -641,7 +624,13 @@ describe("ArenaMetrics outcome", () => {
     // An early vote stops the loser, and a stopped run still carries a
     // `completedAt`. Two timestamps looked like a finish line, so every early
     // vote recorded a winner of a race that was never run.
-    const base = { chat: { _id: "chat" } as ChatDocument, generations: [], reviewEvents: [], transcripts: {}, computedAt: new Date(0) }
+    const base = {
+      chat: { _id: "chat" } as ChatDocument,
+      generations: [],
+      reviewEvents: [],
+      transcripts: {},
+      computedAt: new Date(0),
+    }
     const raced = computeBattleMetrics({
       ...base,
       turn: turnFor("a"),
@@ -806,6 +795,33 @@ describe("ArenaMetrics outcome", () => {
       computedAt: new Date(0),
     })
     expect(battle.sides.a).toMatchObject({ providerErrors: 1, retries: 0, llmCalls: 3, ttftMs: 1000 })
+  })
+
+  test("records prompt-to-first-output waiting including admission and setup per voted side", () => {
+    const turn = turnFor("a")
+    turn.setupTimings = {
+      preCreationMs: 120,
+      admissionWaitMs: 80,
+      freezeMs: 20,
+      warmPath: "reused",
+      warmMs: 10,
+      assignmentWaitMs: 0,
+    }
+    const battle = computeBattleMetrics({
+      chat: { _id: "chat" } as ChatDocument,
+      turn,
+      runs: [{ ...runFor("a"), telemetryVersion: 1 }, runFor("b")],
+      generations: [
+        { ...generationFor("summary", 0, 10, 200), requestKind: "compaction" },
+        generationFor("answer", 100, 500, 200),
+      ],
+      reviewEvents: [],
+      transcripts: {},
+      computedAt: new Date(0),
+    })
+    expect(battle.sides.a?.perceivedWaitMs).toBe(700)
+    expect(battle.sides.a?.ttftMs).toBe(400)
+    expect(battle.sides.b).not.toHaveProperty("perceivedWaitMs")
   })
 
   test("times the first token of the contestant's first step, not the title request before it", () => {

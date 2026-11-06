@@ -1,6 +1,11 @@
+import { Context } from "effect"
 import { randomUUID } from "node:crypto"
 import { COMPACTION_HEADER, COMPACTION_OFFER } from "@agent-duel/arena-service/request-budget"
 import { readCompactionRequired, requestTooLargeMessage } from "@agent-duel/arena-service/request-error"
+
+export const OpportunisticCompactionID = Context.Reference<string | undefined>("arena/OpportunisticCompactionID", {
+  defaultValue: () => undefined,
+})
 
 export type RequestClassification = "generation" | "compaction" | "utility"
 

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { eq } from "drizzle-orm"
-import { DateTime, Effect, Layer, Schema } from "effect"
+import { DateTime, Deferred, Effect, Fiber, Layer, Schema } from "effect"
 import { AIError, HttpContext, InvalidProviderOutputError, ProviderInternalError } from "@opencode/ai"
 import { AppNodeBuilder } from "@opencode/core/effect/app-node-builder"
 import { Database } from "@opencode/core/database/database"
@@ -42,6 +42,7 @@ import {
 import { ArenaEngineIdle } from "../../src/arena/engine-runtime/idle"
 import { battleResumeInput } from "../../src/arena/resume-note"
 import { expireCopiedReasoning } from "../../src/arena/reasoning"
+import { createHistoryCompaction, type HistoryCompactionPorts } from "../../src/arena/compaction-history"
 import { SessionRetry } from "../../src/session/retry"
 import { toLLMMessages } from "@opencode/core/session/runner/to-llm-message"
 import { toSessionError } from "@opencode/core/session/to-session-error"
@@ -1324,5 +1325,369 @@ describe("shell stop notice on Resume", () => {
         yield* prompt.loop({ sessionID: a.id, stoppedShellIDs: ["sh_a"] })
         expect(yield* sessions.inbox(a.id)).toEqual([])
       }),
+  )
+})
+
+describe("opportunistic history compaction", () => {
+  const location = Location.Ref.make({ directory: AbsolutePath.make("/arena-history-compaction-test") })
+  const nativeModel = { providerID: Provider.ID.make("arena"), id: Model.ID.make("native") }
+  const usageAt = (sessionID: string, contextTokens: number | undefined, useCompactionForSteer?: boolean) => ({
+    engagementID: "engagement_context_threshold",
+    runID: "run_context_threshold",
+    sessionID,
+    rootCalls: 0,
+    compactionCalls: 0,
+    calls: [],
+    contextTokens,
+    useCompactionForSteer,
+  })
+
+  const checkpoint = (summary: string): SessionMessage.CompactionCompleted => ({
+    id: SessionMessage.ID.create(),
+    type: "compaction",
+    status: "completed",
+    reason: "auto",
+    model: nativeModel,
+    summary,
+    recent: "",
+    time: { created: at },
+  })
+
+  const sourceMessage = (id: string, text = "native history") =>
+    SessionMessage.User.make({
+      id: SessionMessage.ID.make(id),
+      type: "user",
+      text,
+      time: { created: at },
+    })
+
+  const rows = (database: Database.Interface, sessionID: Session.ID) =>
+    database.db
+      .select()
+      .from(SessionMessageTable)
+      .where(eq(SessionMessageTable.session_id, sessionID))
+      .all()
+      .pipe(Effect.orDie)
+
+  const waitFor = (snapshots: Array<{ status: string }>, status: string) =>
+    Effect.gen(function* () {
+      for (let attempt = 0; attempt < 100; attempt++) {
+        const found = snapshots.findLast((snapshot) => snapshot.status === status)
+        if (found) return found
+        yield* Effect.sleep("1 millis")
+      }
+      return yield* Effect.die(`compaction did not reach ${status}`)
+    })
+
+  const makeCompaction = (
+    sessions: CoreSession.Interface,
+    database: Database.Interface,
+    generate: HistoryCompactionPorts["generate"],
+  ) => {
+    const snapshots: Array<{ id: string; status: string; candidate?: unknown }> = []
+    const compactions = createHistoryCompaction({
+      sessions,
+      database,
+      generate,
+      observe: (id, snapshot) => snapshots.push({ id, status: snapshot.status, candidate: snapshot.candidate }),
+    })
+    return { compactions, snapshots }
+  }
+
+  it.effect("keeps native rows intact and accepts a ready checkpoint below the steering threshold on handoff", () =>
+    Effect.gen(function* () {
+      const sessions = yield* CoreSession.Service
+      const database = yield* Database.Service
+      const session = yield* sessions.create({ location })
+      yield* seedGraftMessage({ sessionID: session.id, message: sourceMessage("msg_native_source"), seq: 0 })
+      const before = yield* rows(database, session.id)
+      const gate = yield* Deferred.make<void>()
+      const { compactions, snapshots } = makeCompaction(sessions, database, () =>
+        Deferred.await(gate).pipe(Effect.as(checkpoint("candidate summary"))),
+      )
+
+      yield* compactions.start({ sessionID: session.id, runID: "run_pending", usage: usageAt(session.id, 50_000) })
+      expect(yield* rows(database, session.id)).toEqual(before)
+      yield* Deferred.succeed(gate, undefined)
+      yield* waitFor(snapshots, "ready")
+      const accepted = yield* compactions.accept(session.id)
+      expect(accepted).toBe(true)
+      const after = yield* rows(database, session.id)
+      expect(after.slice(0, before.length)).toEqual(before)
+      expect(after).toHaveLength(before.length + 1)
+    }),
+  )
+
+  for (const [label, contextTokens, decision, accepted] of [
+    ["below", 272_000, false, false],
+    ["at", 54_400, true, true],
+    ["above", 100_000, true, true],
+    ["unknown", 272_000, undefined, false],
+  ] as const) {
+    it.effect(`selects the correct steering history with ${label} threshold usage`, () =>
+      Effect.gen(function* () {
+        const sessions = yield* CoreSession.Service
+        const database = yield* Database.Service
+        const session = yield* sessions.create({ location })
+        yield* seedGraftMessage({ sessionID: session.id, message: sourceMessage(`msg_steer_${label}`), seq: 0 })
+        const before = yield* rows(database, session.id)
+        const { compactions, snapshots } = makeCompaction(sessions, database, () =>
+          Effect.succeed(checkpoint("ready steering summary")),
+        )
+        yield* compactions.start({
+          sessionID: session.id,
+          runID: `run_steer_${label}`,
+          usage: usageAt(session.id, contextTokens, decision),
+        })
+        yield* waitFor(snapshots, "ready")
+
+        expect(yield* compactions.accept(session.id, undefined, "steer")).toBe(accepted)
+        expect(snapshots.at(-1)?.status).toBe(accepted ? "used" : "discarded")
+        const after = yield* rows(database, session.id)
+        expect(after.slice(0, before.length)).toEqual(before)
+        expect(after).toHaveLength(before.length + Number(accepted))
+        // The later runPrompt admission must not consume a summary rejected by steering.
+        expect(yield* compactions.accept(session.id)).toBe(false)
+        yield* sessions.prompt({ sessionID: session.id, text: "new steer" })
+        expect(yield* sessions.inbox(session.id)).toHaveLength(1)
+      }),
+    )
+  }
+
+  it.effect("cancels a pending candidate immediately while admitting a steer above the threshold", () =>
+    Effect.gen(function* () {
+      const sessions = yield* CoreSession.Service
+      const database = yield* Database.Service
+      const session = yield* sessions.create({ location })
+      yield* seedGraftMessage({ sessionID: session.id, message: sourceMessage("msg_pending_cancel"), seq: 0 })
+      const before = yield* rows(database, session.id)
+      const gate = yield* Deferred.make<void>()
+      const { compactions, snapshots } = makeCompaction(sessions, database, () =>
+        Deferred.await(gate).pipe(Effect.as(checkpoint("late candidate"))),
+      )
+
+      yield* compactions.start({
+        sessionID: session.id,
+        runID: "run_pending_cancel",
+        usage: usageAt(session.id, 272_000, true),
+      })
+      expect(yield* compactions.accept(session.id, undefined, "steer")).toBe(false)
+      yield* sessions.prompt({ sessionID: session.id, text: "normal prompt admitted" })
+      expect(yield* sessions.inbox(session.id)).toHaveLength(1)
+      yield* Deferred.succeed(gate, undefined)
+      yield* waitFor(snapshots, "canceled")
+      expect(yield* rows(database, session.id)).toEqual(before)
+    }),
+  )
+
+  it.effect("rejects a stale source changed before generation finishes", () =>
+    Effect.gen(function* () {
+      const sessions = yield* CoreSession.Service
+      const database = yield* Database.Service
+      const session = yield* sessions.create({ location })
+      yield* seedGraftMessage({ sessionID: session.id, message: sourceMessage("msg_stale_before"), seq: 0 })
+      const gate = yield* Deferred.make<void>()
+      const { compactions, snapshots } = makeCompaction(sessions, database, () =>
+        Deferred.await(gate).pipe(Effect.as(checkpoint("stale summary"))),
+      )
+      yield* compactions.start({ sessionID: session.id, runID: "run_stale_before", usage: undefined })
+      yield* sessions.synthetic({
+        sessionID: session.id,
+        id: SessionMessage.ID.make("msg_mutated_before"),
+        text: "changed",
+        resume: false,
+      })
+      yield* (yield* ArenaSession).deliverPending(session.id)
+      yield* Deferred.succeed(gate, undefined)
+      yield* waitFor(snapshots, "discarded")
+      expect(yield* compactions.accept(session.id)).toBe(false)
+      expect((yield* sessions.messages({ sessionID: session.id })).map((message) => message.id).toSorted()).toEqual(
+        [SessionMessage.ID.make("msg_stale_before"), SessionMessage.ID.make("msg_mutated_before")].toSorted(),
+      )
+    }),
+  )
+
+  it.effect("rejects a source changed after readiness", () =>
+    Effect.gen(function* () {
+      const sessions = yield* CoreSession.Service
+      const database = yield* Database.Service
+      const session = yield* sessions.create({ location })
+      yield* seedGraftMessage({ sessionID: session.id, message: sourceMessage("msg_stale_after"), seq: 0 })
+      const { compactions, snapshots } = makeCompaction(sessions, database, () => Effect.succeed(checkpoint("ready")))
+      yield* compactions.start({ sessionID: session.id, runID: "run_stale_after", usage: undefined })
+      yield* waitFor(snapshots, "ready")
+      yield* sessions.synthetic({
+        sessionID: session.id,
+        id: SessionMessage.ID.make("msg_mutated_after"),
+        text: "changed",
+        resume: false,
+      })
+      expect(yield* compactions.accept(session.id)).toBe(false)
+      expect(
+        (yield* sessions.messages({ sessionID: session.id })).some((message) => message.type === "compaction"),
+      ).toBe(false)
+    }),
+  )
+
+  it.effect("records failed generation and leaves history unchanged", () =>
+    Effect.gen(function* () {
+      const sessions = yield* CoreSession.Service
+      const database = yield* Database.Service
+      const session = yield* sessions.create({ location })
+      yield* seedGraftMessage({ sessionID: session.id, message: sourceMessage("msg_failed_generation"), seq: 0 })
+      const before = yield* rows(database, session.id)
+      const { compactions, snapshots } = makeCompaction(sessions, database, () =>
+        Effect.fail(new Error("generation failed")),
+      )
+      yield* compactions.start({ sessionID: session.id, runID: "run_failed", usage: undefined })
+      yield* waitFor(snapshots, "failed")
+      expect(yield* compactions.accept(session.id)).toBe(false)
+      expect(yield* rows(database, session.id)).toEqual(before)
+    }),
+  )
+
+  it.effect("transfers a pending candidate and rewrites it on canonical acceptance", () =>
+    Effect.gen(function* () {
+      const sessions = yield* CoreSession.Service
+      const database = yield* Database.Service
+      const source = yield* sessions.create({ location })
+      const target = yield* sessions.create({ location })
+      yield* seedGraftMessage({ sessionID: source.id, message: sourceMessage("msg_transfer_source"), seq: 0 })
+      const gate = yield* Deferred.make<void>()
+      const { compactions, snapshots } = makeCompaction(sessions, database, () =>
+        Deferred.await(gate).pipe(Effect.as(checkpoint("transferred summary"))),
+      )
+      yield* compactions.start({ sessionID: source.id, runID: "run_transfer", usage: undefined })
+      yield* compactions.transfer({
+        sourceSessionID: source.id,
+        targetSessionID: target.id,
+        transform: (candidate) => Effect.succeed({ ...candidate, summary: `${candidate.summary} rewritten` }),
+      })
+      yield* Deferred.succeed(gate, undefined)
+      yield* waitFor(snapshots, "ready")
+      expect(yield* compactions.accept(target.id)).toBe(true)
+      expect((yield* sessions.messages({ sessionID: target.id })).map((message) => message.type)).toEqual([
+        "compaction",
+      ])
+      expect((yield* sessions.messages({ sessionID: target.id }))[0]).toMatchObject({
+        summary: "transferred summary rewritten",
+      })
+    }),
+  )
+
+  it.effect("does not publish while a user inbox item is queued", () =>
+    Effect.gen(function* () {
+      const sessions = yield* CoreSession.Service
+      const database = yield* Database.Service
+      const session = yield* sessions.create({ location })
+      yield* seedGraftMessage({ sessionID: session.id, message: sourceMessage("msg_queued_inbox"), seq: 0 })
+      const gate = yield* Deferred.make<void>()
+      const { compactions, snapshots } = makeCompaction(sessions, database, () =>
+        Deferred.await(gate).pipe(Effect.as(checkpoint("queued summary"))),
+      )
+      yield* compactions.start({ sessionID: session.id, runID: "run_queued", usage: undefined })
+      yield* Deferred.succeed(gate, undefined)
+      yield* waitFor(snapshots, "ready")
+      yield* sessions.prompt({ sessionID: session.id, text: "queued user input" })
+      expect(yield* compactions.accept(session.id)).toBe(false)
+      expect(
+        (yield* sessions.messages({ sessionID: session.id })).some((message) => message.type === "compaction"),
+      ).toBe(false)
+      expect(yield* sessions.inbox(session.id)).toHaveLength(1)
+    }),
+  )
+
+  it.effect("does not launch generation when admission wins while start reads the source", () =>
+    Effect.gen(function* () {
+      const sessions = yield* CoreSession.Service
+      const database = yield* Database.Service
+      const session = yield* sessions.create({ location })
+      yield* seedGraftMessage({ sessionID: session.id, message: sourceMessage("msg_admission_race"), seq: 0 })
+      const sourceRead = yield* Deferred.make<void>()
+      const releaseRead = yield* Deferred.make<void>()
+      let blocked = true
+      const read = sessions.messages.bind(sessions)
+      const gatedSessions: CoreSession.Interface = {
+        ...sessions,
+        messages: (input) => {
+          if (input.sessionID !== session.id || !blocked) return read(input)
+          blocked = false
+          return Deferred.succeed(sourceRead, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseRead)),
+            Effect.andThen(read(input)),
+          )
+        },
+      }
+      let generated = false
+      const { compactions, snapshots } = makeCompaction(gatedSessions, database, () => {
+        generated = true
+        return Effect.succeed(checkpoint("should not run"))
+      })
+      const pending = yield* compactions
+        .start({ sessionID: session.id, runID: "run_admission_race", usage: undefined })
+        .pipe(Effect.forkScoped)
+      yield* Deferred.await(sourceRead)
+      expect(yield* compactions.accept(session.id)).toBe(false)
+      yield* Deferred.succeed(releaseRead, undefined)
+      yield* Fiber.join(pending)
+      yield* Effect.sleep("5 millis")
+      expect(generated).toBe(false)
+      expect(snapshots).toEqual([])
+    }),
+  )
+
+  it.effect("rejects a candidate that became ready after the prompt received-at cutoff", () =>
+    Effect.gen(function* () {
+      const sessions = yield* CoreSession.Service
+      const database = yield* Database.Service
+      const session = yield* sessions.create({ location })
+      yield* seedGraftMessage({ sessionID: session.id, message: sourceMessage("msg_received_at_cutoff"), seq: 0 })
+      const { compactions, snapshots } = makeCompaction(sessions, database, () =>
+        Effect.succeed(checkpoint("late ready")),
+      )
+      const receivedAt = performance.timeOrigin + performance.now()
+      yield* compactions.start({ sessionID: session.id, runID: "run_received_at_cutoff", usage: undefined })
+      yield* waitFor(snapshots, "ready")
+      expect(yield* compactions.accept(session.id, receivedAt)).toBe(false)
+      expect(
+        (yield* sessions.messages({ sessionID: session.id })).some((message) => message.type === "compaction"),
+      ).toBe(false)
+      expect(snapshots.at(-1)?.status).toBe("discarded")
+    }),
+  )
+
+  it.effect("does not append a reserved transfer when a second acceptance supersedes its transform", () =>
+    Effect.gen(function* () {
+      const sessions = yield* CoreSession.Service
+      const database = yield* Database.Service
+      const source = yield* sessions.create({ location })
+      const target = yield* sessions.create({ location })
+      yield* seedGraftMessage({ sessionID: source.id, message: sourceMessage("msg_accept_race_source"), seq: 0 })
+      const { compactions, snapshots } = makeCompaction(sessions, database, () =>
+        Effect.succeed(checkpoint("original")),
+      )
+      yield* compactions.start({ sessionID: source.id, runID: "run_accept_race", usage: undefined })
+      yield* waitFor(snapshots, "ready")
+      const transformGate = yield* Deferred.make<void>()
+      let transformStarted = false
+      yield* compactions.transfer({
+        sourceSessionID: source.id,
+        targetSessionID: target.id,
+        transform: (candidate) =>
+          Effect.gen(function* () {
+            transformStarted = true
+            yield* Deferred.await(transformGate)
+            return { ...candidate, summary: "rewritten" }
+          }),
+      })
+
+      const first = yield* compactions.accept(target.id).pipe(Effect.forkScoped)
+      for (let attempt = 0; attempt < 100 && !transformStarted; attempt++) yield* Effect.sleep("1 millis")
+      expect(transformStarted).toBe(true)
+      expect(yield* compactions.accept(target.id)).toBe(false)
+      yield* Deferred.succeed(transformGate, undefined)
+      expect(yield* Fiber.join(first)).toBe(false)
+      expect(yield* sessions.messages({ sessionID: target.id })).toEqual([])
+    }),
   )
 })

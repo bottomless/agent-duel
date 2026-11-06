@@ -34,8 +34,12 @@ import { testEffect } from "./lib/effect"
 
 let requests: LLMRequest[] = []
 let summaryText = "## Objective\n- manual summary"
+let blockNextStream = false
+let blockedStreamEntered = false
 afterEach(() => {
   summaryText = "## Objective\n- manual summary"
+  blockNextStream = false
+  blockedStreamEntered = false
 })
 const model = LanguageModel.make({
   id: "summary-model",
@@ -55,7 +59,7 @@ const cost = [
 const client = Layer.mock(LLMClient.Service)({
   stream: (request: LLMRequest) => {
     requests.push(request)
-    return Stream.make(
+    const response = Stream.make(
       LLMEvent.textDelta({ id: "summary", text: summaryText }),
       LLMEvent.stepFinish({
         index: 0,
@@ -73,6 +77,10 @@ const client = Layer.mock(LLMClient.Service)({
         reason: { normalized: "stop" },
       }),
     )
+    if (!blockNextStream) return response
+    blockNextStream = false
+    blockedStreamEntered = true
+    return Stream.concat(response, Stream.fromEffect(Effect.never))
   },
   generate: () => Effect.die("unused"),
 })
@@ -627,6 +635,174 @@ it.effect("manual compaction summarizes short context instead of no-op", () =>
       { type: Bus.versionedType(SessionEvent.Compaction.Started.type, 1) },
       { type: Bus.versionedType(SessionEvent.UsageRecorded.type, 1) },
       { type: Bus.versionedType(SessionEvent.Compaction.Ended.type, 1) },
+    ])
+  }),
+)
+
+it.effect("candidate summarizes the complete snapshot without writing lifecycle history", () =>
+  Effect.gen(function* () {
+    requests = []
+    const compaction = yield* SessionCompaction.Service
+    const db = yield* Database.Service
+    const store = yield* SessionStore.Service
+    const session = yield* insertSession(Session.ID.make("ses_compaction_candidate"))
+    const older = SessionMessage.User.make({
+      id: SessionMessage.ID.create(),
+      type: "user",
+      text: "Earlier requirement",
+      time: { created: DateTime.makeUnsafe(0) },
+    })
+    const latest = Schema.decodeUnknownSync(SessionMessage.Assistant)({
+      id: SessionMessage.ID.create(),
+      type: "assistant",
+      agent: Agent.defaultID,
+      model: { id: "summary-model", providerID: "test" },
+      content: [
+        { type: "text", text: "Finished latest turn" },
+        { type: "reasoning", text: "Finished native reasoning", state: { sealed: "state" } },
+      ],
+      time: { created: 0, completed: 1 },
+    })
+    const messages = [
+      older,
+      SessionMessage.User.make({
+        id: SessionMessage.ID.create(),
+        type: "user",
+        text: "Latest request",
+        time: { created: DateTime.makeUnsafe(0) },
+      }),
+      latest,
+    ]
+    const original = yield* store.context(session.id)
+    const checkpoint = yield* compaction.candidate(loaded(session, messages))
+
+    expect(checkpoint).toMatchObject({
+      type: "compaction",
+      status: "completed",
+      reason: "auto",
+      summary: summaryText,
+      recent: expect.stringContaining("Finished latest turn"),
+    })
+    expect(JSON.stringify(requests[0]?.messages)).toContain("Finished native reasoning")
+    expect(yield* store.context(session.id)).toEqual(original)
+    expect(
+      yield* db.db
+        .select({ type: EventTable.type })
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, session.id))
+        .all()
+        .pipe(Effect.orDie),
+    ).toEqual([{ type: Bus.versionedType(SessionEvent.UsageRecorded.type, 1) }])
+  }),
+)
+
+it.effect("failed candidate leaves the original snapshot untouched and emits no failure event", () =>
+  Effect.gen(function* () {
+    requests = []
+    summaryText = "not a checkpoint"
+    const compaction = yield* SessionCompaction.Service
+    const db = yield* Database.Service
+    const store = yield* SessionStore.Service
+    const session = yield* insertSession(Session.ID.make("ses_failed_compaction_candidate"))
+    const messages = [
+      SessionMessage.User.make({
+        id: SessionMessage.ID.create(),
+        type: "user",
+        text: "Keep this request",
+        time: { created: DateTime.makeUnsafe(0) },
+      }),
+    ]
+    const original = yield* store.context(session.id)
+    const failure = yield* compaction.candidate(loaded(session, messages)).pipe(Effect.flip)
+    expect(failure).toEqual({
+      error: { type: "compaction.failed", message: "Compaction summary did not match the required template" },
+    })
+    expect(yield* store.context(session.id)).toEqual(original)
+    expect(
+      yield* db.db
+        .select({ type: EventTable.type })
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, session.id))
+        .all()
+        .pipe(Effect.orDie),
+    ).toEqual([
+      { type: Bus.versionedType(SessionEvent.UsageRecorded.type, 1) },
+      { type: Bus.versionedType(SessionEvent.UsageRecorded.type, 1) },
+    ])
+  }),
+)
+
+it.effect("an interrupted candidate cannot contaminate a later compaction operation", () =>
+  Effect.gen(function* () {
+    requests = []
+    const compaction = yield* SessionCompaction.Service
+    const db = yield* Database.Service
+    const store = yield* SessionStore.Service
+    const session = yield* insertSession(Session.ID.make("ses_interrupted_compaction_candidate"))
+    const messages = [
+      SessionMessage.User.make({
+        id: SessionMessage.ID.create(),
+        type: "user",
+        text: "Keep this request",
+        time: { created: DateTime.makeUnsafe(0) },
+      }),
+    ]
+    const original = yield* store.context(session.id)
+    blockNextStream = true
+    const pending = yield* compaction.candidate(loaded(session, messages)).pipe(Effect.forkScoped)
+    for (let attempt = 0; attempt < 100 && !blockedStreamEntered; attempt++) yield* Effect.yieldNow
+    expect(blockedStreamEntered).toBe(true)
+    yield* Fiber.interrupt(pending)
+    expect(yield* store.context(session.id)).toEqual(original)
+
+    expect(yield* compactManually(session, messages)).toEqual({ status: "completed" })
+    expect(yield* store.context(session.id)).toMatchObject([
+      { type: "compaction", status: "completed", tokens: { input: 10, output: 4, reasoning: 2 } },
+    ])
+    const events = yield* db.db
+      .select({ type: EventTable.type })
+      .from(EventTable)
+      .where(eq(EventTable.aggregate_id, session.id))
+      .orderBy(asc(EventTable.seq))
+      .all()
+      .pipe(Effect.orDie)
+    expect(events).toEqual([
+      { type: Bus.versionedType(SessionEvent.UsageRecorded.type, 1) },
+      { type: Bus.versionedType(SessionEvent.Compaction.Started.type, 1) },
+      { type: Bus.versionedType(SessionEvent.UsageRecorded.type, 1) },
+      { type: Bus.versionedType(SessionEvent.Compaction.Ended.type, 1) },
+    ])
+  }),
+)
+
+it.effect("an interrupted mandatory compaction reports the usage from its own operation", () =>
+  Effect.gen(function* () {
+    requests = []
+    const compaction = yield* SessionCompaction.Service
+    const store = yield* SessionStore.Service
+    const session = yield* insertSession(Session.ID.make("ses_interrupted_mandatory_compaction"))
+    const messages = [
+      SessionMessage.User.make({
+        id: SessionMessage.ID.create(),
+        type: "user",
+        text: "Keep this request",
+        time: { created: DateTime.makeUnsafe(0) },
+      }),
+    ]
+    blockNextStream = true
+    const pending = yield* compaction
+      .compact({ reason: "overflow", context: loaded(session, messages) })
+      .pipe(Effect.forkScoped)
+    for (let attempt = 0; attempt < 100 && !blockedStreamEntered; attempt++) yield* Effect.yieldNow
+    expect(blockedStreamEntered).toBe(true)
+    yield* Fiber.interrupt(pending)
+    expect(yield* store.context(session.id)).toMatchObject([
+      {
+        type: "compaction",
+        status: "failed",
+        error: { type: "compaction.interrupted" },
+        tokens: { input: 10, output: 4, reasoning: 2 },
+      },
     ])
   }),
 )

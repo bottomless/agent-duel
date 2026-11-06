@@ -1,3 +1,4 @@
+import type { CompactionObservation, CompactionMetrics } from "./compaction-metrics"
 import type { BattleState, Resolution, Side, Vote, VoteDiscardedReason } from "./domain"
 import type { ArenaActiveOperation, ArenaOperationProgress } from "./operation-tracker"
 import type { RefChange, RefOutcome } from "./ref-types"
@@ -479,6 +480,8 @@ export type TurnDocument = {
 }
 
 export type RunDocument = {
+  compactions?: Record<string, CompactionObservation>
+  pendingCompactionIDs?: string[]
   readonly _id: Identifier
   readonly turnID: Identifier
   readonly side: Side
@@ -600,6 +603,8 @@ export type GenerationDocument = {
   readonly enforcedReasoning: Readonly<Record<string, unknown>>
   readonly classification: "root" | "subagent" | "compaction"
   /** The engine's request: a contestant step, a compaction, or a utility call such as the title. */
+  readonly engagementID?: string
+  readonly opportunisticCompactionID?: string
   readonly requestKind?: "generation" | "compaction" | "utility"
   readonly startedAt: Date
   responseHeadersAt?: Date
@@ -845,7 +850,7 @@ export type ReviewEventInput = {
 export const reviewFlushLimit = 500
 
 /** Bump when a derived field changes meaning, then recompute the whole table. */
-export const battleMetricsSchemaVersion = 10
+export const battleMetricsSchemaVersion = 11
 
 /** The current `RunDocument.telemetryVersion`; see there. */
 export const runTelemetryVersion = 1
@@ -904,6 +909,9 @@ export type ReviewEffort = {
  */
 /** One contestant's side of a battle. */
 export type BattleSideMetrics = {
+  readonly compactions?: CompactionMetrics
+  /** From prompt arrival to the first root-model output, including handoff/setup. */
+  readonly perceivedWaitMs?: number
   /** Absent when the battle ended without a reveal; the engine never learns the model then. */
   readonly model?: string
   readonly providers: readonly string[]
@@ -918,13 +926,13 @@ export type BattleSideMetrics = {
    */
   readonly ttftMs?: number
   readonly tokensPerSec?: number
-  readonly promptTokens: number
-  readonly completionTokens: number
-  readonly reasoningTokens: number
-  readonly totalTokens: number
-  readonly cacheReadTokens: number
-  readonly cacheWriteTokens: number
-  readonly cost: number
+  readonly promptTokens: number | null
+  readonly completionTokens: number | null
+  readonly reasoningTokens: number | null
+  readonly totalTokens: number | null
+  readonly cacheReadTokens: number | null
+  readonly cacheWriteTokens: number | null
+  readonly cost: number | null
   readonly upstreamInferenceCost?: number
   /** Refused or failed attempts, except those that waited on the user's network or sign-in. */
   readonly providerErrors: number

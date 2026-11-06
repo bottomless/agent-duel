@@ -1,3 +1,9 @@
+import { SessionContext } from "@opencode/core/session/context"
+import { SessionCompaction } from "@opencode/core/session/compaction"
+import { OpportunisticCompactionID } from "../engine-runtime/request"
+import { createHistoryCompaction, type HistoryCompaction } from "../compaction-history"
+import { compactionObservation } from "../compaction-metrics"
+import { ArenaRuntime } from "../runtime"
 import { and, desc, eq } from "drizzle-orm"
 import { AIError } from "@opencode/ai"
 import { Clock, Context, DateTime, Effect, Layer, Schema } from "effect"
@@ -78,6 +84,7 @@ export class Directory extends Context.Service<Directory, DirectoryInterface>()(
 export { CurrentDirectory }
 
 export interface SessionInterface {
+  readonly compactions: HistoryCompaction
   readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<SessionV1.SessionInfo, Error>
   readonly create: (input?: SessionCreateInput) => Effect.Effect<SessionV1.SessionInfo, Error>
   readonly children: (parentID: SessionSchema.ID) => Effect.Effect<SessionV1.SessionInfo[], Error>
@@ -437,6 +444,43 @@ const layer: Layer.Layer<Session, never, CoreSession.Service | Database.Service 
       const database = yield* Database.Service
       const bus = yield* Bus.Service
       const directory = yield* Directory
+      const observations = new Map<string, Promise<void>>()
+      const compactions = createHistoryCompaction({
+        sessions,
+        database,
+        generate: ({ sessionID, id }) =>
+          normalizeError(
+            Effect.gen(function* () {
+              const session = yield* sessions.get(sessionID)
+              return yield* directory.provide(
+                session.location,
+                Effect.gen(function* () {
+                  const contexts = yield* SessionContext.Service
+                  const compaction = yield* SessionCompaction.Service
+                  const context = yield* contexts.load(yield* contexts.select(sessionID))
+                  return yield* compaction.candidate(context)
+                }).pipe(Effect.provideService(OpportunisticCompactionID, id)),
+              )
+            }),
+          ),
+        observe: (id, snapshot) => {
+          const observation = compactionObservation(id, snapshot)
+          const previous = observations.get(id) ?? Promise.resolve()
+          const pending = previous
+            .then(async () => {
+              const store = await ArenaRuntime.store()
+              await store.recordCompaction(observation)
+            })
+            .catch((cause) => {
+              console.warn("[arena-compaction] Could not record outcome", cause)
+            })
+          observations.set(id, pending)
+          void pending.finally(() => {
+            if (observations.get(id) === pending) observations.delete(id)
+          })
+        },
+      })
+      yield* Effect.addFinalizer(() => Effect.sync(() => compactions.dispose()))
 
       const messages = Effect.fn("ArenaSession.messages")(function* (input: { readonly sessionID: SessionSchema.ID }) {
         const canonical = yield* sessions.messages({ ...input, order: "asc" })
@@ -646,6 +690,7 @@ const layer: Layer.Layer<Session, never, CoreSession.Service | Database.Service 
       })
 
       return Session.of({
+        compactions,
         get: (sessionID) => normalizeError(sessions.get(sessionID).pipe(Effect.map(projectSession))),
         create: (input = {}) =>
           normalizeError(
@@ -711,7 +756,10 @@ const layer: Layer.Layer<Session, never, CoreSession.Service | Database.Service 
               return input.messageID
             }),
           ),
-        remove: (sessionID) => normalizeError(sessions.remove(sessionID)),
+        remove: (sessionID) =>
+          normalizeError(
+            Effect.sync(() => compactions.invalidate(sessionID)).pipe(Effect.andThen(sessions.remove(sessionID))),
+          ),
         setAgentModel: (input) =>
           normalizeError(
             Effect.gen(function* () {
@@ -821,7 +869,14 @@ const promptLayer: Layer.Layer<
     })
     // Admission is durable once it returns. `wake` starts the runner, or rings the doorbell of the
     // one already running so it drains again before it goes idle.
-    const admit = Effect.fn("ArenaSessionPrompt.admit")(function* (input: ArenaPromptInput, wake: boolean) {
+    const admit = Effect.fn("ArenaSessionPrompt.admit")(function* (
+      input: ArenaPromptInput,
+      wake: boolean,
+      kind: "handoff" | "steer" = "handoff",
+    ) {
+      yield* arena.compactions
+        .accept(input.sessionID, undefined, kind)
+        .pipe(Effect.catchCause(() => Effect.succeed(false)))
       const metadata = {
         ...(input.metadata ?? {}),
         ...(input.system !== undefined ? { arenaSystem: input.system } : {}),
@@ -877,7 +932,7 @@ const promptLayer: Layer.Layer<
             return yield* loop({ sessionID: input.sessionID }, admittedAt)
           }),
         ),
-      steer: (input) => normalizeError(admit(input, true).pipe(Effect.asVoid)),
+      steer: (input) => normalizeError(admit(input, true, "steer").pipe(Effect.asVoid)),
       loop: (input) => normalizeError(loop(input)),
       join: (input) => normalizeError(join(input)),
       cancel: (sessionID, options) =>

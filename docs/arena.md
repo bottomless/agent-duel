@@ -91,6 +91,22 @@ Read a `battleMetrics` side's `retries` and `ttftMs` only where they are present
 mean unknown, and engine recovery rebuilds old rows only on desktops that upgrade, for turns still
 stored locally (`BattleSideMetrics` in `arena/records.ts`).
 
+Provider token counts and cost in schema 11 can be unknown. Only provider usage with
+`provenance: "provider"` and `version: 2` can justify skipping opportunistic compaction. Older
+reasoning zeros may mean that the provider omitted the field. Revalidate the raw provider response
+before using them in a skip-rate estimate; if it is unavailable or was sanitized, keep the case
+unknown. `arena-backend/packages/opencode/script/audit-compaction-usage.ts` audits an exported
+list of generation records without printing prompts or reasoning. It does not estimate missing usage
+from thinking text or budgets. The parser follows [OpenRouter usage accounting](https://openrouter.ai/docs/cookbook/administration/usage-accounting)
+and [Anthropic cumulative streaming usage](https://platform.claude.com/docs/en/build-with-claude/streaming).
+
+A run's `compactions` records keep candidate outcomes tied to the source-history version.
+`battleMetrics.sides.*.compactions` joins their tagged generations to report use, cancellation,
+failure, discard, and wasted tokens/cost. A canceled stream without final usage remains unknown.
+Late results and post-vote usage refresh update that rollup. `perceivedWaitMs` on each side measures
+prompt arrival to first root-model output, including setup and handoff; the compaction-specific
+wait is zero because no prompt waits for proactive inference or cancellation acknowledgement.
+
 Keep inline images in separate content-addressed artifacts and refer to them from archived
 transcripts as `arena-image:sha256:<hash>` (`arena/transcript-artifact.ts`). This avoids duplicating
 image bytes across transcripts. Research sends the transcript and shared image records through the
@@ -1621,6 +1637,36 @@ owns that deadline and its recovery budget. Core's own header deadline reports `
 timed out` through HTTP hooks too. When the runtime abandons a request, the daemon's Arena proxy aborts its control-plane
 request too; otherwise the hosted function keeps streaming, and billing, until its own time limit.
 
+After a contestant engagement completes, start opportunistic compaction before the vote
+(`arena/compaction-history.ts`). The usage decision counts each finalized root-model call once,
+including all its generated reasoning, and excludes subagents, utilities, and compaction. Skip at
+500 reasoning tokens or below, or at 1,000 or below when reasoning is at most half of generated
+tokens. Unknown usage or a runtime context estimate of at least 272,000 overrides that skip.
+Replies after completion start a new engagement; steers and automatic retries stay in the current one.
+
+Keep the original native history intact while producing the candidate. Summarize the complete
+finished context before its reasoning expires at the assignment boundary, including the recent
+exchange normally kept outside the summarizer. If shrinking would lose sealed reasoning, fail the
+candidate and retain the original. A background summary has no session runner and emits no
+compaction lifecycle rows into the source history.
+
+Publish a completed candidate only after checking its source version and empty inbox in one
+transaction. The vote carries the candidate to the winner's canonical history without waiting.
+At the next post-vote prompt, reserve an already published candidate. Steering a finished contestant
+uses a ready summary only when its original context has reached two-thirds of the applicable model's
+compaction threshold, including endpoint overrides. The routing service compares the final root
+call's total usage (including reasoning and cached input) with the same private `compactAt` used for
+automatic compaction, and returns only the decision. Below that threshold, or when the decision is
+unknown, keep the original transcript and discard the candidate. Do not reuse an earlier call's
+decision when the latest root call has none. This selection rule does not change when background
+summaries are generated.
+
+For every prompt, invalidate pending work and request cancellation without waiting, including above
+the steering threshold. Verify the history again before atomically appending a selected checkpoint;
+keep all original rows. An intervening prompt, rewind, stale graft, failure, or late completion cannot
+replace newer history. A restart discards unpublished candidates. Ordinary handoff and mandatory
+context-limit recovery still run after this choice.
+
 The control plane owns model-specific compaction limits (`arena-service/src/openrouter.ts`), since
 only it knows the contestant's context window and output cap. `X-Arena-Compaction: auto` marks a
 request whose history can be summarized. The service returns neutral 413 `arena_compaction_required`
@@ -1631,7 +1677,7 @@ uses the assignment's latest measured prompt size; calibration samples expire af
 the control plane's TTL index (`request-calibration.ts`).
 
 The native Arena plugin offers compaction to the control plane and translates its neutral 413 into
-Core's checkpoint-and-retry path (`arena/engine-runtime/plugin.ts`). The engine has no separate
+Core's checkpoint-and-retry path (`arena/engine-runtime/plugin.ts`). Mandatory recovery has no separate
 savings threshold or fallback for an older control plane. Sealed provider state is replay metadata,
 not prompt text; counting its duplicated envelopes makes reasoning-heavy chats compact too early.
 Core still checks the contestant's context window. A first request or one still too large after a

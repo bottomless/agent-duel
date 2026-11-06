@@ -1,8 +1,25 @@
 import { describe, expect, test } from "bun:test"
 import { DEFAULT_COMPACT_AT, DEFAULT_MODEL_OUTPUT_LIMIT, modelLimits } from "./pool"
-import { estimateRequest, prepareRequest } from "./request-budget"
+import { estimateRequest, prepareRequest, steeringCompaction } from "./request-budget"
 
 describe("Arena request budget", () => {
+  test("uses two-thirds of the applicable threshold and preserves unknown context", () => {
+    const small = modelLimits({ contextWindow: 128_000 })
+    const large = modelLimits({ contextWindow: 1_000_000 })
+    const custom = modelLimits({ contextWindow: 1_000_000, limits: { compactAt: 600_000 } })
+    expect(steeringCompaction({ totalTokens: 54_399 }, small)).toBe(false)
+    expect(steeringCompaction({ totalTokens: 54_400 }, small)).toBe(true)
+    expect(steeringCompaction({ totalTokens: 54_400 }, large)).toBe(false)
+    expect(steeringCompaction({ totalTokens: 181_333 }, large)).toBe(false)
+    expect(steeringCompaction({ totalTokens: 181_334 }, large)).toBe(true)
+    expect(steeringCompaction({ totalTokens: 399_999 }, custom)).toBe(false)
+    expect(steeringCompaction({ totalTokens: 400_000 }, custom)).toBe(true)
+    for (const totalTokens of [null, NaN, Infinity]) {
+      expect(steeringCompaction({ totalTokens }, small)).toBeUndefined()
+    }
+    expect(steeringCompaction(undefined, small)).toBeUndefined()
+  })
+
   test("defaults output to the private runtime cap and keeps it below a small context", () => {
     expect(modelLimits({ contextWindow: 200_000 }).output).toBe(DEFAULT_MODEL_OUTPUT_LIMIT)
     expect(modelLimits({ contextWindow: 1000 }).output).toBe(250)

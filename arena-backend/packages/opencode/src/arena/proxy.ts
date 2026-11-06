@@ -40,6 +40,7 @@ export type RequestMetadata = {
   /** What the engine asked for (`x-arena-generation-classification`); absent on old callers. */
   readonly requestKind?: "generation" | "compaction" | "utility"
   readonly startedAt: Date
+  readonly opportunisticCompactionID?: string
 }
 
 /**
@@ -676,6 +677,9 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
         : {}),
       ...(kind ? { requestKind: kind } : {}),
       startedAt: new Date(),
+      ...(request.headers.get("x-arena-opportunistic-compaction-id")
+        ? { opportunisticCompactionID: request.headers.get("x-arena-opportunistic-compaction-id")! }
+        : {}),
     }
     await telemetry?.start?.(metadata, rewritten)
 
