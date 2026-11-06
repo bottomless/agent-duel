@@ -81,6 +81,14 @@ Research readers use `resolveResearchDocument` from arena-service under the same
 Deploy the control plane's updated arena-service dependency before shipping this protocol: an old
 server refuses chunks, which the desktop retains for automatic recovery after the server upgrade.
 
+The desktop's per-call copies are scrubbed, so in hosted battles the control plane keeps each
+contestant call as OpenRouter received it, with the real model, routing, cache key and restored
+reasoning, and its raw response (`arena-service/src/generation-capture.ts`, `captureGenerations`).
+Messages, tools and images are stored once per account by content, because each call resends the
+whole history. Single-agent chats, keep-alive pings and the service's own comparison and metadata
+calls are not kept. BYOK leaves capture off: its store is on the voter's machine, and those fields
+name the model.
+
 `archiveComplete` means the local archive exists, not that research has uploaded. Reply resets keep
 the previous cloud archive until its replacement arrives. Keep transcript and image archives whole,
 without per-call artifact budgets; a disk error must fail the local write rather than produce an
@@ -202,8 +210,16 @@ Open on Difference summary while a report is pending or available; otherwise ope
 a stopped battle or a failed side. Read the turn's `comparisonState` before the comparison record
 exists (`battleSummaryStatus`): the review keeps its initial tab, so relying on the record opens it
 on Changes too soon. The chevron folds review; choosing a tab opens it. Changes retries a failed
-read twice before offering manual retry. Summary generation allows three attempts for transient
-network or service failures; permanent payment or credential failures remain actionable.
+read twice before offering manual retry. Summary generation retries transient network and service
+failures for about a minute (`RETRY_DELAYS_MS` in `arena/comparison.ts`): a shared upstream pool can
+refuse every utility model with 429 for that long. Permanent payment or credential failures remain
+actionable. Retry summary claims the failed summary and marks the turn and its record `running`
+before it answers (`claimComparisonRetry`): the app reads the record's state first, and a record left
+`failed` kept the button up while every further press failed. A press that loses to a running retry
+gets the current snapshot, not an error. A decision (vote, early pick, stop) closes the summary's
+scope and the control plane answers later calls with 403, so the generator stops once the turn has a
+resolution, and a decided turn's failed summary shows neither the error nor Retry summary. A summary
+already on its way when the vote lands still shows.
 
 Keep agent responses above review in the visual hierarchy. Tabs use a baseline and selected
 underline, the summary uses compact Markdown with flat headings and paragraphs capped at

@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test"
 import type { MongoClient } from "mongodb"
 import type { Caller } from "./context"
+import { loadGenerationCapture } from "./generation-capture"
 import { connectMongoDb, type MongoDb } from "./mongo"
 import { DEFAULT_MODEL_OUTPUT_LIMIT, type ModelPool } from "./pool"
 import { createArenaService, type ArenaService, type ArenaServiceOptions } from "./service"
@@ -58,6 +59,8 @@ beforeAll(async () => {
 beforeEach(async () => {
   await db.collection("arenaAssignmentSets").deleteMany({})
   await db.collection("arenaAssignmentGenerationMetrics").deleteMany({})
+  await db.collection("arenaGenerationCaptures").deleteMany({})
+  await db.collection("arenaGenerationParts").deleteMany({})
 })
 
 afterAll(async () => {
@@ -316,6 +319,86 @@ describe("Arena service", () => {
     expect(comparedAfterResolution.status).toBe(403)
     expect(await comparedAfterResolution.json()).toEqual({ error: "Arena comparison scope is invalid" })
     expect(upstream).toHaveLength(2)
+  })
+
+  test("captures a battle call with its media in MongoDB", async () => {
+    const { service, upstream } = createService({ captureGenerations: true })
+    await send(service, assignmentsRequest({ action: "create", kind: "battle", scopeID: "turn-1" }))
+    const image = `data:image/png;base64,${Buffer.from([0, 1, 2, 250, 251, 252]).toString("base64")}`
+    const request = new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer user-1",
+        "Content-Type": "application/json",
+        "X-Arena-Assignment-ID": "assignment-a",
+        "X-Arena-Scope-ID": "turn-1",
+        "X-Arena-Generation-ID": generationID,
+      },
+      body: JSON.stringify({
+        model: "contestant",
+        messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: image } }] }],
+        stream: false,
+      }),
+    })
+    expect((await send(service, request)).status).toBe(200)
+
+    const loaded = await loadGenerationCapture(db, "user-1", generationID)
+    expect(loaded?.verified).toBe(true)
+    expect(loaded!.body).toEqual(upstream[0]!.body)
+    expect(loaded!.capture.response).toMatchObject({ state: "complete", status: 200 })
+    expect(loaded!.capture.response?.body).toContain("hidden-provider")
+    const media = await db.collection("arenaGenerationParts").findOne({ userId: "user-1", kind: "media" })
+    expect(media).not.toBeNull()
+  })
+
+  test("closes the capture of a call whose answer cannot be read", async () => {
+    const answers = [
+      () => new Response("{not json", { headers: { "content-type": "application/json" } }),
+      () => Promise.reject(new Error("socket hang up")),
+    ]
+    const { service } = createService({
+      captureGenerations: true,
+      fetch: async () => answers.shift()!(),
+    })
+    await send(service, assignmentsRequest({ action: "create", kind: "battle", scopeID: "turn-1" }))
+
+    expect((await send(service, contestantRequest({ assignmentID: "assignment-a", scopeID: "turn-1" }))).status).toBe(
+      502,
+    )
+    const malformed = await loadGenerationCapture(db, "user-1", generationID)
+    expect(malformed!.capture.response).toMatchObject({ state: "failed", status: 200, body: "{not json" })
+
+    await db.collection("arenaGenerationCaptures").deleteMany({})
+    expect((await send(service, contestantRequest({ assignmentID: "assignment-b", scopeID: "turn-1" }))).status).toBe(
+      502,
+    )
+    const rejected = await loadGenerationCapture(db, "user-1", generationID)
+    expect(rejected!.capture.response).toMatchObject({ state: "failed", body: "" })
+    expect(rejected!.capture.response?.status).toBeUndefined()
+  })
+
+  test("stores a cancelled stream's capture before the cancel settles", async () => {
+    const { service } = createService({
+      captureGenerations: true,
+      fetch: async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"hi"}}]}\n\n'))
+            },
+          }),
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+    })
+    await send(service, assignmentsRequest({ action: "create", kind: "battle", scopeID: "turn-1" }))
+    const response = await send(service, contestantRequest({ assignmentID: "assignment-a", scopeID: "turn-1" }))
+    const reader = response.body!.getReader()
+    await reader.read()
+    await reader.cancel()
+
+    const loaded = await loadGenerationCapture(db, "user-1", generationID)
+    expect(loaded!.capture.response).toMatchObject({ state: "cancelled", status: 200 })
+    expect(loaded!.capture.response?.body).toContain('"hi"')
   })
 
   test("does not let another caller use an assignment", async () => {

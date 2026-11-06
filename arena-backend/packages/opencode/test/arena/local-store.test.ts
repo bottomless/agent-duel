@@ -242,6 +242,45 @@ describe("local Arena store", () => {
     }
   })
 
+  test("lets one of two summary retries claim a failed comparison, with its record running too", async () => {
+    const directory = await temporaryDirectory()
+    try {
+      const store = await connectLocalStore({ directory })
+      await store.db.collection<ArenaRecord>("turns").insertOne({
+        _id: "turn-retry",
+        chatID: "chat",
+        comparisonState: "failed",
+        comparisonID: "comparison|turn-retry",
+      })
+      await store.db.collection<ArenaRecord>("comparisons").insertOne({
+        _id: "comparison|turn-retry",
+        turnID: "turn-retry",
+        state: "failed",
+        error: "Utility request failed with status 429",
+        createdAt: now,
+        updatedAt: now,
+      })
+
+      const [first, second] = await Promise.all([
+        store.claimComparisonRetry("turn-retry"),
+        store.claimComparisonRetry("turn-retry"),
+      ])
+      expect([first.claimed, second.claimed].filter(Boolean)).toHaveLength(1)
+      expect((await store.turn("turn-retry"))?.comparisonState).toBe("running")
+      expect(await store.comparisons.findOne({ _id: "comparison|turn-retry" })).toMatchObject({
+        state: "running",
+        error: "Utility request failed with status 429",
+      })
+
+      await store.releaseComparisonRetry("turn-retry", "comparison|turn-retry")
+      expect((await store.turn("turn-retry"))?.comparisonState).toBe("failed")
+      expect((await store.comparisons.findOne({ _id: "comparison|turn-retry" }))?.state).toBe("failed")
+      await store.close()
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
   test("keeps the time of each request a reply or retry starts over", async () => {
     const directory = await temporaryDirectory()
     try {

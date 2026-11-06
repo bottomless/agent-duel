@@ -39,16 +39,21 @@ export function canReviewBattle(turn: ArenaSnapshot["turn"]): boolean {
  * git evidence before it writes the comparison record, so the review mounts with no record yet; the
  * turn's own state stands in until the record exists. Reading only the record opened every review
  * on Changes, because the review keeps the tab it opened on.
+ *
+ * Once the turn is decided, a summary that failed is left out rather than offered again: the
+ * decision closes the summary's scope, so every retry is refused, and the voter has moved on. One
+ * still on its way keeps showing, since a call already under way can still land.
  */
 export function battleSummaryStatus(
   comparison: ArenaSnapshot["comparison"],
   comparisonState: NonNullable<ArenaSnapshot["turn"]>["comparisonState"],
+  decided: boolean,
 ): { available: boolean; pending: boolean; failed: boolean } {
   // A stopped battle never gets a summary.
   if (comparisonState === "skipped") return { available: false, pending: false, failed: false };
   const state = comparison?.state ?? comparisonState;
   const pending = state === "pending" || state === "running";
-  const failed = state === "failed";
+  const failed = state === "failed" && !decided;
   return { available: pending || failed || Boolean(comparison?.output), pending, failed };
 }
 

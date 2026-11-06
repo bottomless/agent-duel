@@ -233,6 +233,7 @@ import { createArenaRuntimeRouter } from "./accounts/arena-runtime-router.js";
 import { FeedbackBackend } from "./feedback/backend.js";
 import { CrashReportSender } from "./crash-reports/sender.js";
 import { onCrashReported } from "./crash-reports/reporter.js";
+import { createCrashReportRouter } from "./crash-reports/routes.js";
 import { createFeedbackContextCapture, type FeedbackContextCapture } from "./feedback/context.js";
 import { ensureAgentLoaded } from "./agent/agent-loading.js";
 import { createLeaderboardRouter } from "./leaderboard/routes.js";
@@ -610,6 +611,13 @@ function mountAccounts(
   });
   onCrashReported(() => void crashReports.flush());
   crashReports.start();
+  app.use(
+    "/api/crash-reports",
+    createCrashReportRouter({
+      home: options.home,
+      flush: () => void crashReports.flush(),
+    }),
+  );
   app.use(
     "/api/feedback",
     createFeedbackRouter({

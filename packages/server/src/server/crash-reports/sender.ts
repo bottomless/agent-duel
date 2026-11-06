@@ -1,7 +1,12 @@
 import type { Logger } from "pino";
 import type { FeedbackContext, FeedbackSubmission } from "@getpaseo/protocol/feedback/schemas";
 import type { FeedbackRemote } from "../feedback/backend.js";
-import { pendingCrashReports, removeCrashReport, type StoredCrashReport } from "./store.js";
+import {
+  isReadyToSend,
+  pendingCrashReports,
+  removeCrashReport,
+  type StoredCrashReport,
+} from "./store.js";
 
 const SEND_INTERVAL_MS = 60_000;
 
@@ -33,6 +38,7 @@ function submission(report: StoredCrashReport): FeedbackSubmission {
       locale: locale(),
     },
     crash: report.crash,
+    ...(report.sendApproved?.message ? { message: report.sendApproved.message } : {}),
   };
 }
 
@@ -50,8 +56,9 @@ function context(report: StoredCrashReport): FeedbackContext {
 /**
  * Sends the crash reports on disk as feedback, with the log tail as its context. It sends on
  * start, after every crash the daemon records, and on an interval, which picks up reports the
- * desktop app wrote and reports that waited for a signed-in session. A report is deleted once the
- * control plane has it; the report id is the feedback id, so sending one again is harmless.
+ * desktop app wrote and reports that waited for a signed-in session. A report of an external end
+ * waits until the user chooses to send it (`routes.ts`). A report is deleted once the control
+ * plane has it; the report id is the feedback id, so sending one again is harmless.
  */
 export class CrashReportSender {
   private readonly dependencies: CrashReportSenderDependencies;
@@ -94,7 +101,7 @@ export class CrashReportSender {
 
   private async send(): Promise<void> {
     const { home, backend, logger } = this.dependencies;
-    const reports = pendingCrashReports(home);
+    const reports = pendingCrashReports(home).filter(isReadyToSend);
     if (reports.length === 0) return;
     const token = this.dependencies.token();
     if (!token) return;

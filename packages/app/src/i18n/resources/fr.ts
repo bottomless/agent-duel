@@ -2634,6 +2634,23 @@ export const fr: TranslationResources = {
       send: "Envoyer",
       successTitle: "Merci, cela nous aide.",
     },
+    crashReports: {
+      title: "Agent Duel s'est arrêté de façon inattendue",
+      stopped: "{{process}} s'est arrêté · {{time}}",
+      processes: {
+        app: "L'app",
+        window: "Une fenêtre",
+        daemon: "Le daemon",
+        engine: "Le moteur de duels",
+      },
+      messageLabel: "Que s'est-il passé ? (facultatif)",
+      messagePlaceholder: "Que faisiez-vous ? Votre ordinateur s'est-il figé ou a-t-il redémarré ?",
+      contents:
+        "Le rapport inclut la fin des journaux de l'app. Rien n'est envoyé tant que vous ne choisissez pas Envoyer le rapport.",
+      discard: "Ne pas envoyer",
+      send: "Envoyer le rapport",
+      decisionError: "Cela n'a pas fonctionné. Réessayez.",
+    },
   },
   contextWindow: {
     noData: "Aucune donnée de contexte",

@@ -2588,6 +2588,23 @@ export const en = {
       send: "Send",
       successTitle: "Thanks — this helps.",
     },
+    crashReports: {
+      title: "Agent Duel stopped unexpectedly",
+      stopped: "{{process}} stopped · {{time}}",
+      processes: {
+        app: "The app",
+        window: "A window",
+        daemon: "The daemon",
+        engine: "The battle engine",
+      },
+      messageLabel: "What happened? (optional)",
+      messagePlaceholder: "What were you doing? Did your computer freeze or restart?",
+      contents:
+        "The report includes the end of the app's logs. Nothing is sent unless you choose Send report.",
+      discard: "Don't send",
+      send: "Send report",
+      decisionError: "That didn't work. Try again.",
+    },
   },
   contextWindow: {
     noData: "No context data",

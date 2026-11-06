@@ -182,6 +182,22 @@ export function define<
   )
 }
 
+/**
+ * Interrupt a wait on the user, such as a question or a permission ask, when the tool call is
+ * aborted. Tools run outside the prompt's fiber, so cancelling the prompt only aborts the call,
+ * and Arena's model stream (`timeoutModelIdle`) finishes only once every running tool has: a wait
+ * that ignores the abort holds Stop and an early pick until someone answers.
+ */
+export function interruptOnAbort(signal: AbortSignal) {
+  const aborted = Effect.callback<never>((resume) => {
+    if (signal.aborted) return resume(Effect.interrupt)
+    const handler = () => resume(Effect.interrupt)
+    signal.addEventListener("abort", handler, { once: true })
+    return Effect.sync(() => signal.removeEventListener("abort", handler))
+  })
+  return <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.raceFirst(effect, aborted)
+}
+
 export function init<P extends Schema.Decoder<unknown>, M extends Metadata>(
   info: Info<P, M>,
 ): Effect.Effect<Def<P, M>> {

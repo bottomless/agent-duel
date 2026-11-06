@@ -40,13 +40,6 @@ const MAX_PRESERVE_RECENT_TOKENS = 8_000
 // Arena cannot use a provider tokenizer without exposing the contestant model. Reserve a bounded
 // allowance for each media item and omit its encoded bytes from the text estimate instead.
 const ARENA_MEDIA_TOKEN_ALLOWANCE = 4_000
-// Compaction is an internal checkpoint, not a new user task or permission to stop after one step.
-const ARENA_COMPACTION_CONTINUE =
-  "Resume the original user task from the summary and retained context. " +
-  "Carry out the remaining steps, including verification, until the task is complete. " +
-  'Do not end with a plan or "next step" while actionable work remains. ' +
-  "Ask the user only when a concrete blocker requires information or authorization you do not have. " +
-  "If the task is already complete, report the result."
 const COMPACTION_EXHAUSTED =
   "The conversation could not be summarized after three recovery attempts. Completed work has been preserved. Retry to continue."
 const ARENA_ROLLING_MAX_BATCHES = 64
@@ -773,7 +766,7 @@ const layer = Layer.effect(
               type: "text",
               synthetic: true,
               metadata: { arena_compaction_replay: true },
-              text: ARENA_COMPACTION_CONTINUE,
+              text: "Continue the request above after compaction.",
             })
           }
         }
@@ -822,15 +815,12 @@ const layer = Layer.effect(
                   : new SessionV1.OutputFormatText(pendingUser.format)
                 : undefined,
             })
-            const continuation = assignment
-              ? ARENA_COMPACTION_CONTINUE
-              : "Continue if you have next steps, or stop and ask for clarification if you are unsure how to proceed."
             const text =
               (pendingUser ? "Process the new user message and attachments retained above. " : "") +
               (input.overflow
                 ? "The previous request exceeded the provider's size limit due to large media attachments. The conversation was compacted and media files were removed from context. If the user was asking about attached images or files, explain that the attachments were too large to process and suggest they try again with smaller or fewer files.\n\n"
                 : "") +
-              continuation
+              "Continue if you have next steps, or stop and ask for clarification if you are unsure how to proceed."
             yield* session.updatePart({
               id: PartID.ascending(),
               messageID: continueMsg.id,

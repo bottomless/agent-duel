@@ -323,6 +323,37 @@ describe("tool execution gate", () => {
     clearToolExecutionEnvironment(sessionID)
   })
 
+  test("holds a question until the base checkout exists, and lets an abort end the wait", async () => {
+    const sessionID = SessionID.make("session-question")
+    const gate = gateToolExecution(sessionID, environment)
+    const execution = { toolID: "question", args: {} }
+    try {
+      const waiting = waitForToolExecution(sessionID, execution).then(() => "released")
+      expect(await Promise.race([waiting, Bun.sleep(25).then(() => "held")])).toBe("held")
+      gate.baseReady()
+      expect(await waiting).toBe("released")
+      expect(readyToolExecutionEnvironment(sessionID)?.provide).toBe(environment.provide)
+    } finally {
+      gate.release()
+      clearToolExecutionEnvironment(sessionID)
+    }
+
+    const stoppedID = SessionID.make("session-question-stopped")
+    const stoppedGate = gateToolExecution(stoppedID, environment)
+    const abort = new AbortController()
+    try {
+      const stopped = waitForToolExecution(stoppedID, execution, abort.signal).then(
+        () => "released",
+        () => "aborted",
+      )
+      abort.abort(new Error("stopped"))
+      expect(await stopped).toBe("aborted")
+    } finally {
+      stoppedGate.release()
+      clearToolExecutionEnvironment(stoppedID)
+    }
+  })
+
   test("holds project skills until the contestant copy finishes", async () => {
     const sessionID = SessionID.make("session-project-skill")
     const gate = gateToolExecution(sessionID, environment)

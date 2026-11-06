@@ -2595,6 +2595,23 @@ export const ru: TranslationResources = {
       send: "Отправить",
       successTitle: "Спасибо — это поможет.",
     },
+    crashReports: {
+      title: "Agent Duel неожиданно остановился",
+      stopped: "{{process}}: остановка · {{time}}",
+      processes: {
+        app: "Приложение",
+        window: "Окно",
+        daemon: "Демон",
+        engine: "Движок батлов",
+      },
+      messageLabel: "Что произошло? (необязательно)",
+      messagePlaceholder: "Что вы делали? Компьютер завис или перезагрузился?",
+      contents:
+        "Отчёт содержит конец журналов приложения. Ничего не отправляется, пока вы не выберете «Отправить отчёт».",
+      discard: "Не отправлять",
+      send: "Отправить отчёт",
+      decisionError: "Не получилось. Попробуйте ещё раз.",
+    },
   },
   contextWindow: {
     noData: "Нет данных о контексте",

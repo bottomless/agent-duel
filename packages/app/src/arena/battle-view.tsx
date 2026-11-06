@@ -513,6 +513,7 @@ function BattleJudging({
   turnId,
   comparison,
   comparisonState,
+  decided,
   runA,
   runB,
   phase,
@@ -524,6 +525,8 @@ function BattleJudging({
   turnId: string;
   comparison: ArenaSnapshot["comparison"];
   comparisonState: NonNullable<ArenaSnapshot["turn"]>["comparisonState"];
+  /** The turn has a resolution, which closes its summary's scope. */
+  decided: boolean;
   runA: ArenaRun | undefined;
   runB: ArenaRun | undefined;
   phase: Exclude<BattleReviewPhase, { kind: "none" }>;
@@ -535,7 +538,7 @@ function BattleJudging({
   const summary =
     phase.kind === "partial"
       ? { available: false, pending: false, failed: false }
-      : battleSummaryStatus(comparison, comparisonState);
+      : battleSummaryStatus(comparison, comparisonState, decided);
   const diffQuery = useBattleDiff(serverId, agentId, turnId, runA, runB, phase);
   const refetchDiff = diffQuery.refetch;
   const retryDiff = useCallback(() => {
@@ -903,6 +906,7 @@ export function ArenaBattleView({
                 turnId={turn.id}
                 comparison={snapshot.comparison}
                 comparisonState={turn.comparisonState}
+                decided={turn.resolution !== undefined}
                 runA={runA}
                 runB={runB}
                 phase={reviewPhase}

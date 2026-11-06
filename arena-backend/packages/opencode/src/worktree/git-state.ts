@@ -80,7 +80,13 @@ export async function copyGitState(input: CopyGitStateInput) {
   }
   await chmod(partial, mode)
   await absoluteAlternates(path.join(input.source, "objects"), path.join(partial, "objects", "info", "alternates"))
-  if (await gitConfigBool(partial, "extensions.worktreeConfig")) {
+  // Read together: neither key is written below, and a git process takes tens of milliseconds to
+  // start on Windows.
+  const [worktreeConfig, refStorage] = await Promise.all([
+    gitConfigBool(partial, "extensions.worktreeConfig"),
+    gitConfigValue(partial, "extensions.refStorage"),
+  ])
+  if (worktreeConfig) {
     // Exit 5: the key was not set. Anything else is a real failure.
     await gitConfig(partial, ["--unset", "core.bare"], [0, 5])
     await gitConfig(partial, ["--worktree", "core.bare", "true"])
@@ -88,7 +94,7 @@ export async function copyGitState(input: CopyGitStateInput) {
     await gitConfig(partial, ["core.bare", "true"])
   }
   await gitConfig(partial, ["--unset", "core.worktree"], [0, 5])
-  if (input.excludeRefPrefixes?.length) await dropRefs(partial, input.excludeRefPrefixes)
+  if (input.excludeRefPrefixes?.length) await dropRefs(partial, input.excludeRefPrefixes, refStorage)
   await renameRetrying(partial, input.target)
 }
 
@@ -101,8 +107,7 @@ export async function copyGitState(input: CopyGitStateInput) {
  * repository keeps refs in binary tables only git may edit, so it is left alone and the
  * caller removes those refs through git.
  */
-async function dropRefs(gitDir: string, prefixes: readonly string[]) {
-  const storage = await gitConfigValue(gitDir, "extensions.refStorage")
+async function dropRefs(gitDir: string, prefixes: readonly string[], storage: string | undefined) {
   if (storage !== undefined && storage !== "files") return
   for (const prefix of prefixes) {
     const relative = prefix.replace(/\/+$/, "")

@@ -25,7 +25,9 @@ The desktop application owns:
 
 ## Build the macOS desktop application
 
-The build signs in to the hosted control plane, `https://agent-duel-cloud.vercel.app`, by default:
+Builds up to 0.4.0-beta.18 call `https://agent-duel-cloud.vercel.app`, so keep that domain serving
+the same deployment until the control plane refuses those versions. Later builds sign in to the
+hosted control plane, `https://agentduel.com`, by default:
 
 ```bash
 npm run build:desktop -- --publish never --mac --arm64
