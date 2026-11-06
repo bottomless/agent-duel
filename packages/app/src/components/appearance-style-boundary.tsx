@@ -42,7 +42,14 @@ class AppearanceStyleBoundaryBase extends Component<AppearanceStyleBoundaryProps
   }
 }
 
-const appearanceStyleBoundaryMapping = (theme: Theme): Partial<AppearanceStyleBoundaryProps> => ({
+// Syntax colors are deliberately excluded here. They repaint through
+// syntaxTokenStyles (Unistyles-tracked, no re-render needed), so including
+// them would remount the whole app subtree on every highlight-theme change
+// and reset scroll position everywhere a ScrollView sits below this boundary
+// (e.g. Settings).
+export const appearanceStyleBoundaryMapping = (
+  theme: Theme,
+): Partial<AppearanceStyleBoundaryProps> => ({
   appearanceKey: [
     theme.fontFamily.ui,
     theme.fontFamily.mono,
@@ -63,26 +70,6 @@ const appearanceStyleBoundaryMapping = (theme: Theme): Partial<AppearanceStyleBo
     theme.colors.surface2,
     theme.colors.border,
     theme.colors.accentBright,
-    theme.colors.syntax.keyword,
-    theme.colors.syntax.comment,
-    theme.colors.syntax.string,
-    theme.colors.syntax.number,
-    theme.colors.syntax.literal,
-    theme.colors.syntax.function,
-    theme.colors.syntax.definition,
-    theme.colors.syntax.class,
-    theme.colors.syntax.type,
-    theme.colors.syntax.tag,
-    theme.colors.syntax.attribute,
-    theme.colors.syntax.property,
-    theme.colors.syntax.variable,
-    theme.colors.syntax.operator,
-    theme.colors.syntax.punctuation,
-    theme.colors.syntax.regexp,
-    theme.colors.syntax.escape,
-    theme.colors.syntax.meta,
-    theme.colors.syntax.heading,
-    theme.colors.syntax.link,
   ].join("\u0000"),
 });
 
