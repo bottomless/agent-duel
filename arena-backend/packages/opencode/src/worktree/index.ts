@@ -16,7 +16,7 @@ import { renameRetrying } from "../util/rename-retry"
 import { discardTree, sweepTrash as sweepTrashDir, TRASH_DIRNAME, trashFor } from "../util/discard-tree"
 import { GlobalBus } from "@/bus/global"
 import { Git } from "@/git"
-import { Effect, Layer, Path, Schema, Scope, Context, Semaphore } from "effect"
+import { Effect, Fiber, Layer, Path, Schema, Scope, Context, Semaphore } from "effect"
 import { ChildProcess } from "effect/process"
 import { FSUtil } from "@opencode/util/fs-util"
 import { AppProcess } from "@opencode/util/process"
@@ -553,6 +553,13 @@ export const layer: Layer.Layer<
       yield* fs.makeDirectory(parent, { recursive: true }).pipe(Effect.orDie)
       if (options?.fresh) yield* discardEntry(host)
 
+      // Read from the checkout, so it runs while the host is copied.
+      const heldFolders = yield* (
+        options?.baseTree
+          ? dependencyFoldersIn(ctx.worktree, options.baseTree)
+          : Effect.succeed(new Set(DEPENDENCY_FOLDERS))
+      ).pipe(Effect.forkChild)
+
       if (!(yield* fs.exists(pathSvc.join(host, "HEAD")).pipe(Effect.orDie))) {
         // Anything half-written from an interrupted create has no `HEAD`; the copy lands
         // under `<host>.partial` and is renamed only when complete.
@@ -599,9 +606,7 @@ export const layer: Layer.Layer<
       const hostExclude = pathSvc.join(host, "info", "exclude")
       const excludes = yield* fs.readFileString(canonicalExclude).pipe(Effect.catch(() => Effect.succeed("")))
       const hostedExcludes = yield* fs.readFileString(hostExclude).pipe(Effect.catch(() => Effect.succeed("")))
-      const held = options?.baseTree
-        ? yield* dependencyFoldersIn(ctx.worktree, options.baseTree)
-        : new Set(DEPENDENCY_FOLDERS)
+      const held = yield* Fiber.join(heldFolders)
       const contestantExcludes = withDependencyExcludes(excludes, held)
       if (hostedExcludes !== contestantExcludes) {
         yield* fs.makeDirectory(pathSvc.dirname(hostExclude), { recursive: true }).pipe(Effect.orDie)
@@ -1537,15 +1542,22 @@ export const layer: Layer.Layer<
         const { commit, hostCopyMs } = yield* Effect.gen(function* () {
           yield* ensureHostRepo(to, { fresh: true, baseTree: input.baseTree })
           const hostCopyMs = Math.round(performance.now() - hostStarted)
-          const resolved = yield* git(
-            ["rev-parse", "--verify", "--quiet", "--end-of-options", `${input.head}^{commit}`],
-            { cwd: host },
+          const ref = input.branch ? `refs/heads/${input.branch}` : undefined
+          // Independent reads of the new host, together: a git process costs tens of
+          // milliseconds to start on Windows whatever it does.
+          const [resolved, known, reftable] = yield* Effect.all(
+            [
+              git(["rev-parse", "--verify", "--quiet", "--end-of-options", `${input.head}^{commit}`], {
+                cwd: host,
+              }),
+              ref ? git(["show-ref", "--verify", "--quiet", ref], { cwd: host }) : Effect.succeed(undefined),
+              usesReftable(host),
+            ],
+            { concurrency: "unbounded" },
           )
           if (resolved.code !== 0) return yield* failed(`${input.head} is not a commit in the checkout`)
           const commit = resolved.text.trim()
-          if (input.branch) {
-            const ref = `refs/heads/${input.branch}`
-            const known = yield* git(["show-ref", "--verify", "--quiet", ref], { cwd: host })
+          if (ref && known) {
             if (known.code !== 0) {
               const created = yield* git(["update-ref", ref, commit], { cwd: host })
               if (created.code !== 0) return yield* failed(created.stderr || `could not create ${ref}`)
@@ -1557,7 +1569,7 @@ export const layer: Layer.Layer<
             fs.writeFileString(pathSvc.join(admin, "gitdir"), `${gitLinkPath(pathSvc.join(to, ".git"))}\n`),
           )
           yield* attempt(fs.writeFileString(pathSvc.join(admin, "commondir"), "../..\n"))
-          if (yield* usesReftable(host)) {
+          if (reftable) {
             // Reftable keeps a worktree's HEAD in the entry's own tables and ignores a HEAD file,
             // so the entry gets the placeholders `git worktree add` writes and git sets HEAD.
             yield* attempt(fs.makeDirectory(pathSvc.join(admin, "reftable"), { recursive: true }))
@@ -1629,20 +1641,28 @@ export const layer: Layer.Layer<
             if (built.code !== 0) return yield* failed(built.stderr || "could not build the index")
           }
 
-          // HEAD is checked on its own: git reads it from where the ref backend keeps it, which
-          // for reftable is not the file.
-          const resolved = yield* git(
+          // Read together once the index is written, so no git process runs beside a write: a
+          // git process costs tens of milliseconds to start on Windows whatever it does.
+          const [resolved, listed] = yield* Effect.all(
             [
-              "rev-parse",
-              "--path-format=absolute",
-              "--absolute-git-dir",
-              "--git-common-dir",
-              "HEAD^{commit}",
-              "--symbolic-full-name",
-              "HEAD",
-              "--",
+              // HEAD is checked on its own: git reads it from where the ref backend keeps it,
+              // which for reftable is not the file.
+              git(
+                [
+                  "rev-parse",
+                  "--path-format=absolute",
+                  "--absolute-git-dir",
+                  "--git-common-dir",
+                  "HEAD^{commit}",
+                  "--symbolic-full-name",
+                  "HEAD",
+                  "--",
+                ],
+                { cwd: to },
+              ),
+              git(["worktree", "list", "--porcelain"], { cwd: host }),
             ],
-            { cwd: to },
+            { concurrency: "unbounded" },
           )
           const [gitDir, commonDir, headCommit, headName] = resolved.text.trim().split("\n")
           if (resolved.code !== 0 || !gitDir || !commonDir || !headCommit || !headName) {
@@ -1660,7 +1680,6 @@ export const layer: Layer.Layer<
           ) {
             return yield* failed(`HEAD is ${headName} at ${headCommit}`)
           }
-          const listed = yield* git(["worktree", "list", "--porcelain"], { cwd: host })
           const registered = parseWorktreeList(listed.text).map((item) => item.path ?? "")
           if (
             listed.code !== 0 ||

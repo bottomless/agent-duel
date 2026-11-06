@@ -20,6 +20,8 @@ const allowedRoutes = new Set([
   "/api/arena/assignments",
   "/api/arena/comparison",
   "/api/arena/metadata",
+  // A contestant's or a chat's web search (arena-service `websearch.ts`).
+  "/api/arena/websearch",
   "/api/research",
   "/api/openrouter/api/v1/chat/completions",
   "/api/openrouter/api/v1/responses",

@@ -248,11 +248,12 @@ function executableWords(words: readonly string[]): readonly string[] {
   return executableWords(words.slice(index))
 }
 
-function wordPaths(input: readonly string[]) {
+function wordPaths(input: readonly string[], skip: ReadonlySet<number> = new Set()) {
   const words = executableWords(input)
   const name = path.basename(words[0] ?? "")
   const found: string[] = []
   for (let index = 1; index < words.length; index++) {
+    if (skip.has(index)) continue
     const word = words[index]
     if (name === "git" || name === "gh") {
       const flag = word.startsWith("--") ? word.split("=")[0] : word.slice(0, 2)
@@ -274,6 +275,223 @@ function wordPaths(input: readonly string[]) {
   }
   return found
 }
+
+/**
+ * A battle contestant's shell is checked for the files it writes, not for every word that could be a
+ * path. Only these forms write: redirects (see `shellPaths`), the operands of file commands, the
+ * destination of a copy, in-place edits, and the values of output flags. Every other operand is a
+ * read, so a URL, a JSON body, or a `sed -n` of a log does not count as a write. A script that an
+ * interpreter runs (`node -e`, `python3 x.py`) is not read for paths: its writes are not visible in
+ * the command text, and guessing them refused safe commands (bench 2026-11-06).
+ */
+type Operand = readonly [word: string, operation: "read" | "write"]
+
+const WRITERS = new Set([
+  "chgrp",
+  "chmod",
+  "chown",
+  "mkdir",
+  "mkfifo",
+  "mknod",
+  "mktemp",
+  "mv",
+  "patch",
+  "rm",
+  "rmdir",
+  "shred",
+  "tee",
+  "touch",
+  "truncate",
+  "unlink",
+])
+// Every operand but the destination is a read.
+const COPIES = new Set(["cp", "install", "ln", "rsync", "scp"])
+const FIND_WRITES = ["-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprintf"]
+const COMPILER_OUTPUT = ["-o"]
+const PIP_OUTPUT = ["--target", "-t", "--prefix", "--root", "--cache-dir", "--src"]
+// The values of these flags are files or directories the program writes.
+const WRITE_FLAGS: Record<string, readonly string[]> = {
+  curl: [
+    "-o",
+    "--output",
+    "-D",
+    "--dump-header",
+    "-c",
+    "--cookie-jar",
+    "--trace",
+    "--trace-ascii",
+    "--stderr",
+    "--output-dir",
+  ],
+  wget: ["-O", "--output-document", "-o", "--output-file", "-a", "--append-output", "-P", "--directory-prefix"],
+  cc: COMPILER_OUTPUT,
+  gcc: COMPILER_OUTPUT,
+  "g++": COMPILER_OUTPUT,
+  clang: COMPILER_OUTPUT,
+  "clang++": COMPILER_OUTPUT,
+  go: COMPILER_OUTPUT,
+  rustc: ["-o", "--out-dir"],
+  javac: ["-d"],
+  tsc: ["--outDir", "--outFile", "--out"],
+  esbuild: ["--outfile", "--outdir"],
+  sort: ["-o", "--output"],
+  unzip: ["-d"],
+  npm: ["--prefix", "--cache"],
+  pnpm: ["--dir", "-C", "--store-dir"],
+  yarn: ["--cwd", "--cache-folder", "--modules-folder"],
+  bun: ["--cwd", "--cache-dir"],
+  pip: PIP_OUTPUT,
+  pip3: PIP_OUTPUT,
+}
+
+/** The indexes of the values of `flags`: `-o x`, `--output x`, `--output=x`, `-ox`, `-sSo x`. */
+function flagValues(words: readonly string[], flags: readonly string[]) {
+  const values = new Map<number, string>()
+  for (let index = 1; index < words.length; index++) {
+    const word = words[index]
+    for (const flag of flags) {
+      if (word === flag && index + 1 < words.length) {
+        values.set(index + 1, words[index + 1])
+        index++
+        break
+      }
+      if (flag.startsWith("--")) {
+        if (word.startsWith(flag + "=")) {
+          values.set(index, word.slice(flag.length + 1))
+          break
+        }
+        continue
+      }
+      if (word.startsWith("--") || !word.startsWith("-") || flag.length !== 2) continue
+      const letter = flag[1]
+      if (new RegExp(`^-[A-Za-z]*${letter}$`).test(word) && index + 1 < words.length) {
+        values.set(index + 1, words[index + 1])
+        index++
+        break
+      }
+      if (word.startsWith(flag) && word.length > 2) {
+        values.set(index, word.slice(2))
+        break
+      }
+    }
+  }
+  return values
+}
+
+function operands(words: readonly string[], operation: "read" | "write", skip?: ReadonlySet<number>): Operand[] {
+  return wordPaths(words, skip).map((word) => [word, operation] as const)
+}
+
+function flagOperands(words: readonly string[], flags: readonly string[]): Operand[] {
+  const values = flagValues(words, flags)
+  return [
+    ...[...values.values()].map((word) => [word, "write"] as const),
+    ...operands(words, "read", new Set(values.keys())),
+  ]
+}
+
+function copyOperands(words: readonly string[]): Operand[] {
+  const found = wordPaths(words)
+  const targetFlag = words.findIndex((word) => word === "-t" || word === "--target-directory")
+  const attachedTarget = words.find((word) => word.startsWith("--target-directory=") || /^-t.+/.test(word))
+  let destination = found.at(-1)
+  if (attachedTarget) destination = attachedTarget.replace(/^(?:--target-directory=|-t)/, "")
+  if (targetFlag >= 0) destination = words[targetFlag + 1]
+  return found.map((word) => [word, word === destination ? "write" : "read"] as const)
+}
+
+// `sed -n '1,9p' file` reads its file. `-i` edits it. A `w` command in the script writes.
+function sedOperands(words: readonly string[]): Operand[] {
+  const inPlace = words.some((word) => /^-[nErsuzl]*i/.test(word) || /^--in-place(?:=|$)/.test(word))
+  const found: Operand[] = []
+  for (let index = 1; index < words.length; index++) {
+    const word = words[index]
+    if (/^(?:-e|--expression=).+/.test(word)) {
+      for (const target of scriptPaths("sed", word.replace(/^(?:-e|--expression=)/, ""))) found.push([target, "write"])
+      continue
+    }
+    if (isScript("sed", words, index)) {
+      for (const target of scriptPaths("sed", word)) found.push([target, "write"])
+      continue
+    }
+    if (word.startsWith("-")) continue
+    for (const part of wordParts(word, "sed")) found.push([part, inPlace ? "write" : "read"])
+  }
+  return found
+}
+
+// `perl -pi -e 's/a/b/' file` edits its file. Without `-i`, perl and ruby read their files.
+function inPlaceOperands(words: readonly string[]): Operand[] {
+  const inPlace = words.some((word) => /^-[^-eEI]*i/.test(word))
+  const found: Operand[] = []
+  let code = false
+  for (let index = 1; index < words.length; index++) {
+    const word = words[index]
+    if (/^-[A-Za-z0-9]*[eE]$/.test(word)) {
+      code = true
+      index++
+      continue
+    }
+    if (word.startsWith("-")) continue
+    // Without -e, the first operand is the script itself.
+    const script = !code && !found.length && !inPlace
+    for (const part of wordParts(word, path.basename(words[0])))
+      found.push([part, inPlace && !script ? "write" : "read"])
+  }
+  return found
+}
+
+function tarOperands(words: readonly string[]): Operand[] {
+  const clusters = words
+    .slice(1)
+    .filter((word, index) => /^-[A-Za-z]+$/.test(word) || (index === 0 && /^[A-Za-z]+$/.test(word)))
+  const letters = clusters.join("").replaceAll("-", "")
+  const extract = /x/.test(letters) || words.some((word) => word === "--extract" || word === "--get")
+  const create =
+    /[cruA]/.test(letters) || words.some((word) => /^--(?:create|append|update|concatenate|catenate)$/.test(word))
+  const writes = new Map<number, string>()
+  if (extract) for (const [index, value] of flagValues(words, ["-C", "--directory"])) writes.set(index, value)
+  if (create) {
+    for (const [index, value] of flagValues(words, ["-f", "--file"])) writes.set(index, value)
+    // `tar czf out.tgz src`: the archive follows the cluster that holds `f`.
+    const cluster = words.findIndex((word, index) => index > 0 && clusters.includes(word) && word.includes("f"))
+    if (cluster > 0 && cluster + 1 < words.length) writes.set(cluster + 1, words[cluster + 1])
+  }
+  return [
+    ...[...writes.values()].map((word) => [word, "write"] as const),
+    ...operands(words, "read", new Set(writes.keys())),
+  ]
+}
+
+/** What each operand of one battle command does to it. `words` is already unwrapped (`sudo`, `env`). */
+function battleOperands(words: readonly string[]): Operand[] {
+  const program = path.basename(words[0] ?? "")
+  if (READS.has(program) || gitRead(words)) return operands(words, "read")
+  if (program === "git") return operands(words, "write")
+  if (program === "find") return operands(words, words.some((word) => FIND_WRITES.includes(word)) ? "write" : "read")
+  if (WRITERS.has(program)) return operands(words, "write")
+  if (COPIES.has(program)) return copyOperands(words)
+  if (program === "sed") return sedOperands(words)
+  if (program === "perl" || program === "ruby") return inPlaceOperands(words)
+  if (program === "tar") return tarOperands(words)
+  if (program === "dd")
+    return words.slice(1).flatMap((word): Operand[] => {
+      if (word.startsWith("of=")) return [[word.slice(3), "write"]]
+      if (word.startsWith("if=")) return [[word.slice(3), "read"]]
+      return []
+    })
+  if (program === "zip") {
+    const found = wordPaths(words)
+    return found.map((word, index) => [word, index === 0 ? "write" : "read"] as const)
+  }
+  const flags = WRITE_FLAGS[program]
+  if (flags) return flagOperands(words, flags)
+  return operands(words, "read")
+}
+
+// A word the shell computes at run time (a substitution inside it). In the battle split it counts as
+// `/` only where the command writes it, so a computed argument to a reader stays a read.
+const UNREADABLE = "\u0000"
 
 const parser = lazy(async () => {
   const { default: runtime } = await import("web-tree-sitter/tree-sitter.wasm" as string, { with: { type: "wasm" } })
@@ -358,6 +576,10 @@ export async function shellPaths(command: string, cwd: string, access: "all" | "
   const paths = new Set<string>(access === "write" ? [] : [cwd + "/"])
   const add = (word: string, base: string, directory = false, operation: "read" | "write" = "write") => {
     if (access !== "all" && access !== operation) return
+    if (word === UNREADABLE) {
+      paths.add("/")
+      return
+    }
     const expanded = expandHome(word)
     // Variables and computed path values are intentionally outside this policy.
     if (expanded.includes("$") || expanded.includes("`")) return
@@ -367,8 +589,10 @@ export async function shellPaths(command: string, cwd: string, access: "all" | "
   const unreadable = () => paths.add("/")
   const read = (node: Node) => {
     const words = literalWords(node.text)
-    if (!words) unreadable()
-    return words ?? []
+    if (words) return words
+    if (access !== "all") return [UNREADABLE]
+    unreadable()
+    return []
   }
   const redirects = (nodes: readonly Node[], base: string) => {
     for (const node of nodes) {
@@ -492,7 +716,7 @@ export async function shellPaths(command: string, cwd: string, access: "all" | "
       if (CWD.has(name)) {
         const targets = words.slice(1).filter((word) => !word.startsWith("-"))
         const target = targets[0] ?? Global.Path.home
-        if (!/[$`]/.test(target)) {
+        if (target !== UNREADABLE && !/[$`]/.test(target)) {
           const bases = initial.map((base) => path.resolve(base, expandHome(target)))
           for (const base of bases) add(base, base, true, "read")
           flow = { success: [...new Set(bases)], failure: [] }
@@ -508,27 +732,12 @@ export async function shellPaths(command: string, cwd: string, access: "all" | "
         } else {
           const executable = executableWords(words)
           const program = path.basename(executable[0] ?? "")
-          const operands = wordPaths(executable)
-          const copy = program === "cp" || program === "ln" || program === "install"
-          const targetFlag = executable.findIndex((word) => word === "-t" || word === "--target-directory")
-          const attachedTarget = executable.find((word) => word.startsWith("--target-directory=") || /^-t.+/.test(word))
-          let destination = operands.at(-1)
-          if (attachedTarget) destination = attachedTarget.replace(/^(?:--target-directory=|-t)/, "")
-          if (targetFlag >= 0) destination = executable[targetFlag + 1]
-          const findWrites =
-            program === "find" &&
-            executable.some((word) =>
-              ["-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprintf"].includes(word),
-            )
-          const reader = READS.has(program) || gitRead(executable) || (program === "find" && !findWrites)
           if (program === "git")
             for (const base of initial)
               for (const directory of gitDirectories(executable, base))
-                add(directory, base, true, reader ? "read" : "write")
-          for (const word of operands) {
-            const operation = reader || (copy && word !== destination) ? "read" : "write"
+                add(directory, base, true, gitRead(executable) ? "read" : "write")
+          for (const [word, operation] of battleOperands(executable))
             for (const base of initial) add(word, base, false, operation)
-          }
           // find passes its nested command as arguments, so it has no command node of its own.
           if (program === "find") {
             const exec = executable.findIndex((word) => ["-exec", "-execdir", "-ok", "-okdir"].includes(word))
@@ -548,7 +757,7 @@ export async function shellPaths(command: string, cwd: string, access: "all" | "
           if (name === "eval") code = words.slice(1).join(" ")
           else if (flag >= 0) code = words[flag + 1]
           if (code) for (const base of initial) scanCode(code, base)
-        } else if (INTERPRETERS.has(name)) {
+        } else if (INTERPRETERS.has(name) && access === "all") {
           for (const word of codePaths(args.map((arg) => arg.text).join(" "), false))
             for (const base of initial) add(word, base)
         }

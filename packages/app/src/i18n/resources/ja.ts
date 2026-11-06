@@ -2600,6 +2600,23 @@ export const ja: TranslationResources = {
       send: "送信",
       successTitle: "ありがとうございます。参考になります。",
     },
+    crashReports: {
+      title: "Agent Duel が予期せず停止しました",
+      stopped: "{{process}}が停止しました · {{time}}",
+      processes: {
+        app: "アプリ",
+        window: "ウィンドウ",
+        daemon: "デーモン",
+        engine: "バトルエンジン",
+      },
+      messageLabel: "何が起きましたか？（任意）",
+      messagePlaceholder: "何をしていましたか？コンピュータがフリーズまたは再起動しましたか？",
+      contents:
+        "レポートにはアプリのログの末尾が含まれます。「レポートを送信」を選ぶまで何も送信されません。",
+      discard: "送信しない",
+      send: "レポートを送信",
+      decisionError: "うまくいきませんでした。もう一度お試しください。",
+    },
   },
   contextWindow: {
     noData: "コンテキストデータがありません",

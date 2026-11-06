@@ -2561,6 +2561,22 @@ export const ar: TranslationResources = {
       send: "إرسال",
       successTitle: "شكرًا — هذا مفيد.",
     },
+    crashReports: {
+      title: "توقف Agent Duel بشكل غير متوقع",
+      stopped: "توقف {{process}} · {{time}}",
+      processes: {
+        app: "التطبيق",
+        window: "نافذة",
+        daemon: "الخدمة الخلفية (daemon)",
+        engine: "محرك المبارزات",
+      },
+      messageLabel: "ماذا حدث؟ (اختياري)",
+      messagePlaceholder: "ماذا كنت تفعل؟ هل تجمّد جهازك أو أُعيد تشغيله؟",
+      contents: "يتضمن التقرير نهاية سجلات التطبيق. لا يُرسل أي شيء ما لم تختر إرسال التقرير.",
+      discard: "عدم الإرسال",
+      send: "إرسال التقرير",
+      decisionError: "لم ينجح ذلك. حاول مرة أخرى.",
+    },
   },
   contextWindow: {
     noData: "لا توجد بيانات للسياق",

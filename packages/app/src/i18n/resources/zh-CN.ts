@@ -2524,6 +2524,22 @@ export const zhCN: TranslationResources = {
       send: "发送",
       successTitle: "谢谢，这很有帮助。",
     },
+    crashReports: {
+      title: "Agent Duel 意外停止",
+      stopped: "{{process}}已停止 · {{time}}",
+      processes: {
+        app: "应用",
+        window: "窗口",
+        daemon: "守护进程",
+        engine: "对战引擎",
+      },
+      messageLabel: "发生了什么？（可选）",
+      messagePlaceholder: "你当时在做什么？电脑是否卡死或重新启动？",
+      contents: "报告包含应用日志的末尾部分。只有在你选择“发送报告”后才会发送。",
+      discard: "不发送",
+      send: "发送报告",
+      decisionError: "操作失败，请重试。",
+    },
   },
   contextWindow: {
     noData: "暂无上下文数据",

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FeedbackContext, FeedbackSubmission } from "@getpaseo/protocol/feedback/schemas";
 import { FeedbackBackendError, type FeedbackRemote } from "../feedback/backend.js";
 import { CrashReportSender } from "./sender.js";
-import { pendingCrashReports, recordCrashReport } from "./store.js";
+import { approveCrashReports, pendingCrashReports, recordCrashReport } from "./store.js";
 
 let home: string;
 
@@ -104,5 +104,43 @@ describe("crash report sender", () => {
 
     expect(signedOut.submitted).toEqual([]);
     expect(pendingCrashReports(home)).toHaveLength(1);
+  });
+
+  it("sends an external end only after the user approves it, with their message", async () => {
+    const report = recordCrashReport({
+      home,
+      crash: {
+        process: "app",
+        kind: "unclean_shutdown",
+        message: "Agent Duel ended without exiting",
+      },
+      appVersion: "0.4.0-beta.17",
+    })!;
+    const control = remote();
+    const sender = new CrashReportSender({
+      home,
+      backend: control.backend,
+      token: () => "session-token",
+      logger: pino({ level: "silent" }),
+    });
+
+    await sender.flush();
+    expect(control.submitted).toEqual([]);
+    expect(pendingCrashReports(home)).toHaveLength(1);
+
+    approveCrashReports(home, [report.id], "The whole Mac froze");
+    await sender.flush();
+
+    expect(control.submitted).toEqual([
+      {
+        token: "session-token",
+        feedback: expect.objectContaining({
+          id: report.id,
+          source: "crash",
+          message: "The whole Mac froze",
+        }),
+      },
+    ]);
+    expect(pendingCrashReports(home)).toEqual([]);
   });
 });

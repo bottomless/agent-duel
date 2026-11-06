@@ -12,6 +12,7 @@ import {
   claimRunningMarker,
   describeError,
   describeUncleanShutdown,
+  recordMarkerStopping,
   releaseRunningMarker,
 } from "./crash-reports/store.js";
 
@@ -186,6 +187,8 @@ async function main() {
   ) => {
     const reason = options?.reason ?? `worker_received_${signal}`;
     if (!shutdownPromise) {
+      // The desktop app kills a daemon that is still stopping after a few seconds; that is a quit.
+      recordMarkerStopping(paseoHome, "daemon");
       logger.info(
         { signal, reason, ...getProcessDiagnostics() },
         `${signal} received, shutting down gracefully...`,

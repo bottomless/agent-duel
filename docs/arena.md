@@ -81,6 +81,14 @@ Research readers use `resolveResearchDocument` from arena-service under the same
 Deploy the control plane's updated arena-service dependency before shipping this protocol: an old
 server refuses chunks, which the desktop retains for automatic recovery after the server upgrade.
 
+The desktop's per-call copies are scrubbed, so in hosted battles the control plane keeps each
+contestant call as OpenRouter received it, with the real model, routing, cache key and restored
+reasoning, and its raw response (`arena-service/src/generation-capture.ts`, `captureGenerations`).
+Messages, tools and images are stored once per account by content, because each call resends the
+whole history. Single-agent chats, keep-alive pings and the service's own comparison and metadata
+calls are not kept. BYOK leaves capture off: its store is on the voter's machine, and those fields
+name the model.
+
 `archiveComplete` means the local archive exists, not that research has uploaded. Reply resets keep
 the previous cloud archive until its replacement arrives. Keep transcript and image archives whole,
 without per-call artifact budgets; a disk error must fail the local write rather than produce an
@@ -202,8 +210,16 @@ Open on Difference summary while a report is pending or available; otherwise ope
 a stopped battle or a failed side. Read the turn's `comparisonState` before the comparison record
 exists (`battleSummaryStatus`): the review keeps its initial tab, so relying on the record opens it
 on Changes too soon. The chevron folds review; choosing a tab opens it. Changes retries a failed
-read twice before offering manual retry. Summary generation allows three attempts for transient
-network or service failures; permanent payment or credential failures remain actionable.
+read twice before offering manual retry. Summary generation retries transient network and service
+failures for about a minute (`RETRY_DELAYS_MS` in `arena/comparison.ts`): a shared upstream pool can
+refuse every utility model with 429 for that long. Permanent payment or credential failures remain
+actionable. Retry summary claims the failed summary and marks the turn and its record `running`
+before it answers (`claimComparisonRetry`): the app reads the record's state first, and a record left
+`failed` kept the button up while every further press failed. A press that loses to a running retry
+gets the current snapshot, not an error. A decision (vote, early pick, stop) closes the summary's
+scope and the control plane answers later calls with 403, so the generator stops once the turn has a
+resolution, and a decided turn's failed summary shows neither the error nor Retry summary. A summary
+already on its way when the vote lands still shows.
 
 Keep agent responses above review in the visual hierarchy. Tabs use a baseline and selected
 underline, the summary uses compact Markdown with flat headings and paragraphs capped at
@@ -1017,13 +1033,26 @@ In both modes, Agent Duel owns session names, session locations, worktree manage
 selection. Hide OpenCode's tools for those operations and their prompt guidance from the model,
 including child agents. File tools, shell, child agents and MCP tools stay available through `execute`.
 
+Web search runs on one provider, OpenRouter, set as Core's default (`arena/websearch.ts`), so Core's
+form that asks which search provider to use and whether to send the query never opens: the app has
+no card for it, and every search failed after a minute. A search goes to `/api/arena/websearch` on the
+battle backend, which sends the query to the utility model with OpenRouter's `web` plugin and no
+engine, so OpenRouter picks its default engine, and returns the URL citations. The query carries no
+model or side. The hosted route is limited per account; BYOK searches on the user's key with no limit.
+
 The checkout's `.git` is readable too. A side's result is imported into it under `refs/battles/`
 as soon as the side finishes, before the vote. Git objects can contain other contestants' work;
 these tool checks do not filter object contents.
 
 The shell check shares the parsed-tree walker used by Ask before tools, but distinguishes
-reads from writes so a checkout file can be a copy source. It checks literal command operands,
-redirects and inline shell code, and follows existing symlinks, including parents of new files.
+reads from writes so a checkout file can be a copy source. A write is a redirect, an operand of a
+file command (`rm`, `mv`, `touch`, `mkdir`, `tee`, ...), a copy's destination, an in-place edit
+(`sed -i`, `perl -i`) or the value of an output flag (`curl -o`, `npm --prefix`, `tar -C`, `dd of=`);
+every other operand is a read (`battleOperands` in `engine-runtime/outside-project.ts`). Do not count
+an unknown program's words as writes: URLs, JSON bodies and `sed -n` of a log then read as paths, and
+the bench refused about a dozen safe commands that way. Interpreter code (`node -e`) is not scanned
+in a battle. The check reads inline shell code, and follows existing symlinks, including parents of
+new files.
 These tool checks provide no operating-system sandbox. See [Gotchas](#gotchas) for unscanned paths
 and code. Programs' internal file operations also escape the scan, and searches from an ancestor
 can enumerate restricted descendants. Do not claim that it confines arbitrary code.
@@ -1034,9 +1063,10 @@ run gives up its worktree: released for the
 next pair (`releaseRunSlot`) or removed by archive, eviction or an environment release
 (`removeStoppedRun`).
 
-Keep the shared-temp restriction out of the system prompt. A denied write tells the model to use
-its own worktree or `$TMPDIR`; a denied read says other Arena worktrees and other sides' temp
-directories are closed. Do not include absolute rule lists: they expose home-directory paths to
+Keep the shared-temp restriction out of the system prompt. A denied write names the path it refused
+and the side's `$TMPDIR`, and a shared temp write says to use the same name under `$TMPDIR`: told only
+to "write in your own folders", models retry the write in other forms. A denied read says other
+Arena worktrees and other sides' temp directories are closed. Do not include absolute rule lists: they expose home-directory paths to
 transcripts and research uploads. Shared temp writes can otherwise overwrite the other side's work.
 
 Prepare and prompt both sides concurrently, each with its own host repository, session and worktree.
@@ -1702,8 +1732,10 @@ sees why. It logs `[arena-service] OpenRouter refused a contestant request` with
 line is in the control plane's Vercel runtime logs, which keep about a day:
 `vercel logs --query '"<battleID>"' --since 1d`. A BYOK build writes it to the engine log.
 
-`No recent activity` means the run has had no event or model argument bytes for 90 seconds; it is
-not proof of a stalled process. Explicit retry and user-input waits take precedence. A tool call that is still
+`No recent activity` means the run has had no event and no part of its model stream for 90 seconds;
+it is not proof of a stalled process. Count every stream part, as the engine's idle deadline does
+(`engine-runtime/tool-stream.ts`): sealed reasoning streams deltas with no text, which reach no
+transcript event, and a model that reasons for ten minutes must not read as quiet. Explicit retry and user-input waits take precedence. A tool call that is still
 running reads `Running a command` or `Running a tool` instead: a long command emits nothing until it
 ends, the same reason the engine's deadline pauses for it. Time that label from the call's own
 start as well as from the run's last event (`run-liveness.ts`): queuing or deleting a steer is a run

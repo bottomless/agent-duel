@@ -19,7 +19,7 @@ describe("desktop deployment config", () => {
 
   test("signs in to the hosted control plane by default", () => {
     const hosted = {
-      controlPlaneUrl: "https://agent-duel-cloud.vercel.app",
+      controlPlaneUrl: "https://agentduel.com",
       sessionPublicKey: expect.stringMatching(/^MCowBQYDK2VwAyEA/),
       updatesEnabled: false,
       arenaBuildSha: SHA,

@@ -806,6 +806,24 @@ export const removeRef = Effect.fn("ArenaGit.removeRef")(function* (input: {
   return true
 })
 
+/**
+ * Delete refs in one `update-ref --stdin` transaction: all go or none do. A ref that is already
+ * gone is no error, as with `update-ref -d`. Unlike `-d`, the transaction refuses a malformed
+ * name instead of ignoring it.
+ */
+const deleteRefs = Effect.fn("ArenaGit.deleteRefs")(function* (
+  git: Git.Interface,
+  root: string,
+  operation: string,
+  refs: readonly string[],
+) {
+  const unique = [...new Set(refs)]
+  if (unique.length === 0) return
+  yield* run(git, root, operation, ["update-ref", "--stdin"], {
+    stdin: Stream.make(new TextEncoder().encode(unique.map((ref) => `delete ${ref}\n`).join(""))),
+  })
+})
+
 /** Return the permanent refs for one turn. `chat` must already be a stable ref-safe slug. */
 export function battleRefs(chat: string, turn: number): BattleRefs {
   const root = `refs/battles/${chat}/turn-${turn}`
@@ -1051,6 +1069,21 @@ function parseRefList(text: string) {
   return refs
 }
 
+/**
+ * The lines of a `REF_LIST_FORMAT` listing whose ref is under one of `prefixes`. Lets one
+ * `for-each-ref` over several namespaces stand in for one per namespace: each git process costs
+ * tens of milliseconds to start on Windows.
+ */
+function refLinesUnder(text: string, prefixes: readonly string[]) {
+  return text
+    .split(/\r?\n/)
+    .filter((line) => {
+      const ref = line.trim().split(" ")[1]
+      return ref !== undefined && prefixes.some((prefix) => ref.startsWith(prefix))
+    })
+    .join("\n")
+}
+
 /** The symbolic refs in a `REF_LIST_FORMAT` listing, by the ref each one points at. */
 function parseSymbolicRefs(text: string) {
   const symbolic = new Map<string, string>()
@@ -1072,17 +1105,27 @@ function parseSymbolicRefs(text: string) {
  */
 export const mirrorCanonicalRefs = Effect.fn("ArenaGit.mirrorCanonicalRefs")(function* (input: MirrorRefsInput) {
   const git = yield* Git.Service
-  const hostWorktrees = parseWorktrees(
-    yield* read(git, input.host, "read_host_worktrees", ["worktree", "list", "--porcelain"]),
+  const listArgs = ["for-each-ref", REF_LIST_FORMAT, ...MIRRORED_NAMESPACES]
+  // Every read goes out at once: each git process costs tens of milliseconds to start on Windows
+  // whatever it does, and none of these depends on another.
+  const [worktreeListing, sourceListing, hostListing, sourceOrigin, hostOrigin] = yield* Effect.all(
+    [
+      read(git, input.host, "read_host_worktrees", ["worktree", "list", "--porcelain"]),
+      read(git, input.canonical, "read_canonical_refs", listArgs),
+      read(git, input.host, "read_host_refs", [...listArgs, ...MIRROR_EXCLUDED_PREFIXES]),
+      readOriginConfig(git, input.canonical),
+      readOriginConfig(git, input.host),
+    ],
+    { concurrency: "unbounded" },
   )
+  const existingListing = refLinesUnder(hostListing, MIRRORED_NAMESPACES)
+  const staleListing = refLinesUnder(hostListing, MIRROR_EXCLUDED_PREFIXES)
+  const hostWorktrees = parseWorktrees(worktreeListing)
   const protectedRefs = new Set(hostWorktrees.flatMap((item) => (item.branch ? [`refs/heads/${item.branch}`] : [])))
   const mirrored = (ref: string) =>
     MIRRORED_NAMESPACES.some((namespace) => ref.startsWith(namespace)) &&
     !MIRROR_EXCLUDED_PREFIXES.some((prefix) => ref.startsWith(prefix)) &&
     !protectedRefs.has(ref)
-  const listArgs = ["for-each-ref", REF_LIST_FORMAT, ...MIRRORED_NAMESPACES]
-  const sourceListing = yield* read(git, input.canonical, "read_canonical_refs", listArgs)
-  const existingListing = yield* read(git, input.host, "read_host_refs", listArgs)
   const source = parseRefList(sourceListing)
   const existing = parseRefList(existingListing)
   // A symbolic ref is never updated, never deleted, and never fetched: it follows its target, so
@@ -1092,13 +1135,7 @@ export const mirrorCanonicalRefs = Effect.fn("ArenaGit.mirrorCanonicalRefs")(fun
   // the symref. The clone's own `origin/HEAD` is the case that arises in practice.
   for (const ref of parseSymbolicRefs(sourceListing).keys()) source.delete(ref)
   for (const ref of parseSymbolicRefs(existingListing).keys()) existing.delete(ref)
-  const stale = parseRefList(
-    yield* read(git, input.host, "read_host_excluded_refs", [
-      "for-each-ref",
-      REF_LIST_FORMAT,
-      ...MIRROR_EXCLUDED_PREFIXES,
-    ]),
-  )
+  const stale = parseRefList(staleListing)
   const wanted = [...(input.requiredRefs ?? [])]
   const updates: string[] = []
   const deletes: string[] = []
@@ -1144,35 +1181,91 @@ export const mirrorCanonicalRefs = Effect.fn("ArenaGit.mirrorCanonicalRefs")(fun
   // `refs/heads/foo/bar` in one `update-ref --stdin` transaction ("cannot lock ref").
   yield* updateRefs(git, input.host, "mirror_canonical_ref_deletes", deletes)
   yield* updateRefs(git, input.host, "mirror_canonical_ref_updates", updates)
-  const updated = updates.length
-  const deleted = deletes.length
+  // After the fetch, not beside it: every git process reads the host's config, and on Windows a
+  // config write cannot rename its lock over a file another process holds open.
+  const origin = yield* mirrorOrigin(git, input.host, sourceOrigin, hostOrigin)
+  return { updated: updates.length, deleted: deletes.length, origin } satisfies MirrorRefsResult
+})
 
-  const url = yield* git.run(["config", "--get", "remote.origin.url"], { cwd: input.canonical })
-  if (url.exitCode !== 0) return { updated, deleted, origin: false } satisfies MirrorRefsResult
-  yield* run(git, input.host, "mirror_origin_url", ["config", "remote.origin.url", output(url)])
-  const fetch = yield* git.run(["config", "--get-all", "remote.origin.fetch"], { cwd: input.canonical })
-  const specs =
-    fetch.exitCode === 0 ? output(fetch).split(/\r?\n/).filter(Boolean) : ["+refs/heads/*:refs/remotes/origin/*"]
-  // `--unset-all` exits 5 when the key is absent; a fresh host has no fetch spec yet.
-  yield* git.run(["config", "--unset-all", "remote.origin.fetch"], { cwd: input.host })
-  for (const spec of specs) {
-    yield* run(git, input.host, "mirror_origin_fetch", ["config", "--add", "remote.origin.fetch", spec])
+const DEFAULT_ORIGIN_FETCH = "+refs/heads/*:refs/remotes/origin/*"
+
+/** Every value of each `origin` key, in the order git reads them. */
+type OriginConfig = {
+  readonly url: readonly string[]
+  readonly fetch: readonly string[]
+  readonly pushurl: readonly string[]
+}
+
+/**
+ * `origin`'s url, fetch specs, and push url as git resolves them in `cwd`, in one process. A
+ * config git cannot read reads as no `origin`, as a failed `--get` did: the canonical then mirrors
+ * none, and a host gets every key written, which fails there if its config is broken.
+ */
+const readOriginConfig = Effect.fn("ArenaGit.readOriginConfig")(function* (git: Git.Interface, cwd: string) {
+  const listed = yield* git.run(["config", "-z", "--get-regexp", "^remote\\.origin\\.(url|fetch|pushurl)$"], { cwd })
+  const values = { url: [] as string[], fetch: [] as string[], pushurl: [] as string[] }
+  // Exit 1: none of the keys is set.
+  if (listed.exitCode !== 0) return values satisfies OriginConfig
+  for (const entry of listed.text().split("\0")) {
+    const newline = entry.indexOf("\n")
+    const key = entry.slice("remote.origin.".length, newline)
+    if (newline < 0 || (key !== "url" && key !== "fetch" && key !== "pushurl")) continue
+    values[key].push(entry.slice(newline + 1))
   }
-  const pushUrl = yield* git.run(["config", "--get", "remote.origin.pushurl"], { cwd: input.canonical })
-  if (pushUrl.exitCode === 0) {
-    yield* run(git, input.host, "mirror_origin_pushurl", ["config", "remote.origin.pushurl", output(pushUrl)])
-  } else {
-    yield* git.run(["config", "--unset", "remote.origin.pushurl"], { cwd: input.host })
+  return values satisfies OriginConfig
+})
+
+/** Whether a single-valued key already holds exactly `value` and nothing else. */
+function holdsOnly(values: readonly string[], value: string) {
+  return values.length === 1 && values[0] === value
+}
+
+/**
+ * Give the host the canonical `origin`, writing only what differs: a fresh host is a copy of the
+ * canonical git directory and already has it. The url and push url are the canonical's last
+ * value, as `git config --get` takes it, and a host holding more than one value is written, which
+ * git refuses as it always did. A canonical with no `origin` url leaves the host's remote config
+ * alone. Returns whether the canonical has one.
+ */
+const mirrorOrigin = Effect.fn("ArenaGit.mirrorOrigin")(function* (
+  git: Git.Interface,
+  host: string,
+  source: OriginConfig,
+  existing: OriginConfig,
+) {
+  const url = source.url.at(-1)
+  if (url === undefined) return false
+  if (!holdsOnly(existing.url, url)) {
+    yield* run(git, host, "mirror_origin_url", ["config", "remote.origin.url", url])
   }
-  return { updated, deleted, origin: true } satisfies MirrorRefsResult
+  const wanted = source.fetch.length > 0 ? source.fetch.filter(Boolean) : [DEFAULT_ORIGIN_FETCH]
+  if (existing.fetch.length !== wanted.length || existing.fetch.some((spec, index) => spec !== wanted[index])) {
+    // `--unset-all` exits 5 when the key is absent; a fresh host has no fetch spec yet.
+    yield* git.run(["config", "--unset-all", "remote.origin.fetch"], { cwd: host })
+    for (const spec of wanted) {
+      yield* run(git, host, "mirror_origin_fetch", ["config", "--add", "remote.origin.fetch", spec])
+    }
+  }
+  const pushUrl = source.pushurl.at(-1)
+  if (pushUrl !== undefined) {
+    if (!holdsOnly(existing.pushurl, pushUrl)) {
+      yield* run(git, host, "mirror_origin_pushurl", ["config", "remote.origin.pushurl", pushUrl])
+    }
+  } else if (existing.pushurl.length > 0) {
+    yield* git.run(["config", "--unset", "remote.origin.pushurl"], { cwd: host })
+  }
+  return true
 })
 
 const listHostRefs = Effect.fn("ArenaGit.listHostRefs")(function* (git: Git.Interface, host: string) {
-  const listing = yield* read(git, host, "read_host_mirrored_refs", [
+  const both = yield* read(git, host, "read_host_mirrored_refs", [
     "for-each-ref",
     REF_LIST_FORMAT,
     ...MIRRORED_NAMESPACES,
+    REF_SNAPSHOT_ROOT,
   ])
+  const listing = refLinesUnder(both, MIRRORED_NAMESPACES)
+  const snapshot = refLinesUnder(both, [REF_SNAPSHOT_ROOT])
   const live = parseRefList(listing)
   // A symbolic ref carries no object of its own; `refs/remotes/origin/HEAD` appears to move only
   // because `refs/remotes/origin/main` moved, and that is reported under its own name. Recording
@@ -1181,10 +1274,7 @@ const listHostRefs = Effect.fn("ArenaGit.listHostRefs")(function* (git: Git.Inte
   for (const ref of Array.from(live.keys())) {
     if (ref.startsWith(SIDE_BRANCH_PREFIX)) live.delete(ref)
   }
-  const start = parseRefList(
-    yield* read(git, host, "read_ref_snapshot", ["for-each-ref", REF_LIST_FORMAT, REF_SNAPSHOT_ROOT]),
-  )
-  return { live, start }
+  return { live, start: parseRefList(snapshot) }
 })
 
 /**
@@ -3393,16 +3483,24 @@ export const hasCherryPickInProgress = Effect.fn("ArenaGit.hasCherryPickInProgre
 export const repositoryOperation = Effect.fn("ArenaGit.repositoryOperation")(function* (canonical: string) {
   const git = yield* Git.Service
   const root = yield* readRoot(git, canonical, "find_operation_root")
-  for (const [path, operation] of [
+  const states = [
     ["rebase-merge", "rebase"],
     ["rebase-apply", "rebase"],
     ["MERGE_HEAD", "merge"],
     ["CHERRY_PICK_HEAD", "cherry-pick"],
     ["REVERT_HEAD", "revert"],
-  ] as const) {
-    const location = yield* read(git, root, "locate_operation_state", ["rev-parse", "--git-path", path])
+  ] as const
+  // One process answers every location, one line each in the order asked.
+  const locations = (yield* read(git, root, "locate_operation_state", [
+    "rev-parse",
+    ...states.flatMap(([path]) => ["--git-path", path]),
+  ])).split(/\r?\n/)
+  if (locations.length !== states.length) {
+    return yield* Effect.fail(new OperationError("locate_operation_state", "git rev-parse returned the wrong number of paths"))
+  }
+  for (const [index, [, operation]] of states.entries()) {
     const present = yield* Effect.promise(() =>
-      lstat(resolve(root, location)).then(
+      lstat(resolve(root, locations[index]!)).then(
         () => true,
         () => false,
       ),
@@ -3938,10 +4036,17 @@ export const promoteWinnerState = Effect.fn("ArenaGit.promoteWinnerState")(funct
     }
   }
   const currentHead = yield* read(git, root, "read_winner_promotion_head", ["rev-parse", "--verify", "HEAD"])
-  const baseWorkingTree = yield* read(git, root, "verify_base_working_tree", ["rev-parse", `${input.baseWorkingTree}^{tree}`])
-  const baseIndexTree = yield* read(git, root, "verify_base_index_tree", ["rev-parse", `${input.baseIndexTree}^{tree}`])
-  const resultTree = yield* read(git, root, "verify_winner_result_tree", ["rev-parse", `${input.resultCommit}^{tree}`])
-  const finalIndexTree = yield* read(git, root, "verify_winner_index_tree", ["rev-parse", `${input.finalIndexTree}^{tree}`])
+  // One process for the four trees, one line each in the order asked.
+  const [baseWorkingTree, baseIndexTree, resultTree, finalIndexTree] = (yield* read(git, root, "verify_winner_trees", [
+    "rev-parse",
+    `${input.baseWorkingTree}^{tree}`,
+    `${input.baseIndexTree}^{tree}`,
+    `${input.resultCommit}^{tree}`,
+    `${input.finalIndexTree}^{tree}`,
+  ])).split(/\r?\n/)
+  if (!baseWorkingTree || !baseIndexTree || !resultTree || !finalIndexTree) {
+    return yield* Effect.fail(new OperationError("verify_winner_trees", "git rev-parse returned too few trees"))
+  }
   const publicIndexTree = yield* readIndexTree(git, root, "read_public_winner_index")
   const publicWorkingTree = yield* readWorkingTree(git, root)
   const currentHeadTree = yield* read(git, root, "read_public_head_tree", ["rev-parse", `${currentHead}^{tree}`])
@@ -4034,22 +4139,42 @@ export const promoteWinnerState = Effect.fn("ArenaGit.promoteWinnerState")(funct
     // A winner that made no commits on a frozen branch is measured from W0/I0, and so is the branch.
     residualOurs = baseWorkingTree
   }
-  const headTree = yield* read(git, root, "read_resulting_head_tree", ["rev-parse", `${resultingHead}^{tree}`])
+  const headTree =
+    resultingHead === currentHead
+      ? currentHeadTree
+      : yield* read(git, root, "read_resulting_head_tree", ["rev-parse", `${resultingHead}^{tree}`])
+  // Every id here was read as a tree or written as one; only a commit (the review's residual
+  // base) still needs resolving.
+  const trees = new Set([
+    baseWorkingTree,
+    baseIndexTree,
+    resultTree,
+    finalIndexTree,
+    publicIndexTree,
+    publicWorkingTree,
+    publicWorktreeSide,
+    publicIndexSide,
+    currentHeadTree,
+    headTree,
+  ])
 
   // 2. The winner's uncommitted residual (and any commit the replay could not land) merges
   //    onto the new head. Conflicts here are the winner against the moved branch.
-  const winnerWorktree = yield* mergeTrees(git, root, residualBase, residualOurs ?? headTree, resultTree)
+  const winnerWorktree = yield* mergeTrees(git, root, residualBase, residualOurs ?? headTree, resultTree, trees)
   const winnerIndex = yield* mergeTrees(
     git,
     root,
     residualIndexBase,
     residualOurs !== undefined ? baseIndexTree : headTree,
     finalIndexTree,
+    trees,
   )
+  trees.add(winnerWorktree.tree)
+  trees.add(winnerIndex.tree)
 
   // 3. The developer's uncommitted work merges on top.
-  const mergedWorktree = yield* mergeTrees(git, root, publicBase, publicWorktreeSide, winnerWorktree.tree)
-  const mergedIndex = yield* mergeTrees(git, root, publicIndexBase, publicIndexSide, winnerIndex.tree)
+  const mergedWorktree = yield* mergeTrees(git, root, publicBase, publicWorktreeSide, winnerWorktree.tree, trees)
+  const mergedIndex = yield* mergeTrees(git, root, publicIndexBase, publicIndexSide, winnerIndex.tree, trees)
 
   // A file the winner already conflicted on cannot take the developer's edit on top of its
   // markers. Merge it once more with the developer's own copy as the "ours" side instead, so
@@ -4223,11 +4348,13 @@ export const promoteWinnerState = Effect.fn("ArenaGit.promoteWinnerState")(funct
     return yield* Effect.fail(new OperationError("verify_winner_promotion", "Promoted winner state could not be verified"))
   }
   if (!input.retainSafetyRef) {
-    yield* run(git, root, "delete_winner_safety_ref", ["update-ref", "-d", input.safetyRef])
-    yield* run(git, root, "delete_winner_index_safety_ref", ["update-ref", "-d", indexSafetyRef])
-    yield* run(git, root, "delete_winner_target_tip_ref", ["update-ref", "-d", targetTipRef(input.safetyRef)])
-    yield* run(git, root, "delete_winner_target_existing_ref", ["update-ref", "-d", targetExistingRef(input.safetyRef)])
-    yield* run(git, root, "delete_winner_target_written_ref", ["update-ref", "-d", targetWrittenRef(input.safetyRef)])
+    yield* deleteRefs(git, root, "delete_winner_safety_refs", [
+      input.safetyRef,
+      indexSafetyRef,
+      targetTipRef(input.safetyRef),
+      targetExistingRef(input.safetyRef),
+      targetWrittenRef(input.safetyRef),
+    ])
   }
   return { resultingHead, conflicts, publicConflicts, atRisk: [], safetyRef: input.safetyRef } satisfies PromoteWinnerStateResult
 })
@@ -4269,6 +4396,10 @@ const treeCommit = Effect.fn("ArenaGit.treeCommit")(function* (
 /**
  * Three-way merge of trees in the object store with git's own merge engine. Conflicted files
  * come back with markers inside the tree, and their paths in `conflicts`. Nothing on disk moves.
+ *
+ * `trees` holds ids the caller already knows are trees, which are their own tree. The rest are
+ * resolved in one `rev-parse`: a promotion runs four merges and is planned more than once per
+ * vote, and each process start costs tens of milliseconds on Windows.
  */
 const mergeTrees = Effect.fn("ArenaGit.mergeTrees")(function* (
   git: Git.Interface,
@@ -4276,9 +4407,22 @@ const mergeTrees = Effect.fn("ArenaGit.mergeTrees")(function* (
   base: string,
   ours: string,
   theirs: string,
+  trees?: ReadonlySet<string>,
 ) {
-  const resolve = (ref: string) => read(git, root, "resolve_merge_input", ["rev-parse", `${ref}^{tree}`])
-  const [baseTree, oursTree, theirsTree] = [yield* resolve(base), yield* resolve(ours), yield* resolve(theirs)]
+  const inputs = [base, ours, theirs]
+  const unresolved = [...new Set(inputs.filter((ref) => !trees?.has(ref)))]
+  const resolved = new Map(inputs.filter((ref) => trees?.has(ref)).map((ref) => [ref, ref]))
+  if (unresolved.length > 0) {
+    const lines = (yield* read(git, root, "resolve_merge_input", [
+      "rev-parse",
+      ...unresolved.map((ref) => `${ref}^{tree}`),
+    ])).split(/\r?\n/)
+    if (lines.length !== unresolved.length) {
+      return yield* Effect.fail(new OperationError("resolve_merge_input", "git rev-parse returned the wrong number of trees"))
+    }
+    unresolved.forEach((ref, index) => resolved.set(ref, lines[index]!))
+  }
+  const [baseTree, oursTree, theirsTree] = inputs.map((ref) => resolved.get(ref)!)
   if (oursTree === baseTree) return { tree: theirsTree, conflicts: [] as string[] }
   if (theirsTree === baseTree || theirsTree === oursTree) return { tree: oursTree, conflicts: [] as string[] }
   const baseCommit = yield* treeCommit(git, root, baseTree)
@@ -4855,12 +4999,14 @@ export const finishWinnerPromotion = Effect.fn("ArenaGit.finishWinnerPromotion")
     yield* run(git, root, "delete_winner_branch_marker", ["update-ref", "-d", promotionBranchMarkerRef(input.safetyRef)])
     return
   }
-  yield* run(git, root, "delete_winner_safety_ref", ["update-ref", "-d", input.safetyRef])
-  yield* run(git, root, "delete_winner_index_safety_ref", ["update-ref", "-d", safetyIndexRef(input.safetyRef)])
-  yield* run(git, root, "delete_winner_branch_marker", ["update-ref", "-d", promotionBranchMarkerRef(input.safetyRef)])
-  yield* run(git, root, "delete_winner_target_tip_ref", ["update-ref", "-d", targetTipRef(input.safetyRef)])
-  yield* run(git, root, "delete_winner_target_existing_ref", ["update-ref", "-d", targetExistingRef(input.safetyRef)])
-  yield* run(git, root, "delete_winner_target_written_ref", ["update-ref", "-d", targetWrittenRef(input.safetyRef)])
+  yield* deleteRefs(git, root, "delete_winner_safety_refs", [
+    input.safetyRef,
+    safetyIndexRef(input.safetyRef),
+    promotionBranchMarkerRef(input.safetyRef),
+    targetTipRef(input.safetyRef),
+    targetExistingRef(input.safetyRef),
+    targetWrittenRef(input.safetyRef),
+  ])
 })
 
 /** Restore the exact pre-promotion state from the private safety refs. */
@@ -4894,8 +5040,10 @@ export const finishPublicRestore = Effect.fn("ArenaGit.finishPublicRestore")(fun
     return yield* Effect.fail(new OperationError("verify_public_restore", `Unresolved files: ${conflicts.join(", ")}`))
   }
   if (!input.retainSafetyRef) {
-    yield* run(git, root, "delete_public_safety_ref", ["update-ref", "-d", input.safetyRef])
-    yield* run(git, root, "delete_public_index_safety_ref", ["update-ref", "-d", input.safetyIndexRef ?? safetyIndexRef(input.safetyRef)])
+    yield* deleteRefs(git, root, "delete_public_safety_refs", [
+      input.safetyRef,
+      input.safetyIndexRef ?? safetyIndexRef(input.safetyRef),
+    ])
   }
 })
 
@@ -4986,12 +5134,14 @@ export const recoverFailedPromotion = Effect.fn("ArenaGit.recoverFailedPromotion
     Effect.provideService(Git.Service, git),
   )
   if (restored.length > 0) return yield* Effect.fail(new OperationError("restore_failed_promotion", restored.join(", ")))
-  yield* run(git, root, "delete_failed_promotion_safety_ref", ["update-ref", "-d", input.safetyRef])
-  yield* run(git, root, "delete_failed_promotion_index_ref", ["update-ref", "-d", indexRef])
-  yield* run(git, root, "delete_failed_winner_branch_marker", ["update-ref", "-d", branchMarkerRef])
-  yield* run(git, root, "delete_failed_target_tip_ref", ["update-ref", "-d", targetTipRef(input.safetyRef)])
-  yield* run(git, root, "delete_failed_target_existing_ref", ["update-ref", "-d", targetExistingRef(input.safetyRef)])
-  yield* run(git, root, "delete_failed_target_written_ref", ["update-ref", "-d", targetWrittenRef(input.safetyRef)])
+  yield* deleteRefs(git, root, "delete_failed_promotion_refs", [
+    input.safetyRef,
+    indexRef,
+    branchMarkerRef,
+    targetTipRef(input.safetyRef),
+    targetExistingRef(input.safetyRef),
+    targetWrittenRef(input.safetyRef),
+  ])
   return true
 })
 

@@ -497,6 +497,7 @@ function ArchivedBattleComparison({
   selectedEarly,
   bothComplete,
   comparison,
+  decided,
   retrying,
   onRetry,
   diffLoading,
@@ -509,6 +510,8 @@ function ArchivedBattleComparison({
   selectedEarly: boolean;
   bothComplete: boolean;
   comparison: ArenaSnapshot["comparison"];
+  /** The turn has a resolution, which closes its summary's scope. */
+  decided: boolean;
   retrying: boolean;
   onRetry: () => void;
   diffLoading: boolean;
@@ -557,7 +560,8 @@ function ArchivedBattleComparison({
           <VerdictBody turnId={turnId} output={comparison.output} />
         </View>
       ) : null}
-      {comparison?.state === "failed" ? (
+      {/* A decided turn's failed summary can't be generated again; see battleSummaryStatus. */}
+      {comparison?.state === "failed" && !decided ? (
         <View style={styles.loadingRow}>
           <Text style={styles.warning}>{t("arena.summaryFailed")}</Text>
           <Button size="xs" variant="outline" loading={retrying} onPress={onRetry}>
@@ -667,6 +671,7 @@ function ExpandedBattleSummary({
         selectedEarly={item.selectedEarly === true}
         bothComplete={bothFinal}
         comparison={snapshot?.comparison}
+        decided={(snapshot?.turn ?? item).resolution !== undefined}
         retrying={retryComparison.isPending}
         onRetry={handleRetry}
         diffLoading={diffQuery.isLoading}

@@ -1328,7 +1328,7 @@ describe("session.compaction.process", () => {
     )
 
   itCompaction.instance(
-    "continues unfinished Arena work after an automatic summary",
+    "sends OpenCode's continue prompt to an Arena contestant after an automatic summary",
     () => {
       const routing = compactionRouting()
       const stub = llm()
@@ -1342,9 +1342,7 @@ describe("session.compaction.process", () => {
             type: "text",
             synthetic: true,
             metadata: { compaction_continue: true },
-            text: expect.stringContaining(
-              "Carry out the remaining steps, including verification, until the task is complete.",
-            ),
+            text: "Continue if you have next steps, or stop and ask for clarification if you are unsure how to proceed.",
           }),
         ])
       }).pipe(
@@ -1359,7 +1357,7 @@ describe("session.compaction.process", () => {
   )
 
   itCompaction.instance(
-    "keeps the unfinished-work instruction when replaying an Arena request after overflow",
+    "marks the replayed Arena request after overflow",
     () => {
       const routing = compactionRouting()
       const stub = llm()
@@ -1394,9 +1392,7 @@ describe("session.compaction.process", () => {
             type: "text",
             synthetic: true,
             metadata: { arena_compaction_replay: true },
-            text: expect.stringContaining(
-              "Carry out the remaining steps, including verification, until the task is complete.",
-            ),
+            text: "Continue the request above after compaction.",
           }),
         ])
       }).pipe(

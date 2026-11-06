@@ -17,6 +17,7 @@ import path from "node:path";
 import { z } from "zod";
 import {
   crashReportSchema,
+  crashReportUserMessageSchema,
   feedbackLogLineMaximumLength,
   feedbackLogTailMaximumLines,
   type CrashReport,
@@ -37,6 +38,17 @@ const storedCrashReportSchema = z
     appVersion: z.string().trim().min(1).max(64).nullable(),
     operatingSystem: z.string().trim().min(1).max(128),
     logTail: z.array(z.string()),
+    /**
+     * Something outside the app ended the process: it was killed, force quit, or the computer
+     * stopped. Nothing in the log explains it, so the report waits for the user to send it with
+     * what they saw, or to discard it.
+     */
+    external: z.boolean().default(false),
+    /** The user chose to send this report, with what they wrote about it. */
+    sendApproved: z
+      .object({ message: crashReportUserMessageSchema.nullable() })
+      .strict()
+      .optional(),
   })
   .strict();
 export type StoredCrashReport = z.infer<typeof storedCrashReportSchema>;
@@ -47,6 +59,21 @@ export interface CrashInput {
   readonly message: string;
   readonly exitCode?: number | null;
   readonly signal?: string | null;
+  /** Set where only the caller can tell, such as Electron's `killed` reason; see `isExternalEnd`. */
+  readonly external?: boolean;
+}
+
+// Signals a process receives from someone else. A crash in the process itself raises SIGSEGV,
+// SIGABRT, SIGBUS and the like, which stay automatic reports.
+const EXTERNAL_SIGNALS = new Set(["SIGKILL", "SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT"]);
+
+/**
+ * A process found gone with no exit of its own, or killed by another process, ended for a reason
+ * outside the app: a force quit, the system reclaiming memory, the computer restarting.
+ */
+export function isExternalEnd(crash: Pick<CrashInput, "kind" | "signal">): boolean {
+  if (crash.kind === "unclean_shutdown") return true;
+  return Boolean(crash.signal && EXTERNAL_SIGNALS.has(crash.signal));
 }
 
 export function crashReportsDirectory(home: string): string {
@@ -113,18 +140,23 @@ export function recordCrashReport(input: {
       appVersion: input.appVersion?.trim().slice(0, 64) || null,
       operatingSystem: operatingSystemName(),
       logTail: readLogTails(input.logPaths ?? []),
+      external: input.crash.external ?? isExternalEnd(input.crash),
     });
-    const directory = crashReportsDirectory(input.home);
-    mkdirSync(directory, { recursive: true });
-    const target = path.join(directory, `${report.id}.json`);
-    // A report half written when the process died would be unreadable, so it appears whole.
-    writeFileSync(`${target}.tmp`, JSON.stringify(report));
-    renameSync(`${target}.tmp`, target);
+    writeCrashReport(input.home, report);
     pruneCrashReports(input.home);
     return report;
   } catch {
     return null;
   }
+}
+
+function writeCrashReport(home: string, report: StoredCrashReport) {
+  const directory = crashReportsDirectory(home);
+  mkdirSync(directory, { recursive: true });
+  const target = path.join(directory, `${report.id}.json`);
+  // A report half written when the process died would be unreadable, so it appears whole.
+  writeFileSync(`${target}.tmp`, JSON.stringify(report));
+  renameSync(`${target}.tmp`, target);
 }
 
 function reportFiles(home: string) {
@@ -169,10 +201,42 @@ export function removeCrashReport(home: string, id: string): void {
   rmSync(path.join(crashReportsDirectory(home), `${id}.json`), { force: true });
 }
 
+/** Whether a report goes without asking: the app's own failures do, external ends wait. */
+export function isReadyToSend(report: StoredCrashReport): boolean {
+  return !report.external || report.sendApproved !== undefined;
+}
+
+/** External ends the user has not decided about yet, oldest first. */
+export function crashReportsAwaitingUser(home: string): StoredCrashReport[] {
+  return pendingCrashReports(home).filter((report) => !isReadyToSend(report));
+}
+
+/** Marks reports the user chose to send; the sender sends them with the user's message. */
+export function approveCrashReports(
+  home: string,
+  ids: readonly string[],
+  message: string | null,
+): void {
+  const wanted = new Set(ids);
+  for (const report of pendingCrashReports(home)) {
+    if (!wanted.has(report.id)) continue;
+    try {
+      writeCrashReport(home, { ...report, sendApproved: { message } });
+    } catch {
+      // Left waiting; the user is asked again on the next start.
+    }
+  }
+}
+
 const runningMarkerSchema = z.object({
   pid: z.number().int().positive(),
   version: z.string().nullable(),
   startedAt: z.iso.datetime(),
+  /**
+   * When the run began a shutdown someone asked for (`recordMarkerStopping`). Being killed after
+   * that, as the desktop app does to a daemon that takes too long to stop, is a normal exit.
+   */
+  stoppingAt: z.iso.datetime().optional(),
   /** How the process ended, when a supervisor saw it end (`recordMarkerExit`). */
   exit: z
     .object({ code: z.number().int().nullable(), signal: z.string().min(1).max(64).nullable() })
@@ -213,7 +277,11 @@ export function claimRunningMarker(input: {
     previous = null;
   }
   const isAlive = input.isAlive ?? isProcessAlive;
-  const ended = previous !== null && previous.pid !== process.pid && !isAlive(previous.pid);
+  const ended =
+    previous !== null &&
+    previous.pid !== process.pid &&
+    previous.stoppingAt === undefined &&
+    !isAlive(previous.pid);
   try {
     mkdirSync(crashReportsDirectory(input.home), { recursive: true });
     const marker: RunningMarker = {
@@ -255,6 +323,21 @@ export function releaseStoppedMarker(input: {
     if (!(input.isAlive ?? isProcessAlive)(marker.pid)) rmSync(file, { force: true });
   } catch {
     // No marker: the process removed it on its way out.
+  }
+}
+
+/**
+ * Records that this process began a requested shutdown, so being killed before it finishes is not
+ * reported. Synchronous, so it lands before anything that could hang.
+ */
+export function recordMarkerStopping(home: string, name: string): void {
+  const file = markerPath(home, name);
+  try {
+    const marker = runningMarkerSchema.parse(JSON.parse(readFileSync(file, "utf8")));
+    if (marker.pid !== process.pid || marker.stoppingAt) return;
+    writeFileSync(file, JSON.stringify({ ...marker, stoppingAt: new Date().toISOString() }));
+  } catch {
+    // No marker of this process: nothing would report its end anyway.
   }
 }
 

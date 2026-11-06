@@ -66,6 +66,8 @@ export function startCrashReporting(): void {
       kind: "exit",
       message: `A window's renderer process ended: ${details.reason}`,
       exitCode: details.exitCode,
+      // `killed`: another process ended it, such as macOS reclaiming memory or Activity Monitor.
+      external: details.reason === "killed",
     });
   });
   app.on("child-process-gone", (_event, details) => {
@@ -75,6 +77,7 @@ export function startCrashReporting(): void {
       kind: "exit",
       message: `Electron's ${details.type} process ended: ${details.reason}${details.name ? ` (${details.name})` : ""}`,
       exitCode: details.exitCode,
+      external: details.reason === "killed",
     });
   });
 }
