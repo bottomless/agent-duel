@@ -7,7 +7,7 @@ import { Global } from "@opencode/util/global"
 import { Effect, Result } from "effect"
 import { LOCAL_STATE_DIRNAME } from "@/worktree/layout"
 import { sharedTmp, spellings, tmpParent } from "@/arena/contestant"
-import { resolveExistingPrefix, shellPaths } from "./outside-project"
+import { DEVICE_PATH, resolveExistingPrefix, shellPaths, windowsShellPath } from "./outside-project"
 
 function contains(root: string, target: string) {
   const relative = path.relative(root, target)
@@ -24,6 +24,7 @@ export function battlePathDenial(
   const absolute = path.isAbsolute(target) ? target : `${directory}/${target}`
   const resolved = resolveExistingPrefix(absolute)
   // Only the sandbox's final reopen rules grant writes. Inherited edit allows cannot widen it.
+  // The sandbox joins its rules with the platform's separator, so on Windows they end in `\*`.
   const start = rules.findLastIndex((rule) => rule.action === "external_directory" && rule.resource === "*")
   const own = rules
     .slice(start + 1)
@@ -32,7 +33,7 @@ export function battlePathDenial(
         rule.action === "edit" &&
         rule.effect === "allow" &&
         path.isAbsolute(rule.resource) &&
-        rule.resource.endsWith("/*"),
+        (rule.resource.endsWith("/*") || rule.resource.endsWith(`${path.sep}*`)),
     )
     .map((rule) => resolveExistingPrefix(rule.resource.slice(0, -2)))
   const blocked = [absolute, resolved].some(
@@ -56,7 +57,7 @@ export function battlePathDenial(
     return "Arena contestants cannot access other Arena worktrees or another side's temp directory."
   }
   if (operation === "read") return
-  if (/^\/dev\/(?:null|std(?:in|out|err)|fd\/\d+)$/.test(resolved)) return
+  if (DEVICE_PATH.test(target) || DEVICE_PATH.test(resolved)) return
 
   if (own.some((root) => contains(root, resolved))) return
   // Name the way out, as 1.x did: a model told only "write only in your own folders" tries the same
@@ -94,6 +95,8 @@ export function battleToolInput({ tool, args, directory, rules }: BattleToolInpu
     const absolute = (file: string) => {
       if (file === "~") return Global.Path.home
       if (file.startsWith("~/")) return `${Global.Path.home}/${file.slice(2)}`
+      const native = windowsShellPath(file)
+      if (native !== file) return native
       return path.isAbsolute(file) ? file : `${directory}/${file}`
     }
     const check = (operation: "read" | "write", targets: readonly string[]) =>
@@ -122,7 +125,7 @@ export function battleToolInput({ tool, args, directory, rules }: BattleToolInpu
         hunk.path,
         ...(hunk.type === "update" && hunk.movePath ? [hunk.movePath] : []),
       ])
-      yield* check("write", targets)
+      yield* check("write", targets.map(absolute))
       const patchText = params.patchText.replace(
         /^\s*\*\*\* (Add File|Update File|Delete File|Move to): (.+)$/gm,
         (_line, operation: string, file: string) => `*** ${operation}: ${absolute(file.trim())}`,
