@@ -36,6 +36,7 @@ import {
   arenaSummaryAnchors,
   arenaTurnFollowedUp,
   pendingArenaPrompt,
+  projectDiscardedArenaPrompts,
   projectPendingArenaPrompt,
   isArenaBattleOnScreen,
   isArenaBattleUnresolved,
@@ -76,6 +77,91 @@ describe("arenaSummaryAnchor", () => {
     expect(
       arenaSummaryAnchor(historyItem, [{ id: "local-user", kind: "user_message" }]),
     ).toBeNull();
+  });
+});
+
+describe("a discarded battle between two votes", () => {
+  const at = (minute: number) => new Date(Date.UTC(2026, 7, 12, 0, minute));
+  const turn = (index: number, extra: Partial<ArenaHistoryItem>) =>
+    ({
+      id: `turn-${index}`,
+      index,
+      state: "complete",
+      resolution: { kind: "vote", vote: "a", appliedSide: "a" },
+      createdAt: at(index * 10).toISOString(),
+      updatedAt: at(index * 10 + 5).toISOString(),
+      ...extra,
+    }) as ArenaHistoryItem;
+  const voted1 = turn(1, { canonicalUserMessageID: "user-1" });
+  const discarded = turn(2, {
+    state: "discarded",
+    resolution: { kind: "stopped", resolution: "discard" },
+    prompt: "Try it another way",
+  });
+  const voted3 = turn(3, { canonicalUserMessageID: "user-3" });
+  const user = (id: string, minute: number) =>
+    createUserMessage({ id, messageId: id, text: id, timestamp: at(minute) });
+  const answer = (id: string, minute: number) =>
+    ({ id, kind: "assistant_message", text: id, timestamp: at(minute) }) as StreamItem;
+  const options = { onScreenTurnId: null, hasOlderTimeline: false };
+
+  it("keeps the discarded prompt and its card after the next vote", () => {
+    const canonical = [
+      user("user-1", 10),
+      answer("answer-1", 11),
+      user("user-3", 30),
+      answer("answer-3", 31),
+    ];
+    const stream = projectDiscardedArenaPrompts(
+      { tail: canonical, head: [] },
+      [voted1, discarded, voted3],
+      options,
+    );
+    expect(stream.tail.map((item) => item.id)).toEqual([
+      "user-1",
+      "answer-1",
+      "arena-prompt:turn-2",
+      "user-3",
+      "answer-3",
+    ]);
+    expect(arenaSummaryAnchors([voted1, discarded], stream)).toEqual([
+      "answer-1",
+      "arena-prompt:turn-2",
+    ]);
+  });
+
+  it("puts the earlier card under its own turn right after the discard", () => {
+    const canonical = [user("user-1", 10), answer("answer-1", 11)];
+    const stream = projectDiscardedArenaPrompts(
+      { tail: canonical, head: [] },
+      [voted1, discarded],
+      options,
+    );
+    expect(arenaTurnFollowedUp(discarded, stream)).toBe(false);
+    expect(arenaTurnFollowedUp(voted1, stream)).toBe(true);
+    expect(arenaSummaryAnchors([voted1], stream)).toEqual(["answer-1"]);
+  });
+
+  it("waits for its page when the loaded rows start after the discarded turn", () => {
+    const page = [user("user-3", 30), answer("answer-3", 31)];
+    const stream = projectDiscardedArenaPrompts({ tail: page, head: [] }, [discarded, voted3], {
+      onScreenTurnId: null,
+      hasOlderTimeline: true,
+    });
+    expect(stream.tail.map((item) => item.id)).toEqual(["user-3", "answer-3"]);
+  });
+
+  it("leaves the prompt to the battle while its discard is still on screen", () => {
+    const canonical = [user("user-1", 10), answer("answer-1", 11)];
+    const stream = projectDiscardedArenaPrompts(
+      { tail: canonical, head: [] },
+      [voted1, discarded],
+      {
+        onScreenTurnId: "turn-2",
+        hasOlderTimeline: false,
+      },
+    );
+    expect(stream.tail.map((item) => item.id)).toEqual(["user-1", "answer-1"]);
   });
 });
 

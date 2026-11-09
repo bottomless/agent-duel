@@ -30,6 +30,7 @@ export interface DesktopWindowOwner<TAgentTarget> {
     pendingProjectPath?: string | null;
   }): Promise<void>;
   openAdditional(input?: { pendingProjectPath?: string | null }): Promise<void>;
+  focusOrOpenPrimary(): Promise<void>;
   openOrFocusAgent(target: TAgentTarget): Promise<void>;
   restoreWhenActivated(): Promise<void>;
   takePendingProject(webContentsId: number): string | null;
@@ -67,6 +68,18 @@ export function createDesktopWindowOwner<TAgentTarget>(
         pendingProjectPath: input.pendingProjectPath ?? null,
         restoreWindowState: false,
       }),
+    async focusOrOpenPrimary() {
+      const windows = port.windows().filter((candidate) => !candidate.isDestroyed());
+      const window =
+        port.focusedWindow() ?? windows.find((candidate) => candidate.isVisible()) ?? windows[0];
+      if (!window || window.isDestroyed()) {
+        await owner.openPrimary();
+        return;
+      }
+      if (window.isMinimized()) window.restore();
+      window.show();
+      window.focus();
+    },
     async openOrFocusAgent(target) {
       const windows = port.windows();
       const window =

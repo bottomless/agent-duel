@@ -135,6 +135,8 @@ export const es: TranslationResources = {
     discard: "Descartar",
     retryResolution: "Reintentar resolución",
     stoppedChoose: "Batalla detenida · elige qué conservar",
+    stoppedFailedSide: "El agente {{side}} falló · conservar cualquiera no contará como voto",
+    stoppedBothFailed: "Ambos agentes fallaron · conservar cualquiera no contará como voto",
     closedBattle: "Agent Duel se cerró durante la batalla · reanuda o descarta",
     bothFailedRetry: "Ambos agentes fallaron · reintenta o descarta",
     bothFailed: "Ambos agentes fallaron",
@@ -440,6 +442,18 @@ export const es: TranslationResources = {
     discardBattleHelp:
       "Se descartará el trabajo de ambos agentes de este turno. Tu historial anterior y proyecto quedan sin cambios.",
     discardBattle: "Descartar batalla",
+    acceptSide: "Aceptar {{side}}",
+    acceptedFailedNote: "(falló, aceptado)",
+    acceptFailedTitle: "¿Aceptar el trabajo fallido del agente {{side}}?",
+    acceptFailedHelp:
+      "El agente {{side}} falló antes de terminar, por lo que su trabajo puede estar incompleto. Sus archivos y su conversación pasan al historial de este chat, y el trabajo del otro agente se descarta. Esto no cuenta como voto.",
+    failedSideAccept: "El agente {{side}} falló · elegir cualquiera no contará como voto",
+    bothFailedAccept: "Ambos agentes fallaron · aceptar cualquiera no contará como voto",
+    acceptedFailedModel: "Se aceptó el trabajo fallido de {{model}} (agente {{side}})",
+    discardReasonLabel: "¿Por qué? (opcional)",
+    discardReasonBothWrong: "Ambos mal",
+    discardReasonChangedMind: "Cambié de idea",
+    discardReasonOther: "Otro",
     chatTooLarge:
       "Esta batalla es demasiado grande para mostrarse. Inicia otro chat para continuar. Los cambios de código ya están en tu proyecto.",
     comparisonTooLarge: "Esta comparación es demasiado grande para mostrarse.",

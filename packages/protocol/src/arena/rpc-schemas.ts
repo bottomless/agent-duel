@@ -319,6 +319,10 @@ export const ArenaHistoryItemSchema = z
     vote: ArenaVoteSchema.optional(),
     // The chosen side applied, but the vote does not count because a side failed.
     voteDiscardedReason: z.enum(["contestant_failed"]).optional(),
+    // The applied side had failed and the voter took its work anyway.
+    acceptedFailedSide: ArenaSideSchema.optional(),
+    // A discarded turn's prompt, which no session holds for the chat to show.
+    prompt: z.string().optional(),
     selectedEarly: z.boolean().optional(),
     appliedSide: ArenaSideSchema.optional(),
     canonicalUserMessageID: z.string().optional(),
@@ -371,6 +375,8 @@ export const ArenaRunSchema = z
     selectable: z.boolean(),
     applicable: z.boolean(),
     canRetry: z.boolean(),
+    // Its work can be accepted though it failed (`canAcceptFailed` in the engine's `arena/domain.ts`).
+    canAcceptFailed: z.boolean().optional(),
     identity: ArenaIdentitySchema.optional(),
     messages: z.array(z.unknown()).optional(),
     parts: z.record(z.string(), z.array(z.unknown())).optional(),
@@ -459,7 +465,7 @@ export const ArenaSnapshotSchema = z
       canVote: z.boolean(),
       // Both results can be chosen (`canTie` in the engine's `arena/domain.ts`).
       canTie: z.boolean(),
-      // Discard instead of applying a result: after a stop, or when neither result can be chosen.
+      // Discard instead of applying a result: at the vote or after a stop.
       canDiscardBattle: z.boolean(),
       // Every side an engine restart cut off resumes together (`canResumeBattle`).
       canResumeBattle: z.boolean(),
@@ -833,6 +839,7 @@ export const ArenaTurnVoteRequestSchema = z.object({
   ...ArenaAgentRequestFields,
   turnId: z.string(),
   vote: ArenaVoteSchema,
+  acceptFailed: z.boolean().optional(),
 });
 export const ArenaTurnVoteResponseSchema = z.object({
   type: z.literal("arena.turn.vote.response"),
@@ -856,11 +863,14 @@ export const ArenaTurnResumeResponseSchema = z.object({
   type: z.literal("arena.turn.resume.response"),
   payload: ArenaSnapshotResponsePayloadSchema,
 });
+export const ArenaDiscardReasonSchema = z.enum(["both_wrong", "changed_mind", "other"]);
+export type ArenaDiscardReason = z.infer<typeof ArenaDiscardReasonSchema>;
 export const ArenaTurnResolveStopRequestSchema = z.object({
   type: z.literal("arena.turn.resolve_stop.request"),
   ...ArenaAgentRequestFields,
   turnId: z.string(),
   resolution: z.enum(["discard", "apply_a", "apply_b"]),
+  discardReason: ArenaDiscardReasonSchema.optional(),
 });
 export const ArenaTurnResolveStopResponseSchema = z.object({
   type: z.literal("arena.turn.resolve_stop.response"),

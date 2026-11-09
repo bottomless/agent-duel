@@ -218,6 +218,7 @@ describe("running marker", () => {
       name: "daemon",
       version: "2",
       isAlive: () => false,
+      bootedAt: 0,
     });
 
     expect(previous).toEqual({ pid: 999_999, version: "1", startedAt: "2026-10-25T01:00:00.000Z" });
@@ -241,12 +242,31 @@ describe("running marker", () => {
       name: "daemon",
       version: "2",
       isAlive: () => false,
+      bootedAt: 0,
     });
 
     expect(previous?.exit).toEqual({ code: null, signal: "SIGKILL" });
     expect(describeUncleanShutdown("The daemon", previous!)).toBe(
       "The daemon (version 1, process 999999, started 2026-10-25T01:00:00.000Z) was killed by SIGKILL",
     );
+  });
+
+  it("does not report a run that started before the machine booted", () => {
+    claimRunningMarker({ home, name: "daemon", version: "1" });
+    writeFileSync(
+      path.join(crashReportsDirectory(home), "daemon.running"),
+      JSON.stringify({ pid: 999_999, version: "1", startedAt: "2026-10-25T01:00:00.000Z" }),
+    );
+
+    expect(
+      claimRunningMarker({
+        home,
+        name: "daemon",
+        version: "2",
+        isAlive: () => false,
+        bootedAt: Date.parse("2026-10-25T08:00:00.000Z"),
+      }),
+    ).toBeNull();
   });
 
   it("returns nothing when the previous run exited or is still running", () => {

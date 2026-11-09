@@ -73,6 +73,19 @@ describe("desktop window owner", () => {
     expect(h.sent).toEqual([{ id: "agent-7" }]);
   });
 
+  it("brings an existing window forward instead of opening another", async () => {
+    const h = harness();
+    await h.owner.openPrimary();
+    await h.owner.focusOrOpenPrimary();
+    expect(h.launches).toHaveLength(1);
+  });
+
+  it("opens the primary window when none is left to bring forward", async () => {
+    const h = harness();
+    await h.owner.focusOrOpenPrimary();
+    expect(h.launches).toEqual([{ initialRoute: null, restoreWindowState: true }]);
+  });
+
   it("removes pending routing state when a window closes", async () => {
     const h = harness();
     await h.owner.openAdditional({ pendingProjectPath: "/project/a" });

@@ -398,14 +398,16 @@ the diff. A stopped battle uses the same pill for `Keep A`, `Discard`, and `Keep
 choice while the battle runs sits there too. While neither result is selectable, show one `Stop`
 button. When one result becomes selectable, put `Choose A early` or `Choose B early` in its side
 and `Stop` in the other side, and name the side still working above the pill
-(`Agent A is still working`). `Tie` is disabled unless both results can be chosen. When neither
-can, both sides failed: `Discard` takes Tie's place and `Choose A` and `Choose B` leave the pill,
-under `Both agents failed · retry or discard` while a side can still be retried and `Both agents
-failed` once neither can. When one side failed, the other can still be chosen under `Agent B failed
-· choosing A won't count as a vote`, and the resolved battle's header says `Vote not counted`.
-Choosing early stops the other side, so it confirms first. The confirmation belongs to that turn's
+(`Agent A is still working`). At the vote the pill reads `Choose A`, `Tie`, `Discard`, `Choose B`.
+`Tie` shows only when both results can be chosen. A failed side shows `Accept B` in its Choose's
+place when its result was saved, and nothing when it was not. So one failed side reads `Choose A`,
+`Discard`, `Accept B` under `Agent B failed · choosing either won't count as a vote`, and two read
+`Accept A`, `Discard`, `Accept B` under `Both agents failed · accepting either won't count as a
+vote`. With no saved result the hint falls back to `Agent B failed · choosing A won't count as a
+vote`, or `Both agents failed · retry or discard` and `Both agents failed`. The resolved battle's
+header says `Vote not counted`, and names an accepted side `(failed, accepted)`. Accept confirms first, because the work can be partial. Choosing early stops the other side, so it confirms first. The confirmation belongs to that turn's
 running state; close it when the turn changes so it cannot cover the normal vote. Discarding a battle also requires
-confirmation. Action failures remain on the battle until another attempt; the normal
+confirmation, which offers an optional reason (`Both wrong`, `Changed my mind`, `Other`). Action failures remain on the battle until another attempt; the normal
 action controls provide the retry so a destructive operation is never retried automatically.
 `Choose A` and `Choose B` carry their side's colour as a tint, the blue and amber of the diff's
 column headings, so the vote reads as picking that column; two choices of equal weight mean
@@ -424,7 +426,8 @@ Product decisions that are settled, so they do not get relitigated per feature:
 
 - The pool is fixed and small. Choosing models per battle is not a goal.
 - Both results are kept until the vote; nothing is auto-selected.
-- A vote is final. There is no rematch on the same prompt.
+- A vote is final. There is no rematch on the same prompt. Discarding both sides ends the battle
+  the same way; the voter sends a new prompt.
 - The loser's files remain on a Git ref. The UI offers no action to restore them; archived threads
   remain readable.
 - Contestant text stays prominent. The newest activity block shows its latest tool or reasoning,
@@ -1323,15 +1326,31 @@ Use one utility request; increase evidence quality before adding model passes.
   metrics row has `won` false on both sides, and the research upload carries both
   (`voteDiscardedReason`). Analysis and the leaderboard drop any battle where a side
   failed. The control plane's resolve route records only `select:<side>`; it takes no other field.
+- **Accept** at `awaiting_vote` is the vote for a failed side, sent with `acceptFailed` so a window
+  that has not heard of the failure cannot apply unfinished work with a plain vote. It is open for a
+  side that ended in error with its result saved (`canAcceptFailed`): its worktree and transcript as
+  they stood at the failure. A side whose setup failed can hold edits no contestant made, and a side
+  whose result could not be saved has at most an earlier attempt's commit. It applies like any
+  winner and carries `voteDiscardedReason` too, so it does not count. The turn and metrics also name
+  the side in `acceptedFailedSide`, because `voteDiscardedReason` alone also marks a vote for the
+  finished side. While the other side still works, the same result is reached through Stop and Keep,
+  which sets the same field, asks the same confirmation, and says first that it will not count.
 - **Early vote** while still `running` claims the resolution, then cancels the loser in the
   background until it reports terminal. Ties are rejected here — a tie needs both results. The
   early choice asks before sending one, since the other side's work is gone the moment it lands.
 - **Tie** applies **A**, deterministically (`voteResolution` in `arena/domain.ts`), so it needs two
   results that can be chosen (`canTie`). Over a failed run it would record a vote for a failure
   and put that run's unfinished work in the checkout.
-- **Discard** at `awaiting_vote` is open only when neither result can be chosen, which means both
-  runs failed (`canDiscardBattle`). It is the stopped battle's discard: the control plane records
-  `discard`, not a vote, and the checkout is left as it was.
+- **Discard** is open at every vote and after a stop (`canDiscardBattle`). The control plane records
+  `discard`, not a vote, and the checkout is left as it was. A discarded battle reads the same in
+  `resolution` wherever it happened, so the turn and its metrics row carry `discardStage` (`vote`,
+  `stop`, `recovery`, `archive`) and, when the voter gave one, `discardReason`. The last two stages
+  are not the voter's verdict on the results; drop them when reading discards as one. A discard
+  writes its metrics row at once. A comparison that finishes keeps its report. One the service refuses,
+  because it already holds the battle as discarded, reads as `skipped` rather than as a failure to
+  retry. A discard grafts nothing, so the chat's session never holds its prompt: the history item
+  carries it, and the app shows it as a prompt row with the discarded card under it
+  (`projectDiscardedArenaPrompts`). The next battle's agents do not see the discarded turn.
 - **Stop** moves to `awaiting_stop_resolution`, where the choice is discard, keep A, or keep B
   (`stop` in `arena/service.ts`). Keeping a side when the other had already failed, rather than
   merely stopped, carries the same `voteDiscardedReason`, so metrics do not file it as a win.
@@ -1635,9 +1654,8 @@ line after a cut; synthetic notes stay hidden. Do not join, edit, or deduplicate
 text rules can lose content inside reopened JSON, HTML, or SQL blocks. Improve the display without
 rewriting the rows.
 
-A run that fails after the budget can be retried by hand. A failed run cannot be chosen or tied, so
-without a retry the voter is left with the other side alone, or with Discard when both failed (see
-[Resolving](#resolving)). When the failure is one the policy above would
+A run that fails after the budget can be retried by hand, or its saved work accepted as it stands. A
+failed run cannot be chosen or tied (see [Resolving](#resolving)). When the failure is one the policy above would
 have retried, or an empty compaction summary, the pane shows **Retry** under its error
 (`errorRetryable`, set in `finalizeSide`).
 Retry continues the same session on the same assignment from its last finished step, adding no

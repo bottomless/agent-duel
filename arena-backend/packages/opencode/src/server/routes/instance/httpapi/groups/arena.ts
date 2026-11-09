@@ -2,6 +2,7 @@ import { Schema } from "effect"
 import { PermissionV1 } from "@opencode/schema/permission-v1"
 import { ArenaActivity } from "@/arena/activity"
 import { ArenaAttachments } from "@/arena/attachments"
+import { DiscardReason } from "@/arena/domain"
 import { ArenaSchema } from "@/arena/schema"
 import { HttpApi, HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/http-api"
 const WorkspaceRoutingQueryFields = {
@@ -111,6 +112,7 @@ export const ReviewEventsResult = Schema.Struct({
 export const VotePayload = Schema.Struct({
   vote: Schema.Literals(["a", "b", "tie"]),
   participantID: Schema.optional(Schema.String),
+  acceptFailed: Schema.optional(Schema.Boolean),
 })
 export const SingleAgentVotePayload = Schema.Struct({
   ratingID: Schema.String,
@@ -128,6 +130,7 @@ export const RetryResolutionPayload = Schema.Struct({
 })
 export const StopResolutionPayload = Schema.Struct({
   resolution: Schema.Literals(["discard", "apply_a", "apply_b"]),
+  discardReason: Schema.optional(Schema.Literals(DiscardReason)),
 })
 export const PermissionReplyPayload = Schema.Struct({ response: PermissionV1.Reply })
 export const SeedWorktreePayload = Schema.Struct({

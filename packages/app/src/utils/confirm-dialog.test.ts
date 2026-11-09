@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   answerConfirmDialog,
   confirmDialog,
+  confirmDialogWithChoice,
   registerConfirmDialogHost,
   selectActiveConfirmDialog,
   useConfirmDialogStore,
@@ -28,6 +29,22 @@ describe("confirmDialog", () => {
     await expect(confirmDialog({ title: "Restart host", message: "Restarts it." })).rejects.toThrow(
       "[ConfirmDialog] No confirm dialog host is mounted.",
     );
+  });
+
+  it("resolves with the picked choice only when the user confirms", async () => {
+    mountHost();
+    const choices = { label: "Why?", options: [{ id: "both_wrong", label: "Both wrong" }] };
+    const picked = confirmDialogWithChoice({ title: "Discard?", message: "Gone.", choices });
+    answerConfirmDialog(activeRequest()!.id, true, "both_wrong");
+    await expect(picked).resolves.toEqual({ confirmed: true, choice: "both_wrong" });
+
+    const unanswered = confirmDialogWithChoice({ title: "Discard?", message: "Gone.", choices });
+    answerConfirmDialog(activeRequest()!.id, true);
+    await expect(unanswered).resolves.toEqual({ confirmed: true });
+
+    const cancelled = confirmDialogWithChoice({ title: "Discard?", message: "Gone.", choices });
+    answerConfirmDialog(activeRequest()!.id, false, "both_wrong");
+    await expect(cancelled).resolves.toEqual({ confirmed: false });
   });
 
   it("shows the request and resolves with the user's answer", async () => {

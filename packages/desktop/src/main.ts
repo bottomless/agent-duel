@@ -906,11 +906,16 @@ function setupSingleInstanceLock(): boolean {
       isDefaultApp: false,
     });
     log.info("[open-project] second-instance openProjectPath:", openProjectPath);
-    // Relaunching the app (CLI `paseo [path]`, double-click, etc.) opens a new
-    // window rather than focusing the existing one. Wait for bootstrap (not just
-    // app.whenReady) so the protocol + IPC handlers exist before the window loads.
+    // Agent Duel: a relaunch with a project path (CLI `paseo [path]`) opens a new window for it;
+    // a plain relaunch (Start menu, taskbar, double-click) brings the running window forward, where
+    // upstream Paseo opens another one. Wait for bootstrap (not just app.whenReady) so the protocol
+    // + IPC handlers exist before a window loads.
     void bootstrapComplete
-      .then(() => desktopWindowOwner.openAdditional({ pendingProjectPath: openProjectPath }))
+      .then(() =>
+        openProjectPath
+          ? desktopWindowOwner.openAdditional({ pendingProjectPath: openProjectPath })
+          : desktopWindowOwner.focusOrOpenPrimary(),
+      )
       .catch((error) => {
         log.error("[window] failed to create window from second-instance", error);
       });

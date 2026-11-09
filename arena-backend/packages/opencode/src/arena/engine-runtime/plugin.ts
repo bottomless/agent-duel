@@ -7,6 +7,7 @@ import { createOpenRouter } from "@openrouter/ai-sdk-provider"
 import { AISDK } from "@opencode/core/aisdk"
 import { ShellTool } from "@opencode/core/tool/plugin/shell"
 import { contestantShellInput, contestantShellTimeoutMessage, shellNotification } from "./shell"
+import { WindowsJob } from "@opencode/util/windows-job"
 import { define } from "@opencode/plugin/effect/plugin"
 import type { Context } from "@opencode/plugin/effect/plugin"
 import type { Model } from "@opencode/schema/model"
@@ -554,23 +555,30 @@ function install(context: Context, options: InstalledOptions) {
     // teardown. Keep them on disk for the next start to stop (`stopOrphanShells`). Every shell counts,
     // since a chat with Battle off runs its commands here as well.
     // Read now, so the first shell's record does not wait for it.
-    yield* Effect.promise(() => ArenaShellLedger.engineOwner().catch(() => undefined))
-    yield* context.event.subscribe().pipe(
-      Stream.runForEach((event) => {
-        const directory = ArenaRuntime.shellLedgerDirectory()
-        const change =
-          event.type === "shell.created"
-            ? () => ArenaShellLedger.recordShell(directory, event.data.info)
-            : event.type === "shell.exited" || event.type === "shell.deleted"
-              ? () => ArenaShellLedger.releaseShell(directory, event.data.id)
-              : undefined
-        if (!change) return Effect.void
-        return Effect.tryPromise(change).pipe(
-          Effect.catchCause((cause) => Effect.logWarning("Arena could not update the shell ledger", { cause })),
-        )
-      }),
-      Effect.forkScoped({ startImmediately: true }),
-    )
+    // The ledger reads process groups with `ps`, which Windows has neither of. There the engine
+    // instead holds everything it starts in a job that ends with it (`endChildrenWithThisProcess`).
+    if (process.platform === "win32") {
+      const held = yield* Effect.promise(() => WindowsJob.endChildrenWithThisProcess())
+      if (!held) yield* Effect.logWarning("Arena could not tie its shells to the engine's lifetime")
+    } else {
+      yield* Effect.promise(() => ArenaShellLedger.engineOwner().catch(() => undefined))
+      yield* context.event.subscribe().pipe(
+        Stream.runForEach((event) => {
+          const directory = ArenaRuntime.shellLedgerDirectory()
+          const change =
+            event.type === "shell.created"
+              ? () => ArenaShellLedger.recordShell(directory, event.data.info)
+              : event.type === "shell.exited" || event.type === "shell.deleted"
+                ? () => ArenaShellLedger.releaseShell(directory, event.data.id)
+                : undefined
+          if (!change) return Effect.void
+          return Effect.tryPromise(change).pipe(
+            Effect.catchCause((cause) => Effect.logWarning("Arena could not update the shell ledger", { cause })),
+          )
+        }),
+        Effect.forkScoped({ startImmediately: true }),
+      )
+    }
 
     // Check the whole shell call before execution. Core's independent cd scan resolves every cd
     // from the initial cwd, so its duplicate asks are suppressed only within this executor.
