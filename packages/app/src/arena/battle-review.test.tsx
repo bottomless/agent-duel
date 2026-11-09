@@ -397,7 +397,9 @@ describe("BattleReview", () => {
 
   it("shows the changes alone when there is no verdict to read", () => {
     render({ summaryAvailable: false });
-    expect(byTestId("arena-review-tabs")).toBeNull();
+    // Changes heads the review alone, as the one tab of the pair.
+    expect(byTestId("arena-review-tab-verdict")).toBeNull();
+    expect(byTestId("arena-review-tab-changes")).not.toBeNull();
     expect(byTestId("arena-inline-diff")).not.toBeNull();
   });
 

@@ -243,11 +243,14 @@ function reviewTabStyle({ hovered, pressed }: { hovered?: boolean; pressed: bool
  * headings above it, and the review is the complement, not the headline.
  */
 function ReviewTabs({
+  tabs,
   tab,
   folded,
   changesLabel,
   onChange,
 }: {
+  /** Whether the summary has a tab; without one, Changes heads the review alone. */
+  tabs: boolean;
   tab: ArenaReviewTab;
   /** Folded, nothing shows, so neither tab reads as selected. */
   folded: boolean;
@@ -257,17 +260,19 @@ function ReviewTabs({
   const { t } = useTranslation();
   return (
     <View style={styles.tabs} accessibilityRole="tablist" testID="arena-review-tabs">
-      <ReviewTab
-        value="verdict"
-        label={t("arena.summary")}
-        selected={folded ? null : tab === "verdict"}
-        onSelect={onChange}
-        testID="arena-review-tab-verdict"
-      />
+      {tabs ? (
+        <ReviewTab
+          value="verdict"
+          label={t("arena.summary")}
+          selected={folded ? null : tab === "verdict"}
+          onSelect={onChange}
+          testID="arena-review-tab-verdict"
+        />
+      ) : null}
       <ReviewTab
         value="changes"
         label={changesLabel}
-        selected={folded ? null : tab === "changes"}
+        selected={folded ? null : !tabs || tab === "changes"}
         onSelect={onChange}
         testID="arena-review-tab-changes"
       />
@@ -310,16 +315,13 @@ function ReviewHeader({
   const sectionName = tabs ? t("arena.reviewSections") : t("arena.reviewChanges");
   return (
     <View style={styles.header} testID="arena-review-header">
-      {tabs ? (
-        <ReviewTabs
-          tab={tab}
-          folded={collapsed}
-          changesLabel={changesLabel}
-          onChange={onTabChange}
-        />
-      ) : (
-        <Text style={styles.title}>{changesLabel}</Text>
-      )}
+      <ReviewTabs
+        tabs={tabs}
+        tab={tab}
+        folded={collapsed}
+        changesLabel={changesLabel}
+        onChange={onTabChange}
+      />
       <View style={styles.spacer} />
       {layoutControl ? <DiffLayoutControl agentId={agentId} width={width} /> : null}
       <PaneIconAction
@@ -626,11 +628,6 @@ const styles = StyleSheet.create((theme) => ({
   },
   content: {
     paddingTop: theme.spacing[2] + theme.spacing[0.5],
-  },
-  title: {
-    color: theme.colors.foreground,
-    fontSize: theme.fontSize.content,
-    fontWeight: theme.fontWeight.semibold,
   },
   tabs: {
     flexDirection: "row",
