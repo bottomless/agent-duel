@@ -70,7 +70,6 @@ const ThemedGitCompareArrows = withUnistyles(GitCompareArrows);
 const ThemedGitBranch = withUnistyles(GitBranch);
 const ThemedInfo = withUnistyles(Info);
 const mutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
-const successColorMapping = (theme: Theme) => ({ color: theme.colors.success });
 // The info accent shared with <Alert variant="info"> and info toasts.
 const infoColorMapping = (theme: Theme) => ({ color: theme.colors.palette.blue[300] });
 
@@ -184,14 +183,12 @@ export function IdenticalBattleResult({ hasChanges = false }: { hasChanges?: boo
       </Text>
     );
   }
+  // One quiet line, as the summary's shared sentence reads: there is nothing to compare.
   return (
-    <View style={styles.identicalResult} testID="arena-identical-results">
-      <ThemedGitCompareArrows size={16} uniProps={successColorMapping} />
-      <View style={styles.identicalCopy}>
-        <Text style={styles.sectionTitle}>{t("arena.identicalFiles")}</Text>
-        <Text style={styles.muted}>{t("arena.neitherChanged")}</Text>
-      </View>
-    </View>
+    <Text style={styles.muted} testID="arena-identical-results">
+      <Text style={styles.identicalTitle}>{t("arena.identicalFiles")}</Text>
+      {` · ${t("arena.neitherChanged")}`}
+    </Text>
   );
 }
 
@@ -1273,20 +1270,9 @@ const styles = StyleSheet.create((theme) => ({
     flexWrap: "wrap",
     gap: theme.spacing[2],
   },
-  identicalResult: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: theme.spacing[2],
-    padding: theme.spacing[3],
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    borderRadius: theme.borderRadius.base,
-    backgroundColor: theme.colors.surface0,
-  },
-  identicalCopy: {
-    flex: 1,
-    minWidth: 0,
-    gap: theme.spacing[1],
+  identicalTitle: {
+    color: theme.colors.foreground,
+    fontWeight: theme.fontWeight.medium,
   },
   muted: {
     color: theme.colors.foregroundMuted,
