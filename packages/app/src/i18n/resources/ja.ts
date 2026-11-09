@@ -131,6 +131,10 @@ export const ja: TranslationResources = {
     discard: "破棄",
     retryResolution: "解決を再試行",
     stoppedChoose: "バトル停止 · 保持する内容を選択",
+    stoppedFailedSide:
+      "エージェント {{side}} が失敗しました · どちらを残しても投票として数えられません",
+    stoppedBothFailed:
+      "両方のエージェントが失敗しました · どちらを残しても投票として数えられません",
     closedBattle: "バトル中にAgent Duelが閉じられました · 再開または破棄",
     bothFailedRetry: "両エージェントが失敗 · 再試行または破棄",
     bothFailed: "両エージェントが失敗",
@@ -431,6 +435,20 @@ export const ja: TranslationResources = {
     discardBattleHelp:
       "このターンの両エージェントの作業を破棄します。以前のチャット履歴とプロジェクトは変わりません。",
     discardBattle: "バトルを破棄",
+    acceptSide: "{{side}} を受け入れる",
+    acceptedFailedNote: "（失敗、受け入れ済み）",
+    acceptFailedTitle: "エージェント {{side}} の失敗した作業を受け入れますか？",
+    acceptFailedHelp:
+      "エージェント {{side}} は完了前に失敗したため、作業が不完全な可能性があります。そのファイルと会話がこのチャットの履歴になり、もう一方のエージェントの作業は破棄されます。これは投票として数えられません。",
+    failedSideAccept:
+      "エージェント {{side}} が失敗しました · どちらを選んでも投票として数えられません",
+    bothFailedAccept:
+      "両方のエージェントが失敗しました · どちらを受け入れても投票として数えられません",
+    acceptedFailedModel: "{{model}} の失敗した作業を受け入れました（エージェント {{side}}）",
+    discardReasonLabel: "理由（任意）",
+    discardReasonBothWrong: "どちらも誤り",
+    discardReasonChangedMind: "気が変わった",
+    discardReasonOther: "その他",
     chatTooLarge:
       "バトルが大きすぎて表示できません。新しいチャットを開始してください。コードの変更は既にプロジェクトにあります。",
     comparisonTooLarge: "比較が大きすぎて表示できません。",

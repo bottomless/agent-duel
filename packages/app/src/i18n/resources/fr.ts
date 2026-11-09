@@ -136,6 +136,10 @@ export const fr: TranslationResources = {
     discard: "Abandonner",
     retryResolution: "Réessayer la résolution",
     stoppedChoose: "Bataille arrêtée · choisissez quoi conserver",
+    stoppedFailedSide:
+      "L'agent {{side}} a échoué · conserver l'un ou l'autre ne comptera pas comme un vote",
+    stoppedBothFailed:
+      "Les deux agents ont échoué · conserver l'un ou l'autre ne comptera pas comme un vote",
     closedBattle: "Agent Duel s’est fermé pendant la bataille · reprendre ou abandonner",
     bothFailedRetry: "Les deux agents ont échoué · réessayer ou abandonner",
     bothFailed: "Les deux agents ont échoué",
@@ -445,6 +449,20 @@ export const fr: TranslationResources = {
     discardBattleHelp:
       "Le travail des deux agents de ce tour sera abandonné. L’historique précédent et le projet restent inchangés.",
     discardBattle: "Abandonner la bataille",
+    acceptSide: "Accepter {{side}}",
+    acceptedFailedNote: "(échoué, accepté)",
+    acceptFailedTitle: "Accepter le travail échoué de l'agent {{side}} ?",
+    acceptFailedHelp:
+      "L'agent {{side}} a échoué avant de terminer, son travail peut donc être partiel. Ses fichiers et sa conversation rejoignent l'historique de ce chat, et le travail de l'autre agent est abandonné. Cela ne compte pas comme un vote.",
+    failedSideAccept:
+      "L'agent {{side}} a échoué · choisir l'un ou l'autre ne comptera pas comme un vote",
+    bothFailedAccept:
+      "Les deux agents ont échoué · accepter l'un ou l'autre ne comptera pas comme un vote",
+    acceptedFailedModel: "Travail échoué de {{model}} accepté (agent {{side}})",
+    discardReasonLabel: "Pourquoi ? (facultatif)",
+    discardReasonBothWrong: "Les deux sont faux",
+    discardReasonChangedMind: "J'ai changé d'avis",
+    discardReasonOther: "Autre",
     chatTooLarge:
       "Cette bataille est trop volumineuse pour être affichée. Démarrez un nouveau chat pour continuer. Vos modifications de code sont déjà dans votre projet.",
     comparisonTooLarge: "Cette comparaison est trop volumineuse pour être affichée.",

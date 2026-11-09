@@ -37,6 +37,20 @@ export type Vote = (typeof Vote)[number]
 export const StopResolution = ["discard", "apply_a", "apply_b"] as const
 export type StopResolution = (typeof StopResolution)[number]
 
+/** Why the voter discarded a battle, when they said. The discard's confirmation offers these. */
+export const DiscardReason = ["both_wrong", "changed_mind", "other"] as const
+export type DiscardReason = (typeof DiscardReason)[number]
+
+/**
+ * Where a battle was when it was discarded: at the vote, after Stop, after the engine lost it, or
+ * because its workspace was archived. The last two are not the voter's verdict on the results.
+ */
+export const DiscardStage = ["vote", "stop", "recovery", "archive"] as const
+export type DiscardStage = (typeof DiscardStage)[number]
+
+/** What `error` on a run starts with when its result could not be saved. */
+export const RESULT_NOT_SAVED_MESSAGE = "Arena result finalization failed"
+
 export type VoteResolution = {
   readonly kind: "vote"
   readonly vote: Vote
@@ -377,22 +391,31 @@ export function canTie(
 /**
  * May the voter discard this battle instead of applying either result?
  *
- * After a stop, always. A finished battle is decided by the vote, unless neither result can be
- * chosen, which means both runs failed, Retry staying open beside it, or the engine's restart cut
- * it off (`canResumeBattle`). The service refuses what this refuses, and the app shows Discard
- * from it.
+ * After a stop and at every vote, whatever the two results are, and when the engine's restart cut
+ * the battle off (`canResumeBattle`). The service refuses what this refuses, and the app shows
+ * Discard from it.
  */
 export function canDiscardBattle(
   turn: { readonly state: BattleState; readonly resolution?: unknown },
   runs: ReadonlyArray<DecidedRun>,
 ): boolean {
   if (turn.resolution !== undefined) return false
-  if (turn.state === "awaiting_stop_resolution") return true
-  if (canResumeBattle(turn, runs)) return true
-  return (
-    turn.state === "awaiting_vote" &&
-    Side.every((side) => runs.some((run) => run.side === side && run.selectable !== true))
-  )
+  // `awaiting_vote` includes a battle `canResumeBattle` reopened.
+  return turn.state === "awaiting_stop_resolution" || turn.state === "awaiting_vote"
+}
+
+/**
+ * The stage a discard the voter asked for records; archiving records `archive` itself. A battle the
+ * engine's restart cut off waits at `awaiting_vote` once reopened, with its review hidden until
+ * Resume, so discarding it there is `recovery`, not a verdict on the results.
+ */
+export function discardStage(
+  turn: { readonly state: BattleState; readonly resolution?: unknown },
+  runs: ReadonlyArray<ResumableRun>,
+): Exclude<DiscardStage, "archive"> {
+  if (turn.state === "finalization_failed" || turn.state === "interrupted_recovery") return "recovery"
+  if (canResumeBattle(turn, runs)) return "recovery"
+  return turn.state === "awaiting_vote" ? "vote" : "stop"
 }
 
 /**
@@ -415,6 +438,54 @@ export function canVote(
     !canResumeBattle(turn, runs) &&
     runs.some((run) => run.side === vote && run.selectable === true)
   )
+}
+
+type AcceptableRun = DecidedRun & {
+  readonly error?: string
+  readonly applicability?: string
+  readonly finalCommit?: string
+  readonly finalIndexTree?: string
+}
+
+/**
+ * May the voter accept this failed side's work anyway?
+ *
+ * Only a side that ended in error with its result saved. A side whose setup failed can hold edits no
+ * contestant made, and a side whose result could not be saved has at most an earlier attempt's
+ * result, which would quietly lose the later work. A side still running comes back here through
+ * Stop and Keep, and a side the engine's restart cut off resumes first. The service refuses what this
+ * refuses, and the app shows Accept from it. The vote does not count (`voteDiscardedReason`).
+ */
+export function canAcceptFailed(
+  turn: { readonly state: BattleState; readonly resolution?: unknown },
+  runs: ReadonlyArray<AcceptableRun>,
+  side: Side,
+): boolean {
+  if (turn.state !== "awaiting_vote" || turn.resolution !== undefined || canResumeBattle(turn, runs)) return false
+  const run = runs.find((candidate) => candidate.side === side)
+  return (
+    run !== undefined &&
+    run.runState === "error" &&
+    run.finalizedAt !== undefined &&
+    run.selectable !== true &&
+    run.applicability === "applicable" &&
+    !run.error?.startsWith(RESULT_NOT_SAVED_MESSAGE) &&
+    Boolean(run.finalCommit && run.finalIndexTree)
+  )
+}
+
+/**
+ * The side this resolution applied, if that side had failed. Analysis needs it apart from
+ * `voteDiscardedReason`, which also marks a vote for the finished side against a failed one. A side
+ * kept after Stop that had already failed counts too.
+ */
+export function acceptedFailedSide(
+  resolution: Resolution | undefined,
+  runs: ReadonlyArray<{ readonly side: Side; readonly runState?: string }>,
+): Side | undefined {
+  if (resolution?.kind !== "vote" && resolution?.kind !== "stopped") return undefined
+  const side = resolution.appliedSide
+  return side && runs.some((run) => run.side === side && run.runState === "error") ? side : undefined
 }
 
 export const VoteDiscardedReason = ["contestant_failed"] as const

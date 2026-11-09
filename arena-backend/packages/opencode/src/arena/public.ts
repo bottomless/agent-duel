@@ -1,6 +1,7 @@
 import { Schema } from "effect"
 import { basename } from "path"
 import {
+  canAcceptFailed,
   canDiscardBattle,
   canResumeBattle,
   canRetryRun,
@@ -91,6 +92,8 @@ export type PublicRun = {
   readonly applicable: boolean
   /** The voter may retry this failed run; see `canRetryRun`. */
   readonly canRetry: boolean
+  /** The voter may accept this failed run's work anyway; see `canAcceptFailed`. */
+  readonly canAcceptFailed: boolean
   readonly identity?: PublicIdentity
   readonly messages?: readonly unknown[]
   readonly parts?: Readonly<Record<string, readonly unknown[]>>
@@ -336,6 +339,7 @@ export function project(snapshot: BattleSnapshot) {
             ...(turn.resolution ? { resolution: resolution(turn.resolution) } : {}),
             ...(turn.vote ? { vote: turn.vote } : {}),
             ...(turn.voteDiscardedReason ? { voteDiscardedReason: turn.voteDiscardedReason } : {}),
+            ...(turn.acceptedFailedSide ? { acceptedFailedSide: turn.acceptedFailedSide } : {}),
             ...(turn.selectedEarly === undefined ? {} : { selectedEarly: turn.selectedEarly }),
             ...(turn.appliedSide ? { appliedSide: turn.appliedSide } : {}),
             ...(turn.canonicalUserMessageID ? { canonicalUserMessageID: turn.canonicalUserMessageID } : {}),
@@ -370,6 +374,11 @@ export function project(snapshot: BattleSnapshot) {
       ...(item.resolution ? { resolution: resolution(item.resolution) } : {}),
       ...(item.vote ? { vote: item.vote } : {}),
       ...(item.voteDiscardedReason ? { voteDiscardedReason: item.voteDiscardedReason } : {}),
+      ...(item.acceptedFailedSide ? { acceptedFailedSide: item.acceptedFailedSide } : {}),
+      // A discard grafts nothing, so the chat has no row for its prompt but this one.
+      ...(item.resolution?.kind === "stopped" && !item.appliedSide && item.userPrompt
+        ? { prompt: item.userPrompt }
+        : {}),
       ...(item.selectedEarly === undefined ? {} : { selectedEarly: item.selectedEarly }),
       ...(item.appliedSide ? { appliedSide: item.appliedSide } : {}),
       ...(item.canonicalUserMessageID ? { canonicalUserMessageID: item.canonicalUserMessageID } : {}),
@@ -451,6 +460,7 @@ export function project(snapshot: BattleSnapshot) {
         selectable: run.selectable === true,
         applicable: run.applicability === "applicable",
         canRetry: turn !== undefined && canRetryRun(turn, run),
+        canAcceptFailed: turn !== undefined && canAcceptFailed(turn, snapshot.runs, run.side),
         ...(revealed && turn ? { identity: identity(turn.placement[run.side]) } : {}),
       }),
     ),

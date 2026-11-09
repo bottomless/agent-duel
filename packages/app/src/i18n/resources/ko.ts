@@ -131,6 +131,8 @@ export const ko: TranslationResources = {
     discard: "삭제",
     retryResolution: "해결 다시 시도",
     stoppedChoose: "배틀 중지됨 · 유지할 작업 선택",
+    stoppedFailedSide: "에이전트 {{side}} 실패 · 어느 쪽을 유지해도 투표로 집계되지 않습니다",
+    stoppedBothFailed: "두 에이전트 모두 실패 · 어느 쪽을 유지해도 투표로 집계되지 않습니다",
     closedBattle: "배틀 중 Agent Duel이 닫혔습니다 · 재개 또는 삭제",
     bothFailedRetry: "두 에이전트 실패 · 다시 시도 또는 삭제",
     bothFailed: "두 에이전트 실패",
@@ -429,6 +431,18 @@ export const ko: TranslationResources = {
     discardBattleHelp:
       "이번 차례의 두 에이전트 작업이 삭제됩니다. 이전 채팅 기록과 프로젝트는 변경되지 않습니다.",
     discardBattle: "배틀 삭제",
+    acceptSide: "{{side}} 수락",
+    acceptedFailedNote: "(실패, 수락됨)",
+    acceptFailedTitle: "에이전트 {{side}}의 실패한 작업을 수락할까요?",
+    acceptFailedHelp:
+      "에이전트 {{side}}가 완료 전에 실패하여 작업이 불완전할 수 있습니다. 해당 파일과 대화가 이 채팅의 기록이 되고 다른 에이전트의 작업은 버려집니다. 투표로 집계되지 않습니다.",
+    failedSideAccept: "에이전트 {{side}} 실패 · 어느 쪽을 선택해도 투표로 집계되지 않습니다",
+    bothFailedAccept: "두 에이전트 모두 실패 · 어느 쪽을 수락해도 투표로 집계되지 않습니다",
+    acceptedFailedModel: "{{model}}의 실패한 작업 수락됨 (에이전트 {{side}})",
+    discardReasonLabel: "이유 (선택 사항)",
+    discardReasonBothWrong: "둘 다 틀림",
+    discardReasonChangedMind: "마음이 바뀜",
+    discardReasonOther: "기타",
     chatTooLarge:
       "이 배틀이 너무 커서 표시할 수 없습니다. 새 채팅에서 계속하세요. 코드 변경 사항은 이미 프로젝트에 있습니다.",
     comparisonTooLarge: "비교가 너무 커서 표시할 수 없습니다.",

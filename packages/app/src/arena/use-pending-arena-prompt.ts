@@ -5,8 +5,15 @@ import { useRetainedPanelActive } from "@/components/retained-panel";
 import { useFetchQuery } from "@/data/query";
 import { useSessionStore } from "@/stores/session-store";
 import type { StreamItem } from "@/types/stream";
-import { pendingArenaPrompt, projectPendingArenaPrompt } from "./summary-anchor";
+import {
+  arenaOnScreenTurnId,
+  pendingArenaPrompt,
+  projectDiscardedArenaPrompts,
+  projectPendingArenaPrompt,
+} from "./summary-anchor";
 import { replaceShellRestartErrors } from "./shell-restart";
+
+const EMPTY_HISTORY: ArenaSnapshot["history"] = [];
 
 interface PendingArenaPromptOptions {
   serverId: string;
@@ -63,6 +70,9 @@ export function usePendingArenaPrompt({
     promptIndex: promptIndex.data,
   });
   const nextPendingTurnId = pendingPrompt?.id ?? null;
+  const history = snapshot?.history ?? EMPTY_HISTORY;
+  // The battle on screen shows its own prompt while its discard lands.
+  const onScreenTurnId = arenaOnScreenTurnId(snapshot);
   // Render-time tracking avoids a blank frame at completion. Reloaded history does not
   // start a handoff, and pagination cannot restart a finished one.
   if (nextPendingTurnId !== pendingTurnId) {
@@ -73,6 +83,19 @@ export function usePendingArenaPrompt({
     const stops = snapshot?.chat.shellStops;
     const tail = replaceShellRestartErrors(streamItems, stops, notice);
     const head = replaceShellRestartErrors(streamHead, stops, notice);
-    return projectPendingArenaPrompt({ tail, head }, pendingPrompt);
-  }, [streamItems, streamHead, pendingPrompt, snapshot?.chat.shellStops, t]);
+    const withDiscarded = projectDiscardedArenaPrompts({ tail, head }, history, {
+      onScreenTurnId,
+      hasOlderTimeline,
+    });
+    return projectPendingArenaPrompt(withDiscarded, pendingPrompt);
+  }, [
+    streamItems,
+    streamHead,
+    pendingPrompt,
+    snapshot?.chat.shellStops,
+    t,
+    history,
+    onScreenTurnId,
+    hasOlderTimeline,
+  ]);
 }

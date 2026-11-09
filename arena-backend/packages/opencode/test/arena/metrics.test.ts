@@ -563,6 +563,45 @@ describe("ArenaMetrics outcome", () => {
     expect(battleFor("a")).not.toHaveProperty("voteDiscardedReason")
   })
 
+  test("a failed side accepted on purpose is named, and it is not a win", () => {
+    const failed = { ...runFor("a"), runState: "error" as const, selectable: false, finalizedAt: new Date(0) }
+    const finished = { ...runFor("b"), selectable: true, finalizedAt: new Date(0) }
+    const battle = computeBattleMetrics({
+      chat: { _id: "chat" } as ChatDocument,
+      turn: turnFor("a"),
+      runs: [failed, finished],
+      generations: [],
+      reviewEvents: [],
+      transcripts: {},
+      computedAt: new Date(0),
+    })
+    expect(battle.acceptedFailedSide).toBe("a")
+    expect(battle.voteDiscardedReason).toBe("contestant_failed")
+    expect([battle.sides.a?.won, battle.sides.b?.won]).toEqual([false, false])
+    expect(battleFor("a")).not.toHaveProperty("acceptedFailedSide")
+  })
+
+  test("a discard carries its stage and reason, and nobody won", () => {
+    const { vote: _vote, appliedSide: _applied, ...voted } = turnFor("a")
+    const turn = {
+      ...voted,
+      resolution: { kind: "stopped", resolution: "discard" },
+      discardStage: "vote",
+      discardReason: "both_wrong",
+    } as TurnDocument
+    const battle = computeBattleMetrics({
+      chat: { _id: "chat" } as ChatDocument,
+      turn,
+      runs: [runFor("a"), runFor("b")],
+      generations: [],
+      reviewEvents: [],
+      transcripts: {},
+      computedAt: new Date(0),
+    })
+    expect(battle).toMatchObject({ resolutionKind: "stopped", discardStage: "vote", discardReason: "both_wrong" })
+    expect([battle.sides.a?.won, battle.sides.b?.won]).toEqual([false, false])
+  })
+
   test("a side kept after Stop while the other side failed does not count as a win", () => {
     const { vote: _vote, ...voted } = turnFor("a")
     const turn = { ...voted, resolution: { kind: "stopped", resolution: "apply_a", appliedSide: "a" } } as TurnDocument
