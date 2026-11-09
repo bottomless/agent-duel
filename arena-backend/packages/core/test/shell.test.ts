@@ -5,7 +5,10 @@ import path from "path"
 import { ShellSelect } from "@opencode/core/shell/select"
 import { FSUtil } from "@opencode/util/fs-util"
 import { which } from "@opencode/core/util/which"
+import { appExecutionAlias } from "./fixture/app-execution-alias"
 import { tmpdir } from "./fixture/tmpdir"
+
+const alias = appExecutionAlias()
 
 const withShell = async (shell: string | undefined, fn: () => void | Promise<void>) => {
   const prev = process.env.SHELL
@@ -136,6 +139,12 @@ describe("shell", () => {
       await withShell(path.win32.basename(shell), async () => {
         expect(ShellSelect.resolve({ priority: "config" })).toBe(shell)
       })
+    })
+
+    // Store installs of PowerShell 7 are app execution aliases; stat throws EACCES for them. Skipped where no
+    // Microsoft Store app is installed for the user; see the fixture.
+    test.skipIf(!alias)("resolves a configured app execution alias", () => {
+      expect(ShellSelect.resolve({ priority: "config" }, alias!.file)).toBe(alias!.file)
     })
   }
 })

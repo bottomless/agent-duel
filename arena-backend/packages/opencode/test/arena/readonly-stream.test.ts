@@ -1,6 +1,6 @@
 import { expect } from "bun:test"
 import { createOpenRouter } from "@openrouter/ai-sdk-provider"
-import { LLM, LLMClient } from "@opencode/ai"
+import { ai, LLMClient } from "@opencode/ai/effect"
 import { RequestExecutor } from "@opencode/ai/route"
 import { AISDK } from "@opencode/core/aisdk"
 import { Agent } from "@opencode/core/agent"
@@ -18,6 +18,7 @@ import { SessionProjector } from "@opencode/core/session/projector"
 import { createLLMEventPublisher } from "@opencode/core/session/runner/publish-llm-event"
 import { SessionMessageTable, SessionTable } from "@opencode/core/session/sql"
 import { SessionEvent } from "@opencode/core/session/event"
+import { SessionUsage } from "@opencode/core/session/usage"
 import { Money } from "@opencode/schema/money"
 import { LayerNode } from "@opencode/util/effect/layer-node"
 import { eq } from "drizzle-orm"
@@ -122,7 +123,7 @@ for (const [id, late] of [
         started: 0,
       })
       const resolved = yield* aisdk.model(model)
-      yield* LLMClient.stream(LLM.request({ model: resolved, prompt: "Wait for the child" })).pipe(
+      yield* LLMClient.stream(ai.request({ model: resolved, prompt: "Wait for the child" })).pipe(
         Stream.runForEach((event) =>
           publisher.publish(event).pipe(
             Effect.tap(() =>
@@ -139,8 +140,8 @@ for (const [id, late] of [
         sessionID,
         assistantMessageID,
         finish: finish.finish,
-        providerState: finish.providerState,
-        tokens: finish.tokens,
+        native: finish.native,
+        tokens: SessionUsage.record(finish.usage, []).tokens,
         cost: Money.USD.zero,
       })
       const message = yield* db
@@ -151,10 +152,10 @@ for (const [id, late] of [
       expect(message?.data).toMatchObject({
         finish: "stop",
         content: [
-          { type: "reasoning", state: { reasoning_details: initial } },
+          { type: "reasoning", native: { reasoning_details: initial } },
           { type: "text", text: "The parent file is written; waiting for the background child." },
         ],
-        providerState: { reasoning_details: complete },
+        native: { reasoning_details: complete },
       })
       expect(message?.data).not.toHaveProperty("error")
       expect(message?.data).not.toHaveProperty("retry")

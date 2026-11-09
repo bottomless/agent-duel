@@ -3,7 +3,8 @@ import { chmod, lstat, mkdir, open, readFile, rename, rm } from "node:fs/promise
 import path from "node:path"
 import asset from "./pty-binding.js"
 
-// opencode-pty does not ship Windows binaries.
+// Agent Duel vendor patch: the desktop build does not ship opencode-pty for Windows yet (see
+// packages/opencode/script/build-desktop.ts), so Windows keeps the non-persistent shell path.
 export const available = process.platform !== "win32"
 
 export async function resolveBinary(bin: string) {
@@ -21,7 +22,8 @@ async function install(
   await privateDirectory(root)
   const directory = path.join(root, `${input.version}-${input.sha256.slice(0, 16)}`)
   await privateDirectory(directory)
-  const destination = path.join(directory, "opencode-pty")
+  // Windows only launches executables with their extension.
+  const destination = path.join(directory, process.platform === "win32" ? "opencode-pty.exe" : "opencode-pty")
   if (await validateIfPresent(destination, input.sha256)) return destination
 
   const bytes = new Uint8Array(await Bun.file(input.path).arrayBuffer())

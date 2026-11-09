@@ -20,7 +20,7 @@ function enableArenaControl() {
   process.env.OPENCODE_ARENA = "1"
 }
 
-function contestantMessage(sessionID = SessionID.descending()): SessionV1.WithParts {
+function contestantMessage(sessionID = SessionID.create()): SessionV1.WithParts {
   const userID = MessageID.ascending()
   const assistantID = MessageID.ascending()
   return {
@@ -316,7 +316,7 @@ describe("ArenaPrivacy", () => {
     const sanitized = upstream.map((callID) =>
       ArenaPrivacy.part({
         id: PartID.ascending(),
-        sessionID: SessionID.descending(),
+        sessionID: SessionID.create(),
         messageID: MessageID.ascending(),
         type: "tool",
         callID,
@@ -336,7 +336,7 @@ describe("ArenaPrivacy", () => {
   test("maps a tool call ID to the same value everywhere it is published", () => {
     process.env.OPENCODE_ARENA = "1"
     const callID = "call-70293612-c1d2-4a95-a9c5-1fb870da15df-68"
-    const sessionID = SessionID.descending()
+    const sessionID = SessionID.create()
     const toolPart = ArenaPrivacy.part({
       id: PartID.ascending(),
       sessionID,

@@ -24,7 +24,11 @@ or winner promotion. The active engine typecheck excludes
 retained 1.x modules; check their imports separately when merging. Preview integration belongs to
 the V2 engine plugin. The Arena `info + parts` transcript is a wire projection; fork and graft
 canonical V2 messages so attachments, compaction checkpoints, and replay state survive a vote,
-subject to the sealed-reasoning boundary under [Blinding](#blinding). Keep canonical history
+subject to the sealed-reasoning boundary under [Blinding](#blinding). The engine writes those rows
+straight into `session_message` with their content inline (`copyMessage` and `updateRow` in
+`arena/session-runtime`). Keep Core's `experimental.part_rows` off: with it on, Core stores
+assistant parts in `session_part` and history reads them before any inline content, so a row the
+engine rewrites would show its parts twice. Keep canonical history
 independent of SDK-owned stream metadata: a provider can still extend its reasoning state after
 answer text begins.
 
@@ -1239,8 +1243,10 @@ field. Each layer has its own file:
   `Thinking redacted` is display text: never turn it into a reply or retain it as reasoning in a
   compaction checkpoint. Omit assistant requests containing only the redaction marker, since
   Moonshot rejects an empty assistant message. Preserve cut-stream text, interruption notes, and tool order.
-  The small Core vendor patches in `session/runner/to-llm-message.ts` and `session/compaction.ts`
-  enforce those marker rules; keep them when updating the vendor.
+  The small Core vendor patch in `session/runner/to-llm-message.ts` enforces those marker rules; keep
+  it when updating the vendor. Core's compaction text has dropped all reasoning since OpenCode 2.1.
+  Provider replay data lives in `native` on messages and parts since 2.1 (`providerState` and
+  `state` before it); the `/api` sanitizer drops all three.
   Runtime-only usage can continue through the transport, but the telemetry copy never persists
   generation request bodies because system prompts and tool
   schemas can fingerprint the provider. It drops per-side token counts, native finish reasons,

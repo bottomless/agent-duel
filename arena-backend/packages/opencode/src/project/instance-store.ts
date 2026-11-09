@@ -5,7 +5,6 @@ import { Location } from "@opencode/core/location"
 import { LocationServiceMap } from "@opencode/core/location-services"
 import { FSUtil } from "@opencode/util/fs-util"
 import { GlobalBus } from "@/bus/global"
-import { serviceUse } from "@opencode/util/effect/service-use"
 import { WorkspaceContext } from "@/control-plane/workspace-context"
 import { InstanceRef } from "@/effect/instance-ref"
 import type { Instance } from "@opencode/core/instance"
@@ -31,8 +30,6 @@ export interface Interface {
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/InstanceStore") {}
-
-export const use = serviceUse(Service)
 
 const resolve = (directory: string) => FSUtil.resolve(directory)
 

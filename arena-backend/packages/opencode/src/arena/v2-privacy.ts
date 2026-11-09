@@ -7,6 +7,8 @@ const OPAQUE_PROVIDER = "arena"
 const OPAQUE_MODEL = "contestant"
 const CATALOG_KEYS = new Set(["models", "providers", "catalog", "modelcatalog", "providercatalog"])
 const PRIVATE_KEYS = new Set([
+  // Provider replay data: `native` since OpenCode 2.1, `providerState`/`providerResultState` before it.
+  "native",
   "providerstate",
   "providerresultstate",
   "rawfinish",

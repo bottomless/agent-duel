@@ -1,6 +1,6 @@
 export * as SessionRunnerLLM from "./llm.js"
 
-import { Message } from "@opencode/ai"
+import { Message } from "@opencode/ai/effect"
 import { and, desc, eq, inArray, sql } from "drizzle-orm"
 import { Cause, Effect, Exit, FiberMap, Layer } from "effect"
 import { Database } from "../../database/database.js"
@@ -11,8 +11,9 @@ import { SessionCompaction } from "../compaction.js"
 import { SessionContext } from "../context.js"
 import { SessionEvent } from "../event.js"
 import { SessionInbox } from "../inbox.js"
+import { SessionBackground } from "../background.js"
+import { Job } from "../../job.js"
 import { SessionHistory } from "../history.js"
-import { SessionProviderContext } from "../provider-context.js"
 import { SessionModelRequest } from "../model-request.js"
 import { SessionModelTransport } from "../model-transport.js"
 import { SessionMessage } from "../message.js"
@@ -39,6 +40,8 @@ const CONTINUE_AFTER_INCOMPLETE_STREAM =
 const CONTINUE_AFTER_OUTPUT_LIMIT =
   "Your last response hit the output token limit (stop reason: length). Do not apologize, recap, or repeat yourself. Break the remaining work into smaller pieces."
 
+type DrainInput = Parameters<Interface["drain"]>[0]
+
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -51,19 +54,22 @@ const layer = Layer.effect(
     const compaction = yield* SessionCompaction.Service
     const plugins = yield* Plugin.Service
     const hooks = yield* PluginHooks.Service
+    const jobs = yield* Job.Service
     const title = yield* SessionTitle.Service
     const steps = yield* SessionStep.make
     // Title generation starts once input is visible and must not delay model execution.
     const titles = yield* FiberMap.make<SessionSchema.ID, void, never>()
 
-    const drain = Effect.fn("SessionRunner.drain")(function* (input: Parameters<Interface["drain"]>[0]) {
+    // Each drain is one turn and starts its own trace, whatever fiber woke it.
+    const drain = Effect.fn("SessionRunner.drain", { root: true })(function* (input: DrainInput) {
       const sessionID = input.sessionID
       let force = input.force
       let continuing = input.continuation !== undefined
       let step = input.continuation?.step ?? 1
       let entering = true
+      let stepped = input.stepped ?? false
       const promotable = input.promotable ?? "input"
-      if (!force && !continuing) {
+      if (!force && !continuing && !stepped) {
         const pending = yield* SessionInbox.nextPromotable(db, sessionID, "input")
         if (!pending) return DrainResult.Complete()
         const control = pending.type === "compaction" || pending.type === "move"
@@ -79,7 +85,11 @@ const layer = Layer.effect(
             while (true) {
               if (lifecycle.isClosed()) {
                 yield* restore(modelTransport.close(sessionID))
-                return DrainResult.Reloaded({ force, continuation: continuing ? { step } : undefined })
+                return DrainResult.Reloaded({
+                  force,
+                  continuation: continuing ? { step } : undefined,
+                  stepped: !continuing && stepped ? true : undefined,
+                })
               }
               // Location entry and idle boundaries allow queued controls, not necessarily queued prompts.
               const pending = yield* SessionInbox.serialized(
@@ -93,7 +103,7 @@ const layer = Layer.effect(
                   if (next?.type === "compaction")
                     yield* bus.publishAll([
                       [SessionEvent.InboxDelivered, { sessionID, inboxID: next.id }],
-                      [SessionEvent.Compaction.Started, { sessionID, reason: "manual", recent: "", inputID: next.id }],
+                      [SessionEvent.Compaction.Started, { sessionID, reason: "manual", inputID: next.id }],
                     ])
                   if (next?.type === "move")
                     yield* restore(
@@ -113,19 +123,18 @@ const layer = Layer.effect(
                 step = 1
               }
               if (pending?.type === "move")
-                return DrainResult.Moved({ continuation: continuing ? { step } : undefined })
+                return DrainResult.Moved({
+                  continuation: continuing ? { step } : undefined,
+                  stepped: !continuing && stepped ? true : undefined,
+                })
               if (pending?.type === "compaction") {
                 const compacted = yield* restore(
                   Effect.gen(function* () {
+                    yield* plugins.awaitActivation
                     const selected = yield* context.select(sessionID)
                     const model = yield* context.resolveModel(selected.session)
                     // Preview updates without admitting them after the already-delivered compaction marker.
-                    const history = yield* SessionHistory.preview(
-                      db,
-                      sessionID,
-                      selected.instructions,
-                      SessionProviderContext.provenance(model) ?? "local",
-                    )
+                    const history = yield* SessionHistory.preview(db, sessionID, selected.instructions, model.ref)
                     return yield* compaction.compact({
                       reason: "manual",
                       inputID: pending.id,
@@ -163,8 +172,18 @@ const layer = Layer.effect(
                 force = false
                 continue
               }
-              if (!force && !continuing && (!pending || (pending.delivery === "queue" && promotable === "steer")))
-                return DrainResult.Complete()
+              if (!force && !continuing && (!pending || (pending.delivery === "queue" && promotable === "steer"))) {
+                // Control-only drains such as a manual compaction never ran the model, so they skip the hook.
+                if (pending || !stepped) return DrainResult.Complete()
+                // The Session would go idle; a plugin may admit input to keep this execution working.
+                yield* restore(
+                  SessionBackground.outstanding(jobs, store, sessionID).pipe(
+                    Effect.flatMap((background) => hooks.trigger("session", "experimental.idle", { sessionID, background })),
+                  ),
+                )
+                if (!(yield* SessionInbox.has(db, sessionID, "input"))) return DrainResult.Complete()
+                continue
+              }
               const ready = yield* restore(
                 Effect.gen(function* () {
                   const selected = yield* prepareContext(sessionID)
@@ -194,6 +213,7 @@ const layer = Layer.effect(
         const next = yield* advanceToStep()
         if (next._tag !== "Ready") return next
         continuing = yield* runStep(next.context, step)
+        stepped = true
         step++
         force = false
         entering = false
@@ -201,6 +221,8 @@ const layer = Layer.effect(
     })
 
     const prepareContext = Effect.fn("SessionRunner.prepareContext")(function* (sessionID: SessionSchema.ID) {
+      // Plugins can reload mid-turn; each step and retry must read the settled agents, models and skills.
+      yield* plugins.awaitActivation
       const selected = yield* context.select(sessionID)
       // A blocked initial instruction baseline must leave admitted input pending.
       yield* InstructionState.prepare(db, bus, selected.instructions, sessionID)
@@ -220,12 +242,14 @@ const layer = Layer.effect(
         // Reuse boundary preparation once; retries refresh context without delivering more input.
         const loaded = initial ?? (yield* prepareContext(sessionID).pipe(Effect.flatMap(context.load)))
         initial = undefined
-        const compacted = yield* compaction.compact({ reason: "auto", context: loaded })
+        const estimate = SessionCompaction.estimatePrompt(loaded)
+        const compacted = yield* compaction.compact({ reason: "auto", context: loaded, estimate })
         if (compacted.status === "failed") return yield* new StepFailedError({ error: compacted.error })
         if (compacted.status === "completed") {
           assistantMessageID = SessionMessage.ID.create()
           continue
         }
+        yield* compaction.precompute(Effect.succeed(loaded), estimate)
         const stepLimitReached = loaded.agent.info.steps !== undefined && step >= loaded.agent.info.steps
         const transcript = SessionModelRequest.baseTranscript({
           agent: loaded.agent.info,
@@ -234,40 +258,53 @@ const layer = Layer.effect(
           initial: loaded.initial,
           messages: loaded.messages,
         })
-        const prepared = yield* context.request.primary({
-          session: loaded.session,
-          agent: loaded.agent.id,
-          model: loaded.model,
-          tools: loaded.tools,
-          system: transcript.system,
-          messages: stepLimitReached
-            ? [...transcript.messages, Message.assistant(MAX_STEPS_PROMPT)]
-            : transcript.messages,
-          // Keep tool definitions on the final Step to preserve the provider's cached prefix.
-          toolChoice: stepLimitReached ? "none" : undefined,
-          webSocket: "session",
-          inputTokens: SessionCompaction.estimatePrompt(loaded),
-        })
+        const prepared = yield* context.request
+          .primary({
+            session: loaded.session,
+            agent: loaded.agent.id,
+            model: loaded.model,
+            tools: loaded.tools,
+            system: transcript.system,
+            messages: stepLimitReached
+              ? [...transcript.messages, Message.assistant(MAX_STEPS_PROMPT)]
+              : transcript.messages,
+            // Keep tool definitions on the final Step to preserve the provider's cached prefix.
+            toolChoice: stepLimitReached ? "none" : undefined,
+            webSocket: "session",
+            inputTokens: estimate,
+          })
+          .pipe(
+            // The hook event holds every message from before images are bounded, screenshots included, and is a separate
+            // copy once a plugin hook has rewritten it. The step and its tool callbacks live as long as the slowest tool,
+            // so they keep only what they use.
+            Effect.map((prepared) => ({
+              request: prepared.request,
+              options: prepared.options,
+              preflight: prepared.preflight,
+              retry: prepared.retry,
+              executeTool: prepared.executeTool,
+            })),
+          )
         // Plugins may reject an oversized provider-neutral request before any network bytes are
         // sent. Compaction is owned by the runner so the native transcript and durable checkpoint
         // remain intact; the next loop rebuilds the request after the summary is committed.
-        const preflight = yield* prepared.preflight()
+        const decision = prepared.preflight ? (yield* prepared.preflight()).decision : "send"
         // Compact at most once per Step, and never right after a completed compaction, like
         // Core's own trigger. A request still over the ceiling after one would only summarize
         // the summary again, so it goes to the provider, whose overflow recovery is bounded.
         const last = loaded.messages.at(-1)
         const compactedLast = last?.type === "compaction" && last.status === "completed"
-        if (preflight.decision === "compact" && (preflightCompacted || compactedLast))
+        if (decision === "compact" && (preflightCompacted || compactedLast))
           yield* Effect.logWarning("request still exceeds the preflight ceiling after compaction; sending", {
             sessionID,
             model: loaded.model.ref,
           })
-        else if (preflight.decision === "compact") {
+        else if (decision === "compact") {
           // Arena preflight is an explicit provider-neutral ceiling. `auto` may
           // legitimately skip below Core's larger catalog ceiling, which would
           // otherwise send the oversized request after this hook returned.
           preflightCompacted = true
-          const result = yield* compaction.compact({ reason: "overflow", context: loaded })
+          const result = yield* compaction.compact({ reason: "overflow", context: loaded, estimate })
           if (result.status === "failed") return yield* new StepFailedError({ error: result.error })
           if (result.status === "completed") {
             assistantMessageID = SessionMessage.ID.create()
@@ -286,7 +323,11 @@ const layer = Layer.effect(
           assistantMessageID,
           agent: loaded.agent.id,
           model: loaded.model,
-          prepared,
+          prepared: {
+            ...prepared,
+            // A tool call can arrive during a reload; its permission check reads the session's agent.
+            executeTool: (call) => plugins.awaitActivation.pipe(Effect.andThen(prepared.executeTool(call))),
+          },
           retry: (cause, error, proposed) =>
             retry.decide({
               cause,
@@ -300,13 +341,20 @@ const layer = Layer.effect(
           recoverOverflow: Effect.suspend(() =>
             recoverOverflow
               ? compaction
-                  .compact({ reason: "overflow", context: loaded })
+                  .compact({ reason: "overflow", context: loaded, estimate })
                   .pipe(Effect.map((result) => result.status === "completed"))
               : Effect.succeed(false),
           ),
         })
         const completed = yield* SessionStep.Outcome.$match(outcome, {
-          Completed: (outcome) => Effect.succeed(outcome.needsContinuation),
+          Completed: Effect.fnUntraced(function* (outcome) {
+            // The Session is about to go idle, which leaves the background summary time to finish.
+            if (!outcome.needsContinuation)
+              yield* compaction.precompute(
+                store.context(sessionID).pipe(Effect.map((messages) => ({ ...loaded, messages }))),
+              )
+            return outcome.needsContinuation
+          }),
           Retry: Effect.fnUntraced(function* (outcome) {
             yield* retry.wait({
               decision: outcome.decision,
@@ -347,8 +395,11 @@ const layer = Layer.effect(
           }),
           OutputLimit: Effect.fn("SessionRunner.continueOutputLimit")(function* (outcome) {
             // The current response is included. User input or any other finish breaks the streak.
-            const rows = yield* db
-              .select()
+            const recent = yield* db
+              .select({
+                type: SessionMessageTable.type,
+                finish: sql<string | null>`json_extract(${SessionMessageTable.data}, '$.finish')`,
+              })
               .from(SessionMessageTable)
               .where(
                 and(
@@ -360,10 +411,8 @@ const layer = Layer.effect(
               .limit(3)
               .all()
               .pipe(Effect.orDie)
-            const recent = yield* Effect.forEach(rows, SessionHistory.decodeMessageRow)
             const exhausted =
-              recent.length === 3 &&
-              recent.every((message) => message.type === "assistant" && message.finish === "length")
+              recent.length === 3 && recent.every((row) => row.type === "assistant" && row.finish === "length")
             if (exhausted)
               return yield* new StepFailedError({
                 error: {
@@ -420,7 +469,7 @@ const layer = Layer.effect(
     const settleStaleToolCalls = Effect.fn("SessionRunner.settleStaleToolCalls")(function* (
       sessionID: SessionSchema.ID,
     ) {
-      for (const message of yield* store.context(sessionID)) {
+      for (const message of yield* SessionHistory.incompleteAssistants(db, sessionID)) {
         if (message.type !== "assistant") continue
         for (const tool of message.content) {
           if (tool.type !== "tool" || (tool.state.status !== "streaming" && tool.state.status !== "running")) continue
@@ -442,7 +491,9 @@ const layer = Layer.effect(
       }
     })
 
-    return Service.of({ drain })
+    return Service.of({
+      drain: (input) => drain(input).pipe(Effect.annotateSpans("session.id", input.sessionID)),
+    })
   }),
 )
 
@@ -459,6 +510,7 @@ export const node = makeLocationNode({
     SessionCompaction.node,
     Plugin.node,
     PluginHooks.node,
+    Job.node,
     SessionTitle.node,
     Snapshot.node,
     ToolOutput.node,

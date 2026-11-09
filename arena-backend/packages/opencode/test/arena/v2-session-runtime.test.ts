@@ -407,7 +407,7 @@ describe("Arena V2 native session storage", () => {
             type: "tool",
             id: "call_native",
             name: "read",
-            providerState: {
+            native: {
               provider: "tool-state",
               reasoning_details: [{ type: "reasoning.encrypted", data: "arena_reasoning_v1.fixture" }],
             },
@@ -422,14 +422,14 @@ describe("Arena V2 native session storage", () => {
           {
             type: "reasoning",
             text: "[Thinking redacted]",
-            state: { reasoning_details: [{ type: "reasoning.encrypted", data: "arena_reasoning_v1.fixture" }] },
+            native: { reasoning_details: [{ type: "reasoning.encrypted", data: "arena_reasoning_v1.fixture" }] },
           },
           { type: "text", text: "Half an answer" },
           { type: "text", text: "[The response was interrupted]" },
           { type: "text", text: "Continuation" },
         ],
         snapshot: { start: undefined, end: undefined, files: ["README.md"] },
-        providerState: { responseID: "response-native" },
+        native: { responseID: "response-native" },
         time: { created, streamed: created, completed: created },
       }
       const encoded = Schema.encodeSync(SessionMessage.Info)(assistant)
@@ -468,11 +468,11 @@ describe("Arena V2 native session storage", () => {
         "[The response was interrupted]",
         "Continuation",
       ])
-      expect(copied.providerState).toEqual({ responseID: "response-native" })
+      expect(copied.native).toEqual({ responseID: "response-native" })
       expect(copied.snapshot?.files).toEqual(["README.md"])
       expect(copied.content[0]).toMatchObject({
         type: "tool",
-        providerState: { provider: "tool-state" },
+        native: { provider: "tool-state" },
         state: { status: "completed", content: [{ type: "text", text: "native output" }] },
       })
       const stored = yield* arena.canonicalMessages(target.id)
@@ -493,7 +493,7 @@ describe("Arena V2 native session storage", () => {
       const nativeTool = compactedTool.content[0]
       if (nativeTool.type !== "tool" || nativeTool.state.status !== "completed")
         throw new Error("native tool copy missing")
-      expect(nativeTool.providerState).toEqual({ provider: "tool-state" })
+      expect(nativeTool.native).toEqual({ provider: "tool-state" })
       expect(nativeTool.state.content).toEqual([{ type: "text", text: "[Old tool result content cleared]" }])
     }),
   )

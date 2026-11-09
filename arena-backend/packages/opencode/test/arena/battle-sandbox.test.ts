@@ -14,6 +14,7 @@ import path from "node:path"
 import { Effect, Layer, Schema } from "effect"
 import { FileAccess } from "@opencode/core/file-access"
 import { FileMutation } from "@opencode/core/file-mutation"
+import { FileWrite } from "@opencode/core/file-write"
 import { Environment } from "@opencode/core/environment/index"
 import { Formatter } from "@opencode/core/formatter"
 import { Location } from "@opencode/core/location"
@@ -186,6 +187,7 @@ function harness(f: ReturnType<typeof fixture>, battle = true, capturedDirectory
     LayerNode.group([
       FileAccess.node,
       FileMutation.node,
+      FileWrite.node,
       Environment.node,
       Formatter.node,
       Permission.node,

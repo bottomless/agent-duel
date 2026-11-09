@@ -1,5 +1,6 @@
 import { describe, expect, test, spyOn } from "bun:test"
-import { LLM, LLMEvent } from "@opencode/ai"
+import { castDraft, produce } from "immer"
+import { ai, LLMEvent, Message } from "@opencode/ai/effect"
 import { LLMClient, RequestExecutor } from "@opencode/ai/route"
 import { AISDK } from "@opencode/core/aisdk"
 import { Model } from "@opencode/core/model"
@@ -85,7 +86,7 @@ const events = (
         event.language = withHeldToolCalls(event.sdk.languageModel("m"))
       })
       const resolved = yield* aisdk.model(model)
-      const stream = LLMClient.stream(LLM.request({ model: resolved, messages, prompt: "Go" }))
+      const stream = LLMClient.stream(ai.request({ model: resolved, messages: [...messages, Message.user("Go")] }))
       const result: LLMEvent[] = []
       yield* stream.pipe(
         Stream.runForEach((event) => Effect.sync(() => void result.push(event))),
@@ -120,6 +121,11 @@ const failedHistory = (all: readonly LLMEvent[], providerID: string, type: strin
   Effect.runPromise(
     Effect.gen(function* () {
       const messages: SessionMessage.Info[] = []
+      const editAssistant = (id: SessionMessage.ID, recipe: (draft: any) => void) =>
+        Effect.sync(() => {
+          const index = messages.findIndex((message) => message.type === "assistant" && message.id === id)
+          if (index >= 0) messages[index] = produce(messages[index] as SessionMessage.Assistant, recipe)
+        })
       const adapter: Adapter = {
         getAgent: () => Effect.succeed(undefined),
         getModel: () => Effect.succeed(undefined),
@@ -132,6 +138,24 @@ const failedHistory = (all: readonly LLMEvent[], providerID: string, type: strin
         updateAssistant: (message) =>
           Effect.sync(() => {
             messages[messages.findIndex((item) => item.id === message.id)] = message
+          }),
+        appendAssistantPart: (id, part) =>
+          editAssistant(id, (draft) => {
+            draft.content.push(castDraft(part))
+          }),
+        updateAssistantPart: (id, match, recipe) =>
+          editAssistant(id, (draft) => {
+            const found = draft.content.findLast(
+              (item: any) =>
+                item.type === match.type &&
+                (match.callID === undefined || (item.type === "tool" && item.id === match.callID)) &&
+                (!match.incompleteReasoning || (item.type === "reasoning" && !item.time?.completed)),
+            )
+            if (found) recipe(found)
+          }),
+        replaceAssistantParts: (id, parts) =>
+          editAssistant(id, (draft) => {
+            draft.content = castDraft([...parts])
           }),
         updateShell: () => Effect.die("Unexpected shell update"),
         updateCompaction: () => Effect.die("Unexpected compaction update"),

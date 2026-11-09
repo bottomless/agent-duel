@@ -36,11 +36,11 @@ type Shipped = {
 }
 
 function opencodePty(): Shipped {
-  const pty = createRequire(core.resolve("@opencode-ai/pty/package.json"))
+  const pty = createRequire(core.resolve("@opencode/pty/package.json"))
   const name = "opencode-pty"
   return {
     name,
-    source: pty.resolve(`@opencode-ai/pty-${platform}-${arch}${platform === "linux" ? "-gnu" : ""}/bin/opencode-pty`),
+    source: pty.resolve(`@opencode/pty-${platform}-${arch}${platform === "linux" ? "-gnu" : ""}/bin/opencode-pty`),
     executable: true,
     // Upstream's CLI build embeds the binary and extracts it into the data directory.
     plugin: {
@@ -135,9 +135,22 @@ for (const item of shipped)
   if (!existsSync(item.source))
     throw new Error(`${item.name} is missing at ${item.source}; run bun install in arena-backend`)
 
+// Windows keeps the non-persistent shell path (core's persistent-pty/binary.bun.ts), so the engine ships no
+// opencode-pty there. The package looks up its platform binary when it loads, which a compiled engine cannot.
+const windowsPty: BunPlugin = {
+  name: "opencode-pty-windows",
+  setup(build) {
+    build.onLoad({ filter: /persistent-pty[/\\]pty-binding\.ts$/ }, () => ({
+      loader: "js",
+      contents: "export default undefined",
+    }))
+  },
+}
+const replaced = [...shipped.map((item) => item.plugin), ...(unix ? [] : [windowsPty])]
+
 // A filter that matches nothing does not fail Bun.build: the engine would embed the file again and extract
 // it at run time, where library validation refuses it. Count each plugin's loads and fail on a miss.
-const loads = new Map(shipped.map((item) => [item.plugin.name, 0]))
+const loads = new Map(replaced.map((plugin) => [plugin.name, 0]))
 const counted = (plugin: BunPlugin): BunPlugin => ({
   name: plugin.name,
   setup(build) {
@@ -157,7 +170,7 @@ const result = await Bun.build({
   entrypoints: [path.resolve(import.meta.dirname, "../src/index.ts")],
   conditions: ["browser"],
   define,
-  plugins: [providers.plugin, ...shipped.map((item) => counted(item.plugin))],
+  plugins: [providers.plugin, ...replaced.map(counted)],
   compile: {
     outfile: path.resolve(outfile),
     // A long-lived engine otherwise keeps its peak heap: collect more often and keep it smaller.
@@ -172,11 +185,11 @@ if (!result.success) {
 
 providers.check()
 
-const missed = shipped.filter((item) => loads.get(item.plugin.name) !== 1)
+const missed = replaced.filter((plugin) => loads.get(plugin.name) !== 1)
 if (missed.length > 0) {
-  for (const item of missed)
+  for (const plugin of missed)
     console.error(
-      `${item.plugin.name} replaced ${loads.get(item.plugin.name)} modules, not 1: its filter no longer matches the module that loads ${item.name}`,
+      `${plugin.name} replaced ${loads.get(plugin.name)} modules, not 1: its filter no longer matches the module it replaces`,
     )
   process.exit(1)
 }

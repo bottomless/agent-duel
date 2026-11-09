@@ -109,7 +109,7 @@ describe("Arena contestant session mutation guard", () => {
     const root = await createSession(headers, { title: "contestant root" })
     const descendant = await createSession(headers, { title: "contestant descendant", parentID: root })
     const canonical = await createSession(headers, { title: "canonical" })
-    const unrelatedV2 = SessionID.descending()
+    const unrelatedV2 = SessionID.create()
     const resolved = await createSession(headers, { title: "resolved contestant" })
 
     setStoreForTest(store({ running: { root, descendant }, complete: { root: resolved } }))

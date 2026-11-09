@@ -350,10 +350,13 @@ function replaceCanonicalPart(
   current: SessionMessage.AssistantContent,
   part: ArenaPart,
 ): SessionMessage.AssistantContent {
-  if (part.type === "text") return { ...current, type: "text", text: part.text, state: part.metadata }
+  if (part.type === "text")
+    return current.type === "text"
+      ? { ...current, text: part.text, native: part.metadata }
+      : { type: "text", text: part.text, native: part.metadata }
   if (part.type === "reasoning") {
-    if (current.type !== "reasoning") return { type: "reasoning", text: part.text, state: part.metadata }
-    return { ...current, text: part.text, state: part.metadata }
+    if (current.type !== "reasoning") return { type: "reasoning", text: part.text, native: part.metadata }
+    return { ...current, text: part.text, native: part.metadata }
   }
   if (part.type !== "tool") return current
   if (current.type !== "tool")

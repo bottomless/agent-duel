@@ -45,8 +45,8 @@ function assistant(id = "msg_20", details = sealed()) {
     model,
     time: { created: 0, completed: 1 },
     content: [
-      { type: "reasoning", text: REDACTED_THINKING, state: { reasoning_details: details } },
-      { type: "text", text: "Half an answer: ```json\n{", state: { reasoning_details: details, unrelated: [] } },
+      { type: "reasoning", text: REDACTED_THINKING, native: { reasoning_details: details } },
+      { type: "text", text: "Half an answer: ```json\n{", native: { reasoning_details: details, unrelated: [] } },
       {
         type: "tool",
         id: "call_fixture",
@@ -86,10 +86,10 @@ describe("sealed reasoning assignment boundaries", () => {
     expect(copy.content.map((part) => part.type)).toEqual(source.content.map((part) => part.type))
     expect(copy.content.map((part) => (part.type === "tool" ? part : part.text))).toEqual(
       source.content.map((part) =>
-        part.type === "tool" ? { ...part, providerState: undefined, providerResultState: undefined } : part.text,
+        part.type === "tool" ? { ...part, native: undefined } : part.text,
       ),
     )
-    expect(copy.content[1]).toMatchObject({ state: { unrelated: [] } })
+    expect(copy.content[1]).toMatchObject({ native: { unrelated: [] } })
     expect(JSON.stringify(lowered(copy))).not.toContain(REDACTED_THINKING)
     expect(JSON.stringify(source)).toBe(before)
   })

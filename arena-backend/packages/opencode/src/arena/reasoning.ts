@@ -1,4 +1,4 @@
-import type { ContentPart, Message, ProviderMetadata } from "@opencode/ai"
+import { AssistantMessage, type Message, type ProviderMetadata } from "@opencode/ai"
 import type { SessionMessage } from "@opencode/schema/session-message"
 import { REDACTED_THINKING } from "@agent-duel/arena-service/reasoning"
 
@@ -39,16 +39,9 @@ export function expireCopiedReasoning(message: SessionMessage.Info): SessionMess
   if (message.type !== "assistant" || message.model.providerID !== "arena") return message
   return {
     ...message,
-    providerState: expireState(message.providerState),
-    content: message.content.map((part) =>
-      part.type === "tool"
-        ? {
-            ...part,
-            providerState: expireState(part.providerState),
-            providerResultState: expireState(part.providerResultState),
-          }
-        : { ...part, state: expireState(part.state) },
-    ),
+    native: expireState(message.native),
+    // A tool's call and result data share `native`.
+    content: message.content.map((part) => ({ ...part, native: expireState(part.native) })),
   }
 }
 
@@ -64,10 +57,10 @@ function expireMetadata(metadata: ProviderMetadata | undefined): ProviderMetadat
 
 /** Battle-off changes scope on each prompt. Do not mutate its canonical rows or transcript hash. */
 export function reasoningContext(messages: Message[], fromMessageID?: string): Message[] {
-  return messages.flatMap((message) => {
+  return messages.flatMap((message): Message[] => {
     if (message.role !== "assistant") return [message]
     const expired = fromMessageID !== undefined && message.id !== undefined && String(message.id) < fromMessageID
-    const content = message.content.flatMap((part): ContentPart[] => {
+    const content = message.content.flatMap((part): AssistantMessage["content"][number][] => {
       if (!expired) return [part]
       if (part.type === "reasoning" && part.text.replaceAll(REDACTED_THINKING, "").trim() === "") return []
       if (!("providerMetadata" in part)) return [part]
@@ -77,6 +70,6 @@ export function reasoningContext(messages: Message[], fromMessageID?: string): M
     const hasReply = content.some(
       (part) => part.type !== "reasoning" && (part.type !== "text" || part.text.trim().length > 0),
     )
-    return hasReply ? [{ ...message, content }] : []
+    return hasReply ? [new AssistantMessage({ ...message, content })] : []
   })
 }

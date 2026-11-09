@@ -149,7 +149,7 @@ describe("Arena fork on native sessions", () => {
         {
           type: "reasoning",
           text: "[Thinking redacted]",
-          state: { reasoning_details: [{ type: "reasoning.encrypted", data: "arena_reasoning_v1.fixture" }] },
+          native: { reasoning_details: [{ type: "reasoning.encrypted", data: "arena_reasoning_v1.fixture" }] },
         },
         { type: "text", text: "Keep this answer" },
       ],

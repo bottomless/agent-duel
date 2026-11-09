@@ -6,6 +6,10 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { fileURLToPath } from "node:url"
 import { Database } from "@opencode/core/database/database"
 import { V1Migration } from "@opencode/core/database/v1-migration"
+import { AppNodeBuilder } from "@opencode/core/effect/app-node-builder"
+import { Project } from "@opencode/core/project"
+import { FSUtil } from "@opencode/util/fs-util"
+import { LayerNode } from "@opencode/util/effect/layer-node"
 import { removeImportedLegacyTables, type CleanupInput } from "./database-cleanup"
 import { engineDatabaseLease } from "./database-lease"
 import { Global } from "@opencode/util/global"
@@ -139,10 +143,16 @@ export async function prepareDatabaseMaintenance(input: CleanupInput, maintenanc
 export async function importLegacyDatabase(input: CleanupInput, acquireLease = engineDatabaseLease) {
   await verifyDatabaseOwnership(input.engineDatabase, input.arenaDirectory)
   using lease = await acquireLease(input.engineDatabase)
+  const global = Layer.succeed(Global.Service, Global.make({ data: dirname(input.engineDatabase) }))
   await Effect.runPromise(
     fenceLegacyEngines.pipe(
-      Effect.provide(Database.layer({ path: input.engineDatabase })),
-      Effect.provideService(Global.Service, Global.make({ data: dirname(input.engineDatabase) })),
+      // The import resolves an owning project for each V1 directory, so it needs Project and FSUtil too.
+      Effect.provide(
+        AppNodeBuilder.build(LayerNode.group([Project.node, Database.node, FSUtil.node]), [
+          Database.node.replace(Database.layer({ path: input.engineDatabase }).pipe(Layer.provide(global))),
+        ]),
+      ),
+      Effect.provide(global),
       Effect.scoped,
     ),
   )

@@ -14,13 +14,16 @@ describe("sanitizeV2", () => {
           cost: 12.3,
           tokens: { input: 20, output: 10 },
           providerState: { raw: "provider replay" },
+          native: { raw: "native provider replay" },
           content: [
             { type: "reasoning", text: "private chain of thought", state: { raw: "secret" } },
-            { type: "text", text: "ordinary assistant prose" },
+            { type: "reasoning", text: "private native thought", native: { signature: "native secret" } },
+            { type: "text", text: "ordinary assistant prose", native: { thoughtSignature: "native secret" } },
             {
               type: "tool",
               id: "provider-call-id",
               name: "shell",
+              native: { itemId: "native secret" },
               state: {
                 status: "completed",
                 input: { command: "echo hello" },
@@ -40,17 +43,20 @@ describe("sanitizeV2", () => {
     expect(encoded).not.toContain("gpt-5-secret")
     expect(encoded).not.toContain("vendor-secret")
     expect(encoded).not.toContain("provider replay")
+    expect(encoded).not.toContain("native secret")
     expect(encoded).not.toContain("private chain of thought")
+    expect(encoded).not.toContain("private native thought")
     expect(value.data.info.cost).toBe(0)
     expect(value.data.info.tokens).toEqual({ input: 0, output: 0 })
     expect(value.models).toBeUndefined()
     expect(value.providers).toBeUndefined()
     expect(value.data.info.model).toEqual({ id: "contestant", providerID: "arena", variant: "fast" })
     expect(value.data.info.content[0]).toMatchObject({ type: "reasoning", text: REDACTED_THINKING })
-    expect(value.data.info.content[1]).toEqual({ type: "text", text: "ordinary assistant prose" })
-    expect(value.data.info.content[2].state.input).toEqual({ command: "echo hello" })
-    expect(value.data.info.content[2].state.content).toEqual([{ type: "text", text: "hello" }])
-    expect(value.data.info.content[2].id).toMatch(/^call_arena_/)
+    expect(value.data.info.content[1]).toEqual({ type: "reasoning", text: REDACTED_THINKING })
+    expect(value.data.info.content[2]).toEqual({ type: "text", text: "ordinary assistant prose" })
+    expect(value.data.info.content[3].state.input).toEqual({ command: "echo hello" })
+    expect(value.data.info.content[3].state.content).toEqual([{ type: "text", text: "hello" }])
+    expect(value.data.info.content[3].id).toMatch(/^call_arena_/)
 
     const catalogEntry = sanitizeV2({
       model: {

@@ -2,6 +2,8 @@ import { describe, expect } from "bun:test"
 import { SystemPart } from "@opencode/ai"
 import { AppNodeBuilder } from "@opencode/core/effect/app-node-builder"
 import { FileAccess } from "@opencode/core/file-access"
+import { Location } from "@opencode/core/location"
+import { AbsolutePath } from "@opencode/core/schema"
 import { Permission } from "@opencode/core/permission"
 import { PluginHooks } from "@opencode/core/plugin/hooks"
 import { Tool as Registry } from "@opencode/core/tool"
@@ -23,7 +25,9 @@ import { AssignmentRegistry } from "@/arena/proxy"
 
 const it = testEffect(
   Layer.mergeAll(
-    AppNodeBuilder.build(LayerNode.group([Registry.node, PluginHooks.node])),
+    AppNodeBuilder.build(LayerNode.group([Registry.node, PluginHooks.node]), [
+      Location.node.replace(Location.boundNode({ directory: AbsolutePath.make("/project") })),
+    ]),
     // Registration captures these services; blocked callbacks must never reach them.
     Layer.mock(FileAccess.Service, {}),
     Layer.mock(Permission.Service, {}),

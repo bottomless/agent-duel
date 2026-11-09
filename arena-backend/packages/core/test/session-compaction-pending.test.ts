@@ -20,20 +20,23 @@ const checkpoint: SessionMessage.CompactionCompleted = {
   status: "completed",
   reason: "auto",
   summary: "Earlier history",
-  recent: "Recent completed exchange",
+  metadata: { recent: "Recent completed exchange" },
 }
 
 test("pending input survives a checkpoint JSON round trip with attachments outside summary text", () => {
   const stored = {
     ...checkpoint,
-    metadata: { [RETAINED_INPUT]: Schema.encodeSync(Schema.Array(SessionMessage.User))([pending]) },
+    metadata: {
+      ...checkpoint.metadata,
+      [RETAINED_INPUT]: Schema.encodeSync(Schema.Array(SessionMessage.User))([pending]),
+    },
   }
   const wire = JSON.stringify(Schema.encodeSync(SessionMessage.Info)(stored))
   const restored = Schema.decodeUnknownSync(SessionMessage.Info)(JSON.parse(wire))
   const messages = toLLMMessages([restored], model)
   expect(messages).toHaveLength(2)
   expect(messages[0].content).toMatchObject([{ type: "text", text: expect.stringContaining("Earlier history") }])
-  expect(messages[0].metadata).toEqual({})
+  expect(JSON.stringify(messages[0])).not.toContain(pending.text)
   expect(messages[1]).toEqual(toLLMMessages([pending], model)[0])
   expect(messages[1].content).toMatchObject([
     { type: "text", text: pending.text },

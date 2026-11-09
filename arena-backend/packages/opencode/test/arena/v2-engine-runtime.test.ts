@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test"
 import { existsSync } from "node:fs"
 import { AISDK } from "@opencode/core/aisdk"
-import { LLM, LLMClient, Media, Message } from "@opencode/ai"
+import { ai, LLMClient, Media, Message } from "@opencode/ai/effect"
 import { RequestExecutor } from "@opencode/ai/route"
 import { FetchHttpClient } from "effect/http"
 import { Context, Effect, Exit, Layer, Scope, Stream } from "effect"
@@ -490,13 +490,11 @@ describe("Arena v2 engine runtime", () => {
         body: { reasoning: { effort: "high" } },
         settings: {},
       })
-      const request = LLM.stream({
+      const request = ai.stream({
         model,
         system: contextEvent.system,
         prompt: "hello",
-        http: {
-          headers: requestHeaders({ sessionID: "ses_probe", parentSessionID: "ses_root", kind: "primary" }),
-        },
+        headers: requestHeaders({ sessionID: "ses_probe", parentSessionID: "ses_root", kind: "primary" }),
       })
       yield* request.pipe(Stream.runDrain, Effect.provide(clientLayer))
     }).pipe(Effect.provide(aisdkLayer), Effect.scoped)
@@ -610,10 +608,10 @@ describe("Arena v2 engine runtime", () => {
       const send = (next: typeof mode, kind: "primary" | "title" = "primary") =>
         Effect.suspend(() => {
           mode = next
-          return LLM.stream({
+          return ai.stream({
             model,
             prompt: "hello",
-            http: { headers: requestHeaders({ sessionID, kind }) },
+            headers: requestHeaders({ sessionID, kind }),
           }).pipe(Stream.runCollect, Effect.provide(clientLayer), Effect.result)
         })
       const failure = Effect.fn(function* (next: typeof mode, kind: "primary" | "title" = "primary") {

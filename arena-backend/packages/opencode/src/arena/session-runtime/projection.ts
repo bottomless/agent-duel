@@ -158,7 +158,7 @@ const canonicalPart = (
       messageID: wireMessageID(messageID),
       type: "text",
       text: value.text,
-      ...(value.state ? { metadata: value.state } : {}),
+      ...(value.native ? { metadata: value.native } : {}),
     }
     return result
   }
@@ -169,7 +169,7 @@ const canonicalPart = (
       messageID: wireMessageID(messageID),
       type: "reasoning",
       text: value.text,
-      ...(value.state ? { metadata: value.state } : {}),
+      ...(value.native ? { metadata: value.native } : {}),
       time: {
         start: value.time ? DateTime.toEpochMillis(value.time.created) : created,
         ...(value.time?.completed ? { end: DateTime.toEpochMillis(value.time.completed) } : {}),
