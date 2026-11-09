@@ -7,6 +7,7 @@ import { createOpenRouter } from "@openrouter/ai-sdk-provider"
 import { AISDK } from "@opencode/core/aisdk"
 import { ShellTool } from "@opencode/core/tool/plugin/shell"
 import { contestantShellInput, contestantShellTimeoutMessage, shellNotification } from "./shell"
+import { WindowsJob } from "@opencode/util/windows-job"
 import { define } from "@opencode/plugin/effect/plugin"
 import type { Context } from "@opencode/plugin/effect/plugin"
 import type { Model } from "@opencode/schema/model"
@@ -554,10 +555,12 @@ function install(context: Context, options: InstalledOptions) {
     // teardown. Keep them on disk for the next start to stop (`stopOrphanShells`). Every shell counts,
     // since a chat with Battle off runs its commands here as well.
     // Read now, so the first shell's record does not wait for it.
-    // The ledger reads process groups with `ps`, which Windows has neither of: there every record
-    // failed and logged a warning per shell. Windows shells run in Job Objects instead
-    // (`@opencode/util/windows-job`); stopping the ones an engine crash leaves is not built there yet.
-    if (process.platform !== "win32") {
+    // The ledger reads process groups with `ps`, which Windows has neither of. There the engine
+    // instead holds everything it starts in a job that ends with it (`endChildrenWithThisProcess`).
+    if (process.platform === "win32") {
+      const held = yield* Effect.promise(() => WindowsJob.endChildrenWithThisProcess())
+      if (!held) yield* Effect.logWarning("Arena could not tie its shells to the engine's lifetime")
+    } else {
       yield* Effect.promise(() => ArenaShellLedger.engineOwner().catch(() => undefined))
       yield* context.event.subscribe().pipe(
         Stream.runForEach((event) => {
