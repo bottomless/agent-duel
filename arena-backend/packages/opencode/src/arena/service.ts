@@ -10,6 +10,7 @@ import {
   type CancelOptions,
 } from "./session-runtime"
 import { ARENA_SENT_AT } from "./session-runtime/projection"
+import { copyKeepingReferences } from "./compaction-reference"
 import { KeyedMutex } from "@opencode/core/effect/keyed-mutex"
 import { closeShellTurn, openShellTurn } from "./engine-runtime/shell"
 import { ArenaActivity } from "./activity"
@@ -10256,46 +10257,43 @@ export const layer: Layer.Layer<
       // in order, because the next turn's model must read what this one read. Do not join the pieces:
       // text rules lost content at 64-76% of cut points for a re-opened JSON, HTML or SQL block in an
       // offline simulation (docs/arena.md).
-      let last: MessageID | undefined
-      for (const message of messagesToGraft(source, boundary)) {
-        const id = MessageID.ascending()
-        last = id
-        const cloned = yield* sessions.copyMessage({
-          sourceSessionID: winnerRoot,
-          sourceMessageID: MessageID.make(String(message.id)),
-          targetSessionID: canonical,
-          targetMessageID: id,
-          transform: (native) =>
-            canonicalize(
-              expireCopiedReasoning(native),
-              native.type === "assistant" ? "assistant" : native.type === "user" ? "user" : undefined,
-            ),
-        })
+      // The copies get new IDs, so a compaction's `keepID` is carried to its copy; otherwise the next turn's
+      // history keeps the summary but loses the verbatim tail, which is the whole compacted turn.
+      const last = yield* copyKeepingReferences({
+        sessions,
+        sourceSessionID: winnerRoot,
+        targetSessionID: canonical,
+        source,
+        messages: messagesToGraft(source, boundary),
+        boundary,
+        transform: (native) =>
+          canonicalize(
+            expireCopiedReasoning(native),
+            native.type === "assistant" ? "assistant" : native.type === "user" ? "user" : undefined,
+          ),
         // Persisted before the rest of the turn is copied so an interrupted graft is recoverable.
-        if (String(message.id) === boundary) {
-          yield* promise(() => store.updateTurn(turn._id, { canonicalUserMessageID: cloned.id }))
-        }
-      }
+        onCopied: (message, cloned) =>
+          String(message.id) === boundary
+            ? promise(() => store.updateTurn(turn._id, { canonicalUserMessageID: cloned.id }))
+            : Effect.void,
+      })
       for (const id of subagents) {
         const copy = sessionMap.get(id)
         if (!copy) continue
         const messages = yield* sessions.canonicalMessages(id).pipe(Effect.mapError(error))
-        for (const message of messages) {
-          if (message.type === "system") continue
-          const messageID = MessageID.ascending()
-          yield* sessions.copyMessage({
-            sourceSessionID: id,
-            sourceMessageID: MessageID.make(String(message.id)),
-            targetSessionID: copy,
-            targetMessageID: messageID,
-            transform: (native) =>
-              canonicalize(
-                expireCopiedReasoning(native),
-                native.type === "assistant" ? "assistant" : native.type === "user" ? "user" : undefined,
-                { subagent: true },
-              ),
-          })
-        }
+        yield* copyKeepingReferences({
+          sessions,
+          sourceSessionID: id,
+          targetSessionID: copy,
+          source: messages,
+          messages: messages.filter((message) => message.type !== "system"),
+          transform: (native) =>
+            canonicalize(
+              expireCopiedReasoning(native),
+              native.type === "assistant" ? "assistant" : native.type === "user" ? "user" : undefined,
+              { subagent: true },
+            ),
+        })
       }
       yield* promise(() =>
         store.updateTurn(turn._id, {

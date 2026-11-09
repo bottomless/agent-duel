@@ -40,6 +40,8 @@ import {
   project,
 } from "../../src/arena/session-runtime/projection"
 import { ArenaEngineIdle } from "../../src/arena/engine-runtime/idle"
+import { copyKeepingReferences, resolveKeptReference } from "../../src/arena/compaction-reference"
+import { SessionHistory } from "@opencode/core/session/history"
 import { battleResumeInput } from "../../src/arena/resume-note"
 import { expireCopiedReasoning } from "../../src/arena/reasoning"
 import { SessionRetry } from "../../src/session/retry"
@@ -257,6 +259,132 @@ describe("Arena V2 session projection", () => {
     expect(result).toHaveLength(1)
     expect(result[0]?.info).toMatchObject({ model: { providerID: "arena", modelID: "contestant-b" } })
   })
+})
+
+describe("compaction tail across the vote graft", () => {
+  test("resolves a kept-tail reference to the copy, the forked row at the same seq, or the next copied row", () => {
+    const context = {
+      copied: new Map([
+        ["msg_b_prompt", "msg_new_prompt"],
+        ["msg_b_tool", "msg_new_tool"],
+      ]),
+      sourceOrder: ["msg_a_forked", "msg_b_prompt", "msg_b_resume", "msg_b_tool"],
+      boundary: "msg_b_prompt",
+      sourceSeq: new Map([["msg_a_forked", 4]]),
+      targetBySeq: new Map([[4, "msg_canonical_earlier"]]),
+    }
+    expect(resolveKeptReference("msg_b_prompt", context)).toBe("msg_new_prompt")
+    expect(resolveKeptReference("msg_a_forked", context)).toBe("msg_canonical_earlier")
+    expect(resolveKeptReference("msg_b_resume", context)).toBe("msg_new_tool")
+    expect(resolveKeptReference("msg_b_unknown", context)).toBeUndefined()
+  })
+
+  it.effect("keeps the summary's verbatim tail in the chat and in the next turn's fork", () =>
+    Effect.gen(function* () {
+      const sessions = yield* CoreSession.Service
+      const arena = yield* ArenaSession
+      const database = yield* Database.Service
+      const location = Location.Ref.make({ directory: AbsolutePath.make("/arena-compaction-tail-test") })
+      const canonical = yield* sessions.create({ location })
+      const plain = yield* sessions.create({ location })
+      yield* seedGraftMessage({
+        sessionID: canonical.id,
+        seq: 0,
+        message: {
+          id: SessionMessage.ID.make("msg_tail_0_earlier"),
+          type: "user",
+          text: "An earlier turn",
+          time: { created: at },
+        },
+      })
+      const winner = yield* arena.fork({ sessionID: canonical.id })
+      // Turn 1 in the winner: the prompt, a tool step, then a mid-turn compaction that keeps the whole turn
+      // as its tail (Core starts the tail at a user message) by naming the prompt in `keepID`.
+      const promptID = SessionMessage.ID.make("msg_tail_1_prompt")
+      yield* seedGraftMessage({
+        sessionID: winner.id,
+        seq: 1,
+        message: { id: promptID, type: "user", text: "Run the numbered logs.", time: { created: at } },
+      })
+      yield* seedGraftMessage({
+        sessionID: winner.id,
+        seq: 2,
+        message: {
+          id: SessionMessage.ID.make("msg_tail_2_step"),
+          type: "assistant",
+          agent: Agent.ID.make("build"),
+          model: { providerID: Provider.ID.make("arena"), id: Model.ID.make("contestant") },
+          content: [
+            {
+              type: "tool",
+              id: "call_tail",
+              name: "shell",
+              state: {
+                status: "completed",
+                input: { command: "printf TAILMARK-1" },
+                content: [{ type: "text", text: "TAILMARK-1 output" }],
+              },
+              time: { created: at, ran: at, completed: at },
+            },
+          ],
+          time: { created: at, completed: at },
+        },
+      })
+      yield* seedGraftMessage({
+        sessionID: winner.id,
+        seq: 3,
+        message: {
+          id: SessionMessage.ID.make("msg_tail_3_compaction"),
+          type: "compaction",
+          status: "completed",
+          reason: "auto",
+          summary: "## Objective\nRun the numbered logs.",
+          metadata: { keepID: promptID },
+          time: { created: at },
+        },
+      })
+      const source = yield* arena.canonicalMessages(winner.id)
+      // History fills `metadata.recent` from the `keepID` reference; an unresolved reference leaves it unset.
+      const recentText = (message: SessionMessage.Info | undefined) =>
+        message?.type === "compaction" && typeof message.metadata?.recent === "string" ? message.metadata.recent : ""
+      const recentOf = (sessionID: Session.ID) =>
+        SessionHistory.load(database.db, sessionID, "latest").pipe(Effect.map((history) => recentText(history[0])))
+      // The winner itself still finds its tail.
+      expect(yield* recentOf(winner.id)).toContain("TAILMARK-1 output")
+
+      // A copy under new IDs that leaves `keepID` alone loses the tail (OpenCode 2.1+ stores a reference).
+      for (const message of messagesToGraft(source, promptID))
+        yield* arena.copyMessage({
+          sourceSessionID: winner.id,
+          sourceMessageID: message.id,
+          targetSessionID: plain.id,
+          targetMessageID: SessionMessage.ID.make(`${message.id}_plain`.replace("msg_tail", "msg_zz_plain")),
+        })
+      expect(yield* recentOf(plain.id)).toBe("")
+
+      yield* copyKeepingReferences({
+        sessions: arena,
+        sourceSessionID: winner.id,
+        targetSessionID: canonical.id,
+        source,
+        messages: messagesToGraft(source, promptID),
+        boundary: promptID,
+      })
+      const chatTail = yield* recentOf(canonical.id)
+      expect(chatTail).toContain("Run the numbered logs.")
+      expect(chatTail).toContain("TAILMARK-1 output")
+
+      // Turn 2's contestants start from a Core fork of the chat, which remaps the reference again.
+      const next = yield* arena.fork({ sessionID: canonical.id })
+      const nextHistory = yield* SessionHistory.load(database.db, next.id, "latest")
+      const checkpoint = nextHistory[0]
+      expect(checkpoint?.type).toBe("compaction")
+      if (checkpoint?.type !== "compaction") return
+      expect(checkpoint.summary).toContain("Run the numbered logs.")
+      expect(recentText(checkpoint)).toContain("Run the numbered logs.")
+      expect(recentText(checkpoint)).toContain("TAILMARK-1 output")
+    }),
+  )
 })
 
 describe("Arena V2 native session storage", () => {

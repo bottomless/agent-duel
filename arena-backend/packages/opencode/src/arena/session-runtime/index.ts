@@ -141,6 +141,8 @@ export interface SessionInterface {
     readonly targetMessageID: SessionV1.MessageID
     readonly transform?: (message: SessionMessage.Info) => Effect.Effect<SessionMessage.Info, Error>
   }) => Effect.Effect<SessionMessage.Info, Error>
+  /** Each message's `seq` in its session. Core's fork keeps a copied row's `seq`. */
+  readonly messageSeqs: (sessionID: SessionSchema.ID) => Effect.Effect<ReadonlyMap<string, number>, Error>
 }
 
 export class Session extends Context.Service<Session, SessionInterface>()("@agent-duel/ArenaSession") {}
@@ -628,6 +630,16 @@ const layer: Layer.Layer<Session, never, CoreSession.Service | Database.Service 
         return message
       })
 
+      const messageSeqs = Effect.fn("ArenaSession.messageSeqs")(function* (sessionID: SessionSchema.ID) {
+        const rows = yield* database.db
+          .select({ id: SessionMessageTable.id, seq: SessionMessageTable.seq })
+          .from(SessionMessageTable)
+          .where(eq(SessionMessageTable.session_id, sessionID))
+          .all()
+          .pipe(Effect.orDie)
+        return new Map(rows.map((row) => [String(row.id), row.seq])) as ReadonlyMap<string, number>
+      })
+
       const fork = Effect.fn("ArenaSession.fork")(function* (input: {
         readonly sessionID: SessionSchema.ID
         readonly messageID?: SessionV1.MessageID
@@ -736,6 +748,7 @@ const layer: Layer.Layer<Session, never, CoreSession.Service | Database.Service 
             }),
           ),
         copyMessage: (input) => normalizeError(copyMessage(input)),
+        messageSeqs: (sessionID) => normalizeError(messageSeqs(sessionID)),
       })
     }),
   )
