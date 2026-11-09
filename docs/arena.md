@@ -226,9 +226,8 @@ result arrives. After eight rows, use Show more while keeping open rows visible.
 Open on Difference summary while a report is pending or available; otherwise open Changes, as for
 a stopped battle or a failed side. Read the turn's `comparisonState` before the comparison record
 exists (`battleSummaryStatus`): the review keeps its initial tab, so relying on the record opens it
-on Changes too soon. The chevron folds review; choosing a tab opens it. Folded, neither tab reads
-as selected; a pinned review's tabs move to the start of the decision row (`folded-review-tabs.tsx`),
-so the row stays the battle's bottom edge and the answers take the room. Changes retries a failed
+on Changes too soon. The chevron folds review; choosing a tab opens it. Folded, the tab row stays
+in place and neither tab reads as selected. Changes retries a failed
 read twice before offering manual retry. Summary generation retries transient network and service
 failures for about a minute (`RETRY_DELAYS_MS` in `arena/comparison.ts`): a shared upstream pool can
 refuse every utility model with 429 for that long. Permanent payment or credential failures remain
@@ -240,14 +239,11 @@ scope and the control plane answers later calls with 403, so the generator stops
 resolution, and a decided turn's failed summary shows neither the error nor Retry summary. A summary
 already on its way when the vote lands still shows.
 
-Keep agent responses above review in the visual hierarchy. The review is pinned under the chat, above
-the decision row and outside the transcript scroller, while there is a choice to make
-(`ArenaPinnedReview` in `battle-judging.tsx`): the answers scroll behind it, its tab row stays put,
-and what is under the tabs scrolls past about two fifths of the window. Only a battle waiting for a
-vote pins it: under Show battle the review sits in the chat under the answers, behind a plain
-hairline, because pinned it stayed in view over turns it did not belong to and took the composer's
-place. Pinned, it is set off by a hairline with a fade that rises above it only,
-since a blurred shadow also greys the decision row. Its tabs head it with no strip of their own; the selected one is semibold with a 2px
+Keep agent responses above review in the visual hierarchy. The review sits in the chat under the
+answers, on their text edge behind a plain hairline, the same for a live battle (`ArenaLiveReview`
+in `battle-judging.tsx`) as under Show battle. Do not pin it under the chat: a pinned review stayed
+in view over turns it did not belong to, and the owner did not want it fixed while voting either.
+Only the decision row is pinned. Its tabs head it with no strip of their own; the selected one is semibold with a 2px
 underline the width of its label. The summary sits on the answers' columns: each side's sentences
 and its value in each row of the differences table under that side's answer
 (`summary-columns.ts`). The judge is asked for that shape, but nothing enforces it, so a report that

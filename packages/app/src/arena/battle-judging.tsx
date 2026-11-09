@@ -73,12 +73,10 @@ function BattleJudging({
   phase,
   retrying,
   onRetry,
-  maxContentHeight,
 }: {
   serverId: string;
   agentId: string;
   turnId: string;
-  maxContentHeight: number;
   comparison: ArenaSnapshot["comparison"];
   comparisonState: NonNullable<ArenaSnapshot["turn"]>["comparisonState"];
   /** The turn has a resolution, which closes its summary's scope. */
@@ -129,36 +127,24 @@ function BattleJudging({
       rows={rows}
       onRetryDiff={retryDiff}
       retryingDiff={diffQuery.isFetching}
-      maxContentHeight={maxContentHeight}
-      foldsIntoDock
     />
   );
 }
 
-/** Whether the battle on screen has a review yet: a result is in. */
-export function arenaBattleHasReview(snapshot: ArenaSnapshot): boolean {
-  if (!isArenaBattleOnScreen(snapshot) || !snapshot.turn) return false;
-  const runA = snapshot.runs.find((run) => run.side === "a");
-  const runB = snapshot.runs.find((run) => run.side === "b");
-  return battleReviewPhase(snapshot.turn, runA, runB).kind !== "none";
-}
-
 /**
- * The battle's review, pinned to the bottom of the chat above the decision row: the answers scroll
- * behind it, and it stays in view while you read them.
+ * The live battle's review, in the chat under its answers, the same as a decided battle's under
+ * Show battle. Nothing until a result is in.
  */
-export function ArenaPinnedReview({
+export function ArenaLiveReview({
   serverId,
   agentId,
   snapshot,
   actions,
-  maxContentHeight,
 }: {
   serverId: string;
   agentId: string;
   snapshot: ArenaSnapshot;
   actions: ArenaBattleActions;
-  maxContentHeight: number;
 }) {
   const turn = isArenaBattleOnScreen(snapshot) ? snapshot.turn : undefined;
   const runA = snapshot.runs.find((run) => run.side === "a");
@@ -178,7 +164,6 @@ export function ArenaPinnedReview({
       phase={phase}
       retrying={actions.pendingAction?.kind === "retry_comparison"}
       onRetry={actions.retryComparison}
-      maxContentHeight={maxContentHeight}
     />
   );
 }

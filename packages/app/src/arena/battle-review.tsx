@@ -1,7 +1,7 @@
 import { i18n } from "@/i18n/i18next";
 import { useTranslation } from "react-i18next";
 import { useCallback, useEffect, useMemo, type ReactNode } from "react";
-import { ScrollView, Text, View, type LayoutChangeEvent } from "react-native";
+import { Text, View, type LayoutChangeEvent } from "react-native";
 import { PressHighlight } from "@/components/ui/press-highlight";
 import { useContainerWidth } from "@/hooks/use-container-width";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
@@ -26,10 +26,8 @@ import { InlineFileDiff, openChangesFiles, toggleChangesFile } from "./inline-fi
 import { PaneIconAction } from "./pane-icon-action";
 import { useArenaReviewState, useArenaReviewStore, type ArenaReviewTab } from "./review-state";
 import { VerdictBody } from "./verdict-body";
-import { BATTLE_RAIL } from "./battle-layout";
 import { parseSummaryColumns } from "./summary-columns";
 import { SummaryColumnsView } from "./summary-columns-view";
-import { useArenaReviewDockStore } from "./review-dock";
 
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
 const ThemedChevronDown = withUnistyles(ChevronDown);
@@ -294,7 +292,6 @@ function ReviewHeader({
   width,
   collapsed,
   onToggleCollapsed,
-  inChat,
 }: {
   /** Whether there is a summary tab to show beside Changes; a stopped battle has only Changes. */
   tabs: boolean;
@@ -307,11 +304,8 @@ function ReviewHeader({
   width: number | null;
   collapsed: boolean;
   onToggleCollapsed: () => void;
-  /** In the chat the section opens downward; pinned under it, it rises. */
-  inChat: boolean;
 }) {
   const { t } = useTranslation();
-  const pointsUp = collapsed !== inChat;
   const sectionName = tabs ? t("arena.reviewSections") : t("arena.reviewChanges");
   return (
     <View style={styles.header} testID="arena-review-header">
@@ -331,27 +325,15 @@ function ReviewHeader({
         onPress={onToggleCollapsed}
         testID="arena-review-collapse"
       >
-        {pointsUp ? (
-          <ThemedChevronUp size={ICON_SIZE.md} uniProps={foregroundColorMapping} />
-        ) : (
+        {/* The section opens downward, under the chevron. */}
+        {collapsed ? (
           <ThemedChevronDown size={ICON_SIZE.md} uniProps={foregroundColorMapping} />
+        ) : (
+          <ThemedChevronUp size={ICON_SIZE.md} uniProps={foregroundColorMapping} />
         )}
       </PaneIconAction>
     </View>
   );
-}
-
-/** The decision row draws a folded review's tabs; this tells it what they are. */
-function usePublishDockTabs(turnId: string, summary: boolean, changesLabel: string) {
-  const setDockTabs = useArenaReviewDockStore((state) => state.setTabs);
-  useEffect(() => {
-    setDockTabs(turnId, { summary, changesLabel });
-  }, [changesLabel, setDockTabs, summary, turnId]);
-}
-
-/** A folded review whose tabs the decision row draws takes no room in the battle. */
-function foldedAway(collapsed: boolean, foldsIntoDock: boolean): boolean {
-  return collapsed && foldsIntoDock;
 }
 
 /**
@@ -377,23 +359,10 @@ export function BattleReview({
   rows,
   onRetryDiff,
   retryingDiff,
-  foldsIntoDock,
-  maxContentHeight,
 }: {
   serverId: string;
   agentId: string;
   turnId: string;
-  /**
-   * Whether the decision row below the transcript draws this review's tabs while it is folded.
-   * Then a folded review takes no room in the card; otherwise it keeps its tab row in place.
-   */
-  foldsIntoDock?: boolean;
-  /**
-   * Pinned under the chat, the tab row stays put and what is under it scrolls past this height,
-   * so the answers above keep their room. Without it the review sits in the chat on the answers'
-   * text edge, under a plain hairline: the fade only reads where the chat scrolls behind it.
-   */
-  maxContentHeight?: number;
   summaryAvailable: boolean;
   summaryPending: boolean;
   summaryFailed: boolean;
@@ -494,7 +463,6 @@ export function BattleReview({
   }, [arrivalFile, rows, setShownFile, showChanges, turnId]);
   const changesLabel =
     rows.length > 0 ? t("arena.changesCount", { total: rows.length }) : t("arena.changes");
-  usePublishDockTabs(turnId, tabs, changesLabel);
   let content;
   if (shownTab === "verdict" && waitingFor !== null) {
     content = <WaitingSummary waitingFor={waitingFor} />;
@@ -529,9 +497,8 @@ export function BattleReview({
     );
   }
 
-  if (foldedAway(collapsed, foldsIntoDock === true)) return null;
   return (
-    <ReviewFrame pinned={maxContentHeight !== undefined} onLayout={onLayout} turnId={turnId}>
+    <ReviewFrame onLayout={onLayout} turnId={turnId}>
       <ReviewHeader
         tabs={tabs}
         tab={tab}
@@ -542,24 +509,18 @@ export function BattleReview({
         width={measured}
         collapsed={collapsed}
         onToggleCollapsed={toggleCollapsed}
-        inChat={maxContentHeight === undefined}
       />
-      {collapsed ? null : <ReviewContent maxHeight={maxContentHeight}>{content}</ReviewContent>}
+      {collapsed ? null : <View style={styles.content}>{content}</View>}
     </ReviewFrame>
   );
 }
 
-/**
- * The review's own edge: pinned under the chat, a hairline with a fade over what scrolls behind;
- * in the chat, a plain hairline on the answers' text edge.
- */
+/** The review in the chat under the answers, on their text edge, set off by a hairline. */
 function ReviewFrame({
-  pinned,
   onLayout,
   turnId,
   children,
 }: {
-  pinned: boolean;
   onLayout: (event: LayoutChangeEvent) => void;
   turnId: string;
   children: ReactNode;
@@ -569,50 +530,21 @@ function ReviewFrame({
   const reviewData = useMemo(() => ({ reviewTurn: turnId }), [turnId]);
   return (
     <View
-      style={[styles.review, !pinned && styles.reviewInChat]}
+      style={styles.review}
       onLayout={onLayout}
       testID="arena-battle-comparison"
       dataSet={reviewData}
     >
-      {pinned ? <View style={styles.edgeFade} pointerEvents="none" /> : null}
       {children}
     </View>
   );
 }
 
-function ReviewContent({ maxHeight, children }: { maxHeight?: number; children: ReactNode }) {
-  const scrollStyle = useMemo(() => ({ maxHeight }), [maxHeight]);
-  if (maxHeight === undefined) return <View style={styles.content}>{children}</View>;
-  return (
-    <ScrollView style={scrollStyle} contentContainerStyle={styles.content}>
-      {children}
-    </ScrollView>
-  );
-}
-
 const styles = StyleSheet.create((theme) => ({
-  // A section that rises from the bottom of the battle: a hairline and a soft fade above it,
-  // the answers' rails inside it.
   review: {
-    position: "relative",
-    paddingHorizontal: BATTLE_RAIL,
     paddingBottom: theme.spacing[3],
     borderTopWidth: 1,
-    borderTopColor: theme.colors.borderAccent,
-  },
-  reviewInChat: {
-    paddingHorizontal: 0,
     borderTopColor: theme.colors.border,
-  },
-  edgeFade: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    top: -25,
-    height: 24,
-    _web: {
-      backgroundImage: `linear-gradient(to top, ${theme.shadow.md.shadowColor}, transparent)`,
-    },
   },
   block: {
     gap: theme.spacing[2],

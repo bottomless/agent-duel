@@ -35,6 +35,7 @@ import type { ArenaTurnAction } from "./use-arena-session";
 import { useArenaBattleActions } from "./use-battle-actions";
 import { ArenaBattleOutcome } from "./battle-summary";
 import { useArenaReviewTelemetry } from "./review-telemetry";
+import { ArenaLiveReview } from "./battle-judging";
 import { isStoppedByEarlyPick } from "./battle-result";
 import type { ArenaPendingQuestion } from "./question";
 import type { ArenaPendingPermission, ArenaPermissionReply } from "./permission";
@@ -759,7 +760,14 @@ export function ArenaBattleView({
               <ArenaTransitionRow transition={turn.transition} />
             </View>
           ) : null}
-          {/* The review is pinned under the chat with the decision (`ArenaPinnedReview`). */}
+          <View style={styles.reviewSection}>
+            <ArenaLiveReview
+              serverId={serverId}
+              agentId={agentId}
+              snapshot={snapshot}
+              actions={actions}
+            />
+          </View>
           <View accessible accessibilityLiveRegion="polite">
             {turn.resolution ? (
               <View style={styles.reviewSection}>
@@ -820,8 +828,10 @@ const styles = StyleSheet.create((theme) => ({
     paddingHorizontal: BATTLE_RAIL,
     paddingVertical: theme.spacing[3],
   },
-  // The review draws its own edge.
-  reviewSection: {},
+  // The review draws its own edge, on the answers' text edge.
+  reviewSection: {
+    paddingHorizontal: BATTLE_RAIL,
+  },
   battleReadingColumn: {
     width: "100%",
     maxWidth: theme.contentMaxWidth,
