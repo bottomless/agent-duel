@@ -405,8 +405,18 @@ const userMessageStylesheet = StyleSheet.create((theme) => ({
     alignItems: "flex-start",
     flex: 1,
   },
+  // The time and actions sit at the row's end, level with the heading's first line.
+  contentHeadlineInline: {
+    flexDirection: "row",
+    gap: theme.spacing[4],
+  },
+  // The space the hidden actions row used to hold under the heading, now the gap to its answer.
+  containerHeadlineAnswered: {
+    paddingBottom: theme.spacing[6],
+  },
   headline: {
     minWidth: 0,
+    flex: 1,
     flexShrink: 1,
   },
   headlineText: {
@@ -423,7 +433,8 @@ const userMessageStylesheet = StyleSheet.create((theme) => ({
   },
   trailingRowHeadline: {
     alignSelf: "flex-start",
-    marginTop: theme.spacing[1],
+    flexShrink: 0,
+    marginTop: (Math.round(theme.fontSize.xl * 1.45) - 24) / 2,
   },
 }));
 
@@ -539,7 +550,9 @@ export const UserMessage = memo(function UserMessage({
   variant = "bubble",
 }: UserMessageProps) {
   const headline = variant === "headline";
-  const variantStyles = userMessageVariantStyles(headline);
+  // A heading carries its time and actions on its own row, so nothing reserves a band below it.
+  const inlineActions = headline && !withoutTrailingRow;
+  const variantStyles = userMessageVariantStyles(headline, inlineActions);
   const isCompact = useIsCompactFormFactor();
   const { t } = useTranslation();
   const [isHovered, setIsHovered] = useState(false);
@@ -573,13 +586,14 @@ export const UserMessage = memo(function UserMessage({
     () => [
       userMessageStylesheet.container,
       headline && userMessageStylesheet.containerHeadline,
+      inlineActions && userMessageStylesheet.containerHeadlineAnswered,
       !resolvedDisableOuterSpacing && [
         isFirstInGroup ? userMessageStylesheet.containerFirstInGroup : null,
         isLastInGroup ? userMessageStylesheet.containerLastInGroup : null,
         !isFirstInGroup || !isLastInGroup ? userMessageStylesheet.containerSpacing : null,
       ],
     ],
-    [resolvedDisableOuterSpacing, isFirstInGroup, isLastInGroup, headline],
+    [resolvedDisableOuterSpacing, isFirstInGroup, isLastInGroup, headline, inlineActions],
   );
   const trailingRowStyle = useMemo(
     () => [
@@ -648,8 +662,8 @@ export const UserMessage = memo(function UserMessage({
   );
 });
 
-/** The bubble and its text, or the same message set as a heading. */
-function userMessageVariantStyles(headline: boolean) {
+/** The bubble and its text, or the same message set as a heading with its actions beside it. */
+function userMessageVariantStyles(headline: boolean, inlineActions: boolean) {
   if (!headline) {
     return {
       content: userMessageStylesheet.content,
@@ -658,7 +672,11 @@ function userMessageVariantStyles(headline: boolean) {
     };
   }
   return {
-    content: [userMessageStylesheet.content, userMessageStylesheet.contentHeadline],
+    content: [
+      userMessageStylesheet.content,
+      userMessageStylesheet.contentHeadline,
+      inlineActions && userMessageStylesheet.contentHeadlineInline,
+    ],
     bubble: userMessageStylesheet.headline,
     text: userMessageStylesheet.headlineText,
   };
