@@ -222,8 +222,8 @@ result arrives. After eight rows, use Show more while keeping open rows visible.
 Open on Difference summary while a report is pending or available; otherwise open Changes, as for
 a stopped battle or a failed side. Read the turn's `comparisonState` before the comparison record
 exists (`battleSummaryStatus`): the review keeps its initial tab, so relying on the record opens it
-on Changes too soon. The chevron folds review; choosing a tab opens it. Folded, the tab row stays
-in place and neither tab reads as selected. Changes retries a failed
+on Changes too soon. The review has no fold: it sits in the chat and scrolls past like the answers.
+Changes retries a failed
 read twice before offering manual retry. Summary generation retries transient network and service
 failures for about a minute (`RETRY_DELAYS_MS` in `arena/comparison.ts`): a shared upstream pool can
 refuse every utility model with 429 for that long. Permanent payment or credential failures remain
