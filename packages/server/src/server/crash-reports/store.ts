@@ -262,12 +262,17 @@ function isProcessAlive(pid: number) {
  * removed it: it ended without exiting (a native crash, a force quit, a lost machine). Every exit,
  * a fatal one included, removes the marker (`releaseRunningMarker`), and a fatal one writes its
  * own report, so a marker left behind is the only trace of the rest.
+ *
+ * A run that started before this boot ended with the machine: Windows ends the daemon at shutdown
+ * or restart without a signal it can handle, so that marker is not a crash.
  */
 export function claimRunningMarker(input: {
   readonly home: string;
   readonly name: string;
   readonly version: string | null;
   readonly isAlive?: (pid: number) => boolean;
+  /** When the machine booted, in milliseconds since the epoch. */
+  readonly bootedAt?: number;
 }): RunningMarker | null {
   const file = markerPath(input.home, input.name);
   let previous: RunningMarker | null = null;
@@ -277,10 +282,12 @@ export function claimRunningMarker(input: {
     previous = null;
   }
   const isAlive = input.isAlive ?? isProcessAlive;
+  const bootedAt = input.bootedAt ?? Date.now() - os.uptime() * 1000;
   const ended =
     previous !== null &&
     previous.pid !== process.pid &&
     previous.stoppingAt === undefined &&
+    Date.parse(previous.startedAt) >= bootedAt &&
     !isAlive(previous.pid);
   try {
     mkdirSync(crashReportsDirectory(input.home), { recursive: true });
