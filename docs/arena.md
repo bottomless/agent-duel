@@ -956,6 +956,17 @@ reply takes the same attachments as a chat message, and both contestants get ide
   The composer holds a battle message to that count when images are attached and refuses a send
   over it: the engine's refusal comes only after New chat has created the chat.
   An image's own file name never reaches the models, transcripts, or judge.
+- Images a contestant reads with its tools are not resized, and they stay in history, so they
+  reach the 4.5 MB limit within one turn. Vercel refuses a larger body before Arena's code runs,
+  and the side fails on a bare 413. The measured cap is 4,494,157 bytes of body, and headers count
+  against it. The engine leaves the oldest images out of a request, only as many as it takes to fit
+  (`engine-runtime/request-size.ts`), with a note in each one's place. Each removal costs a
+  prompt-cache miss, so a chat at the limit misses the cache on every step that reads an image.
+  It never drops the newest step's images to fit older ones; what does not fit
+  of that step, or an image too large on its own, gets a note asking for a separate read or a
+  smaller file. Canonical history keeps every image. Reasoning is sealed between calls, so an
+  agent that keeps no written notes re-reads removed images in a loop; a third read of the same
+  file with the same bytes is not attached, which ends it.
 - Every model in both pools must read images. The control plane's catalog check refuses one that
   does not: excluding it from a draw only when a prompt carries an image would reveal the model.
 - The turn keeps labels and a text excerpt, never bytes (`TurnDocument.userAttachments`). The live
