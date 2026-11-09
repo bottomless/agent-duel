@@ -24,6 +24,7 @@ export function battlePathDenial(
   const absolute = path.isAbsolute(target) ? target : `${directory}/${target}`
   const resolved = resolveExistingPrefix(absolute)
   // Only the sandbox's final reopen rules grant writes. Inherited edit allows cannot widen it.
+  // The sandbox joins its rules with the platform's separator, so on Windows they end in `\*`.
   const start = rules.findLastIndex((rule) => rule.action === "external_directory" && rule.resource === "*")
   const own = rules
     .slice(start + 1)
@@ -32,7 +33,7 @@ export function battlePathDenial(
         rule.action === "edit" &&
         rule.effect === "allow" &&
         path.isAbsolute(rule.resource) &&
-        rule.resource.endsWith("/*"),
+        (rule.resource.endsWith("/*") || rule.resource.endsWith(`${path.sep}*`)),
     )
     .map((rule) => resolveExistingPrefix(rule.resource.slice(0, -2)))
   const blocked = [absolute, resolved].some(
