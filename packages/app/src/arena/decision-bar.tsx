@@ -67,8 +67,9 @@ export function ArenaSideChoiceButton({
   return (
     <Button
       variant="secondary"
-      size="sm"
+      size="md"
       style={[styles.sideChoice, side === "a" ? styles.sideA : styles.sideB]}
+      textStyle={[styles.choiceText, side === "a" ? styles.sideAText : styles.sideBText]}
       loading={loading}
       disabled={disabled}
       onPress={onPress}
@@ -120,7 +121,8 @@ export function ArenaRunningPillButton({
     >
       <Button
         variant="outline"
-        size="sm"
+        size="md"
+        textStyle={styles.choiceText}
         style={[
           styles.sideChoice,
           styles.runningChoice,
@@ -152,9 +154,10 @@ export function VoteDecision({
   }, [actions]);
   return (
     <Button
-      variant="ghost"
-      size="sm"
+      variant="secondary"
+      size="md"
       style={styles.pillChoice}
+      textStyle={styles.choiceText}
       loading={pendingAction?.kind === "vote" && pendingAction.vote === "tie"}
       disabled={pending || disabled}
       onPress={tie}
@@ -180,8 +183,9 @@ export function ResumeDecision({ actions }: { actions: ArenaBattleActions }) {
   return (
     <Button
       variant="default"
-      size="sm"
+      size="md"
       style={styles.pillChoice}
+      textStyle={styles.choiceText}
       loading={pendingAction?.kind === "resume_battle"}
       disabled={pending}
       onPress={resume}
@@ -205,9 +209,10 @@ export function DiscardDecision({ actions }: { actions: ArenaBattleActions }) {
   }, [actions]);
   return (
     <Button
-      variant="ghost"
-      size="sm"
+      variant="secondary"
+      size="md"
       style={styles.pillChoice}
+      textStyle={styles.choiceText}
       loading={pendingAction?.kind === "resolve_stop" && pendingAction.resolution === "discard"}
       disabled={pending}
       onPress={discard}
@@ -394,20 +399,32 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.foregroundMuted,
     fontSize: theme.fontSize.base,
   },
+  // The decision's buttons: the landing page's shape, rectangular with semibold labels.
   sideChoice: {
-    minWidth: 96,
-    borderRadius: theme.borderRadius.full,
+    minWidth: 112,
+    borderRadius: theme.borderRadius.lg,
   },
   pillChoice: {
-    borderRadius: theme.borderRadius.full,
+    minWidth: 72,
+    borderRadius: theme.borderRadius.lg,
+  },
+  choiceText: {
+    fontWeight: theme.fontWeight.semibold,
   },
   sideA: {
     backgroundColor: tint(theme.colors.statusDotRunning, 22),
-    borderColor: tint(theme.colors.statusDotRunning, 48),
+    borderColor: tint(theme.colors.statusDotRunning, 22),
   },
   sideB: {
     backgroundColor: tint(theme.colors.statusDotWarning, 24),
-    borderColor: tint(theme.colors.statusDotWarning, 50),
+    borderColor: tint(theme.colors.statusDotWarning, 24),
+  },
+  // The side's colour toward the text colour: deep on light, pale on dark.
+  sideAText: {
+    color: `color-mix(in srgb, ${theme.colors.statusDotRunning} 55%, ${theme.colors.foreground})`,
+  },
+  sideBText: {
+    color: `color-mix(in srgb, ${theme.colors.statusDotWarning} 55%, ${theme.colors.foreground})`,
   },
   hoverTarget: {
     position: "relative",

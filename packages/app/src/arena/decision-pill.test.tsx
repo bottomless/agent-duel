@@ -27,6 +27,12 @@ vi.mock("./use-battle-actions", () => ({
   }),
 }));
 
+// The review pinned above the row fetches its own diff; these tests are about the choices.
+vi.mock("./battle-judging", () => ({
+  ArenaPinnedReview: () => null,
+  arenaBattleHasReview: () => false,
+}));
+
 import { ArenaDecisionPill } from "./decision-pill";
 
 const noop = () => {};

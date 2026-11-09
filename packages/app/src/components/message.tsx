@@ -119,6 +119,11 @@ interface UserMessageProps {
    * thread that reserved band reads as an empty gap under the bubble.
    */
   withoutTrailingRow?: boolean;
+  /**
+   * `headline` sets the message as the heading of what answers it, the way a battle shows its
+   * prompt above both answers: left-aligned, larger and semibold, with no bubble.
+   */
+  variant?: "bubble" | "headline";
 }
 
 const MessageOuterSpacingContext = createContext(false);
@@ -384,6 +389,33 @@ const userMessageStylesheet = StyleSheet.create((theme) => ({
     color: theme.colors.foregroundMuted,
     fontSize: Math.round((theme.fontSize.base * 13) / 14),
   },
+  containerHeadline: {
+    justifyContent: "flex-start",
+  },
+  contentHeadline: {
+    alignItems: "flex-start",
+    flex: 1,
+  },
+  headline: {
+    minWidth: 0,
+    flexShrink: 1,
+  },
+  headlineText: {
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.xl,
+    fontWeight: theme.fontWeight.semibold,
+    letterSpacing: -0.27,
+    ...(isWeb
+      ? {
+          lineHeight: Math.round(theme.fontSize.xl * 1.45),
+          overflowWrap: "anywhere" as const,
+        }
+      : {}),
+  },
+  trailingRowHeadline: {
+    alignSelf: "flex-start",
+    marginTop: theme.spacing[1],
+  },
 }));
 
 interface UserMessageImagePillProps {
@@ -488,7 +520,10 @@ export const UserMessage = memo(function UserMessage({
   isPending = false,
   disableOuterSpacing,
   withoutTrailingRow = false,
+  variant = "bubble",
 }: UserMessageProps) {
+  const headline = variant === "headline";
+  const variantStyles = userMessageVariantStyles(headline);
   const isCompact = useIsCompactFormFactor();
   const { t } = useTranslation();
   const [isHovered, setIsHovered] = useState(false);
@@ -521,32 +556,34 @@ export const UserMessage = memo(function UserMessage({
   const containerStyle = useMemo(
     () => [
       userMessageStylesheet.container,
+      headline && userMessageStylesheet.containerHeadline,
       !resolvedDisableOuterSpacing && [
         isFirstInGroup ? userMessageStylesheet.containerFirstInGroup : null,
         isLastInGroup ? userMessageStylesheet.containerLastInGroup : null,
         !isFirstInGroup || !isLastInGroup ? userMessageStylesheet.containerSpacing : null,
       ],
     ],
-    [resolvedDisableOuterSpacing, isFirstInGroup, isLastInGroup],
+    [resolvedDisableOuterSpacing, isFirstInGroup, isLastInGroup, headline],
   );
   const trailingRowStyle = useMemo(
     () => [
       userMessageStylesheet.trailingRow,
+      headline && userMessageStylesheet.trailingRowHeadline,
       showTrailingRow
         ? userMessageStylesheet.trailingRowVisible
         : userMessageStylesheet.trailingRowHidden,
     ],
-    [showTrailingRow],
+    [headline, showTrailingRow],
   );
 
   return (
     <View style={containerStyle} testID="user-message" aria-busy={isPending}>
       <View
-        style={userMessageStylesheet.content}
+        style={variantStyles.content}
         onPointerEnter={handlePointerEnter}
         onPointerLeave={handlePointerLeave}
       >
-        <View style={userMessageStylesheet.bubble}>
+        <View style={variantStyles.bubble}>
           {hasAttachments ? (
             <UserMessageAttachmentTray
               images={images}
@@ -557,7 +594,7 @@ export const UserMessage = memo(function UserMessage({
             />
           ) : null}
           {hasText ? (
-            <Text selectable style={userMessageStylesheet.text} dataSet={MESSAGE_TEXT_DATASET}>
+            <Text selectable style={variantStyles.text} dataSet={MESSAGE_TEXT_DATASET}>
               {message}
             </Text>
           ) : null}
@@ -591,6 +628,22 @@ export const UserMessage = memo(function UserMessage({
     </View>
   );
 });
+
+/** The bubble and its text, or the same message set as a heading. */
+function userMessageVariantStyles(headline: boolean) {
+  if (!headline) {
+    return {
+      content: userMessageStylesheet.content,
+      bubble: userMessageStylesheet.bubble,
+      text: userMessageStylesheet.text,
+    };
+  }
+  return {
+    content: [userMessageStylesheet.content, userMessageStylesheet.contentHeadline],
+    bubble: userMessageStylesheet.headline,
+    text: userMessageStylesheet.headlineText,
+  };
+}
 
 interface AssistantTurnFooterProps {
   getContent: () => string;

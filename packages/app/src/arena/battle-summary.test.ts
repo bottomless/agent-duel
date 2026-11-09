@@ -32,6 +32,8 @@ import {
 } from "./comparison-visibility";
 import { comparisonDiff, threeWayFile } from "./review-fixtures.test-helpers";
 import {
+  arenaKeptAnswerFooterRowId,
+  arenaKeptAnswerRowIds,
   arenaSummaryAnchor,
   arenaSummaryAnchors,
   arenaTurnFollowedUp,
@@ -53,7 +55,7 @@ const historyItem = {
 } as ArenaHistoryItem;
 
 describe("arenaSummaryAnchor", () => {
-  it("places the marker after the winning turn and before the next prompt", () => {
+  it("places the summary right after the battle's prompt, above the kept answer", () => {
     expect(
       arenaSummaryAnchor(historyItem, [
         { id: "user-1", kind: "user_message", messageId: "user-1" },
@@ -61,16 +63,7 @@ describe("arenaSummaryAnchor", () => {
         { id: "assistant-1", kind: "assistant_message" },
         { id: "user-2", kind: "user_message", messageId: "user-2" },
       ]),
-    ).toBe("assistant-1");
-  });
-
-  it("anchors to the final item when the winning turn is last", () => {
-    expect(
-      arenaSummaryAnchor(historyItem, [
-        { id: "user-1", kind: "user_message", messageId: "user-1" },
-        { id: "assistant-1", kind: "assistant_message" },
-      ]),
-    ).toBe("assistant-1");
+    ).toBe("user-1");
   });
 
   it("waits for canonical history when the promoted prompt is not present", () => {
@@ -192,54 +185,8 @@ describe("arenaSummaryAnchors", () => {
     // The overlay `session-stream-reducers.ts` builds without an authoritative baseline.
     const overlay = liveAnswer([prompt], [], "The answer");
     const stream = { tail: [], head: [...overlay.tail, ...overlay.head] };
-    expect(arenaSummaryAnchors([historyItem], stream)).toEqual([stream.head.at(-1)!.id]);
+    expect(arenaSummaryAnchors([historyItem], stream)).toEqual([prompt.id]);
     expect(arenaSummaryAnchor(historyItem, stream.tail)).toBeNull();
-  });
-
-  it("anchors after the end of an answer that is still in the head", () => {
-    // A streaming answer stays in the head as one message. Searching the tail alone put the
-    // summary above the answer.
-    const stream = liveAnswer([prompt], [], "First paragraph.\n\nLast paragraph.");
-    expect(stream.head).toHaveLength(1);
-    expect(arenaSummaryAnchors([historyItem], stream)).toEqual([stream.head[0].id]);
-  });
-});
-
-describe("arenaSummaryAnchors in chat order", () => {
-  it("follows the work the turn's answer moved above, not the answer", () => {
-    // The chat shows the answer first and the work that led to it beneath (`orderArenaChat`);
-    // anchoring to the answer put the summary between them once a later prompt followed.
-    const prompt = createUserMessage({
-      messageId: "user-1",
-      text: "Battle prompt",
-      timestamp: new Date(historyItem.createdAt),
-    });
-    const work = {
-      id: "call-1",
-      kind: "tool_call",
-      timestamp: new Date(historyItem.createdAt),
-      payload: {
-        source: "agent",
-        data: {
-          provider: "opencode",
-          callId: "call-1",
-          name: "shell",
-          status: "completed",
-          error: null,
-          detail: { type: "shell", command: "ls" },
-        },
-      },
-    } as StreamItem;
-    const answer = { id: "answer-1", kind: "assistant_message", text: "Done" } as StreamItem;
-    const reply = createUserMessage({
-      clientMessageId: "reply",
-      text: "Battle-off follow-up",
-      timestamp: new Date("2026-08-12T00:05:00Z"),
-    });
-
-    expect(
-      arenaSummaryAnchors([historyItem], { tail: [prompt, work, answer, reply], head: [] }),
-    ).toEqual(["call-1"]);
   });
 });
 
@@ -311,27 +258,27 @@ describe("a battle with replies sent inside it", () => {
     { id: "answer-later", kind: "assistant_message" },
   ] as StreamItem[];
 
-  it("anchors after the battle's last answer, not its first", () => {
-    expect(arenaSummaryAnchor(battle, battleRows)).toBe("answer-3");
+  it("anchors at the battle's own prompt, above every answer inside it", () => {
+    expect(arenaSummaryAnchor(battle, battleRows)).toBe("msg_0100");
     expect(arenaTurnFollowedUp(battle, { tail: battleRows, head: [] })).toBe(false);
   });
 
   it("stays under the battle once a single-agent reply follows it", () => {
     const stream = { tail: [...battleRows, ...later], head: [] };
-    expect(arenaSummaryAnchors([battle], stream)).toEqual(["answer-3"]);
+    expect(arenaSummaryAnchors([battle], stream)).toEqual(["msg_0100"]);
     expect(arenaTurnFollowedUp(battle, stream)).toBe(true);
     const sending = createUserMessage({
       clientMessageId: "reply",
       text: "Battle-off follow-up",
       timestamp: new Date("2026-08-12T00:05:00Z"),
     });
-    expect(arenaSummaryAnchor(battle, [...battleRows, sending])).toBe("answer-3");
+    expect(arenaSummaryAnchor(battle, [...battleRows, sending])).toBe("msg_0100");
     expect(arenaTurnFollowedUp(battle, { tail: battleRows, head: [sending] })).toBe(true);
   });
 
-  it("finds the battle's end when the loaded page starts after its prompt", () => {
+  it("waits for the battle's prompt when the loaded page starts after it", () => {
     const page = [...battleRows.slice(2), ...later];
-    expect(arenaSummaryAnchor(battle, page)).toBe("answer-3");
+    expect(arenaSummaryAnchor(battle, page)).toBeNull();
     expect(arenaTurnFollowedUp(battle, { tail: page, head: [] })).toBe(true);
   });
 
@@ -343,20 +290,30 @@ describe("a battle with replies sent inside it", () => {
     expect(arenaTurnFollowedUp(battle, { tail: battleRows.slice(6), head: [] })).toBe(false);
   });
 
-  it("follows the work the last reply's answer moved above, in chat order", () => {
-    const work = shellCall("call-3");
-    const lastReply = [
-      { id: "msg_0150", kind: "user_message", messageId: "msg_0150" },
-      work,
-      { id: "answer-3", kind: "assistant_message", text: "Done" },
-    ] as StreamItem[];
-    const stream = { tail: [...battleRows.slice(0, 5), ...lastReply, ...later], head: [] };
-    expect(arenaSummaryAnchors([battle], stream)).toEqual(["call-3"]);
+  it("finds the kept answer's rows, replies inside the battle included", () => {
+    const stream = { tail: [...battleRows, ...later], head: [] };
+    expect([...arenaKeptAnswerRowIds(battle, stream)]).toEqual([
+      "answer-1",
+      "msg_0120",
+      "answer-2",
+      "tool-2",
+      "msg_0150",
+      "answer-3",
+    ]);
   });
 
-  it("falls back to the battle's own prompt for a turn grafted without the bound", () => {
+  it("names the kept model in the footer under the battle's last text, not a later turn's", () => {
+    const stream = { tail: [...battleRows, ...later], head: [] };
+    expect(arenaKeptAnswerFooterRowId(battle, stream)).toBe("answer-3");
+    // Work after the last text stays in the turn; the footer still hangs off that text.
+    const withTrailingWork = { tail: [...battleRows, shellCall("tool-3"), ...later], head: [] };
+    expect(arenaKeptAnswerFooterRowId(battle, withTrailingWork)).toBe("answer-3");
+    expect(arenaKeptAnswerFooterRowId(battle, { tail: later, head: [] })).toBeNull();
+  });
+
+  it("anchors a turn grafted without the bound at its own prompt too", () => {
     const { canonicalLastMessageID: _omitted, ...older } = battle;
-    expect(arenaSummaryAnchor(older, battleRows)).toBe("answer-1");
+    expect(arenaSummaryAnchor(older, battleRows)).toBe("msg_0100");
   });
 });
 

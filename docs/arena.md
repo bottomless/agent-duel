@@ -189,9 +189,17 @@ intact; [i18n.md](i18n.md) owns the translation boundary.
 The voter is a developer getting work done who happens to get two attempts to choose between, not a
 benchmark operator scoring models. Optimize the UI for deciding quickly and moving on: the two
 results side by side, the difference between them legible, and every decision in one place. The
-battle card in the transcript is for reading. The contestant responses and their inline review
+battle in the transcript is for reading. The contestant responses and their inline review
 share one surface, without another Responses/Review switch. The battle uses no side panel tab:
-the card has the chat's width, and a panel beside it would narrow the card to show the same thing.
+it has the chat's width, and a panel beside it would narrow it to show the same thing.
+
+The battle has no frame. Its prompt is its headline (`UserMessage` `variant="headline"`), and the
+prompt, both answers, the review's columns and the decision row share two rails (`battle-layout.ts`).
+Each answer is headed by a rule in its side's colour, the colour of its Choose button, then the
+agent's name with its state and time. The size of each change is read in the Changes tab, beside the
+other side's. The heading ends with the agent's tools (`pane-actions.tsx`): Preview when it runs an
+app, a terminal in its worktree, and a menu with the worktree path, Copy path, Expand, and its
+services.
 
 Review has two tabs: **Difference summary**, the generated comparison, and **Changes**, the file
 rows with Git's status for each pair. It appears when the first side has a result
@@ -214,7 +222,9 @@ result arrives. After eight rows, use Show more while keeping open rows visible.
 Open on Difference summary while a report is pending or available; otherwise open Changes, as for
 a stopped battle or a failed side. Read the turn's `comparisonState` before the comparison record
 exists (`battleSummaryStatus`): the review keeps its initial tab, so relying on the record opens it
-on Changes too soon. The chevron folds review; choosing a tab opens it. Changes retries a failed
+on Changes too soon. The chevron folds review; choosing a tab opens it. Folded, its tabs move to the
+start of the decision row, or of a shown battle's row (`folded-review-tabs.tsx`), so the row stays the
+battle's bottom edge and the answers take the room. Changes retries a failed
 read twice before offering manual retry. Summary generation retries transient network and service
 failures for about a minute (`RETRY_DELAYS_MS` in `arena/comparison.ts`): a shared upstream pool can
 refuse every utility model with 429 for that long. Permanent payment or credential failures remain
@@ -226,10 +236,18 @@ scope and the control plane answers later calls with 403, so the generator stops
 resolution, and a decided turn's failed summary shows neither the error nor Retry summary. A summary
 already on its way when the vote lands still shows.
 
-Keep agent responses above review in the visual hierarchy. Tabs use a baseline and selected
-underline, the summary uses compact Markdown with flat headings and paragraphs capped at
-`proseMeasure`, and the differences table keeps the card's width. The diff layout toggle uses the
-`xs` tier. [Design](design.md) owns the tokens and control conventions.
+Keep agent responses above review in the visual hierarchy. The review is pinned under the chat, above
+the decision row and outside the transcript scroller, while there is a choice to make
+(`ArenaPinnedReview` in `battle-judging.tsx`): the answers scroll behind it, its tab row stays put,
+and what is under the tabs scrolls past about two fifths of the window. A shown battle pins it the
+same way above what was kept. It is set off by a hairline with a fade that rises above it only,
+since a blurred shadow also greys the decision row. Its tabs head it with no strip of their own; the selected one is semibold with a 2px
+underline the width of its label. The summary sits on the answers' columns: each side's sentences
+and its value in each row of the differences table under that side's answer
+(`summary-columns.ts`). The judge is asked for that shape, but nothing enforces it, so a report that
+does not split cleanly shows whole, as compact Markdown with flat headings and paragraphs capped at
+`proseMeasure`. The diff layout toggle uses the `xs` tier. [Design](design.md) owns the tokens and
+control conventions.
 
 The judge writes a short report (`arena/comparison.ts`): what each agent did, including shared task
 violations, then a table of differences. Show it whole unless it exceeds a screen of the card, when
@@ -313,7 +331,11 @@ text. Changing the view keeps both panes mounted, preserving reading position an
 the active battle open and its threads height-limited so the prompt and composer remain
 reachable. The card has no link back to the history: the conversation is right above it.
 
-The composer stays available while a running or completed contestant can accept a reply. Who it
+While both results wait for a decision (a vote, or what to keep after a stop), the composer is put
+away behind Ask a follow-up at the end of the decision row, so the decision is the bottom of the
+battle (`useBattleComposerPutAway` in `agent-panel.tsx`). A draft keeps it out, and asking brings it
+back for the rest of that turn. Otherwise the composer stays available while a running or completed
+contestant can accept a reply. Who it
 goes to is a `Both | Agent A | Agent B` segmented control (`Both | A | B` on a compact composer)
 at the composer's leading edge (`reply-target-control.tsx`), replacing the disabled Battle
 toggle during an active battle, so the target is visible before typing rather than hidden in
@@ -1371,9 +1393,24 @@ in one compare-and-set. Acknowledge votes, kept sides, and review answers after 
 (`applyInBackground`); Git work can exceed the client's wait. The feed carries progress and failures,
 including `application_failed` and `canonicalization_failed`.
 
-Keep the battle open during application, then collapse it. Expanded history retains the summary,
-changes, threads, transition report, worktree menus, and services. The workspace header's branch
-control and Environment overflow item open checkout and environment details.
+Keep the battle open during application, then collapse it to the kept answer. The model that wrote
+it, its time, and Show battle end that answer's footer at the battle's right edge
+(`ArenaKeptByline`, keyed by `arenaKeptAnswerFooterRowId`), in place of the footer's own duration.
+They are small on purpose: in a long chat a large name above each answer drew the eye from the
+answers. The chat after a battle sits on the battle's rails (`agent-stream/arena-row-layout.tsx`):
+a battle's prompt takes the battle's width as a heading, and the rest keeps the reading width from
+the same left edge, so nothing moves sideways when a battle closes. A rule goes above each turn's
+prompt after the chat's first row, live battles' included, never between a prompt and its answer:
+under the prompt it read as the previous answer belonging to the next prompt. Show battle opens the
+battle in place of its kept answer (`shown-battle.ts`, `arenaKeptAnswerRowIds`), with the vote's
+names in place of Agent A and B; while it is open, its review, what was kept and Hide battle take
+the composer's place, unless another battle is live in the chat. It also retains the transition
+report.
+
+A battle chat's header names the project only, with no rule under it: the battle's prompt heads the
+page. Commit shows once a battle is decided, and the editor, environment, scripts and changes sit in
+the overflow, where a narrow header puts them anyway (`useArenaWorkspaceHeader`). Its Environment
+item opens checkout and environment details.
 
 Show recorded setup and application operations in the conversation. Hide panes, replies, and early
 choices until setup finishes, including copying that overlaps model startup. Keep Stop available
