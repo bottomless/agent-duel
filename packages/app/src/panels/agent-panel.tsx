@@ -25,7 +25,7 @@ import React, {
   useSyncExternalStore,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { StyleSheet as RNStyleSheet, Text, View, type LayoutChangeEvent } from "react-native";
+import { StyleSheet as RNStyleSheet, Text, View } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import invariant from "tiny-invariant";
 import { shallow, useShallow } from "zustand/shallow";
@@ -152,8 +152,8 @@ import { ArenaDecisionPill } from "@/arena/decision-pill";
 import { arenaDecisionPhase } from "@/arena/decision-state";
 import { useArenaBattleActions } from "@/arena/use-battle-actions";
 import { showsArenaDecisionBar } from "@/arena/decision-state";
-import { ArenaBattleSummary, ArenaKeptByline, ShownBattleFooter } from "@/arena/battle-summary";
-import { useArenaShownBattle, useArenaShownBattleStore } from "@/arena/shown-battle";
+import { ArenaBattleSummary, ArenaKeptByline } from "@/arena/battle-summary";
+import { useArenaShownBattle } from "@/arena/shown-battle";
 import { ArenaChatCallouts, hasArenaChatCallouts } from "@/arena/readiness-strip";
 import {
   ARENA_CONFLICT_RESOLUTION_PROMPT,
@@ -2068,11 +2068,6 @@ const AgentComposerSection = memo(function AgentComposerSection({
     onComposerHeightChange(0);
     onDecisionPillHeightChange(0);
   }, [onComposerHeightChange, onDecisionPillHeightChange, startingBattle]);
-  const { shownBattle, hideShownBattle, reportShownFooterHeight } = useShownBattleDock({
-    agentId,
-    history: arenaSession.data?.history,
-    onComposerHeightChange,
-  });
   const { composerPutAway, askFollowUp } = useBattleComposerPutAway({
     snapshot: arenaSession.data,
     battleReplyAvailable,
@@ -2117,19 +2112,6 @@ const AgentComposerSection = memo(function AgentComposerSection({
         onMessageSent={onMessageSent}
       />
     );
-  if (shownBattle && !isArenaBattleOnScreen(arenaSession.data)) {
-    return (
-      <View style={styles.composerSlot}>
-        <ShownBattleFooter
-          serverId={serverId}
-          agentId={agentId}
-          item={shownBattle}
-          onHideBattle={hideShownBattle}
-          onLayout={reportShownFooterHeight}
-        />
-      </View>
-    );
-  }
   if (composerPutAway && arenaSession.data) {
     return (
       <View style={styles.composerSlot}>
@@ -2221,31 +2203,6 @@ function useKeptAnswerBylines({
     }
     return ends;
   }, [agentId, history, key]);
-}
-
-/** A battle opened with Show battle puts its footer in the composer's place until it is hidden. */
-function useShownBattleDock({
-  agentId,
-  history,
-  onComposerHeightChange,
-}: {
-  agentId: string | undefined;
-  history: ArenaSnapshot["history"] | undefined;
-  onComposerHeightChange: (height: number) => void;
-}) {
-  const shownTurnId = useArenaShownBattle(agentId);
-  const hide = useArenaShownBattleStore((state) => state.hide);
-  const shownBattle = shownTurnId
-    ? (history?.find((item) => item.id === shownTurnId) ?? null)
-    : null;
-  const hideShownBattle = useCallback(() => {
-    if (agentId) hide(agentId);
-  }, [agentId, hide]);
-  const reportShownFooterHeight = useCallback(
-    (event: LayoutChangeEvent) => onComposerHeightChange(event.nativeEvent.layout.height),
-    [onComposerHeightChange],
-  );
-  return { shownBattle, hideShownBattle, reportShownFooterHeight };
 }
 
 /**
