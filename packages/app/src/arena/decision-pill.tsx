@@ -1,7 +1,7 @@
 import { i18n } from "@/i18n/i18next";
 import { useTranslation } from "react-i18next";
 import { useCallback, useEffect } from "react";
-import { Text, View, useWindowDimensions, type LayoutChangeEvent } from "react-native";
+import { Text, View, type LayoutChangeEvent } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { ARENA_MAX_CONTENT_WIDTH } from "@/constants/layout";
 import { Button } from "@/components/ui/button";
@@ -21,10 +21,7 @@ import {
 } from "./decision-state";
 import { isArenaBattleOnScreen } from "./summary-anchor";
 import { useArenaBattleActions, type ArenaBattleActions } from "./use-battle-actions";
-import { ArenaPinnedReview, arenaBattleHasReview } from "./battle-judging";
 import { BATTLE_RAIL } from "./battle-layout";
-import { FoldedReviewTabs, ReviewDockFade, reviewDockStyles } from "./folded-review-tabs";
-import { useArenaReviewState } from "./review-state";
 
 function BattlePaneDecision({
   side,
@@ -281,13 +278,6 @@ export function ArenaDecisionPill({
   const actions = useArenaBattleActions(serverId, agentId, snapshot.turn);
   const phase = arenaDecisionPhase(snapshot);
   const visible = arenaDecisionRowVisible(snapshot);
-  const turnId = snapshot.turn?.id;
-  const folded = useArenaReviewState(turnId ?? "").collapsed === true;
-  // The review is pinned above the row while there is a choice to make, so it stays in view
-  // while the answers scroll behind it. Folded, its tabs move into the row.
-  const pinnedReview = visible && arenaBattleHasReview(snapshot);
-  const reviewOpen = pinnedReview && !folded;
-  const { height: windowHeight } = useWindowDimensions();
   const handleLayout = useCallback(
     (event: LayoutChangeEvent) => onHeightChange(event.nativeEvent.layout.height),
     [onHeightChange],
@@ -300,32 +290,14 @@ export function ArenaDecisionPill({
 
   return (
     <View
-      style={[
-        docked ? styles.dock : styles.container,
-        reviewOpen && styles.underReview,
-        folded && reviewDockStyles.edge,
-      ]}
+      style={docked ? styles.dock : styles.container}
       onLayout={handleLayout}
       pointerEvents="box-none"
       testID="arena-decision-pill"
     >
-      {folded ? <ReviewDockFade /> : null}
-      {pinnedReview ? (
-        <View style={styles.review}>
-          <ArenaPinnedReview
-            serverId={serverId}
-            agentId={agentId}
-            snapshot={snapshot}
-            actions={actions}
-            maxContentHeight={Math.round(windowHeight * PINNED_REVIEW_SHARE)}
-          />
-        </View>
-      ) : null}
       <DecisionHintRow phase={phase} actions={actions} />
       <View style={styles.row} pointerEvents="box-none">
-        <View style={styles.start} pointerEvents="box-none">
-          {turnId ? <FoldedReviewTabs turnId={turnId} /> : null}
-        </View>
+        <View style={styles.start} pointerEvents="box-none" />
         {pillHasChoice(phase) ? <DecisionChoices phase={phase} actions={actions} /> : null}
         <View style={[styles.start, styles.end]} pointerEvents="box-none">
           {onAskFollowUp ? (
@@ -345,10 +317,6 @@ export function ArenaDecisionPill({
     </View>
   );
 }
-
-// How much of the window the pinned review's content may take before it scrolls, so the answers
-// above it keep the larger part.
-const PINNED_REVIEW_SHARE = 0.38;
 
 const styles = StyleSheet.create((theme) => ({
   // Above the composer, over the end of the transcript. Opaque, so the transcript scrolls under it.
@@ -371,14 +339,6 @@ const styles = StyleSheet.create((theme) => ({
     paddingTop: theme.spacing[4],
     paddingBottom: theme.spacing[4] + theme.spacing[1],
     gap: theme.spacing[2],
-  },
-  // An open review heads the dock and draws its own edge.
-  underReview: {
-    paddingTop: 0,
-  },
-  review: {
-    width: "100%",
-    maxWidth: ARENA_MAX_CONTENT_WIDTH,
   },
   row: {
     width: "100%",
