@@ -1,7 +1,7 @@
 import { i18n } from "@/i18n/i18next";
 import { useTranslation } from "react-i18next";
 import { useCallback, useEffect, useMemo, type ReactNode } from "react";
-import { ScrollView, Text, View } from "react-native";
+import { ScrollView, Text, View, type LayoutChangeEvent } from "react-native";
 import { PressHighlight } from "@/components/ui/press-highlight";
 import { useContainerWidth } from "@/hooks/use-container-width";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
@@ -244,10 +244,13 @@ function reviewTabStyle({ hovered, pressed }: { hovered?: boolean; pressed: bool
  */
 function ReviewTabs({
   tab,
+  folded,
   changesLabel,
   onChange,
 }: {
   tab: ArenaReviewTab;
+  /** Folded, nothing shows, so neither tab reads as selected. */
+  folded: boolean;
   changesLabel: string;
   onChange: (tab: ArenaReviewTab) => void;
 }) {
@@ -257,14 +260,14 @@ function ReviewTabs({
       <ReviewTab
         value="verdict"
         label={t("arena.summary")}
-        selected={tab === "verdict"}
+        selected={folded ? null : tab === "verdict"}
         onSelect={onChange}
         testID="arena-review-tab-verdict"
       />
       <ReviewTab
         value="changes"
         label={changesLabel}
-        selected={tab === "changes"}
+        selected={folded ? null : tab === "changes"}
         onSelect={onChange}
         testID="arena-review-tab-changes"
       />
@@ -286,6 +289,7 @@ function ReviewHeader({
   width,
   collapsed,
   onToggleCollapsed,
+  inChat,
 }: {
   /** Whether there is a summary tab to show beside Changes; a stopped battle has only Changes. */
   tabs: boolean;
@@ -298,14 +302,21 @@ function ReviewHeader({
   width: number | null;
   collapsed: boolean;
   onToggleCollapsed: () => void;
+  /** In the chat the section opens downward; pinned under it, it rises. */
+  inChat: boolean;
 }) {
   const { t } = useTranslation();
-
+  const pointsUp = collapsed !== inChat;
   const sectionName = tabs ? t("arena.reviewSections") : t("arena.reviewChanges");
   return (
     <View style={styles.header} testID="arena-review-header">
       {tabs ? (
-        <ReviewTabs tab={tab} changesLabel={changesLabel} onChange={onTabChange} />
+        <ReviewTabs
+          tab={tab}
+          folded={collapsed}
+          changesLabel={changesLabel}
+          onChange={onTabChange}
+        />
       ) : (
         <Text style={styles.title}>{changesLabel}</Text>
       )}
@@ -318,7 +329,7 @@ function ReviewHeader({
         onPress={onToggleCollapsed}
         testID="arena-review-collapse"
       >
-        {collapsed ? (
+        {pointsUp ? (
           <ThemedChevronUp size={ICON_SIZE.md} uniProps={foregroundColorMapping} />
         ) : (
           <ThemedChevronDown size={ICON_SIZE.md} uniProps={foregroundColorMapping} />
@@ -377,7 +388,8 @@ export function BattleReview({
   foldsIntoDock?: boolean;
   /**
    * Pinned under the chat, the tab row stays put and what is under it scrolls past this height,
-   * so the answers above keep their room.
+   * so the answers above keep their room. Without it the review sits in the chat on the answers'
+   * text edge, under a plain hairline: the fade only reads where the chat scrolls behind it.
    */
   maxContentHeight?: number;
   summaryAvailable: boolean;
@@ -481,9 +493,6 @@ export function BattleReview({
   const changesLabel =
     rows.length > 0 ? t("arena.changesCount", { total: rows.length }) : t("arena.changes");
   usePublishDockTabs(turnId, tabs, changesLabel);
-  // Review telemetry listens to scrolls on the whole document; this tells it which diffs are
-  // this battle's.
-  const reviewData = useMemo(() => ({ reviewTurn: turnId }), [turnId]);
   let content;
   if (shownTab === "verdict" && waitingFor !== null) {
     content = <WaitingSummary waitingFor={waitingFor} />;
@@ -520,13 +529,7 @@ export function BattleReview({
 
   if (foldedAway(collapsed, foldsIntoDock === true)) return null;
   return (
-    <View
-      style={styles.review}
-      onLayout={onLayout}
-      testID="arena-battle-comparison"
-      dataSet={reviewData}
-    >
-      <View style={styles.edgeFade} pointerEvents="none" />
+    <ReviewFrame pinned={maxContentHeight !== undefined} onLayout={onLayout} turnId={turnId}>
       <ReviewHeader
         tabs={tabs}
         tab={tab}
@@ -537,8 +540,40 @@ export function BattleReview({
         width={measured}
         collapsed={collapsed}
         onToggleCollapsed={toggleCollapsed}
+        inChat={maxContentHeight === undefined}
       />
       {collapsed ? null : <ReviewContent maxHeight={maxContentHeight}>{content}</ReviewContent>}
+    </ReviewFrame>
+  );
+}
+
+/**
+ * The review's own edge: pinned under the chat, a hairline with a fade over what scrolls behind;
+ * in the chat, a plain hairline on the answers' text edge.
+ */
+function ReviewFrame({
+  pinned,
+  onLayout,
+  turnId,
+  children,
+}: {
+  pinned: boolean;
+  onLayout: (event: LayoutChangeEvent) => void;
+  turnId: string;
+  children: ReactNode;
+}) {
+  // Review telemetry listens to scrolls on the whole document; this tells it which diffs are
+  // this battle's.
+  const reviewData = useMemo(() => ({ reviewTurn: turnId }), [turnId]);
+  return (
+    <View
+      style={[styles.review, !pinned && styles.reviewInChat]}
+      onLayout={onLayout}
+      testID="arena-battle-comparison"
+      dataSet={reviewData}
+    >
+      {pinned ? <View style={styles.edgeFade} pointerEvents="none" /> : null}
+      {children}
     </View>
   );
 }
@@ -562,6 +597,10 @@ const styles = StyleSheet.create((theme) => ({
     paddingBottom: theme.spacing[3],
     borderTopWidth: 1,
     borderTopColor: theme.colors.borderAccent,
+  },
+  reviewInChat: {
+    paddingHorizontal: 0,
+    borderTopColor: theme.colors.border,
   },
   edgeFade: {
     position: "absolute",

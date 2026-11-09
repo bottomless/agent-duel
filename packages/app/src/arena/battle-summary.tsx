@@ -5,7 +5,7 @@ import { arenaSizeErrorOr } from "./chat-too-large";
 import { ArenaStreamStatus } from "./stream-status";
 import { useArenaStream } from "./use-arena-stream";
 import { useCallback, useMemo, useRef, useState } from "react";
-import { Text, View, useWindowDimensions, type LayoutChangeEvent } from "react-native";
+import { Text, View } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import Animated, {
   Easing,
@@ -62,8 +62,6 @@ import { formatDuration } from "@/utils/time";
 import { BattleReview } from "./battle-review";
 import { BATTLE_GUTTER, BATTLE_RAIL } from "./battle-layout";
 import { useArenaShownBattle, useArenaShownBattleStore } from "./shown-battle";
-import { FoldedReviewTabs, ReviewDockFade, reviewDockStyles } from "./folded-review-tabs";
-import { useArenaReviewState } from "./review-state";
 
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
 const ThemedChevronDown = withUnistyles(ChevronDown);
@@ -398,58 +396,35 @@ function showBattleStyle() {
 }
 
 /**
- * The bottom of a shown battle, in the composer's place: what was kept where the choice was, and
- * the way back to the chat.
+ * The end of a shown battle, in the chat under its review: what was kept where the choice was, and
+ * the way back to the kept answer.
  */
-export function ShownBattleFooter({
-  serverId,
-  agentId,
-  item,
-  onHideBattle,
-  onLayout,
-}: {
-  serverId: string;
-  agentId: string;
-  item: ArenaHistoryItem;
-  onHideBattle: () => void;
-  onLayout?: (event: LayoutChangeEvent) => void;
-}) {
+function ShownBattleEnd({ agentId, item }: { agentId: string; item: ArenaHistoryItem }) {
   const { t } = useTranslation();
   const winner = battleWinnerSide(item);
-  const folded = useArenaReviewState(item.id).collapsed === true;
+  const hide = useArenaShownBattleStore((state) => state.hide);
+  const onHideBattle = useCallback(() => hide(agentId), [agentId, hide]);
   return (
-    <View
-      style={[styles.shownDock, folded && reviewDockStyles.edge]}
-      onLayout={onLayout}
-      testID="arena-shown-battle-footer"
-    >
-      {folded ? <ReviewDockFade /> : null}
-      <View style={styles.shownReview}>
-        <ShownBattleReview serverId={serverId} agentId={agentId} item={item} />
-      </View>
-      <View style={styles.shownFooter}>
-        <View style={styles.shownFooterEnd}>
-          <FoldedReviewTabs turnId={item.id} />
-        </View>
-        {winner ? (
-          <Text style={styles.shownFooterResult}>
-            {t("arena.youKept", { side: winner.toUpperCase() })}
-          </Text>
-        ) : (
-          <Text style={styles.shownFooterResult}>{chosenLabel(item)}</Text>
-        )}
-        <View style={[styles.shownFooterEnd, styles.shownFooterEndRight]}>
-          <Button
-            variant="outline"
-            size="md"
-            style={styles.hideBattle}
-            textStyle={styles.hideBattleText}
-            onPress={onHideBattle}
-            testID={`arena-hide-battle-${item.id}`}
-          >
-            {t("arena.hideBattle")}
-          </Button>
-        </View>
+    <View style={styles.shownFooter} testID="arena-shown-battle-footer">
+      <View style={styles.shownFooterEnd} />
+      {winner ? (
+        <Text style={styles.shownFooterResult}>
+          {t("arena.youKept", { side: winner.toUpperCase() })}
+        </Text>
+      ) : (
+        <Text style={styles.shownFooterResult}>{chosenLabel(item)}</Text>
+      )}
+      <View style={[styles.shownFooterEnd, styles.shownFooterEndRight]}>
+        <Button
+          variant="outline"
+          size="md"
+          style={styles.hideBattle}
+          textStyle={styles.hideBattleText}
+          onPress={onHideBattle}
+          testID={`arena-hide-battle-${item.id}`}
+        >
+          {t("arena.hideBattle")}
+        </Button>
       </View>
     </View>
   );
@@ -606,9 +581,7 @@ const noop = () => {};
  * A shown battle's review: the same section the battle had while it ran, once there is a summary
  * or a change to show. Until then, the archive's own loading and failure lines.
  */
-function ShownBattleComparison(
-  props: Parameters<typeof ArchivedBattleComparison>[0] & { maxContentHeight: number },
-) {
+function ShownBattleComparison(props: Parameters<typeof ArchivedBattleComparison>[0]) {
   const { comparison, diff, bothComplete } = props;
   const reviewable =
     bothComplete && !diff?.treesEqual && (comparison?.output || hasBattleDiff(diff));
@@ -630,8 +603,6 @@ function ShownBattleComparison(
       rows={arenaChangesRows(diff)}
       onRetryDiff={noop}
       retryingDiff={false}
-      maxContentHeight={props.maxContentHeight}
-      foldsIntoDock
     />
   );
 }
@@ -757,17 +728,17 @@ function ExpandedBattleSummary({
         />
       </View>
       <BattleThreads runA={settledHistoryRun(runA)} runB={settledHistoryRun(runB)} item={item} />
+      <View style={styles.shownReview}>
+        <ShownBattleReview serverId={serverId} agentId={agentId} item={item} />
+      </View>
+      <ShownBattleEnd agentId={agentId} item={item} />
     </View>
   );
 }
 
-// How much of the window a shown battle's review may take before it scrolls; the decision row's
-// pinned review uses the same share.
-const PINNED_REVIEW_SHARE = 0.38;
-
 /**
- * A shown battle's review, pinned under the chat above what was kept, the way it was pinned
- * above the decision while the battle ran.
+ * A shown battle's review, in the chat under its answers. Only a battle waiting for a vote pins its
+ * review under the chat: once decided, the review is part of the record and scrolls with its turn.
  */
 function ShownBattleReview({
   serverId,
@@ -781,7 +752,6 @@ function ShownBattleReview({
   const { t } = useTranslation();
   const toast = useToast();
   const queryClient = useQueryClient();
-  const { height: windowHeight } = useWindowDimensions();
   const client = useSessionStore((state) => state.sessions[serverId]?.client ?? null);
   const turnQueryKey = ["arena", "turn", serverId, agentId, item.id] as const;
   const turnQuery = useArenaStream(serverId, agentId, item.id);
@@ -853,7 +823,6 @@ function ShownBattleReview({
       diffLoading={diffQuery.isLoading}
       diff={diffQuery.data}
       diffError={diffQuery.error}
-      maxContentHeight={Math.round(windowHeight * PINNED_REVIEW_SHARE)}
     />
   );
 }
@@ -1088,25 +1057,15 @@ const styles = StyleSheet.create((theme) => ({
     alignSelf: "center",
     paddingHorizontal: BATTLE_RAIL - theme.spacing[3],
   },
-  // A shown battle's dock, in the composer's place: its review, then what was kept.
-  shownDock: {
-    width: "100%",
-    alignItems: "center",
-    backgroundColor: theme.colors.surface0,
-  },
+  // A shown battle's review and end sit on the answers' text edge, as the notices above do.
   shownReview: {
-    width: "100%",
-    maxWidth: ARENA_MAX_CONTENT_WIDTH,
+    paddingHorizontal: theme.spacing[3],
   },
   shownFooter: {
-    width: "100%",
-    maxWidth: ARENA_MAX_CONTENT_WIDTH,
     flexDirection: "row",
     alignItems: "center",
     gap: theme.spacing[4],
-    paddingHorizontal: BATTLE_RAIL,
-    paddingTop: theme.spacing[4],
-    paddingBottom: theme.spacing[4] + theme.spacing[1],
+    paddingHorizontal: theme.spacing[3],
   },
   shownFooterEnd: {
     flex: 1,
