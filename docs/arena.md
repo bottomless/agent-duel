@@ -222,9 +222,9 @@ result arrives. After eight rows, use Show more while keeping open rows visible.
 Open on Difference summary while a report is pending or available; otherwise open Changes, as for
 a stopped battle or a failed side. Read the turn's `comparisonState` before the comparison record
 exists (`battleSummaryStatus`): the review keeps its initial tab, so relying on the record opens it
-on Changes too soon. The chevron folds review; choosing a tab opens it. Folded, its tabs move to the
-start of the decision row, or of a shown battle's row (`folded-review-tabs.tsx`), so the row stays the
-battle's bottom edge and the answers take the room. Changes retries a failed
+on Changes too soon. The chevron folds review; choosing a tab opens it. Folded, neither tab reads
+as selected; a pinned review's tabs move to the start of the decision row (`folded-review-tabs.tsx`),
+so the row stays the battle's bottom edge and the answers take the room. Changes retries a failed
 read twice before offering manual retry. Summary generation retries transient network and service
 failures for about a minute (`RETRY_DELAYS_MS` in `arena/comparison.ts`): a shared upstream pool can
 refuse every utility model with 429 for that long. Permanent payment or credential failures remain
@@ -239,8 +239,10 @@ already on its way when the vote lands still shows.
 Keep agent responses above review in the visual hierarchy. The review is pinned under the chat, above
 the decision row and outside the transcript scroller, while there is a choice to make
 (`ArenaPinnedReview` in `battle-judging.tsx`): the answers scroll behind it, its tab row stays put,
-and what is under the tabs scrolls past about two fifths of the window. A shown battle pins it the
-same way above what was kept. It is set off by a hairline with a fade that rises above it only,
+and what is under the tabs scrolls past about two fifths of the window. Only a battle waiting for a
+vote pins it: under Show battle the review sits in the chat under the answers, behind a plain
+hairline, because pinned it stayed in view over turns it did not belong to and took the composer's
+place. Pinned, it is set off by a hairline with a fade that rises above it only,
 since a blurred shadow also greys the decision row. Its tabs head it with no strip of their own; the selected one is semibold with a 2px
 underline the width of its label. The summary sits on the answers' columns: each side's sentences
 and its value in each row of the differences table under that side's answer
@@ -1403,9 +1405,8 @@ the same left edge, so nothing moves sideways when a battle closes. A rule goes 
 prompt after the chat's first row, live battles' included, never between a prompt and its answer:
 under the prompt it read as the previous answer belonging to the next prompt. Show battle opens the
 battle in place of its kept answer (`shown-battle.ts`, `arenaKeptAnswerRowIds`), with the vote's
-names in place of Agent A and B; while it is open, its review, what was kept and Hide battle take
-the composer's place, unless another battle is live in the chat. It also retains the transition
-report.
+names in place of Agent A and B, its review under them, and what was kept with Hide battle at its
+end. It also retains the transition report.
 
 A battle chat's header names the project only, with no rule under it: the battle's prompt heads the
 page. Commit shows once a battle is decided, and the editor, environment, scripts and changes sit in
