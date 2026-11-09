@@ -5,7 +5,6 @@ import { Text, View, type LayoutChangeEvent } from "react-native";
 import { PressHighlight } from "@/components/ui/press-highlight";
 import { useContainerWidth } from "@/hooks/use-container-width";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
-import { ChevronDown, ChevronUp } from "lucide-react-native";
 import type {
   ArenaComparisonDiff,
   ArenaSide,
@@ -13,7 +12,7 @@ import type {
 } from "@getpaseo/protocol/arena/rpc-schemas";
 import { Button } from "@/components/ui/button";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
-import { ICON_SIZE, type Theme } from "@/styles/theme";
+import type { Theme } from "@/styles/theme";
 import { toErrorMessage } from "@/utils/error-messages";
 import { IdenticalBattleResult, SummaryOmissionNotice } from "./battle-summary";
 import { ArenaChangesList } from "./changes-list";
@@ -23,17 +22,13 @@ import { DiffLayoutControl } from "./diff-layout-control";
 import { comparisonRevision } from "./comparison-visibility";
 import { useArenaFileDiff } from "./file-diff-query";
 import { InlineFileDiff, openChangesFiles, toggleChangesFile } from "./inline-file-diff";
-import { PaneIconAction } from "./pane-icon-action";
 import { useArenaReviewState, useArenaReviewStore, type ArenaReviewTab } from "./review-state";
 import { VerdictBody } from "./verdict-body";
 import { parseSummaryColumns } from "./summary-columns";
 import { SummaryColumnsView } from "./summary-columns-view";
 
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
-const ThemedChevronDown = withUnistyles(ChevronDown);
-const ThemedChevronUp = withUnistyles(ChevronUp);
 const mutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
-const foregroundColorMapping = (theme: Theme) => ({ color: theme.colors.foreground });
 
 function Verdict({
   turnId,
@@ -193,7 +188,7 @@ function ChangesTab({
  * the bottom of the tab row. Exported so the folded review can draw the same tabs in the decision
  * row; there nothing is selected, since nothing is showing.
  */
-export function ReviewTab({
+function ReviewTab({
   value,
   label,
   selected,
@@ -202,31 +197,23 @@ export function ReviewTab({
 }: {
   value: ArenaReviewTab;
   label: string;
-  selected: boolean | null;
+  selected: boolean;
   onSelect: (tab: ArenaReviewTab) => void;
   testID: string;
 }) {
   const handlePress = useCallback(() => onSelect(value), [onSelect, value]);
-  const accessibilityState = useMemo(() => ({ selected: selected === true }), [selected]);
+  const accessibilityState = useMemo(() => ({ selected }), [selected]);
   return (
     <PressHighlight
       accessibilityRole="tab"
       accessibilityState={accessibilityState}
-      aria-selected={selected === true}
+      aria-selected={selected}
       onPress={handlePress}
       style={reviewTabStyle}
       testID={testID}
     >
-      <Text
-        style={[
-          styles.tabText,
-          selected === true && styles.tabTextSelected,
-          selected === null && styles.tabTextFolded,
-        ]}
-      >
-        {label}
-      </Text>
-      {selected === true ? <View style={styles.tabIndicator} pointerEvents="none" /> : null}
+      <Text style={[styles.tabText, selected && styles.tabTextSelected]}>{label}</Text>
+      {selected ? <View style={styles.tabIndicator} pointerEvents="none" /> : null}
     </PressHighlight>
   );
 }
@@ -243,15 +230,12 @@ function reviewTabStyle({ hovered, pressed }: { hovered?: boolean; pressed: bool
 function ReviewTabs({
   tabs,
   tab,
-  folded,
   changesLabel,
   onChange,
 }: {
   /** Whether the summary has a tab; without one, Changes heads the review alone. */
   tabs: boolean;
   tab: ArenaReviewTab;
-  /** Folded, nothing shows, so neither tab reads as selected. */
-  folded: boolean;
   changesLabel: string;
   onChange: (tab: ArenaReviewTab) => void;
 }) {
@@ -262,7 +246,7 @@ function ReviewTabs({
         <ReviewTab
           value="verdict"
           label={t("arena.summary")}
-          selected={folded ? null : tab === "verdict"}
+          selected={tab === "verdict"}
           onSelect={onChange}
           testID="arena-review-tab-verdict"
         />
@@ -270,7 +254,7 @@ function ReviewTabs({
       <ReviewTab
         value="changes"
         label={changesLabel}
-        selected={folded ? null : !tabs || tab === "changes"}
+        selected={!tabs || tab === "changes"}
         onSelect={onChange}
         testID="arena-review-tab-changes"
       />
@@ -290,8 +274,6 @@ function ReviewHeader({
   layoutControl,
   agentId,
   width,
-  collapsed,
-  onToggleCollapsed,
 }: {
   /** Whether there is a summary tab to show beside Changes; a stopped battle has only Changes. */
   tabs: boolean;
@@ -302,36 +284,12 @@ function ReviewHeader({
   layoutControl: boolean;
   agentId: string;
   width: number | null;
-  collapsed: boolean;
-  onToggleCollapsed: () => void;
 }) {
-  const { t } = useTranslation();
-  const sectionName = tabs ? t("arena.reviewSections") : t("arena.reviewChanges");
   return (
     <View style={styles.header} testID="arena-review-header">
-      <ReviewTabs
-        tabs={tabs}
-        tab={tab}
-        folded={collapsed}
-        changesLabel={changesLabel}
-        onChange={onTabChange}
-      />
+      <ReviewTabs tabs={tabs} tab={tab} changesLabel={changesLabel} onChange={onTabChange} />
       <View style={styles.spacer} />
       {layoutControl ? <DiffLayoutControl agentId={agentId} width={width} /> : null}
-      <PaneIconAction
-        accessibilityLabel={t(collapsed ? "arena.showReview" : "arena.hideReview", {
-          section: sectionName,
-        })}
-        onPress={onToggleCollapsed}
-        testID="arena-review-collapse"
-      >
-        {/* The section opens downward, under the chevron. */}
-        {collapsed ? (
-          <ThemedChevronDown size={ICON_SIZE.md} uniProps={foregroundColorMapping} />
-        ) : (
-          <ThemedChevronUp size={ICON_SIZE.md} uniProps={foregroundColorMapping} />
-        )}
-      </PaneIconAction>
     </View>
   );
 }
@@ -387,8 +345,6 @@ export function BattleReview({
   const setShownFile = useArenaReviewStore((state) => state.setShownFile);
   const openStoreFile = useArenaReviewStore((state) => state.openFile);
   const setShownTab = useArenaReviewStore((state) => state.setShownTab);
-  const setStoreCollapsed = useArenaReviewStore((state) => state.setCollapsed);
-  const collapsed = chosen.collapsed === true;
   // The summary tab exists while one side works, so the voter knows the summary is coming.
   const tabs = summaryAvailable || waitingFor !== null;
   // The summary is the first tab whenever there is one; a reader's pick stands.
@@ -408,17 +364,9 @@ export function BattleReview({
     file: openFiles[0] ?? null,
     revision: diff ? comparisonRevision(diff) : undefined,
   });
-  // Picking a tab on a folded section opens it on that tab.
   const setTab = useCallback(
-    (next: ArenaReviewTab) => {
-      setStoreTab(turnId, next);
-      if (collapsed) setStoreCollapsed(turnId, false);
-    },
-    [collapsed, setStoreCollapsed, setStoreTab, turnId],
-  );
-  const toggleCollapsed = useCallback(
-    () => setStoreCollapsed(turnId, !collapsed),
-    [collapsed, setStoreCollapsed, turnId],
+    (next: ArenaReviewTab) => setStoreTab(turnId, next),
+    [setStoreTab, turnId],
   );
   // A file the reader opens is the one they are reading now, even when they opened it before;
   // closing one records nothing.
@@ -443,12 +391,11 @@ export function BattleReview({
   // rather than anything the reader picked. Telemetry counts these, so a reader
   // who never touches a control is still recorded as having read something.
   const shownTab: ArenaReviewTab = tab === "verdict" && tabs ? "verdict" : "changes";
-  // A folded section shows nothing, so telemetry records nothing as read while it is folded.
-  const showChanges = shownTab === "changes" && !collapsed;
+  const showChanges = shownTab === "changes";
   const showLayoutControl = showChanges;
   useEffect(() => {
-    if (!collapsed) setShownTab(turnId, shownTab);
-  }, [collapsed, setShownTab, shownTab, turnId]);
+    setShownTab(turnId, shownTab);
+  }, [setShownTab, shownTab, turnId]);
   // The default diff counts as read the first time Changes shows it. Files the reader opens
   // afterwards are recorded by the toggle above.
   const arrivalFile = chosen.shownFile === undefined ? openFiles[openFiles.length - 1] : undefined;
@@ -507,10 +454,8 @@ export function BattleReview({
         layoutControl={showLayoutControl && rows.length > 0}
         agentId={agentId}
         width={measured}
-        collapsed={collapsed}
-        onToggleCollapsed={toggleCollapsed}
       />
-      {collapsed ? null : <View style={styles.content}>{content}</View>}
+      <View style={styles.content}>{content}</View>
     </ReviewFrame>
   );
 }
@@ -582,11 +527,6 @@ const styles = StyleSheet.create((theme) => ({
   tabTextSelected: {
     color: theme.colors.foreground,
     fontWeight: theme.fontWeight.semibold,
-  },
-  // Folded, both tabs are ways to open the review; neither reads as selected.
-  tabTextFolded: {
-    color: theme.colors.foregroundMuted,
-    fontWeight: theme.fontWeight.medium,
   },
   tabIndicator: {
     position: "absolute",

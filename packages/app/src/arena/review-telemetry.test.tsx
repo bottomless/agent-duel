@@ -149,36 +149,6 @@ describe("useArenaReviewTelemetry", () => {
     expect(types()).not.toContain("diff.scrolled");
   });
 
-  it("reports folding the review away and opening it again", () => {
-    // Folding leaves the shown tab alone, so without this the rollup would count
-    // the folded time as reading that tab.
-    mount();
-    act(() => {
-      useArenaReviewStore.getState().setShownTab(TURN, "changes");
-    });
-    act(() => {
-      useArenaReviewStore.getState().setCollapsed(TURN, true);
-    });
-    act(() => {
-      useArenaReviewStore.getState().setCollapsed(TURN, false);
-    });
-    act(() => {
-      root.unmount();
-    });
-    const folds = sent.filter((event) => event.type === "review.collapsed");
-    expect(folds.map((event) => "on" in event && event.on)).toEqual([true, false]);
-  });
-
-  it("seeds a review that is already folded", () => {
-    useArenaReviewStore.getState().setShownTab(TURN, "changes");
-    useArenaReviewStore.getState().setCollapsed(TURN, true);
-    mount();
-    act(() => {
-      root.unmount();
-    });
-    expect(types()).toEqual(["battle.opened", "tab.viewed", "review.collapsed"]);
-  });
-
   it("records the reader opening the file they opened last once more", () => {
     // Closing a diff records nothing and leaves the shown file on it, so opening
     // it again would otherwise look like no change at all.

@@ -372,29 +372,6 @@ describe("BattleReview", () => {
     expect(rows()[8]).toBe("arena-changes-row-src/f20.py");
   });
 
-  it("folds the whole section away and opens it again from a tab", () => {
-    render({ summaryAvailable: true });
-    const collapse = () => byTestId("arena-review-collapse") as HTMLElement;
-    expect(collapse().getAttribute("aria-label")).toBe("Hide the difference summary and changes");
-    act(() => fireEvent.click(collapse()));
-    expect(container.textContent).not.toContain("The judge's report");
-    expect(byTestId("arena-review-tabs")).not.toBeNull();
-    expect(collapse().getAttribute("aria-label")).toBe("Show the difference summary and changes");
-
-    act(() => fireEvent.click(byTestId("arena-review-tab-changes") as HTMLElement));
-    expect(byTestId("arena-inline-diff")).not.toBeNull();
-    expect(useArenaReviewStore.getState().byTurn["turn-1"]?.collapsed).toBe(false);
-  });
-
-  it("records nothing as shown while the section is folded", () => {
-    useArenaReviewStore.setState({ byTurn: { "turn-1": { collapsed: true } } });
-    render({ summaryAvailable: false });
-    expect(byTestId("arena-inline-diff")).toBeNull();
-    const state = useArenaReviewStore.getState().byTurn["turn-1"];
-    expect(state?.shownFile).toBeUndefined();
-    expect(state?.shownTab).toBeUndefined();
-  });
-
   it("shows the changes alone when there is no verdict to read", () => {
     render({ summaryAvailable: false });
     // Changes heads the review alone, as the one tab of the pair.
