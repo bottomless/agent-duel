@@ -89,6 +89,7 @@ import {
   canRetryRun,
   canTie,
   canVote,
+  discardStage,
   earlyResolution,
   chatSlug,
   generationName,
@@ -11647,7 +11648,7 @@ export const layer: Layer.Layer<
           const lost = expectedState === "finalization_failed" || expectedState === "interrupted_recovery"
           if (!lost) yield* ensureArchives(store, turn)
           const reveal = lost || (yield* promise(() => anySideShowedOutput(store, turn._id)))
-          const stage = lost ? "recovery" : expectedState === "awaiting_vote" ? "vote" : "stop"
+          const stage = discardStage(turn, yield* promise(() => store.runsForTurn(turn._id)))
           const recorded = yield* recordDiscard(
             store,
             turn,

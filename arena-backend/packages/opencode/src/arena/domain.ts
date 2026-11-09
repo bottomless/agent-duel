@@ -405,6 +405,20 @@ export function canDiscardBattle(
 }
 
 /**
+ * The stage a discard the voter asked for records; archiving records `archive` itself. A battle the
+ * engine's restart cut off waits at `awaiting_vote` once reopened, with its review hidden until
+ * Resume, so discarding it there is `recovery`, not a verdict on the results.
+ */
+export function discardStage(
+  turn: { readonly state: BattleState; readonly resolution?: unknown },
+  runs: ReadonlyArray<ResumableRun>,
+): Exclude<DiscardStage, "archive"> {
+  if (turn.state === "finalization_failed" || turn.state === "interrupted_recovery") return "recovery"
+  if (canResumeBattle(turn, runs)) return "recovery"
+  return turn.state === "awaiting_vote" ? "vote" : "stop"
+}
+
+/**
  * May the voter choose this side of a finished battle?
  *
  * Only a result that can be chosen, so a battle whose runs both failed is never voted on: Discard

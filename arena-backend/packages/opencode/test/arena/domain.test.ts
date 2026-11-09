@@ -11,6 +11,7 @@ import {
   canTransition,
   canVote,
   chatSlug,
+  discardStage,
   earlyResolution,
   generationName,
   identitiesRevealed,
@@ -215,6 +216,14 @@ describe("canResumeBattle", () => {
     expect(canResumeBattle({ state: "awaiting_vote", resolution: voteResolution("a") }, [interrupted])).toBe(false)
     expect(canResumeBattle({ state: "running" }, [interrupted, interrupted])).toBe(false)
     expect(canResumeBattle({ state: "awaiting_stop_resolution" }, [interrupted, interrupted])).toBe(false)
+  })
+
+  test("records a discard of a battle the restart cut off as recovery, not a vote", () => {
+    expect(discardStage({ state: "awaiting_vote" }, [complete, interrupted])).toBe("recovery")
+    expect(discardStage({ state: "interrupted_recovery" }, [])).toBe("recovery")
+    expect(discardStage({ state: "finalization_failed" }, [])).toBe("recovery")
+    expect(discardStage({ state: "awaiting_vote" }, [complete, complete])).toBe("vote")
+    expect(discardStage({ state: "awaiting_stop_resolution" }, [interrupted, interrupted])).toBe("stop")
   })
 
   test("leaves Discard as the only other choice while the battle can resume", () => {
