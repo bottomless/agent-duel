@@ -1,7 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { useCallback, useMemo } from "react";
 import { View } from "react-native";
-import { Globe2 } from "lucide-react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import type { ArenaSide } from "@getpaseo/protocol/arena/rpc-schemas";
 import { Button } from "@/components/ui/button";
@@ -11,10 +10,8 @@ import { useOpenArenaServiceUrl } from "./open-service-url";
 import type { Theme } from "@/styles/theme";
 import { agentLabel, type LifecycleServiceEntry } from "./environment";
 
-const ThemedGlobe = withUnistyles(Globe2);
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
 const mutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
-const successColorMapping = (theme: Theme) => ({ color: theme.colors.statusSuccess });
 
 /** The small dot that says "up" (green) or "not up" (muted) next to a status phrase. */
 export function StatusDot({ tone }: { tone: "live" | "muted" }) {
@@ -50,27 +47,24 @@ export function PreviewButton({
     openUrl(entry.url);
   }, [addPreviewOpened, entry?.url, openUrl, side, turnId]);
   const ready = entry !== undefined && entry.live && Boolean(entry.url);
-  // The globe is the one place the button says "live" in colour; the button's own text colour
-  // would paint it neutral.
-  const icon = useMemo(
-    () => <ThemedGlobe size={14} uniProps={ready ? successColorMapping : mutedColorMapping} />,
-    [ready],
-  );
+  // The dot is the one place the button says "live" in colour.
+  const icon = useMemo(() => <StatusDot tone={ready ? "live" : "muted"} />, [ready]);
   if (!entry) return null;
   return (
     <Button
-      size="xs"
+      size="sm"
       variant="outline"
       disabled={!ready}
       onPress={handlePress}
       leftIcon={icon}
+      style={styles.preview}
       textStyle={ready ? styles.previewText : styles.previewTextMuted}
       accessibilityLabel={t(ready ? "arena.openPreview" : "arena.startingPreview", {
         agent: agentLabel(side),
       })}
       testID={testID}
     >
-      {t("arena.preview")}{" "}
+      {`${t("arena.preview")}  ↗`}
     </Button>
   );
 }
@@ -88,14 +82,17 @@ const styles = StyleSheet.create((theme) => ({
     borderRadius: theme.borderRadius.full,
     backgroundColor: theme.colors.foregroundMuted,
   },
+  preview: {
+    borderRadius: theme.borderRadius.lg,
+  },
   previewText: {
     color: theme.colors.foreground,
-    fontSize: theme.fontSize.sm,
-    fontWeight: theme.fontWeight.medium,
+    fontSize: theme.fontSize.base,
+    fontWeight: theme.fontWeight.semibold,
   },
   previewTextMuted: {
     color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.sm,
-    fontWeight: theme.fontWeight.medium,
+    fontSize: theme.fontSize.base,
+    fontWeight: theme.fontWeight.semibold,
   },
 }));

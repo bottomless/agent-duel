@@ -25,7 +25,7 @@ const ThemedChevronUp = withUnistyles(ChevronUp);
 const ThemedExternalLink = withUnistyles(ExternalLink);
 const mutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
 
-function ServiceMenuItem({ entry, side }: { entry: LifecycleServiceEntry; side: string }) {
+export function ServiceMenuItem({ entry, side }: { entry: LifecycleServiceEntry; side: string }) {
   const { t } = useTranslation();
   const openUrl = useOpenArenaServiceUrl();
   const handleSelect = useCallback(() => {

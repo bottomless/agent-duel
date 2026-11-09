@@ -97,6 +97,8 @@ import type { ArenaSide } from "@getpaseo/protocol/arena/rpc-schemas";
 import { resolveArenaSeatMenuSides } from "@/arena/terminal-target";
 import { ArenaEnvironmentButton } from "@/arena/readiness-strip";
 import { useArenaSessionQuery } from "@/arena/use-arena-session";
+import { isArenaBattleOnScreen } from "@/arena/summary-anchor";
+import { BATTLE_RAIL } from "@/arena/battle-layout";
 import { useAppSettings } from "@/hooks/use-settings";
 import { applySidePanelPlacement } from "@/workspace/side-panel-placement";
 import { normalizeWorkspaceTabTarget, workspaceTabTargetsEqual } from "@/workspace-tabs/identity";
@@ -482,12 +484,14 @@ function useCloseTabs(): UseCloseTabsResult {
 function WorkspaceHeaderProjectRow({
   subtitle,
   isSubtitleDistinct,
+  always = false,
 }: {
   subtitle: string;
   isSubtitleDistinct: boolean;
+  always?: boolean;
 }) {
   const isCompact = useIsCompactFormFactor();
-  const showProject = isSubtitleDistinct || isCompact;
+  const showProject = always || isSubtitleDistinct || isCompact;
   if (!showProject) {
     return null;
   }
@@ -502,6 +506,8 @@ function WorkspaceHeaderProjectRow({
 
 interface WorkspaceHeaderTitleBarProps {
   isLoading: boolean;
+  /** A battle chat's header names its project only: the battle's prompt heads the page. */
+  projectOnly?: boolean;
   title: string;
   subtitle: string;
   isSubtitleDistinct: boolean;
@@ -509,6 +515,7 @@ interface WorkspaceHeaderTitleBarProps {
 
 function WorkspaceHeaderTitleBar({
   isLoading,
+  projectOnly = false,
   title,
   subtitle,
   isSubtitleDistinct,
@@ -520,16 +527,37 @@ function WorkspaceHeaderTitleBar({
           <View style={styles.headerTitleSkeleton} />
         ) : (
           <>
-            <ScreenTitle testID="workspace-header-title">{title}</ScreenTitle>
+            {projectOnly ? null : (
+              <ScreenTitle testID="workspace-header-title">{title}</ScreenTitle>
+            )}
             <WorkspaceHeaderProjectRow
               subtitle={subtitle}
               isSubtitleDistinct={isSubtitleDistinct}
+              always={projectOnly}
             />
           </>
         )}
       </View>
     </View>
   );
+}
+
+/**
+ * A battle chat keeps its header to the project, Commit once there is a result to commit, the
+ * overflow and the panel toggle, with no rule under it. The editor, environment, scripts and
+ * changes sit in the overflow, the way they do when the header is too narrow for them.
+ */
+function useArenaWorkspaceHeader(
+  arenaSnapshot: ReturnType<typeof useArenaSessionQuery>["data"],
+  headerActionsCollapsed: boolean,
+) {
+  const arenaChat = Boolean(arenaSnapshot);
+  return {
+    arenaChat,
+    arenaBattleOnScreen: isArenaBattleOnScreen(arenaSnapshot),
+    headerActionsInMenu: headerActionsCollapsed || arenaChat,
+    headerLeftStyle: arenaChat ? styles.arenaHeaderLeft : undefined,
+  };
 }
 
 type PaneDirection = "left" | "right" | "up" | "down";
@@ -3048,13 +3076,13 @@ function WorkspaceScreenContent({
     gate: workspaceScreenGate,
     workspaceKey: persistenceKey,
   });
+  const { arenaChat, arenaBattleOnScreen, headerActionsInMenu, headerLeftStyle } =
+    useArenaWorkspaceHeader(arenaSnapshot, headerActionsCollapsed);
   const headerRight = useMemo(
     () => (
       <View style={styles.headerRight}>
         <PluginHeaderButtons serverId={normalizedServerId} workspaceId={normalizedWorkspaceId} />
-        {!headerActionsCollapsed &&
-        workspaceDescriptor &&
-        workspaceDescriptor.scripts.length > 0 ? (
+        {!headerActionsInMenu && workspaceDescriptor && workspaceDescriptor.scripts.length > 0 ? (
           <WorkspaceScriptsButton
             serverId={normalizedServerId}
             workspaceId={normalizedWorkspaceId}
@@ -3066,7 +3094,7 @@ function WorkspaceScreenContent({
             hideLabels
           />
         ) : null}
-        {!headerActionsCollapsed && workspaceDirectory ? (
+        {!headerActionsInMenu && workspaceDirectory ? (
           <WorkspaceOpenInEditorButton
             serverId={normalizedServerId}
             cwd={workspaceDirectory}
@@ -3074,7 +3102,7 @@ function WorkspaceScreenContent({
             hideLabels
           />
         ) : null}
-        {!headerActionsCollapsed && arenaSnapshot && chatAgentId && workspaceDirectory ? (
+        {!headerActionsInMenu && arenaSnapshot && chatAgentId && workspaceDirectory ? (
           <ArenaEnvironmentButton
             key={chatAgentId}
             serverId={normalizedServerId}
@@ -3086,51 +3114,49 @@ function WorkspaceScreenContent({
             isWorktree={isWorktree}
           />
         ) : null}
-        {!headerActionsCollapsed && workspaceDirectory ? (
-          <>
-            <WorkspaceActions serverId={normalizedServerId} cwd={workspaceDirectory} hideOverflow />
-            {isGitCheckout ? (
-              <Tooltip delayDuration={0} enabledOnDesktop enabledOnMobile={false}>
-                <TooltipTrigger asChild>
-                  <PressHighlight
-                    testID="workspace-changes-open"
-                    onPress={handleOpenChangesTab}
-                    accessibilityRole="button"
-                    accessibilityLabel={t("workspace.tabs.sidePanel.openChanges")}
-                    style={changesButtonStyle}
-                  >
-                    {({ hovered, pressed }) => {
-                      const active = hovered || pressed;
-                      const colorMapping = active ? foregroundColorMapping : extraMutedColorMapping;
-                      return (
-                        <>
-                          <ThemedSourceControlPanelIcon size={16} uniProps={colorMapping} />
-                          {workspaceDescriptor?.diffStat ? (
-                            <DiffStat
-                              additions={workspaceDescriptor.diffStat.additions}
-                              deletions={workspaceDescriptor.diffStat.deletions}
-                            />
-                          ) : null}
-                        </>
-                      );
-                    }}
-                  </PressHighlight>
-                </TooltipTrigger>
-                <TooltipContent
-                  testID="workspace-changes-open-tooltip"
-                  side="left"
-                  align="center"
-                  offset={8}
-                >
-                  <View style={styles.explorerTooltipRow}>
-                    <Text style={styles.explorerTooltipText}>
-                      {t("workspace.tabs.sidePanel.openChanges")}
-                    </Text>
-                  </View>
-                </TooltipContent>
-              </Tooltip>
-            ) : null}
-          </>
+        {!headerActionsCollapsed && !arenaBattleOnScreen && workspaceDirectory ? (
+          <WorkspaceActions serverId={normalizedServerId} cwd={workspaceDirectory} hideOverflow />
+        ) : null}
+        {!headerActionsInMenu && workspaceDirectory && isGitCheckout ? (
+          <Tooltip delayDuration={0} enabledOnDesktop enabledOnMobile={false}>
+            <TooltipTrigger asChild>
+              <PressHighlight
+                testID="workspace-changes-open"
+                onPress={handleOpenChangesTab}
+                accessibilityRole="button"
+                accessibilityLabel={t("workspace.tabs.sidePanel.openChanges")}
+                style={changesButtonStyle}
+              >
+                {({ hovered, pressed }) => {
+                  const active = hovered || pressed;
+                  const colorMapping = active ? foregroundColorMapping : extraMutedColorMapping;
+                  return (
+                    <>
+                      <ThemedSourceControlPanelIcon size={16} uniProps={colorMapping} />
+                      {workspaceDescriptor?.diffStat ? (
+                        <DiffStat
+                          additions={workspaceDescriptor.diffStat.additions}
+                          deletions={workspaceDescriptor.diffStat.deletions}
+                        />
+                      ) : null}
+                    </>
+                  );
+                }}
+              </PressHighlight>
+            </TooltipTrigger>
+            <TooltipContent
+              testID="workspace-changes-open-tooltip"
+              side="left"
+              align="center"
+              offset={8}
+            >
+              <View style={styles.explorerTooltipRow}>
+                <Text style={styles.explorerTooltipText}>
+                  {t("workspace.tabs.sidePanel.openChanges")}
+                </Text>
+              </View>
+            </TooltipContent>
+          </Tooltip>
         ) : null}
         <WorkspaceHeaderOverflow
           serverId={normalizedServerId}
@@ -3140,7 +3166,7 @@ function WorkspaceScreenContent({
           snapshot={arenaSnapshot}
           agentId={chatAgentId}
           isWorktree={isWorktree}
-          collapsed={headerActionsCollapsed}
+          collapsed={headerActionsInMenu}
           isFocused={isRouteFocused}
           branchName={currentBranchName}
           scripts={workspaceScripts}
@@ -3201,6 +3227,8 @@ function WorkspaceScreenContent({
       handleViewScriptTerminal,
       handleOpenUrlInBrowserTab,
       headerActionsCollapsed,
+      headerActionsInMenu,
+      arenaBattleOnScreen,
       currentBranchName,
       workspaceScripts,
       showWorkspaceSetup,
@@ -3332,11 +3360,14 @@ function WorkspaceScreenContent({
       {showScreenHeader && (
         <ScreenHeader
           onRowLayout={onHeaderLayout}
+          borderless={arenaChat}
+          leftStyle={headerLeftStyle}
           left={
             <>
               <SidebarMenuToggle />
               <WorkspaceHeaderTitleBar
                 isLoading={isWorkspaceHeaderLoading}
+                projectOnly={arenaChat}
                 title={workspaceHeaderTitle}
                 subtitle={workspaceHeaderSubtitle}
                 isSubtitleDistinct={isWorkspaceHeaderSubtitleDistinct}
@@ -3484,6 +3515,10 @@ const styles = StyleSheet.create((theme) => ({
   centerColumn: {
     flex: 1,
     minHeight: 0,
+  },
+  // The project name sits on the battle's left rail; the header row already insets by 12.
+  arenaHeaderLeft: {
+    paddingLeft: BATTLE_RAIL - theme.spacing[3],
   },
   headerTitleContainer: {
     flex: 1,
