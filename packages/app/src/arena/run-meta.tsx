@@ -38,11 +38,17 @@ export const ArenaRunMeta = memo(function ArenaRunMeta({
   side,
   active,
   onOpenChanges,
+  showChangeSize = true,
 }: {
   run: ArenaRun;
   side: ArenaSide;
   active: boolean;
   onOpenChanges?: () => void;
+  /**
+   * The battle's own pane heading shows state and time only; the size of each change is read in
+   * the review's Changes tab, beside the other side's.
+   */
+  showChangeSize?: boolean;
 }) {
   const { t } = useTranslation();
   const [now, setNow] = useState(() => Date.now());
@@ -85,7 +91,7 @@ export const ArenaRunMeta = memo(function ArenaRunMeta({
           </Text>
         </>
       ) : null}
-      {run.diff && run.diff.files === 0 ? (
+      {showChangeSize && run.diff && run.diff.files === 0 ? (
         <>
           <Text style={styles.text}>·</Text>
           <Text style={styles.text} testID={`arena-run-diff-${side}`}>
@@ -93,7 +99,7 @@ export const ArenaRunMeta = memo(function ArenaRunMeta({
           </Text>
         </>
       ) : null}
-      {run.diff && run.diff.files > 0 ? (
+      {showChangeSize && run.diff && run.diff.files > 0 ? (
         <>
           <Text style={styles.text}>·</Text>
           <RunDiffStat

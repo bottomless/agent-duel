@@ -67,8 +67,9 @@ export function ArenaSideChoiceButton({
   return (
     <Button
       variant="secondary"
-      size="sm"
+      size="md"
       style={[styles.sideChoice, side === "a" ? styles.sideA : styles.sideB]}
+      textStyle={[styles.choiceText, side === "a" ? styles.sideAText : styles.sideBText]}
       loading={loading}
       disabled={disabled}
       onPress={onPress}
@@ -120,7 +121,8 @@ export function ArenaRunningPillButton({
     >
       <Button
         variant="outline"
-        size="sm"
+        size="md"
+        textStyle={styles.choiceText}
         style={[
           styles.sideChoice,
           styles.runningChoice,
@@ -152,9 +154,10 @@ export function VoteDecision({
   }, [actions]);
   return (
     <Button
-      variant="ghost"
-      size="sm"
+      variant="secondary"
+      size="md"
       style={styles.pillChoice}
+      textStyle={styles.choiceText}
       loading={pendingAction?.kind === "vote" && pendingAction.vote === "tie"}
       disabled={pending || disabled}
       onPress={tie}
@@ -180,8 +183,9 @@ export function ResumeDecision({ actions }: { actions: ArenaBattleActions }) {
   return (
     <Button
       variant="default"
-      size="sm"
+      size="md"
       style={styles.pillChoice}
+      textStyle={styles.choiceText}
       loading={pendingAction?.kind === "resume_battle"}
       disabled={pending}
       onPress={resume}
@@ -194,8 +198,8 @@ export function ResumeDecision({ actions }: { actions: ArenaBattleActions }) {
 }
 
 /**
- * The choice to apply neither side: in the pill after a stop or beside Resume after the engine's
- * restart cut the battle off, and at the vote only on the line that says a side failed
+ * The choice to apply neither side: among the choices after a stop or beside Resume after the
+ * engine's restart cut the battle off, and at the vote only on the line that says a side failed
  * (`placement="hint"`), as a row action rather than one of the vote's choices.
  */
 export function DiscardDecision({
@@ -212,15 +216,16 @@ export function DiscardDecision({
   }, [actions]);
   return (
     <Button
-      variant={placement === "pill" ? "ghost" : "outline"}
-      size={placement === "pill" ? "sm" : "xs"}
+      variant={placement === "pill" ? "secondary" : "outline"}
+      size={placement === "pill" ? "md" : "xs"}
       style={placement === "pill" ? styles.pillChoice : undefined}
+      textStyle={placement === "pill" ? styles.choiceText : undefined}
       loading={pendingAction?.kind === "resolve_stop" && pendingAction.resolution === "discard"}
       disabled={pending}
       onPress={discard}
       testID="arena-stopped-discard"
     >
-      {/* Alone on the failure line it names what it throws away; in the pill its neighbours do. */}
+      {/* Alone on the failure line it names what it throws away; among the choices its neighbours do. */}
       {placement === "pill" ? t("arena.discard") : t("arena.discardBattle")}{" "}
     </Button>
   );
@@ -402,20 +407,32 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.foregroundMuted,
     fontSize: theme.fontSize.base,
   },
+  // The decision's buttons: the landing page's shape, rectangular with semibold labels.
   sideChoice: {
-    minWidth: 96,
-    borderRadius: theme.borderRadius.full,
+    minWidth: 112,
+    borderRadius: theme.borderRadius.lg,
   },
   pillChoice: {
-    borderRadius: theme.borderRadius.full,
+    minWidth: 72,
+    borderRadius: theme.borderRadius.lg,
+  },
+  choiceText: {
+    fontWeight: theme.fontWeight.semibold,
   },
   sideA: {
     backgroundColor: tint(theme.colors.statusDotRunning, 22),
-    borderColor: tint(theme.colors.statusDotRunning, 48),
+    borderColor: tint(theme.colors.statusDotRunning, 22),
   },
   sideB: {
     backgroundColor: tint(theme.colors.statusDotWarning, 24),
-    borderColor: tint(theme.colors.statusDotWarning, 50),
+    borderColor: tint(theme.colors.statusDotWarning, 24),
+  },
+  // The side's colour toward the text colour: deep on light, pale on dark.
+  sideAText: {
+    color: `color-mix(in srgb, ${theme.colors.statusDotRunning} 55%, ${theme.colors.foreground})`,
+  },
+  sideBText: {
+    color: `color-mix(in srgb, ${theme.colors.statusDotWarning} 55%, ${theme.colors.foreground})`,
   },
   hoverTarget: {
     position: "relative",

@@ -25,7 +25,7 @@ import React, {
   useSyncExternalStore,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { StyleSheet as RNStyleSheet, Text, View } from "react-native";
+import { StyleSheet as RNStyleSheet, Text, View, type LayoutChangeEvent } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import invariant from "tiny-invariant";
 import { shallow, useShallow } from "zustand/shallow";
@@ -149,9 +149,11 @@ import {
 import { ArenaDecisionBar } from "@/arena/decision-bar";
 import { arenaSetupStatus } from "@/arena/transition-progress";
 import { ArenaDecisionPill } from "@/arena/decision-pill";
+import { arenaDecisionPhase } from "@/arena/decision-state";
 import { useArenaBattleActions } from "@/arena/use-battle-actions";
 import { showsArenaDecisionBar } from "@/arena/decision-state";
-import { ArenaBattleSummary } from "@/arena/battle-summary";
+import { ArenaBattleSummary, ArenaKeptByline, ShownBattleFooter } from "@/arena/battle-summary";
+import { useArenaShownBattle, useArenaShownBattleStore } from "@/arena/shown-battle";
 import { ArenaChatCallouts, hasArenaChatCallouts } from "@/arena/readiness-strip";
 import {
   ARENA_CONFLICT_RESOLUTION_PROMPT,
@@ -163,11 +165,15 @@ import {
 } from "@/arena/reply-state";
 import { useArenaReplyComposerControls } from "@/arena/reply-target-control";
 import {
+  arenaBattlePromptRowIds,
+  arenaKeptAnswerFooterRowId,
+  arenaKeptAnswerRowIds,
   arenaChatCanStartBattle,
   arenaSummaryAnchors,
   arenaTurnFollowedUp,
   isArenaBattleOnScreen,
   partitionArenaSummaries,
+  type ArenaPresentedStream,
 } from "@/arena/summary-anchor";
 import { arenaAgentPreferenceKey } from "@/arena/constants";
 import { applyArenaPreferencePatch, useArenaPreferences } from "@/arena/preferences";
@@ -1751,22 +1757,49 @@ const AgentStreamSection = memo(function AgentStreamSection({
     streamHead: streamHead ?? EMPTY_STREAM_ITEMS,
     hasAppliedAuthoritativeHistory,
   });
-  // The newest summary sits at the end of the chat, above the next battle while that one runs,
-  // until a later prompt follows its turn; then it stays under its own turn. Placed inline any
-  // earlier, it lands above that turn's footer, which the stream draws after its last row.
+  const battleHistory = arenaSession.data?.history;
+  // Each summary heads its battle's kept answer, right after the battle's prompt. The newest
+  // waits at the end of the chat only until that prompt is in the chat to anchor to.
   const latestSummary = useMemo(
-    () => partitionArenaSummaries(arenaSession.data?.history ?? [], false).live,
-    [arenaSession.data?.history],
+    () => partitionArenaSummaries(battleHistory ?? [], false).live,
+    [battleHistory],
   );
   const latestSummaryFollowedUp = useMemo(
-    () => latestSummary !== null && arenaTurnFollowedUp(latestSummary, presentedStream),
+    () =>
+      latestSummary !== null &&
+      (arenaTurnFollowedUp(latestSummary, presentedStream) ||
+        arenaSummaryAnchors([latestSummary], presentedStream)[0] !== null),
     [latestSummary, presentedStream],
   );
+  // A battle opened with Show battle stands in for its kept answer.
+  const shownTurnId = useArenaShownBattle(agentId);
+  const shownStream = useMemo(() => {
+    const shown = shownTurnId ? battleHistory?.find((item) => item.id === shownTurnId) : undefined;
+    if (!shown) return presentedStream;
+    const hidden = arenaKeptAnswerRowIds(shown, presentedStream);
+    if (hidden.size === 0) return presentedStream;
+    return {
+      tail: presentedStream.tail.filter((item) => !hidden.has(item.id)),
+      head: presentedStream.head.filter((item) => !hidden.has(item.id)),
+    };
+  }, [battleHistory, presentedStream, shownTurnId]);
+  const chatHasRows = shownStream.tail.length + shownStream.head.length > 0;
+  const { battlePromptRowIds, ruledRowIds } = useBattlePromptRows(
+    battleHistory,
+    presentedStream,
+    shownStream,
+  );
+  const keptFooterEnds = useKeptAnswerBylines({
+    agentId: agent.id,
+    history: battleHistory,
+    stream: presentedStream,
+    shownTurnId,
+  });
   // The feedback prompt stays at the end of the chat even after the summary moves up.
   const feedbackBattle = arenaBattleOnScreen ? null : latestSummary;
   const summaryPlacement = useMemo(
-    () => partitionArenaSummaries(arenaSession.data?.history ?? [], latestSummaryFollowedUp),
-    [arenaSession.data?.history, latestSummaryFollowedUp],
+    () => partitionArenaSummaries(battleHistory ?? [], latestSummaryFollowedUp),
+    [battleHistory, latestSummaryFollowedUp],
   );
   // Keyed by the anchors themselves, so a streaming head does not rebuild every row.
   const summaryAnchorKey = useMemo(
@@ -1812,10 +1845,19 @@ const AgentStreamSection = memo(function AgentStreamSection({
           agentId={agent.id}
           snapshot={snapshot}
           {...(startingBattle ? { startingPrompt: startingBattle } : {})}
+          ruled={chatHasRows}
         />
       </View>
     );
-  }, [agent.id, arenaBattleOnScreen, arenaSession.data, serverId, startingBattle, workspaceId]);
+  }, [
+    agent.id,
+    arenaBattleOnScreen,
+    arenaSession.data,
+    chatHasRows,
+    serverId,
+    startingBattle,
+    workspaceId,
+  ]);
 
   const canStartAgain = arenaChatCanStartBattle(arenaSession.data, arenaBattleOnScreen);
   const latestBattleSummary = useMemo(
@@ -1951,8 +1993,8 @@ const AgentStreamSection = memo(function AgentStreamSection({
         agentId={agent.id}
         serverId={serverId}
         context={agent}
-        streamItems={presentedStream.tail}
-        streamHead={presentedStream.head}
+        streamItems={shownStream.tail}
+        streamHead={shownStream.head}
         pendingPermissions={pendingPermissions}
         routeBottomAnchorRequest={routeBottomAnchorRequest}
         isAuthoritativeHistoryReady={hasAppliedAuthoritativeHistory}
@@ -1961,13 +2003,16 @@ const AgentStreamSection = memo(function AgentStreamSection({
         turnPresentation={turnPresentation}
         onOpenWorkspaceFile={onOpenWorkspaceFile}
         afterItems={arenaAfterItems}
+        headlineUserMessageIds={battlePromptRowIds}
+        ruledItemIds={ruledRowIds}
+        turnFooterEnds={keptFooterEnds}
         forkBoundaryAfterItemId={forkBoundaryAfterItemId}
         liveContent={liveContentWithConnection}
         bottomOverlayHeight={bottomOverlayHeight}
         bottomOverlayTailClearance={bottomOverlayTailClearance}
         bottomOverlayControlClearance={bottomOverlayControlClearance}
         arenaChat={arenaSession.data !== undefined}
-        arenaHistory={arenaSession.data?.history}
+        arenaHistory={battleHistory}
       />
     </ArenaPartSourceContext.Provider>
   );
@@ -2023,6 +2068,17 @@ const AgentComposerSection = memo(function AgentComposerSection({
     onComposerHeightChange(0);
     onDecisionPillHeightChange(0);
   }, [onComposerHeightChange, onDecisionPillHeightChange, startingBattle]);
+  const { shownBattle, hideShownBattle, reportShownFooterHeight } = useShownBattleDock({
+    agentId,
+    history: arenaSession.data?.history,
+    onComposerHeightChange,
+  });
+  const { composerPutAway, askFollowUp } = useBattleComposerPutAway({
+    snapshot: arenaSession.data,
+    battleReplyAvailable,
+    agentInputDraft,
+    onDecisionPillHeightChange,
+  });
   if (!agentId) {
     return null;
   }
@@ -2061,6 +2117,33 @@ const AgentComposerSection = memo(function AgentComposerSection({
         onMessageSent={onMessageSent}
       />
     );
+  if (shownBattle && !isArenaBattleOnScreen(arenaSession.data)) {
+    return (
+      <View style={styles.composerSlot}>
+        <ShownBattleFooter
+          serverId={serverId}
+          agentId={agentId}
+          item={shownBattle}
+          onHideBattle={hideShownBattle}
+          onLayout={reportShownFooterHeight}
+        />
+      </View>
+    );
+  }
+  if (composerPutAway && arenaSession.data) {
+    return (
+      <View style={styles.composerSlot}>
+        <ArenaDecisionPill
+          serverId={serverId}
+          agentId={agentId}
+          snapshot={arenaSession.data}
+          onHeightChange={onComposerHeightChange}
+          onAskFollowUp={askFollowUp}
+          docked
+        />
+      </View>
+    );
+  }
   return (
     <View style={styles.composerSlot}>
       {arenaSession.data ? (
@@ -2075,6 +2158,129 @@ const AgentComposerSection = memo(function AgentComposerSection({
     </View>
   );
 });
+
+/**
+ * Battle prompts read as headings, as the live battle shows its prompt above both answers, and each
+ * one after the chat's first row starts a new turn with a rule above it. Keyed by the ids, so a
+ * streaming head does not hand the stream new sets on every event.
+ */
+function useBattlePromptRows(
+  history: ArenaSnapshot["history"] | undefined,
+  presentedStream: ArenaPresentedStream,
+  shownStream: ArenaPresentedStream,
+) {
+  const battlePromptRowKey = useMemo(
+    () => [...arenaBattlePromptRowIds(history ?? [], presentedStream)].sort().join("\n"),
+    [history, presentedStream],
+  );
+  const battlePromptRowIds = useMemo(
+    () => new Set(battlePromptRowKey ? battlePromptRowKey.split("\n") : []),
+    [battlePromptRowKey],
+  );
+  const firstRowId = (shownStream.tail[0] ?? shownStream.head[0])?.id;
+  const ruledRowIds = useMemo(() => {
+    if (!firstRowId || !battlePromptRowIds.has(firstRowId)) return battlePromptRowIds;
+    const ruled = new Set(battlePromptRowIds);
+    ruled.delete(firstRowId);
+    return ruled;
+  }, [battlePromptRowIds, firstRowId]);
+  return { battlePromptRowIds, ruledRowIds };
+}
+
+/**
+ * Each decided battle's kept model and Show battle, keyed by the row whose footer closes its kept
+ * answer. Keyed by those rows, so a streaming head does not rebuild every footer.
+ */
+function useKeptAnswerBylines({
+  agentId,
+  history,
+  stream,
+  shownTurnId,
+}: {
+  agentId: string;
+  history: ArenaSnapshot["history"] | undefined;
+  stream: ArenaPresentedStream;
+  shownTurnId: string | null;
+}): ReadonlyMap<string, React.ReactNode> {
+  const key = useMemo(() => {
+    const pairs: [string, string][] = [];
+    for (const item of history ?? []) {
+      if (item.id === shownTurnId) continue;
+      const row = arenaKeptAnswerFooterRowId(item, stream);
+      if (row) pairs.push([row, item.id]);
+    }
+    return JSON.stringify(pairs);
+  }, [history, shownTurnId, stream]);
+  return useMemo(() => {
+    const pairs: [string, string][] = JSON.parse(key);
+    const byTurn = new Map((history ?? []).map((item) => [item.id, item]));
+    const ends = new Map<string, React.ReactNode>();
+    for (const [row, turnId] of pairs) {
+      const item = byTurn.get(turnId);
+      if (item) ends.set(row, <ArenaKeptByline agentId={agentId} item={item} />);
+    }
+    return ends;
+  }, [agentId, history, key]);
+}
+
+/** A battle opened with Show battle puts its footer in the composer's place until it is hidden. */
+function useShownBattleDock({
+  agentId,
+  history,
+  onComposerHeightChange,
+}: {
+  agentId: string | undefined;
+  history: ArenaSnapshot["history"] | undefined;
+  onComposerHeightChange: (height: number) => void;
+}) {
+  const shownTurnId = useArenaShownBattle(agentId);
+  const hide = useArenaShownBattleStore((state) => state.hide);
+  const shownBattle = shownTurnId
+    ? (history?.find((item) => item.id === shownTurnId) ?? null)
+    : null;
+  const hideShownBattle = useCallback(() => {
+    if (agentId) hide(agentId);
+  }, [agentId, hide]);
+  const reportShownFooterHeight = useCallback(
+    (event: LayoutChangeEvent) => onComposerHeightChange(event.nativeEvent.layout.height),
+    [onComposerHeightChange],
+  );
+  return { shownBattle, hideShownBattle, reportShownFooterHeight };
+}
+
+/**
+ * While both results wait for a decision, the composer is put away behind "Ask a follow-up", so
+ * the decision row is the bottom of the battle. A draft keeps it out; so does asking.
+ */
+function useBattleComposerPutAway({
+  snapshot,
+  battleReplyAvailable,
+  agentInputDraft,
+  onDecisionPillHeightChange,
+}: {
+  snapshot: ArenaSnapshot | undefined;
+  battleReplyAvailable: boolean;
+  agentInputDraft: AgentInputDraft;
+  onDecisionPillHeightChange: (height: number) => void;
+}) {
+  const draftText = useSyncExternalStore(
+    agentInputDraft.textSource.subscribe,
+    agentInputDraft.textSource.getSnapshot,
+  );
+  const [followUpTurnId, setFollowUpTurnId] = useState<string | null>(null);
+  const decisionTurnId = snapshot?.turn?.id ?? null;
+  const decisionKind = snapshot ? arenaDecisionPhase(snapshot).kind : null;
+  const composerPutAway =
+    battleReplyAvailable &&
+    (decisionKind === "awaiting_vote" || decisionKind === "awaiting_stop_resolution") &&
+    followUpTurnId !== decisionTurnId &&
+    draftText.trim().length === 0;
+  const askFollowUp = useCallback(() => setFollowUpTurnId(decisionTurnId), [decisionTurnId]);
+  useEffect(() => {
+    if (composerPutAway) onDecisionPillHeightChange(0);
+  }, [composerPutAway, onDecisionPillHeightChange]);
+  return { composerPutAway, askFollowUp };
+}
 
 function useSingleAgentRatingDialog({
   serverId,

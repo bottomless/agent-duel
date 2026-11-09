@@ -1,7 +1,8 @@
 import { i18n } from "@/i18n/i18next";
 import { useTranslation } from "react-i18next";
-import { useCallback, useEffect, useMemo } from "react";
-import { Text, View } from "react-native";
+import { useCallback, useEffect, useMemo, type ReactNode } from "react";
+import { ScrollView, Text, View } from "react-native";
+import { PressHighlight } from "@/components/ui/press-highlight";
 import { useContainerWidth } from "@/hooks/use-container-width";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { ChevronDown, ChevronUp } from "lucide-react-native";
@@ -25,6 +26,10 @@ import { InlineFileDiff, openChangesFiles, toggleChangesFile } from "./inline-fi
 import { PaneIconAction } from "./pane-icon-action";
 import { useArenaReviewState, useArenaReviewStore, type ArenaReviewTab } from "./review-state";
 import { VerdictBody } from "./verdict-body";
+import { BATTLE_RAIL } from "./battle-layout";
+import { parseSummaryColumns } from "./summary-columns";
+import { SummaryColumnsView } from "./summary-columns-view";
+import { useArenaReviewDockStore } from "./review-dock";
 
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
 const ThemedChevronDown = withUnistyles(ChevronDown);
@@ -50,6 +55,7 @@ function Verdict({
   onRetry: () => void;
 }) {
   const { t } = useTranslation();
+  const columns = useMemo(() => (output ? parseSummaryColumns(output) : null), [output]);
   return (
     <View style={styles.section}>
       {pending ? (
@@ -61,7 +67,11 @@ function Verdict({
       {output ? (
         <>
           <SummaryOmissionNotice comparison={comparison} />
-          <VerdictBody turnId={turnId} output={output} />
+          {columns ? (
+            <SummaryColumnsView columns={columns} />
+          ) : (
+            <VerdictBody turnId={turnId} output={output} />
+          )}
         </>
       ) : null}
       {failed ? (
@@ -180,7 +190,12 @@ function ChangesTab({
   );
 }
 
-function ReviewTab({
+/**
+ * One tab: its label, and under the selected one a 2px rule the width of the label, sitting on
+ * the bottom of the tab row. Exported so the folded review can draw the same tabs in the decision
+ * row; there nothing is selected, since nothing is showing.
+ */
+export function ReviewTab({
   value,
   label,
   selected,
@@ -189,32 +204,37 @@ function ReviewTab({
 }: {
   value: ArenaReviewTab;
   label: string;
-  selected: boolean;
+  selected: boolean | null;
   onSelect: (tab: ArenaReviewTab) => void;
   testID: string;
 }) {
   const handlePress = useCallback(() => onSelect(value), [onSelect, value]);
-  const accessibilityState = useMemo(() => ({ selected }), [selected]);
+  const accessibilityState = useMemo(() => ({ selected: selected === true }), [selected]);
   return (
-    <View style={styles.tab}>
-      <Button
-        variant="ghost"
-        size="sm"
-        accessibilityRole="tab"
-        accessibilityState={accessibilityState}
-        aria-selected={selected}
-        textStyle={selected ? styles.tabTextSelected : undefined}
-        onPress={handlePress}
-        testID={testID}
+    <PressHighlight
+      accessibilityRole="tab"
+      accessibilityState={accessibilityState}
+      aria-selected={selected === true}
+      onPress={handlePress}
+      style={reviewTabStyle}
+      testID={testID}
+    >
+      <Text
+        style={[
+          styles.tabText,
+          selected === true && styles.tabTextSelected,
+          selected === null && styles.tabTextFolded,
+        ]}
       >
         {label}
-      </Button>
-      <View
-        style={[styles.tabIndicator, selected && styles.tabIndicatorSelected]}
-        pointerEvents="none"
-      />
-    </View>
+      </Text>
+      {selected === true ? <View style={styles.tabIndicator} pointerEvents="none" /> : null}
+    </PressHighlight>
   );
+}
+
+function reviewTabStyle({ hovered, pressed }: { hovered?: boolean; pressed: boolean }) {
+  return [styles.tab, (hovered || pressed) && styles.tabHovered];
 }
 
 /**
@@ -299,13 +319,26 @@ function ReviewHeader({
         testID="arena-review-collapse"
       >
         {collapsed ? (
-          <ThemedChevronDown size={ICON_SIZE.sm} uniProps={foregroundColorMapping} />
+          <ThemedChevronUp size={ICON_SIZE.md} uniProps={foregroundColorMapping} />
         ) : (
-          <ThemedChevronUp size={ICON_SIZE.sm} uniProps={foregroundColorMapping} />
+          <ThemedChevronDown size={ICON_SIZE.md} uniProps={foregroundColorMapping} />
         )}
       </PaneIconAction>
     </View>
   );
+}
+
+/** The decision row draws a folded review's tabs; this tells it what they are. */
+function usePublishDockTabs(turnId: string, summary: boolean, changesLabel: string) {
+  const setDockTabs = useArenaReviewDockStore((state) => state.setTabs);
+  useEffect(() => {
+    setDockTabs(turnId, { summary, changesLabel });
+  }, [changesLabel, setDockTabs, summary, turnId]);
+}
+
+/** A folded review whose tabs the decision row draws takes no room in the battle. */
+function foldedAway(collapsed: boolean, foldsIntoDock: boolean): boolean {
+  return collapsed && foldsIntoDock;
 }
 
 /**
@@ -331,10 +364,22 @@ export function BattleReview({
   rows,
   onRetryDiff,
   retryingDiff,
+  foldsIntoDock,
+  maxContentHeight,
 }: {
   serverId: string;
   agentId: string;
   turnId: string;
+  /**
+   * Whether the decision row below the transcript draws this review's tabs while it is folded.
+   * Then a folded review takes no room in the card; otherwise it keeps its tab row in place.
+   */
+  foldsIntoDock?: boolean;
+  /**
+   * Pinned under the chat, the tab row stays put and what is under it scrolls past this height,
+   * so the answers above keep their room.
+   */
+  maxContentHeight?: number;
   summaryAvailable: boolean;
   summaryPending: boolean;
   summaryFailed: boolean;
@@ -435,6 +480,7 @@ export function BattleReview({
   }, [arrivalFile, rows, setShownFile, showChanges, turnId]);
   const changesLabel =
     rows.length > 0 ? t("arena.changesCount", { total: rows.length }) : t("arena.changes");
+  usePublishDockTabs(turnId, tabs, changesLabel);
   // Review telemetry listens to scrolls on the whole document; this tells it which diffs are
   // this battle's.
   const reviewData = useMemo(() => ({ reviewTurn: turnId }), [turnId]);
@@ -472,6 +518,7 @@ export function BattleReview({
     );
   }
 
+  if (foldedAway(collapsed, foldsIntoDock === true)) return null;
   return (
     <View
       style={styles.review}
@@ -479,6 +526,7 @@ export function BattleReview({
       testID="arena-battle-comparison"
       dataSet={reviewData}
     >
+      <View style={styles.edgeFade} pointerEvents="none" />
       <ReviewHeader
         tabs={tabs}
         tab={tab}
@@ -490,67 +538,94 @@ export function BattleReview({
         collapsed={collapsed}
         onToggleCollapsed={toggleCollapsed}
       />
-      {collapsed ? null : <View style={styles.content}>{content}</View>}
+      {collapsed ? null : <ReviewContent maxHeight={maxContentHeight}>{content}</ReviewContent>}
     </View>
   );
 }
 
+function ReviewContent({ maxHeight, children }: { maxHeight?: number; children: ReactNode }) {
+  const scrollStyle = useMemo(() => ({ maxHeight }), [maxHeight]);
+  if (maxHeight === undefined) return <View style={styles.content}>{children}</View>;
+  return (
+    <ScrollView style={scrollStyle} contentContainerStyle={styles.content}>
+      {children}
+    </ScrollView>
+  );
+}
+
 const styles = StyleSheet.create((theme) => ({
-  review: {},
+  // A section that rises from the bottom of the battle: a hairline and a soft fade above it,
+  // the answers' rails inside it.
+  review: {
+    position: "relative",
+    paddingHorizontal: BATTLE_RAIL,
+    paddingBottom: theme.spacing[3],
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.borderAccent,
+  },
+  edgeFade: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    top: -25,
+    height: 24,
+    _web: {
+      backgroundImage: `linear-gradient(to top, ${theme.shadow.md.shadowColor}, transparent)`,
+    },
+  },
   block: {
     gap: theme.spacing[2],
   },
-  // A tab strip across the whole section, with a baseline the selected tab's underline sits
-  // on, so the tabs read as the heading of what follows rather than a control floating in it.
+  // The tab row heads the section: its tabs, the diff layout control, and the fold.
   header: {
     flexDirection: "row",
     alignItems: "center",
-    // The layout control and the panel button drop to a second line when the
-    // card narrows, rather than clipping.
+    // The layout control drops to a second line when the battle narrows, rather than clipping.
     flexWrap: "wrap",
-    gap: theme.spacing[2],
-    // Tall enough for the ghost button, so a header without one sits at the
-    // same height as one with it.
-    minHeight: 32,
-    paddingVertical: theme.spacing[2],
-    paddingHorizontal: theme.spacing[3],
-    borderBottomWidth: 1,
-    borderBottomColor: theme.colors.border,
+    columnGap: theme.spacing[6],
+    minHeight: 52,
   },
   content: {
-    padding: theme.spacing[3],
+    paddingTop: theme.spacing[2] + theme.spacing[0.5],
   },
   title: {
     color: theme.colors.foreground,
-    fontSize: theme.fontSize.base,
-    fontWeight: theme.fontWeight.medium,
+    fontSize: theme.fontSize.content,
+    fontWeight: theme.fontWeight.semibold,
   },
-  // The ghost button's padding is the hit area; pulling the row back by it puts the first
-  // label's glyphs on the section's rail.
   tabs: {
     flexDirection: "row",
-    alignItems: "center",
-    marginLeft: -theme.spacing[3],
+    alignItems: "stretch",
+    columnGap: theme.spacing[6],
+    alignSelf: "stretch",
   },
   tab: {
-    alignItems: "stretch",
+    justifyContent: "center",
+    minHeight: 44,
+    borderRadius: theme.borderRadius.base,
+  },
+  tabHovered: {
+    opacity: 0.8,
+  },
+  tabText: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.content,
   },
   tabTextSelected: {
     color: theme.colors.foreground,
+    fontWeight: theme.fontWeight.semibold,
+  },
+  // Folded, both tabs are ways to open the review; neither reads as selected.
+  tabTextFolded: {
+    color: theme.colors.foregroundMuted,
     fontWeight: theme.fontWeight.medium,
   },
-  // The underline spans the whole tab, padding included, so the first tab's line meets the
-  // card's edge; it hangs below the button by the strip's bottom padding plus one pixel to sit
-  // on the strip's baseline.
   tabIndicator: {
     position: "absolute",
     left: 0,
     right: 0,
-    bottom: -(theme.spacing[2] + 1),
+    bottom: 0,
     height: 2,
-    backgroundColor: "transparent",
-  },
-  tabIndicatorSelected: {
     backgroundColor: theme.colors.foreground,
   },
   spacer: {
