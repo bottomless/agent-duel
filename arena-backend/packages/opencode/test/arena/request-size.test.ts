@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Media, Message, ToolCallPart, ToolResultPart } from "@opencode/ai"
-import { REQUEST_BYTES_TRIGGER, boundRequestSize } from "@/arena/engine-runtime/request-size"
+import { REQUEST_BYTES_LIMIT, boundRequestSize } from "@/arena/engine-runtime/request-size"
 
 const system = [{ type: "text" as const, text: "You are a contestant." }]
 let call = 0
@@ -85,8 +85,8 @@ describe("request size", () => {
     expect(bound(messages).report).toBeUndefined()
   })
 
-  test("the oldest images go first, down to the target, and the newest step stays", () => {
-    // Like Qwen's battle: renders read one per step pile up until the body passes the trigger.
+  test("the oldest images go first, only as many as it takes to fit", () => {
+    // Like Qwen's battle: renders read one per step pile up until the body passes the limit.
     const messages = [
       user("Review the deck"),
       ...Array.from({ length: 30 }, (_, index) => step([[`render-${index + 1}.jpg`, 0.15]])).flat(),
@@ -94,23 +94,27 @@ describe("request size", () => {
     const { messages: sent, report } = bound(messages)
     const view = shown(sent)
     expect(view["render-30.jpg"]).toBe("sent")
-    expect(report?.after).toBeLessThanOrEqual(REQUEST_BYTES_TRIGGER)
     const removed = Object.keys(view).filter((name) => view[name] === "removed")
     expect(removed.length).toBeGreaterThan(0)
     expect(removed).toEqual(removed.map((_, index) => `render-${index + 1}.jpg`))
+    // It fits, and putting back the last image it removed would not.
+    expect(report?.after).toBeLessThanOrEqual(REQUEST_BYTES_LIMIT)
+    expect((report?.after ?? 0) + 150_000).toBeGreaterThan(REQUEST_BYTES_LIMIT)
   })
 
-  test("a request keeps the earlier requests' decisions, so the cached prefix survives", () => {
+  test("a later request keeps the earlier decisions and removes only the next oldest", () => {
     const history = [
       user("Review the deck"),
       ...Array.from({ length: 30 }, (_, index) => step([[`render-${index + 1}.jpg`, 0.15]])).flat(),
     ]
     const first = shown(bound(history).messages)
-    // Two more small renders fit in the room the last removal made: nothing else moves.
     const later = shown(
       bound([...history, ...step([["render-31.jpg", 0.15]]), ...step([["render-32.jpg", 0.15]])]).messages,
     )
-    for (const [name, state] of Object.entries(first)) expect(later[name]).toBe(state)
+    for (const [name, state] of Object.entries(first)) if (state === "removed") expect(later[name]).toBe("removed")
+    const stillSent = Object.keys(first).filter((name) => first[name] === "sent")
+    const newlyRemoved = stillSent.filter((name) => later[name] === "removed")
+    expect(newlyRemoved).toEqual(stillSent.slice(0, newlyRemoved.length))
     expect(later["render-32.jpg"]).toBe("sent")
   })
 
@@ -124,33 +128,33 @@ describe("request size", () => {
       ["slide-5.png", 1.5],
     ] as const
     const first = [user("QA the slides"), ...step(slides)]
+    // 1.2 + 1.3 + 1.8 MB fit under the limit; adding either of the others would not.
     expect(shown(bound(first).messages)).toEqual({
       "slide-1.png": "sent",
       "slide-2.png": "sent",
-      "slide-3.png": "deferred",
+      "slide-3.png": "sent",
       "slide-4.png": "deferred",
       "slide-5.png": "deferred",
     })
 
     // Reading the deferred ones again makes room by removing the previous step's images.
-    const second = [...first, ...step([slides[2], slides[3], slides[4]])]
+    const second = [...first, ...step([slides[3], slides[4]])]
     const { messages: secondSent, report } = bound(second)
-    expect(report?.after).toBeLessThanOrEqual(REQUEST_BYTES_TRIGGER)
-    const secondTools = secondSent.slice(first.length)
-    expect(shown(secondTools)).toEqual({ "slide-3.png": "sent", "slide-4.png": "sent", "slide-5.png": "deferred" })
-    expect(shown(secondSent.slice(0, first.length))["slide-1.png"]).toBe("removed")
-
-    // The last one alone fits after the step before it leaves.
-    const third = bound([...second, ...step([slides[4]])]).messages
-    expect(shown(third.slice(second.length))).toEqual({ "slide-5.png": "sent" })
+    expect(report?.after).toBeLessThanOrEqual(REQUEST_BYTES_LIMIT)
+    expect(shown(secondSent.slice(first.length))).toEqual({ "slide-4.png": "sent", "slide-5.png": "sent" })
+    expect(shown(secondSent.slice(0, first.length))).toMatchObject({
+      "slide-1.png": "removed",
+      "slide-2.png": "removed",
+      "slide-3.png": "removed",
+    })
   })
 
   test("an image too large to fit alone gets a note asking for a smaller file, and stays out", () => {
-    const messages = [user("Look at the poster"), ...step([["poster.png", 4.2]])]
+    const messages = [user("Look at the poster"), ...step([["poster.png", 4.6]])]
     const sent = bound(messages).messages
     const note = JSON.stringify(sent.at(-1))
     expect(shown(sent)).toEqual({ "poster.png": "oversized" })
-    expect(note).toContain("it is 4.2 MB encoded")
+    expect(note).toContain("it is 4.6 MB encoded")
     expect(note).toContain("Crop it or export it at a lower resolution")
     // It never comes back on a later request, which would reorder the prefix.
     expect(shown(bound([...messages, answer("I could not see it.")]).messages)).toEqual({ "poster.png": "oversized" })
@@ -172,11 +176,11 @@ describe("request size", () => {
 
   test("a removed pasted image asks the user, a removed tool image asks for a new read", () => {
     const messages = [
-      user("Match this design", [["attachment-1.png", 1.4]]),
-      ...step([["render-1.jpg", 1.3]]),
+      user("Match this design", [["attachment-1.png", 1.6]]),
+      ...step([["render-1.jpg", 1.5]]),
       answer("Done."),
-      user("Now this one", [["attachment-2.png", 1.4]]),
-      ...step([["render-2.jpg", 1.3]]),
+      user("Now this one", [["attachment-2.png", 1.6]]),
+      ...step([["render-2.jpg", 1.5]]),
     ]
     const text = JSON.stringify(bound(messages).messages)
     expect(text).toContain("Image render-1.jpg was removed")
@@ -213,7 +217,7 @@ describe("request size", () => {
   })
 
   test("the history itself is never changed", () => {
-    const messages = [user("Review the deck"), ...step([["poster.png", 4.2]])]
+    const messages = [user("Review the deck"), ...step([["poster.png", 4.6]])]
     const before = JSON.stringify(messages)
     bound(messages)
     expect(JSON.stringify(messages)).toBe(before)

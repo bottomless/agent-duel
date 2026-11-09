@@ -2,16 +2,18 @@ import { Message, type ContentPart, type SystemPart } from "@opencode/ai"
 import type { Content } from "@opencode/schema/tool"
 
 /**
- * Keeps a contestant request under the hosted control plane's body limit. Vercel refuses a function
- * request body over 4.5 MB before Arena's code runs, so the engine sees a bare 413 and the side
- * fails. Images are what grows a body that far: every image a tool read stays in history as base64
- * and is sent again on every later call.
+ * Keeps a contestant request under the hosted control plane's request limit. Vercel refuses a
+ * function request over about 4.5 MB before Arena's code runs, so the engine sees a bare 413 and the
+ * side fails. Images are what grows a request that far: every image a tool read stays in history as
+ * base64 and is sent again on every later call.
  *
- * Over `TRIGGER`, the oldest images are left out until the body is back under `TARGET`; the gap
- * makes a removal rare, since each one rewrites the prompt prefix and costs a cache miss. Images
- * from the newest step are never removed for older ones' sake. When they do not fit together, the
- * first ones in the step are sent and the rest get a note asking for a separate read; an image that
- * cannot fit even alone gets a note asking for a smaller file, so the agent does not retry it.
+ * A request over `REQUEST_BYTES_LIMIT` leaves out its oldest images, only as many as it takes to
+ * fit, so it carries every image that fits. Each removal rewrites the prompt prefix, so once a chat
+ * is at the limit, every later step that reads an image costs a cache miss; that is the price of
+ * sending the most images. Images from the newest step are never removed for older ones' sake. When
+ * they do not fit together, the first ones in the step are sent and the rest get a note asking for a
+ * separate read; an image that cannot fit even alone gets a note asking for a smaller file, so the
+ * agent does not retry it.
  *
  * An agent that needs more images at once than a request holds, and keeps no written notes, reads
  * them again in a loop: each read removes another one. After the same image was removed twice, a
@@ -19,11 +21,17 @@ import type { Content } from "@opencode/schema/tool"
  * the same file with the same bytes: agents render new versions of a slide to the same path.
  *
  * Decisions are replayed from the start of history on every request instead of being stored. History
- * only grows, so each request reaches the same decisions as the one before it and the prefix stays
- * stable until the next removal. Only the request changes: canonical history keeps every image.
+ * only grows, so each request reaches the same decisions as the one before it. Only the request
+ * changes: canonical history keeps every image.
  */
-export const REQUEST_BYTES_TRIGGER = 3_800_000
-export const REQUEST_BYTES_TARGET = 2_500_000
+
+// Measured on 2026-11-09 against agentduel.com: a 4,494,157-byte body passes and one byte more gets
+// Vercel's FUNCTION_PAYLOAD_TOO_LARGE. Headers count against the same limit (a 2,009-byte header
+// cost 1,508 bytes of body over HTTP/2), so the engine's own headers come off it.
+const HOSTED_REQUEST_LIMIT = 4_494_157
+// The account token and the x-arena-* and x-opencode-* ids, which are well under this.
+const HEADER_ALLOWANCE = 4_096
+export const REQUEST_BYTES_LIMIT = HOSTED_REQUEST_LIMIT - HEADER_ALLOWANCE
 
 export interface RequestSize {
   readonly system: readonly SystemPart[]
@@ -59,6 +67,7 @@ interface Slot {
 }
 
 // JSON keys, quotes and the provider's per-message wrapping that a part's own JSON does not show.
+// With these, the estimate ran 0.5–1.2% above the real body in QA, never below it.
 const ENVELOPE_BYTES = 8_192
 const MEDIA_PART_BYTES = 128
 // Removals of one image after which a new read of the same content is no longer attached.
@@ -146,29 +155,29 @@ function decide(request: RequestSize) {
 
   const check = () => {
     let body = fixed + sent()
-    if (body <= REQUEST_BYTES_TRIGGER) return
+    if (body <= REQUEST_BYTES_LIMIT) return
     const older = all.slice(0, stepStart).filter((slot) => slot.decision === "sent")
     for (const slot of [...older.filter((slot) => !slot.user), ...older.filter((slot) => slot.user)]) {
-      if (body <= REQUEST_BYTES_TARGET) break
+      if (body <= REQUEST_BYTES_LIMIT) break
       slot.decision = "removed"
       body -= slot.bytes
       if (slot.content) removals.set(slot.content, (removals.get(slot.content) ?? 0) + 1)
     }
-    if (body <= REQUEST_BYTES_TRIGGER) return
+    if (body <= REQUEST_BYTES_LIMIT) return
     // Every older image is gone, so what is left is the newest step: send it in order while it fits.
     let used = fixed
     for (const slot of all.slice(stepStart)) {
       if (slot.decision !== "sent") continue
-      if (used + slot.bytes <= REQUEST_BYTES_TRIGGER) {
+      if (used + slot.bytes <= REQUEST_BYTES_LIMIT) {
         used += slot.bytes
         continue
       }
-      if (fixed + slot.bytes <= REQUEST_BYTES_TRIGGER) {
+      if (fixed + slot.bytes <= REQUEST_BYTES_LIMIT) {
         slot.decision = "deferred"
         continue
       }
       slot.decision = "oversized"
-      slot.room = REQUEST_BYTES_TRIGGER - fixed
+      slot.room = REQUEST_BYTES_LIMIT - fixed
     }
   }
 
