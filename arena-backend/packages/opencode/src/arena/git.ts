@@ -3401,10 +3401,38 @@ export const containsCommit = Effect.fn("ArenaGit.containsCommit")(function* (in
 })
 
 /**
- * The canonical checkout's branch and nothing else, for the stream poll: a full inspection runs
- * six git commands, and asking every second what the developer has checked out must cost one.
+ * The branch named by the checkout's HEAD file, or `undefined` when only Git can tell: a HEAD that
+ * is not a plain branch or commit, a reftable repository (`refs/heads/.invalid`), or a read error.
+ * A detached HEAD answers `{ branch: undefined }`, as `symbolic-ref --quiet` does.
+ */
+export async function branchFromHeadFile(root: string): Promise<{ branch: string | undefined } | undefined> {
+  try {
+    const dotGit = join(root, ".git")
+    let gitDirectory = dotGit
+    if ((await stat(dotGit)).isFile()) {
+      const pointer = /^gitdir:\s*(.+?)\s*$/m.exec(await readFile(dotGit, "utf8"))
+      if (!pointer) return undefined
+      gitDirectory = resolve(root, pointer[1])
+    }
+    const head = (await readFile(join(gitDirectory, "HEAD"), "utf8")).trim()
+    const ref = /^ref: refs\/heads\/(.+)$/.exec(head)
+    if (ref) return ref[1] === ".invalid" ? undefined : { branch: ref[1] }
+    if (/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(head)) return { branch: undefined }
+    return undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * The canonical checkout's branch and nothing else, for the stream poll, which asks every second
+ * while a ready chat is open. Reading HEAD costs no process; on Windows a Git start is tens of
+ * milliseconds, which made an idle open chat use a steady share of a core. Git answers only what
+ * the file cannot.
  */
 export const readCanonicalBranch = Effect.fn("ArenaGit.readCanonicalBranch")(function* (root: string) {
+  const known = yield* Effect.promise(() => branchFromHeadFile(root))
+  if (known) return known.branch
   const git = yield* Git.Service
   return yield* readBranch(git, root)
 })
