@@ -60,5 +60,23 @@ describe("battle tools with the platform's own paths", () => {
         }).pipe(Effect.result),
       ),
     ).toMatchObject({ success: { path: own } })
+    // The same spellings inside a shell command.
+    expect(await shellPaths("echo x > /tmp/opencode/arena/ses_native_paths/out.txt", worktree, "write")).toEqual([
+      path.join(os.tmpdir(), "opencode", "arena", "ses_native_paths", "out.txt"),
+    ])
+  })
+
+  it("lets a shell command write to /dev/null", async () => {
+    expect(await shellPaths("ls missing 2>/dev/null || echo none", worktree, "write")).toEqual(["/dev/null"])
+    expect(
+      await Effect.runPromise(
+        battleToolInput({
+          tool: "shell",
+          args: { command: "ls missing 2>/dev/null || echo none" },
+          directory: worktree,
+          rules,
+        }).pipe(Effect.result),
+      ),
+    ).toMatchObject({ success: { command: "ls missing 2>/dev/null || echo none" } })
   })
 })

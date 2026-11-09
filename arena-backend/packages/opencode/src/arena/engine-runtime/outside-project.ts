@@ -1,4 +1,5 @@
 import { realpathSync, statSync } from "node:fs"
+import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { Language, Parser, type Node } from "web-tree-sitter"
@@ -158,6 +159,23 @@ const PATH_FLAGS: Record<string, string> = {
   gcc: "o",
   cc: "o",
   clang: "o",
+}
+
+/** Device files a shell may name. They are not paths on disk; on Windows they would resolve to `C:\dev\...`. */
+export const DEVICE_PATH = /^\/dev\/(?:null|std(?:in|out|err)|fd\/\d+)$/
+
+/**
+ * On Windows a contestant's shell is Git Bash, which spells `C:\Users\...` as `/c/Users/...` and the
+ * user's temp directory as `/tmp`, so `$TMPDIR` reads as `/tmp/opencode/arena/...`. Read as Windows
+ * paths, those would land in `C:\c\...` or `C:\tmp\...`. Other words stay as written.
+ */
+export function windowsShellPath(word: string) {
+  if (process.platform !== "win32") return word
+  const drive = /^\/([a-zA-Z])(?=\/|$)(.*)$/.exec(word)
+  if (drive) return path.win32.join(`${drive[1].toUpperCase()}:\\`, drive[2])
+  const tmp = /^\/tmp(?=\/|$)(.*)$/.exec(word)
+  if (tmp) return path.win32.join(os.tmpdir(), tmp[1])
+  return word
 }
 
 function expandHome(word: string) {
@@ -586,9 +604,13 @@ export async function shellPaths(command: string, cwd: string, access: "all" | "
       paths.add("/")
       return
     }
-    const expanded = expandHome(word)
+    const expanded = windowsShellPath(expandHome(word))
     // Variables and computed path values are intentionally outside this policy.
     if (expanded.includes("$") || expanded.includes("`")) return
+    if (DEVICE_PATH.test(expanded)) {
+      paths.add(expanded)
+      return
+    }
     const resolved = resolveExistingPrefix(path.isAbsolute(expanded) ? expanded : `${base}/${expanded}`)
     paths.add((directory || expanded.endsWith("/")) && resolved !== "/" ? resolved + "/" : resolved)
   }

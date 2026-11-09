@@ -1,4 +1,3 @@
-import os from "node:os"
 import path from "node:path"
 import { statSync } from "node:fs"
 import { Permission } from "@opencode/core/permission"
@@ -8,7 +7,7 @@ import { Global } from "@opencode/util/global"
 import { Effect, Result } from "effect"
 import { LOCAL_STATE_DIRNAME } from "@/worktree/layout"
 import { sharedTmp, spellings, tmpParent } from "@/arena/contestant"
-import { resolveExistingPrefix, shellPaths } from "./outside-project"
+import { DEVICE_PATH, resolveExistingPrefix, shellPaths, windowsShellPath } from "./outside-project"
 
 function contains(root: string, target: string) {
   const relative = path.relative(root, target)
@@ -58,7 +57,7 @@ export function battlePathDenial(
     return "Arena contestants cannot access other Arena worktrees or another side's temp directory."
   }
   if (operation === "read") return
-  if (/^\/dev\/(?:null|std(?:in|out|err)|fd\/\d+)$/.test(resolved)) return
+  if (DEVICE_PATH.test(target) || DEVICE_PATH.test(resolved)) return
 
   if (own.some((root) => contains(root, resolved))) return
   // Name the way out, as 1.x did: a model told only "write only in your own folders" tries the same
@@ -96,15 +95,8 @@ export function battleToolInput({ tool, args, directory, rules }: BattleToolInpu
     const absolute = (file: string) => {
       if (file === "~") return Global.Path.home
       if (file.startsWith("~/")) return `${Global.Path.home}/${file.slice(2)}`
-      if (process.platform === "win32") {
-        // Git Bash, the contestants' shell on Windows, prints `/c/Users/...` for `C:\Users\...` and
-        // `/tmp/...` for the user's temp directory, so `$TMPDIR` reads as `/tmp/opencode/arena/...`.
-        // A file tool given that spelling would otherwise reach `C:\tmp`.
-        const drive = /^\/([a-zA-Z])(?=\/|$)(.*)$/.exec(file)
-        if (drive) return path.win32.join(`${drive[1].toUpperCase()}:\\`, drive[2])
-        const tmp = /^\/tmp(?=\/|$)(.*)$/.exec(file)
-        if (tmp) return path.win32.join(os.tmpdir(), tmp[1])
-      }
+      const native = windowsShellPath(file)
+      if (native !== file) return native
       return path.isAbsolute(file) ? file : `${directory}/${file}`
     }
     const check = (operation: "read" | "write", targets: readonly string[]) =>
