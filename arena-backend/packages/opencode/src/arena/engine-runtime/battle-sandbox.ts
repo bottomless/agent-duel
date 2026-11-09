@@ -1,3 +1,4 @@
+import os from "node:os"
 import path from "node:path"
 import { statSync } from "node:fs"
 import { Permission } from "@opencode/core/permission"
@@ -95,6 +96,15 @@ export function battleToolInput({ tool, args, directory, rules }: BattleToolInpu
     const absolute = (file: string) => {
       if (file === "~") return Global.Path.home
       if (file.startsWith("~/")) return `${Global.Path.home}/${file.slice(2)}`
+      if (process.platform === "win32") {
+        // Git Bash, the contestants' shell on Windows, prints `/c/Users/...` for `C:\Users\...` and
+        // `/tmp/...` for the user's temp directory, so `$TMPDIR` reads as `/tmp/opencode/arena/...`.
+        // A file tool given that spelling would otherwise reach `C:\tmp`.
+        const drive = /^\/([a-zA-Z])(?=\/|$)(.*)$/.exec(file)
+        if (drive) return path.win32.join(`${drive[1].toUpperCase()}:\\`, drive[2])
+        const tmp = /^\/tmp(?=\/|$)(.*)$/.exec(file)
+        if (tmp) return path.win32.join(os.tmpdir(), tmp[1])
+      }
       return path.isAbsolute(file) ? file : `${directory}/${file}`
     }
     const check = (operation: "read" | "write", targets: readonly string[]) =>
@@ -123,7 +133,7 @@ export function battleToolInput({ tool, args, directory, rules }: BattleToolInpu
         hunk.path,
         ...(hunk.type === "update" && hunk.movePath ? [hunk.movePath] : []),
       ])
-      yield* check("write", targets)
+      yield* check("write", targets.map(absolute))
       const patchText = params.patchText.replace(
         /^\s*\*\*\* (Add File|Update File|Delete File|Move to): (.+)$/gm,
         (_line, operation: string, file: string) => `*** ${operation}: ${absolute(file.trim())}`,

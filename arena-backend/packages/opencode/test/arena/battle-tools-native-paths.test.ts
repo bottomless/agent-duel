@@ -2,7 +2,8 @@ import { afterAll, describe, expect, it } from "bun:test"
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { battlePathDenial } from "@/arena/engine-runtime/battle-sandbox"
+import { Effect } from "effect"
+import { battlePathDenial, battleToolInput } from "@/arena/engine-runtime/battle-sandbox"
 import { shellPaths } from "@/arena/engine-runtime/outside-project"
 import { permissionRules, sandboxForSession } from "@/arena/engine-runtime/sandbox"
 
@@ -36,5 +37,28 @@ describe("battle tools with the platform's own paths", () => {
   it("parses a contestant's shell command", async () => {
     expect(await shellPaths("echo ok", worktree, "write")).toEqual([])
     expect(await shellPaths("echo x > out.txt", worktree, "write")).toEqual([path.join(worktree, "out.txt")])
+  })
+
+  it.if(process.platform === "win32")("reads Git Bash spellings as Windows paths", async () => {
+    const posix = (file: string) => `/${file[0].toLowerCase()}${file.slice(2).split(path.sep).join("/")}`
+    const write = (file: string) =>
+      Effect.runPromise(
+        battleToolInput({ tool: "write", args: { path: file, content: "x" }, directory: worktree, rules }),
+      )
+    expect(await write(posix(path.join(worktree, "index.html")))).toMatchObject({
+      path: path.join(worktree, "index.html"),
+    })
+    // Git Bash maps `/tmp` to the user's temp directory, where the contestant's `$TMPDIR` lives.
+    const own = path.join(os.tmpdir(), "opencode", "arena", "ses_native_paths", "note.txt")
+    expect(
+      await Effect.runPromise(
+        battleToolInput({
+          tool: "write",
+          args: { path: "/tmp/opencode/arena/ses_native_paths/note.txt", content: "x" },
+          directory: worktree,
+          rules,
+        }).pipe(Effect.result),
+      ),
+    ).toMatchObject({ success: { path: own } })
   })
 })
