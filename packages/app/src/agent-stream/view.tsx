@@ -1,3 +1,4 @@
+import { ArenaRow, ArenaRowLayoutProvider, useArenaRowLayout } from "./arena-row-layout";
 import { ChatFind, ChatFindExpansion } from "@/agent-stream/chat-find";
 import type { ChatFindHistory } from "@/agent-stream/chat-find/types";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
@@ -219,6 +220,7 @@ function renderStreamItemWithTurnFooter(input: {
   const footerHost = input.layoutItem.completedFooter;
   const footer = footerHost ? (
     <CompletedTurnFooterRow
+      hostItemId={footerHost.itemId}
       strategy={input.strategy}
       items={footerHost.items}
       timing={footerHost.timing}
@@ -228,7 +230,11 @@ function renderStreamItemWithTurnFooter(input: {
     />
   ) : null;
   const content = (
-    <StreamItemWrapper gapBelow={input.layoutItem.gapBelow} turnIndent={input.turnIndent}>
+    <StreamItemWrapper
+      itemId={input.layoutItem.item.id}
+      gapBelow={input.layoutItem.gapBelow}
+      turnIndent={input.turnIndent}
+    >
       {input.content}
     </StreamItemWrapper>
   );
@@ -300,6 +306,12 @@ export interface AgentStreamViewProps {
   onOpenWorkspaceFile?: (request: WorkspaceFileOpenRequest) => void;
   /** Content inserted immediately after a canonical stream item (for durable in-stream markers). */
   afterItems?: ReadonlyMap<string, ReactNode>;
+  /** User messages set as headings rather than bubbles, such as battles' own prompts. */
+  headlineUserMessageIds?: ReadonlySet<string>;
+  /** Rows that start a new turn in an Agent Duel chat, with a rule above them. */
+  ruledItemIds?: ReadonlySet<string>;
+  /** What ends a turn's footer in an Agent Duel chat, keyed by the row the footer closes. */
+  turnFooterEnds?: ReadonlyMap<string, ReactNode>;
   /** Canonical stream item after which inherited fork history ends. */
   forkBoundaryAfterItemId?: string;
   /** Transient content rendered at the live end of the transcript. */
@@ -490,6 +502,9 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       toast,
       onOpenWorkspaceFile,
       afterItems,
+      headlineUserMessageIds,
+      ruledItemIds,
+      turnFooterEnds,
       forkBoundaryAfterItemId,
       liveContent,
       bottomOverlayHeight,
@@ -864,10 +879,18 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
               item.clientMessageId !== undefined &&
               pendingClientMessageIds.has(item.clientMessageId)
             }
+            variant={headlineUserMessageIds?.has(item.id) ? "headline" : "bubble"}
           />
         );
       },
-      [context.capabilities, agentId, client, pendingClientMessageIds, resolvedServerId],
+      [
+        context.capabilities,
+        agentId,
+        client,
+        headlineUserMessageIds,
+        pendingClientMessageIds,
+        resolvedServerId,
+      ],
     );
 
     const renderAssistantMessageItem = useCallback(
@@ -1459,31 +1482,38 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
             <MessageOuterSpacingProvider disableOuterSpacing>
               <ToolCallExpansionContext.Provider value={toolCallExpansion}>
                 <UserMessageExpansionContext.Provider value={userMessageExpansion}>
-                  {streamRenderStrategy.render({
-                    readingRowReplacements: presentation.readingRowReplacements,
-                    agentId,
-                    segments: renderModel.segments,
-                    historyRowRevision,
-                    liveHeadRowRevision,
-                    boundary,
-                    renderers,
-                    listEmptyComponent,
-                    viewportRef,
-                    routeBottomAnchorRequest,
-                    isAuthoritativeHistoryReady,
-                    isInitialHistoryLoading,
-                    revealInitialHistory,
-                    onNearBottomChange: nearBottom.set,
-                    onNearHistoryStart: loadOlder,
-                    isLoadingOlderHistory: isLoadingOlder,
-                    hasOlderHistory: hasOlder,
-                    olderHistoryProgressKey: progressKey,
-                    scrollEnabled: streamScrollEnabled,
-                    listStyle: stylesheet.list,
-                    baseListContentContainerStyle: stylesheet.listContentContainer,
-                    forwardListContentContainerStyle: stylesheet.forwardListContentContainer,
-                    contentMaxWidth,
-                  })}
+                  <ArenaRowLayoutProvider
+                    enabled={arenaChat === true}
+                    fullWidthIds={headlineUserMessageIds}
+                    ruledIds={ruledItemIds}
+                    footerEnds={turnFooterEnds}
+                  >
+                    {streamRenderStrategy.render({
+                      readingRowReplacements: presentation.readingRowReplacements,
+                      agentId,
+                      segments: renderModel.segments,
+                      historyRowRevision,
+                      liveHeadRowRevision,
+                      boundary,
+                      renderers,
+                      listEmptyComponent,
+                      viewportRef,
+                      routeBottomAnchorRequest,
+                      isAuthoritativeHistoryReady,
+                      isInitialHistoryLoading,
+                      revealInitialHistory,
+                      onNearBottomChange: nearBottom.set,
+                      onNearHistoryStart: loadOlder,
+                      isLoadingOlderHistory: isLoadingOlder,
+                      hasOlderHistory: hasOlder,
+                      olderHistoryProgressKey: progressKey,
+                      scrollEnabled: streamScrollEnabled,
+                      listStyle: stylesheet.list,
+                      baseListContentContainerStyle: stylesheet.listContentContainer,
+                      forwardListContentContainerStyle: stylesheet.forwardListContentContainer,
+                      contentMaxWidth,
+                    })}
+                  </ArenaRowLayoutProvider>
                 </UserMessageExpansionContext.Provider>
               </ToolCallExpansionContext.Provider>
             </MessageOuterSpacingProvider>
@@ -1602,6 +1632,11 @@ function collectArenaStreamViewPropDiffs(
 ): string[] {
   const reasons: string[] = [];
   if (left.afterItems !== right.afterItems) reasons.push("afterItems");
+  if (left.headlineUserMessageIds !== right.headlineUserMessageIds) {
+    reasons.push("headlineUserMessageIds");
+  }
+  if (left.ruledItemIds !== right.ruledItemIds) reasons.push("ruledItemIds");
+  if (left.turnFooterEnds !== right.turnFooterEnds) reasons.push("turnFooterEnds");
   if (left.forkBoundaryAfterItemId !== right.forkBoundaryAfterItemId) {
     reasons.push("forkBoundaryAfterItemId");
   }
@@ -2211,12 +2246,14 @@ const permissionStyles = StyleSheet.create((theme) => ({
 }));
 
 interface StreamItemWrapperProps {
+  itemId: string;
   gapBelow: number;
   turnIndent: TurnIndent;
   children: ReactNode;
 }
 
-function StreamItemWrapper({ gapBelow, turnIndent, children }: StreamItemWrapperProps) {
+function StreamItemWrapper({ itemId, gapBelow, turnIndent, children }: StreamItemWrapperProps) {
+  const arenaLayout = useArenaRowLayout();
   const wrapperStyle = useMemo(
     () => [
       stylesheet.streamItemWrapper,
@@ -2224,27 +2261,57 @@ function StreamItemWrapper({ gapBelow, turnIndent, children }: StreamItemWrapper
     ],
     [gapBelow, turnIndent],
   );
+  const arenaRowStyle = useMemo(
+    () => ({
+      marginBottom: turnIndent === "nested" || turnIndent === "openedHost" ? 0 : gapBelow,
+    }),
+    [gapBelow, turnIndent],
+  );
   const gapStyle = useMemo(() => ({ paddingBottom: gapBelow }), [gapBelow]);
+  if (arenaLayout) {
+    return (
+      <ArenaRow
+        fullWidth={arenaLayout.fullWidthIds?.has(itemId) === true}
+        ruled={arenaLayout.ruledIds?.has(itemId) === true}
+        style={arenaRowStyle}
+      >
+        <TurnIndentContent turnIndent={turnIndent} gapStyle={gapStyle}>
+          {children}
+        </TurnIndentContent>
+      </ArenaRow>
+    );
+  }
+  return (
+    <View style={wrapperStyle}>
+      <TurnIndentContent turnIndent={turnIndent} gapStyle={gapStyle}>
+        {children}
+      </TurnIndentContent>
+    </View>
+  );
+}
+
+/** A row's content beside its turn's rail, if it sits in an opened turn. */
+function TurnIndentContent({
+  turnIndent,
+  gapStyle,
+  children,
+}: {
+  turnIndent: TurnIndent;
+  gapStyle: { paddingBottom: number };
+  children: ReactNode;
+}) {
   switch (turnIndent) {
     case "none":
     case "openedHost":
       return (
-        <View style={wrapperStyle}>
+        <>
           {children}
           {turnIndent === "openedHost" ? <IndentRail style={gapStyle} /> : null}
-        </View>
+        </>
       );
     case "nested":
-      return (
-        <View style={wrapperStyle}>
-          <IndentRail style={gapStyle}>{children}</IndentRail>
-        </View>
-      );
+      return <IndentRail style={gapStyle}>{children}</IndentRail>;
     case "lastNested":
-      return (
-        <View style={wrapperStyle}>
-          <IndentRail>{children}</IndentRail>
-        </View>
-      );
+      return <IndentRail>{children}</IndentRail>;
   }
 }

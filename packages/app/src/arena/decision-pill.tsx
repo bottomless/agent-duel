@@ -1,8 +1,10 @@
 import { i18n } from "@/i18n/i18next";
 import { useTranslation } from "react-i18next";
 import { useCallback, useEffect } from "react";
-import { Text, View, type LayoutChangeEvent } from "react-native";
+import { Text, View, useWindowDimensions, type LayoutChangeEvent } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
+import { ARENA_MAX_CONTENT_WIDTH } from "@/constants/layout";
+import { Button } from "@/components/ui/button";
 import type { ArenaSide, ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
 import {
   ArenaRunningPillButton,
@@ -19,6 +21,10 @@ import {
 } from "./decision-state";
 import { isArenaBattleOnScreen } from "./summary-anchor";
 import { useArenaBattleActions, type ArenaBattleActions } from "./use-battle-actions";
+import { ArenaPinnedReview, arenaBattleHasReview } from "./battle-judging";
+import { BATTLE_RAIL } from "./battle-layout";
+import { FoldedReviewTabs, ReviewDockFade, reviewDockStyles } from "./folded-review-tabs";
+import { useArenaReviewState } from "./review-state";
 
 function BattlePaneDecision({
   side,
@@ -167,8 +173,8 @@ function decisionHint(phase: ArenaDecisionPhase): string | null {
 }
 
 /**
- * The pill is empty only at a vote with no side to take, a Choose or an Accept in a failed side's
- * place; then the failure line's Discard is the only choice and an empty pill would sit under it.
+ * The choices are empty only at a vote with no side to take, a Choose or an Accept in a failed
+ * side's place; then the failure line's Discard is the only choice and the middle stays empty.
  */
 function pillHasChoice(phase: ArenaDecisionPhase): boolean {
   if (phase.kind !== "awaiting_vote" || phase.canResume) return true;
@@ -178,7 +184,7 @@ function pillHasChoice(phase: ArenaDecisionPhase): boolean {
 /**
  * At the vote Discard sits at the end of the line that says a side failed rather than among the
  * vote's choices, so it shows only when that line explains why the battle can be thrown away.
- * After a stop or a restart it stays in the pill.
+ * After a stop or a restart it stays among the choices.
  */
 function DecisionHintRow({
   phase,
@@ -198,25 +204,90 @@ function DecisionHintRow({
   );
 }
 
-/** Lives outside the transcript scroller so the decision stays above the composer. */
+/** Whether the decision row shows for this snapshot: a battle on screen with a choice to make. */
+export function arenaDecisionRowVisible(snapshot: ArenaSnapshot): boolean {
+  const phase = arenaDecisionPhase(snapshot);
+  const showChoices =
+    phase.kind === "running" ||
+    phase.kind === "awaiting_vote" ||
+    phase.kind === "awaiting_stop_resolution";
+  return isArenaBattleOnScreen(snapshot) && showChoices;
+}
+
+/** The choices themselves, centred between the two answers. */
+function DecisionChoices({
+  phase,
+  actions,
+}: {
+  phase: ArenaDecisionPhase;
+  actions: ArenaBattleActions;
+}) {
+  const stopped = phase.kind === "awaiting_stop_resolution";
+  const interrupted = phase.kind === "awaiting_vote" && phase.canResume;
+  return (
+    <View style={styles.choices} testID="arena-battle-choice-row">
+      {phase.kind === "running"
+        ? arenaRunningDecisionOrder(phase).map((choice) =>
+            choice === "stop" ? (
+              <BattleStopDecision key="stop" phase={phase} actions={actions} />
+            ) : (
+              <BattlePaneDecision key={choice} side={choice} phase={phase} actions={actions} />
+            ),
+          )
+        : null}
+      {interrupted ? (
+        <>
+          <ResumeDecision actions={actions} />
+          <DiscardDecision actions={actions} />
+        </>
+      ) : null}
+      {/* A failed side shows Accept in its Choose's place, or nothing if its result was not saved,
+          and each failed pane keeps its Retry. */}
+      {phase.kind !== "running" && !interrupted ? (
+        <>
+          <BattlePaneDecision side="a" phase={phase} actions={actions} />
+          {phase.kind === "awaiting_vote" && phase.canTie ? <VoteDecision actions={actions} /> : null}
+          {stopped ? <DiscardDecision actions={actions} /> : null}
+          <BattlePaneDecision side="b" phase={phase} actions={actions} />
+        </>
+      ) : null}
+    </View>
+  );
+}
+
+/**
+ * The battle's bottom row, outside the transcript scroller so the decision stays in view: a folded
+ * review's tabs at the start, the choices centred between the two answers, and the way to reply
+ * at the end while the composer is put away.
+ */
 export function ArenaDecisionPill({
   serverId,
   agentId,
   snapshot,
   onHeightChange,
+  onAskFollowUp,
+  docked = false,
 }: {
   serverId: string;
   agentId: string;
   snapshot: ArenaSnapshot;
   onHeightChange: (height: number) => void;
+  /** Shown while the composer is put away; brings it back. */
+  onAskFollowUp?: () => void;
+  /** In the composer's place rather than floating above it. */
+  docked?: boolean;
 }) {
-  useTranslation();
+  const { t } = useTranslation();
   const actions = useArenaBattleActions(serverId, agentId, snapshot.turn);
   const phase = arenaDecisionPhase(snapshot);
-  const stopped = phase.kind === "awaiting_stop_resolution";
-  const interrupted = phase.kind === "awaiting_vote" && phase.canResume;
-  const showChoices = phase.kind === "running" || phase.kind === "awaiting_vote" || stopped;
-  const visible = isArenaBattleOnScreen(snapshot) && showChoices;
+  const visible = arenaDecisionRowVisible(snapshot);
+  const turnId = snapshot.turn?.id;
+  const folded = useArenaReviewState(turnId ?? "").collapsed === true;
+  // The review is pinned above the row while there is a choice to make, so it stays in view
+  // while the answers scroll behind it. Folded, its tabs move into the row.
+  const pinnedReview = visible && arenaBattleHasReview(snapshot);
+  const reviewOpen = pinnedReview && !folded;
+  const { height: windowHeight } = useWindowDimensions();
   const handleLayout = useCallback(
     (event: LayoutChangeEvent) => onHeightChange(event.nativeEvent.layout.height),
     [onHeightChange],
@@ -229,70 +300,116 @@ export function ArenaDecisionPill({
 
   return (
     <View
-      style={styles.container}
+      style={[
+        docked ? styles.dock : styles.container,
+        reviewOpen && styles.underReview,
+        folded && reviewDockStyles.edge,
+      ]}
       onLayout={handleLayout}
       pointerEvents="box-none"
       testID="arena-decision-pill"
     >
-      <DecisionHintRow phase={phase} actions={actions} />
-      {pillHasChoice(phase) ? (
-        <View style={styles.pill} testID="arena-battle-choice-row">
-          {phase.kind === "running"
-            ? arenaRunningDecisionOrder(phase).map((choice) =>
-                choice === "stop" ? (
-                  <BattleStopDecision key="stop" phase={phase} actions={actions} />
-                ) : (
-                  <BattlePaneDecision key={choice} side={choice} phase={phase} actions={actions} />
-                ),
-              )
-            : null}
-          {interrupted ? (
-            <>
-              <ResumeDecision actions={actions} />
-              <DiscardDecision actions={actions} />
-            </>
-          ) : null}
-          {/* A failed side shows Accept in its Choose's place, or nothing if its result was not
-              saved, and each failed pane keeps its Retry. */}
-          {phase.kind !== "running" && !interrupted ? (
-            <>
-              <BattlePaneDecision side="a" phase={phase} actions={actions} />
-              {phase.kind === "awaiting_vote" && phase.canTie ? (
-                <VoteDecision actions={actions} />
-              ) : null}
-              {stopped ? <DiscardDecision actions={actions} /> : null}
-              <BattlePaneDecision side="b" phase={phase} actions={actions} />
-            </>
-          ) : null}
+      {folded ? <ReviewDockFade /> : null}
+      {pinnedReview ? (
+        <View style={styles.review}>
+          <ArenaPinnedReview
+            serverId={serverId}
+            agentId={agentId}
+            snapshot={snapshot}
+            actions={actions}
+            maxContentHeight={Math.round(windowHeight * PINNED_REVIEW_SHARE)}
+          />
         </View>
       ) : null}
+      <DecisionHintRow phase={phase} actions={actions} />
+      <View style={styles.row} pointerEvents="box-none">
+        <View style={styles.start} pointerEvents="box-none">
+          {turnId ? <FoldedReviewTabs turnId={turnId} /> : null}
+        </View>
+        {pillHasChoice(phase) ? <DecisionChoices phase={phase} actions={actions} /> : null}
+        <View style={[styles.start, styles.end]} pointerEvents="box-none">
+          {onAskFollowUp ? (
+            <Button
+              variant="outline"
+              size="md"
+              style={styles.followUp}
+              textStyle={styles.followUpText}
+              onPress={onAskFollowUp}
+              testID="arena-ask-follow-up"
+            >
+              {t("arena.askFollowUp")}
+            </Button>
+          ) : null}
+        </View>
+      </View>
     </View>
   );
 }
 
+// How much of the window the pinned review's content may take before it scrolls, so the answers
+// above it keep the larger part.
+const PINNED_REVIEW_SHARE = 0.38;
+
 const styles = StyleSheet.create((theme) => ({
+  // Above the composer, over the end of the transcript. Opaque, so the transcript scrolls under it.
   container: {
     position: "absolute",
     bottom: "100%",
     left: 0,
     right: 0,
-    backgroundColor: "transparent",
+    backgroundColor: theme.colors.surface0,
     alignItems: "center",
-    paddingHorizontal: theme.spacing[2],
-    paddingTop: theme.spacing[2],
-    paddingBottom: theme.spacing[2],
+    paddingTop: theme.spacing[3],
+    paddingBottom: theme.spacing[3],
     gap: theme.spacing[2],
   },
-  pill: {
-    maxWidth: "100%",
+  // In the composer's place while the composer is put away.
+  dock: {
+    width: "100%",
+    backgroundColor: theme.colors.surface0,
+    alignItems: "center",
+    paddingTop: theme.spacing[4],
+    paddingBottom: theme.spacing[4] + theme.spacing[1],
+    gap: theme.spacing[2],
+  },
+  // An open review heads the dock and draws its own edge.
+  underReview: {
+    paddingTop: 0,
+  },
+  review: {
+    width: "100%",
+    maxWidth: ARENA_MAX_CONTENT_WIDTH,
+  },
+  row: {
+    width: "100%",
+    maxWidth: ARENA_MAX_CONTENT_WIDTH,
     flexDirection: "row",
     alignItems: "center",
-    gap: theme.spacing[1],
-    padding: theme.spacing[1],
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    borderRadius: theme.borderRadius.full,
-    backgroundColor: theme.colors.surface2,
+    paddingHorizontal: BATTLE_RAIL,
+    gap: theme.spacing[4],
+  },
+  // The two ends share the space evenly, so the choices stay centred between the answers.
+  start: {
+    flex: 1,
+    flexBasis: 0,
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  end: {
+    justifyContent: "flex-end",
+  },
+  choices: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[2],
+  },
+  followUp: {
+    height: 40,
+    borderRadius: theme.borderRadius.lg,
+  },
+  followUpText: {
+    fontWeight: theme.fontWeight.semibold,
   },
   hintRow: {
     maxWidth: "100%",
