@@ -146,7 +146,20 @@ const windowsPty: BunPlugin = {
     }))
   },
 }
-const replaced = [...shipped.map((item) => item.plugin), ...(unix ? [] : [windowsPty])]
+// Bun keeps `ws` as its built-in module and drops `export * from "ws"` in this side-effect-free module, so the
+// compiled engine exits at start with "ws2 is not defined". The names match upstream's CLI build
+// (packages/cli/script/build.ts).
+const wsReexports: BunPlugin = {
+  name: "ws-named-reexports",
+  setup(build) {
+    build.onLoad({ filter: /platform-node-shared[/\\]dist[/\\]NodeWS\.js$/ }, () => ({
+      loader: "js",
+      contents:
+        'export { createWebSocketStream, extension, Receiver, Sender, subprotocol, WebSocket, WebSocketServer } from "ws"',
+    }))
+  },
+}
+const replaced = [...shipped.map((item) => item.plugin), ...(unix ? [] : [windowsPty]), wsReexports]
 
 // A filter that matches nothing does not fail Bun.build: the engine would embed the file again and extract
 // it at run time, where library validation refuses it. Count each plugin's loads and fail on a miss.
