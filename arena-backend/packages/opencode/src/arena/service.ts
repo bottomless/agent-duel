@@ -95,6 +95,7 @@ import {
   generationName,
   identitiesRevealed,
   INTERRUPTED_RUN_MESSAGE,
+  interruptedComparisonState,
   isFinalState,
   isParkedPromotion,
   isStopAbort,
@@ -6277,7 +6278,10 @@ export const layer: Layer.Layer<
               ),
             )
           }
-          yield* promise(() => store.updateTurn(turn._id, { comparisonState: "failed" }))
+          // A stopped battle has no summary to fail.
+          if (current?.comparisonState !== "skipped") {
+            yield* promise(() => store.updateTurn(turn._id, { comparisonState: "failed" }))
+          }
           if (current?.state === "running") yield* promise(() => store.transitionTurn(turn._id, "finalizing"))
           yield* promise(() => store.transitionTurn(turn._id, "finalization_failed"))
           yield* promise(() => store.transitionTurn(turn._id, "awaiting_stop_resolution"))
@@ -9687,7 +9691,7 @@ export const layer: Layer.Layer<
           Effect.forkIn(scope),
         )
       } else if (!a || !b) {
-        yield* promise(() => store.updateTurn(turn._id, { comparisonState: "failed" }))
+        yield* promise(() => store.updateTurn(turn._id, { comparisonState: interruptedComparisonState(turn) }))
       }
     })
 
@@ -9780,10 +9784,11 @@ export const layer: Layer.Layer<
         (turn) =>
           Effect.gen(function* () {
             const comparison = yield* promise(() => store.comparisons.findOne({ turnID: turn._id }))
+            const comparisonState = interruptedComparisonState(turn, comparison ?? undefined)
             if (comparison?.state === "complete" || comparison?.state === "failed") {
               yield* promise(() =>
                 store.updateTurn(turn._id, {
-                  comparisonState: comparison.state,
+                  comparisonState,
                   comparisonID: comparison._id,
                 }),
               )
@@ -9799,7 +9804,7 @@ export const layer: Layer.Layer<
             }
             yield* promise(() =>
               store.updateTurn(turn._id, {
-                comparisonState: "failed",
+                comparisonState,
                 ...(comparison ? { comparisonID: comparison._id } : {}),
               }),
             )

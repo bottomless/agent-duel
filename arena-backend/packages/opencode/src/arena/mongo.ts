@@ -1218,6 +1218,9 @@ export class Store {
             state: to,
             updatedAt: at,
             [`transitionTimestamps.${to}`]: at,
+            // A stopped battle ends at Keep or Discard and never gets a summary. In the same write,
+            // so the decision never shows one on its way and a restart cannot find it pending.
+            ...(to === "stopping" ? { comparisonState: "skipped" as const } : {}),
           },
         },
         { returnDocument: "after" },

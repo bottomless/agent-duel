@@ -367,6 +367,20 @@ export function canReopenInterruptedBattle(
   )
 }
 
+/**
+ * The summary state a restart leaves when a turn's summary had not settled. A record that settled
+ * stands. Otherwise the summary was cut off and can be retried, except in a battle the voter
+ * stopped: that never gets a summary, so it reads as one with a failed side does, not as a failure
+ * to retry.
+ */
+export function interruptedComparisonState(
+  turn: { readonly transitionTimestamps?: Partial<Record<BattleState, Date>> },
+  comparison?: { readonly state: "pending" | "running" | "complete" | "failed" },
+): "complete" | "failed" | "skipped" {
+  if (comparison?.state === "complete" || comparison?.state === "failed") return comparison.state
+  return turn.transitionTimestamps?.stopping === undefined ? "failed" : "skipped"
+}
+
 type DecidedRun = { readonly side: Side; readonly selectable?: boolean } & ResumableRun
 
 /**

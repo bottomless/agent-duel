@@ -1357,7 +1357,10 @@ Use one utility request; increase evidence quality before adding model passes.
   carries it, and the app shows it as a prompt row with the discarded card under it
   (`projectDiscardedArenaPrompts`). The next battle's agents do not see the discarded turn.
 - **Stop** moves to `awaiting_stop_resolution`, where the choice is discard, keep A, or keep B
-  (`stop` in `arena/service.ts`). Keeping a side when the other had already failed, rather than
+  (`stop` in `arena/service.ts`). A stopped battle gets no summary, so the move to `stopping` marks
+  it `skipped` in the same write (`transitionTurn` in `arena/mongo.ts`). Left `pending`, the decision
+  showed a summary on its way, and a restart failed it and offered Retry summary
+  (`interruptedComparisonState`). Keeping a side when the other had already failed, rather than
   merely stopped, carries the same `voteDiscardedReason`, so metrics do not file it as a win.
 
 **Applying** (`promoteImpl` in `arena/service.ts`) records the resolution and enters `applying`
