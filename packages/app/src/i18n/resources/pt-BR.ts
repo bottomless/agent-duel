@@ -113,7 +113,6 @@ export const ptBR: TranslationResources = {
     openTerminalIn: "Abrir um terminal no worktree do agente {{side}}",
     showBattle: "Mostrar batalha",
     hideBattle: "Ocultar batalha",
-    youKept: "Você ficou com o agente {{side}}",
     keptAgent: "Agente {{side}} · mantido",
     actionFailed: "Falha na ação da batalha",
     trunkUnavailable: "Trunk indisponível",

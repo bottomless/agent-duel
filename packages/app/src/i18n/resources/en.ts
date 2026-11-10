@@ -103,7 +103,6 @@ export const en = {
     openTerminalIn: "Open a terminal in Agent {{side}}'s worktree",
     showBattle: "Show battle",
     hideBattle: "Hide battle",
-    youKept: "You kept Agent {{side}}",
     keptAgent: "Agent {{side}} · kept",
     actionFailed: "Battle action failed",
     trunkUnavailable: "Trunk unavailable",

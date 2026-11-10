@@ -48,6 +48,7 @@ import { DiffLayoutControl } from "./diff-layout-control";
 import { InlineFileDiff, openChangesFiles, toggleChangesFile } from "./inline-file-diff";
 import { VerdictBody } from "./verdict-body";
 import { ArenaChangesList } from "./changes-list";
+import { ArenaPastDecision, type ArenaPastChoice } from "./decision-bar";
 import { arenaChangesCountLabel, arenaChangesRows } from "./changes-rows";
 import { arenaDiffQueryKey, hasBattleDiff } from "./comparison-visibility";
 import { arenaModelDisplayName } from "./side-label";
@@ -130,7 +131,7 @@ function ArchivedChanges({
     [openFiles],
   );
   const renderDiff = useCallback(
-    (file: string) => (
+    (file: string, onColumns: boolean) => (
       <InlineFileDiff
         serverId={serverId}
         agentId={agentId}
@@ -138,6 +139,7 @@ function ArchivedChanges({
         file={file}
         layout={layout}
         embedded
+        onColumns={onColumns}
       />
     ),
     [agentId, layout, serverId, turnId],
@@ -392,22 +394,35 @@ function showBattleStyle() {
   return styles.showBattle;
 }
 
+/** The row a decided battle's choice was made in, and which button it took. */
+function pastChoice(item: ArenaHistoryItem): ArenaPastChoice | null {
+  const resolution = item.resolution;
+  if (resolution?.kind === "vote") {
+    return { kind: "vote", chosen: resolution.vote === "tie" ? "middle" : resolution.vote };
+  }
+  if (resolution?.kind === "early") return { kind: "vote", chosen: resolution.vote };
+  if (resolution?.kind === "stopped") {
+    if (resolution.resolution === "apply_a") return { kind: "keep", chosen: "a" };
+    if (resolution.resolution === "apply_b") return { kind: "keep", chosen: "b" };
+    return { kind: "keep", chosen: "middle" };
+  }
+  return null;
+}
+
 /**
- * The end of a shown battle, in the chat under its review: what was kept where the choice was, and
- * the way back to the kept answer.
+ * The end of a shown battle, in the chat under its review: the decision row as it was left, the
+ * button taken marked, and Hide battle where Ask a follow-up was.
  */
 function ShownBattleEnd({ agentId, item }: { agentId: string; item: ArenaHistoryItem }) {
   const { t } = useTranslation();
-  const winner = battleWinnerSide(item);
+  const choice = pastChoice(item);
   const hide = useArenaShownBattleStore((state) => state.hide);
   const onHideBattle = useCallback(() => hide(agentId), [agentId, hide]);
   return (
     <View style={styles.shownFooter} testID="arena-shown-battle-footer">
       <View style={styles.shownFooterEnd} />
-      {winner ? (
-        <Text style={styles.shownFooterResult}>
-          {t("arena.youKept", { side: winner.toUpperCase() })}
-        </Text>
+      {choice ? (
+        <ArenaPastDecision kind={choice.kind} chosen={choice.chosen} />
       ) : (
         <Text style={styles.shownFooterResult}>{chosenLabel(item)}</Text>
       )}

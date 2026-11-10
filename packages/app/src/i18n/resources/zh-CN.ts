@@ -105,7 +105,6 @@ export const zhCN: TranslationResources = {
     openTerminalIn: "在智能体 {{side}} 的 worktree 中打开终端",
     showBattle: "显示对战",
     hideBattle: "隐藏对战",
-    youKept: "你保留了智能体 {{side}}",
     keptAgent: "智能体 {{side}} · 已保留",
     actionFailed: "对战操作失败",
     trunkUnavailable: "主干不可用",

@@ -32,6 +32,7 @@ import {
   type ThreeWayWindowedDiff,
 } from "./three-way-diff";
 import { ExpandBand } from "./three-way-file-diff";
+import { BATTLE_GUTTER } from "./battle-layout";
 import { TokenText } from "./token-text";
 
 type Side = "a" | "b";
@@ -228,6 +229,7 @@ function PairedRegion({
   aligned,
   numberWidth,
   showStatus,
+  gutter,
 }: {
   rows: ThreeWayRow[];
   sides: readonly Side[];
@@ -235,13 +237,16 @@ function PairedRegion({
   aligned: boolean;
   numberWidth: number;
   showStatus: boolean;
+  /** On the answers' columns: A and B part by the battle's gutter. */
+  gutter: boolean;
 }) {
   const { t } = useTranslation();
+  const pairStyle = gutter ? styles.pairGutter : styles.pair;
   const numberStyle = useMemo(() => inlineUnistylesStyle({ width: numberWidth }), [numberWidth]);
   return (
     <>
       {showStatus ? (
-        <View style={styles.pair}>
+        <View style={pairStyle}>
           {sides.map((side) => (
             <Text key={side} numberOfLines={1} style={[styles.column, styles.regionStatus]}>
               {sideChanged(rows, side) ? " " : t("arena.noRegionChanges")}
@@ -250,7 +255,7 @@ function PairedRegion({
         </View>
       ) : null}
       {rows.map((row) => (
-        <View key={row.key} style={styles.pair}>
+        <View key={row.key} style={pairStyle}>
           {sides.map((side) => (
             <View key={side} style={[styles.column, styles.wrappedBody]} dataSet={SIDE_DATA[side]}>
               <WrappedLine
@@ -317,6 +322,109 @@ function Column({
   );
 }
 
+/**
+ * The viewer's sticky head. On the answers' columns it holds only each side's expand, at the end
+ * of its column; elsewhere the caption, then the side labels when A sits beside B.
+ */
+function DiffHeader({
+  columns,
+  mode,
+  layout,
+  waitingFor,
+  onExpandA,
+  onExpandB,
+  onBack,
+  onLayout,
+}: {
+  columns: boolean;
+  mode: Side | null;
+  layout: ArenaDiffLayout;
+  waitingFor: Side | undefined;
+  onExpandA: () => void;
+  onExpandB: () => void;
+  onBack: () => void;
+  onLayout: (event: LayoutChangeEvent) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <View
+      style={[styles.header, columns && styles.headerOnColumns, STICKY_STYLE]}
+      dataSet={HEADER_DATA}
+      onLayout={onLayout}
+    >
+      {columns ? (
+        <View style={styles.pairGutter}>
+          {SIDES.map((side) => (
+            <View key={side} style={styles.columnActions}>
+              {side === waitingFor ? (
+                <WaitingAction side={side} />
+              ) : (
+                <Action
+                  label={t("arena.expandLabel", { agent: labelFor(side) })}
+                  onPress={side === "a" ? onExpandA : onExpandB}
+                  testID={`arena-diff-expand-${side}`}
+                />
+              )}
+            </View>
+          ))}
+        </View>
+      ) : null}
+      <View style={[styles.toolbar, columns && styles.hidden]}>
+        <Text style={styles.caption}>
+          {mode
+            ? t("arena.sideOriginalChanges", { agent: labelFor(mode) })
+            : t("arena.originalChanges")}
+        </Text>
+        {mode ? (
+          <Action
+            label={t("arena.backComparison")}
+            onPress={onBack}
+            back
+            testID="arena-diff-back"
+          />
+        ) : null}
+        {!mode && layout === "single" ? (
+          <View style={styles.actions}>
+            {SIDES.map((side) =>
+              side === waitingFor ? (
+                <WaitingAction key={side} side={side} />
+              ) : (
+                <Action
+                  key={side}
+                  label={t("arena.expandLabel", { agent: labelFor(side) })}
+                  onPress={side === "a" ? onExpandA : onExpandB}
+                  side={side}
+                  testID={`arena-diff-expand-${side}`}
+                />
+              ),
+            )}
+          </View>
+        ) : null}
+      </View>
+      {!mode && layout === "split" && !columns ? (
+        <View style={styles.pair}>
+          {SIDES.map((side) => (
+            <View key={side} style={styles.columnHeader}>
+              <Text style={[styles.agentLabel, side === "a" ? styles.agentA : styles.agentB]}>
+                {labelFor(side)}
+              </Text>
+              {side === waitingFor ? (
+                <WaitingAction side={side} />
+              ) : (
+                <Action
+                  label={t("arena.expandLabel", { agent: labelFor(side) })}
+                  onPress={side === "a" ? onExpandA : onExpandB}
+                  testID={`arena-diff-expand-${side}`}
+                />
+              )}
+            </View>
+          ))}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
 function ReadyDiff({
   file,
   diff,
@@ -324,6 +432,7 @@ function ReadyDiff({
   layout,
   waitingFor,
   embedded,
+  onColumns,
 }: {
   file: ArenaThreeWayFile;
   diff: ThreeWayWindowedDiff;
@@ -332,6 +441,7 @@ function ReadyDiff({
   /** The side still working. Its column is a placeholder and only the other side expands. */
   waitingFor: Side | undefined;
   embedded: boolean;
+  onColumns: boolean;
 }) {
   const { t } = useTranslation();
   const viewportRef = useRef<View>(null);
@@ -448,6 +558,9 @@ function ReadyDiff({
   const labelSticky = stickyLabelStyle(headerHeight);
   const stacked = layout === "single" || mode !== null;
   const sides = mode ? [mode] : SIDES;
+  // Side by side under the battle's answers: A's code under A, B's under B, each in its own box,
+  // with nothing to name them; the columns already do.
+  const columns = onColumns && !stacked;
   const renderBlock = (
     block: ThreeWayBlock,
     shown: readonly Side[],
@@ -483,6 +596,7 @@ function ReadyDiff({
             aligned={diff.aligned}
             numberWidth={numberWidth}
             showStatus={showStatus}
+            gutter={columns}
           />
         ) : null}
         {paired
@@ -536,70 +650,26 @@ function ReadyDiff({
   return (
     <View
       ref={viewportRef}
-      style={[styles.viewer, embedded && styles.viewerEmbedded]}
+      style={[styles.viewer, embedded && styles.viewerEmbedded, columns && styles.viewerOnColumns]}
       testID="arena-inline-diff"
       dataSet={viewportData}
     >
-      <View style={[styles.header, STICKY_STYLE]} dataSet={HEADER_DATA} onLayout={measureHeader}>
-        <View style={styles.toolbar}>
-          <Text style={styles.caption}>
-            {mode
-              ? t("arena.sideOriginalChanges", { agent: labelFor(mode) })
-              : t("arena.originalChanges")}
-          </Text>
-          {mode ? (
-            <Action
-              label={t("arena.backComparison")}
-              onPress={back}
-              back
-              testID="arena-diff-back"
-            />
-          ) : null}
-          {!mode && layout === "single" ? (
-            <View style={styles.actions}>
-              {SIDES.map((side) =>
-                side === waitingFor ? (
-                  <WaitingAction key={side} side={side} />
-                ) : (
-                  <Action
-                    key={side}
-                    label={t("arena.expandLabel", { agent: labelFor(side) })}
-                    onPress={side === "a" ? expandA : expandB}
-                    side={side}
-                    testID={`arena-diff-expand-${side}`}
-                  />
-                ),
-              )}
-            </View>
-          ) : null}
-        </View>
-        {!mode && layout === "split" ? (
-          <View style={styles.pair}>
-            {SIDES.map((side) => (
-              <View key={side} style={styles.columnHeader}>
-                <Text style={[styles.agentLabel, side === "a" ? styles.agentA : styles.agentB]}>
-                  {labelFor(side)}
-                </Text>
-                {side === waitingFor ? (
-                  <WaitingAction side={side} />
-                ) : (
-                  <Action
-                    label={t("arena.expandLabel", { agent: labelFor(side) })}
-                    onPress={side === "a" ? expandA : expandB}
-                    testID={`arena-diff-expand-${side}`}
-                  />
-                )}
-              </View>
-            ))}
-          </View>
-        ) : null}
-      </View>
+      <DiffHeader
+        columns={columns}
+        mode={mode}
+        layout={layout}
+        waitingFor={waitingFor}
+        onExpandA={expandA}
+        onExpandB={expandB}
+        onBack={back}
+        onLayout={measureHeader}
+      />
       {!diff.aligned ? <Text style={styles.warning}>{t("arena.regionsReplaced")} </Text> : null}
       {truncated ? <Text style={styles.warning}>{t("arena.notFullFile")} </Text> : null}
       {waitingFor && !stacked ? (
         // The working side's column is one placeholder for the whole file, the slot its diff
         // will fill, beside the finished side's regions.
-        <View style={styles.pair}>
+        <View style={columns ? styles.pairGutter : styles.pair}>
           {SIDES.map((side) =>
             side === waitingFor ? (
               <View
@@ -622,9 +692,17 @@ function ReadyDiff({
           )}
         </View>
       ) : (
-        blocks.map((block) =>
-          renderBlock(block, sides, { stackedRows: stacked, labels: stacked && !mode }),
-        )
+        <View style={styles.blocks}>
+          {blocks.map((block) =>
+            renderBlock(block, sides, { stackedRows: stacked, labels: stacked && !mode }),
+          )}
+          {columns ? (
+            <View style={styles.boxes} pointerEvents="none">
+              <View style={styles.box} />
+              <View style={styles.box} />
+            </View>
+          ) : null}
+        </View>
       )}
       {diff.rows.length === 0 ? (
         <Text style={styles.notice}>{t("arena.noOriginalChanges")}</Text>
@@ -645,6 +723,7 @@ export function BaseRelativeFileView({
   layout,
   waitingFor,
   embedded = false,
+  onColumns = false,
 }: {
   file: ArenaThreeWayFile;
   layout: ArenaDiffLayout;
@@ -652,6 +731,8 @@ export function BaseRelativeFileView({
   waitingFor?: Side;
   /** Drawn under its row in the Changes list, which supplies the edges around it. */
   embedded?: boolean;
+  /** Under a row on the battle's answers' columns (`SplitChangesRow`). */
+  onColumns?: boolean;
 }) {
   const { t } = useTranslation();
   const comparison = useMemo<BaseRelativeDiff>(() => buildBaseRelativeDiff(file, t), [file, t]);
@@ -669,6 +750,7 @@ export function BaseRelativeFileView({
       layout={layout}
       waitingFor={waitingFor}
       embedded={embedded}
+      onColumns={onColumns}
     />
   );
 }
@@ -707,6 +789,40 @@ const styles = StyleSheet.create((theme) => ({
   actions: { flexDirection: "row", gap: theme.spacing[1] },
   caption: { color: theme.colors.foregroundMuted, fontSize: theme.fontSize.sm },
   pair: { flexDirection: "row", minWidth: 0 },
+  pairGutter: { flexDirection: "row", minWidth: 0, columnGap: BATTLE_GUTTER },
+  viewerOnColumns: {
+    borderWidth: 0,
+    borderRadius: 0,
+    backgroundColor: "transparent",
+  },
+  headerOnColumns: {
+    backgroundColor: theme.colors.surface0,
+    borderBottomWidth: 0,
+  },
+  columnActions: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: "row",
+    justifyContent: "flex-end",
+  },
+  hidden: { display: "none" },
+  blocks: { position: "relative", minWidth: 0 },
+  // Each side's box, drawn over its column so the code's tints run to its edge.
+  boxes: {
+    position: "absolute",
+    top: 0,
+    bottom: 0,
+    left: 0,
+    right: 0,
+    flexDirection: "row",
+    columnGap: BATTLE_GUTTER,
+  },
+  box: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    borderRadius: theme.borderRadius.base,
+  },
   column: { flex: 1, minWidth: 0 },
   columnHeader: {
     flex: 1,

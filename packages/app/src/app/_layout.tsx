@@ -44,7 +44,11 @@ import { ProviderSettingsHost } from "@/components/provider-settings-host";
 import { WorkspaceSetupDialog } from "@/components/workspace-setup-dialog";
 import { WorkspaceShortcutTargetsSubscriber } from "@/components/workspace-shortcut-targets-subscriber";
 import { FloatingPanelPortalHost } from "@/components/ui/floating-panel-portal";
-import { HEADER_INNER_HEIGHT, useIsCompactFormFactor } from "@/constants/layout";
+import {
+  DESKTOP_TRAFFIC_LIGHT_OFFSET_Y,
+  HEADER_INNER_HEIGHT,
+  useIsCompactFormFactor,
+} from "@/constants/layout";
 import { DesktopPanelOverlay } from "@/components/desktop-panel-overlay";
 import {
   resolveDesktopAppChromeLayout,
@@ -624,7 +628,7 @@ function DesktopWindowControlsSync() {
     if (isLoading || isNative) return;
     void updateDesktopWindowChrome({
       backgroundColor: surface0,
-      trafficLightOffsetY: -4,
+      trafficLightOffsetY: DESKTOP_TRAFFIC_LIGHT_OFFSET_Y,
     }).catch((error) => {
       console.warn("[DesktopWindow] Failed to update window controls overlay", error);
     });

@@ -108,7 +108,6 @@ export const ru: TranslationResources = {
     openTerminalIn: "Открыть терминал в worktree агента {{side}}",
     showBattle: "Показать битву",
     hideBattle: "Скрыть битву",
-    youKept: "Вы оставили агента {{side}}",
     keptAgent: "Агент {{side}} · оставлен",
     actionFailed: "Действие битвы не выполнено",
     trunkUnavailable: "Основная ветка недоступна",

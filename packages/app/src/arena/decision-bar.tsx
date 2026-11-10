@@ -2,13 +2,16 @@ import { useTranslation } from "react-i18next";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Text, View, type LayoutChangeEvent } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { StyleSheet } from "react-native-unistyles";
+import { StyleSheet, withUnistyles } from "react-native-unistyles";
+import { Check } from "lucide-react-native";
 import type { ArenaSide, ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
 import { Button } from "@/components/ui/button";
 import { ArenaTransitionStatus } from "./transition-status";
 import { arenaSetupStatus } from "./transition-progress";
 import { inlineUnistylesStyle } from "@/styles/unistyles-inline-style";
 import { tint } from "@/styles/tint";
+import { createControlGeometry } from "@/components/ui/control-geometry";
+import type { Theme } from "@/styles/theme";
 import { ArenaContentColumn } from "./content-column";
 import {
   arenaDecisionPhase,
@@ -78,6 +81,88 @@ export function ArenaSideChoiceButton({
       {label ?? buttonLabel}
     </Button>
   );
+}
+
+const ThemedCheck = withUnistyles(Check);
+const sideAColor = (theme: Theme) =>
+  `color-mix(in srgb, ${theme.colors.statusDotRunning} 55%, ${theme.colors.foreground})`;
+const sideBColor = (theme: Theme) =>
+  `color-mix(in srgb, ${theme.colors.statusDotWarning} 55%, ${theme.colors.foreground})`;
+const checkColorMapping = {
+  a: (theme: Theme) => ({ color: sideAColor(theme) }),
+  b: (theme: Theme) => ({ color: sideBColor(theme) }),
+  middle: (theme: Theme) => ({ color: theme.colors.foreground }),
+};
+
+const SELECTED = { selected: true };
+const UNSELECTED = { selected: false };
+
+/** What a decided battle's row offered, and which of its three it took. */
+export interface ArenaPastChoice {
+  kind: "vote" | "keep";
+  chosen: ArenaSide | "middle";
+}
+
+/**
+ * A decided battle's choice, drawn as the row it was made in: the same three buttons, the one
+ * taken marked and the others quiet. Nothing here acts; Show battle is for looking back.
+ */
+export function ArenaPastDecision({ kind, chosen }: ArenaPastChoice) {
+  const { t } = useTranslation();
+  const labels =
+    kind === "vote"
+      ? {
+          a: t("arena.choose", { side: "A" }),
+          middle: t("arena.tie"),
+          b: t("arena.choose", { side: "B" }),
+        }
+      : {
+          a: t("arena.keepSide", { side: "A" }),
+          middle: t("arena.discard"),
+          b: t("arena.keepSide", { side: "B" }),
+        };
+  return (
+    <View style={styles.pastRow} testID="arena-past-decision">
+      {(["a", "middle", "b"] as const).map((choice) => {
+        const selected = choice === chosen;
+        return (
+          <View
+            key={choice}
+            accessibilityState={selected ? SELECTED : UNSELECTED}
+            style={[
+              styles.past,
+              choice === "middle" ? styles.pastMiddle : styles.pastSide,
+              selected ? pastSelectedStyle(choice) : styles.pastQuiet,
+            ]}
+            testID={`arena-past-decision-${choice}${selected ? "-chosen" : ""}`}
+          >
+            {selected ? <ThemedCheck size={14} uniProps={checkColorMapping[choice]} /> : null}
+            <Text
+              style={[
+                styles.choiceText,
+                styles.pastText,
+                selected ? pastSelectedTextStyle(choice) : styles.pastQuietText,
+              ]}
+            >
+              {labels[choice]}
+            </Text>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
+function pastSelectedStyle(choice: ArenaSide | "middle") {
+  if (choice === "a") return styles.pastChosenA;
+  if (choice === "b") return styles.pastChosenB;
+  return styles.pastChosenMiddle;
+}
+
+function pastSelectedTextStyle(choice: ArenaSide | "middle") {
+  if (choice === "a") return styles.sideAText;
+  if (choice === "b") return styles.sideBText;
+  return null;
 }
 
 function runningHoverStyle(side: ArenaSide | null) {
@@ -381,6 +466,48 @@ export const ArenaDecisionBar = memo(function ArenaDecisionBar({
 const BAR_PADDING = 12;
 
 const styles = StyleSheet.create((theme) => ({
+  pastRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[2],
+  },
+  past: {
+    ...createControlGeometry(theme).buttonMd,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: theme.spacing[2],
+    borderRadius: theme.borderRadius.lg,
+    borderWidth: 2,
+    borderColor: "transparent",
+  },
+  pastSide: {
+    minWidth: 112,
+  },
+  pastMiddle: {
+    minWidth: 72,
+  },
+  pastQuiet: {
+    backgroundColor: theme.colors.surface2,
+  },
+  pastChosenA: {
+    backgroundColor: tint(theme.colors.statusDotRunning, 22),
+    borderColor: theme.colors.statusDotRunning,
+  },
+  pastChosenB: {
+    backgroundColor: tint(theme.colors.statusDotWarning, 24),
+    borderColor: theme.colors.statusDotWarning,
+  },
+  pastChosenMiddle: {
+    backgroundColor: theme.colors.surface3,
+    borderColor: theme.colors.foregroundMuted,
+  },
+  pastText: {
+    fontSize: theme.fontSize.base,
+  },
+  pastQuietText: {
+    color: theme.colors.foregroundMuted,
+  },
   bar: {
     width: "100%",
     borderTopWidth: 1,

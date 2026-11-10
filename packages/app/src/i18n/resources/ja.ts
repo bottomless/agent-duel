@@ -109,7 +109,6 @@ export const ja: TranslationResources = {
     openTerminalIn: "エージェント{{side}}のworktreeでターミナルを開く",
     showBattle: "バトルを表示",
     hideBattle: "バトルを隠す",
-    youKept: "エージェント{{side}}を残しました",
     keptAgent: "エージェント{{side}} · 採用",
     actionFailed: "バトル操作に失敗しました",
     trunkUnavailable: "トランクを利用できません",

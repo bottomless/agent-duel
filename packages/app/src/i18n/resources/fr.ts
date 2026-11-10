@@ -114,7 +114,6 @@ export const fr: TranslationResources = {
     openTerminalIn: "Ouvrir un terminal dans le worktree de l’agent {{side}}",
     showBattle: "Afficher la bataille",
     hideBattle: "Masquer la bataille",
-    youKept: "Vous avez gardé l’agent {{side}}",
     keptAgent: "Agent {{side}} · gardé",
     actionFailed: "Échec de l’action de bataille",
     trunkUnavailable: "Tronc indisponible",

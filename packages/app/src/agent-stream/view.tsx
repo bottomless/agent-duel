@@ -281,8 +281,8 @@ export interface AgentStreamViewProps {
   onOpenWorkspaceFile?: (request: WorkspaceFileOpenRequest) => void;
   /** Content inserted immediately after a canonical stream item (for durable in-stream markers). */
   afterItems?: ReadonlyMap<string, ReactNode>;
-  /** User messages set as headings rather than bubbles, such as battles' own prompts. */
-  headlineUserMessageIds?: ReadonlySet<string>;
+  /** Battles' own prompts: in an Agent Duel chat their bubbles end at the battle's right edge. */
+  battlePromptIds?: ReadonlySet<string>;
   /** Rows that start a new turn in an Agent Duel chat, with a rule above them. */
   ruledItemIds?: ReadonlySet<string>;
   /** What ends a turn's footer in an Agent Duel chat, keyed by the row the footer closes. */
@@ -449,7 +449,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       toast,
       onOpenWorkspaceFile,
       afterItems,
-      headlineUserMessageIds,
+      battlePromptIds,
       ruledItemIds,
       turnFooterEnds,
       forkBoundaryAfterItemId,
@@ -823,18 +823,10 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
               item.clientMessageId !== undefined &&
               pendingClientMessageIds.has(item.clientMessageId)
             }
-            variant={headlineUserMessageIds?.has(item.id) ? "headline" : "bubble"}
           />
         );
       },
-      [
-        context.capabilities,
-        agentId,
-        client,
-        headlineUserMessageIds,
-        pendingClientMessageIds,
-        resolvedServerId,
-      ],
+      [context.capabilities, agentId, client, pendingClientMessageIds, resolvedServerId],
     );
 
     const renderAssistantMessageItem = useCallback(
@@ -1411,7 +1403,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
             <MessageOuterSpacingProvider disableOuterSpacing>
               <ArenaRowLayoutProvider
                 enabled={arenaChat === true}
-                fullWidthIds={headlineUserMessageIds}
+                promptIds={battlePromptIds}
                 ruledIds={ruledItemIds}
                 footerEnds={turnFooterEnds}
               >
@@ -1563,8 +1555,8 @@ function collectArenaStreamViewPropDiffs(
 ): string[] {
   const reasons: string[] = [];
   if (left.afterItems !== right.afterItems) reasons.push("afterItems");
-  if (left.headlineUserMessageIds !== right.headlineUserMessageIds) {
-    reasons.push("headlineUserMessageIds");
+  if (left.battlePromptIds !== right.battlePromptIds) {
+    reasons.push("battlePromptIds");
   }
   if (left.ruledItemIds !== right.ruledItemIds) reasons.push("ruledItemIds");
   if (left.turnFooterEnds !== right.turnFooterEnds) reasons.push("turnFooterEnds");
@@ -2185,7 +2177,7 @@ function StreamItemWrapper({ itemId, gapBelow, children }: StreamItemWrapperProp
   if (arenaLayout) {
     return (
       <ArenaRow
-        fullWidth={arenaLayout.fullWidthIds?.has(itemId) === true}
+        prompt={arenaLayout.promptIds?.has(itemId) === true}
         ruled={arenaLayout.ruledIds?.has(itemId) === true}
         style={gapStyle}
       >

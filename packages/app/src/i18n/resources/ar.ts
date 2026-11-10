@@ -106,7 +106,6 @@ export const ar: TranslationResources = {
     openTerminalIn: "افتح طرفية في worktree الخاص بالوكيل {{side}}",
     showBattle: "عرض المعركة",
     hideBattle: "إخفاء المعركة",
-    youKept: "احتفظت بالوكيل {{side}}",
     keptAgent: "الوكيل {{side}} · محتفَظ به",
     actionFailed: "فشل إجراء المعركة",
     trunkUnavailable: "الجذع غير متاح",
