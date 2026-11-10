@@ -1313,7 +1313,10 @@ Keep complete small changes grouped by agent against the base. Do not collapse s
 or add a third A/B view when both base patches fit: extra directions can reverse attribution.
 For large changes, keep base-to-result changes alongside direct A/B differences. The base
 establishes who changed what and exposes shared mistakes; A/B differences keep a small divergence
-visible beside large generated files. Compare complete JSON before budgeting, preserving numeric
+visible beside large generated files. The timelines never establish who changed what: from the
+second turn on, each contestant's history holds the earlier winners' work as its own, so its text
+can recap code it never touched, and a judge that read the recap as an edit credited that side
+with the previous winner's work. Compare complete JSON before budgeting, preserving numeric
 tokens and duplicate keys. Match array records by id only when both arrays have unique scalar
 ids; otherwise retain positions. A missing excerpt is unknown. File equality and equal
 record counts do not prove correctness or preservation against the task. A complete computed

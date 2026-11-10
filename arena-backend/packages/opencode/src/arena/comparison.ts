@@ -8,7 +8,7 @@ import { prepareEvidence, type ComparisonFileFact } from "./comparison-evidence"
 // first choice here and the model that answered in `resolvedModel`.
 export const model = utilityModels[0].id
 export const provider = utilityModels[0].provider
-export const promptVersion = "arena-comparison-v13"
+export const promptVersion = "arena-comparison-v14"
 
 // The caps add up to one budget. Qwen on Cerebras lists a 65,536-token window; it accepted a
 // 51,909-token prompt, and OpenRouter refused one of about 62,000 for its length. Summaries run
@@ -18,6 +18,9 @@ export const promptVersion = "arena-comparison-v13"
 // still overflows is refused and falls back to DeepSeek on Baseten, whose window is 1,048,576
 // tokens.
 const MAX_PROMPT_CHARS = 12_000
+// A prompt over the cap is cut like a timeline: a pasted log or file usually comes first and the
+// ask after it, so a head-only cut sent the summary a paste without its question.
+const PROMPT_HEAD_CHARS = 2_400
 // Timelines carry only visible text and tool calls, but a long or steered run still passes 12,000
 // characters, and its final answer is at the end.
 const MAX_TRANSCRIPT_CHARS = 40_000
@@ -76,23 +79,25 @@ type Input = {
   readonly execute?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>
 }
 
-/** Cuts the middle of a long timeline, never its end: the replies and the final answer are there. */
-function boundedTimeline(value: string) {
-  if (value.length <= MAX_TRANSCRIPT_CHARS) return { value, truncated: false }
-  const tail = MAX_TRANSCRIPT_CHARS - TRANSCRIPT_HEAD_CHARS
-  const omitted = value.length - MAX_TRANSCRIPT_CHARS
+/**
+ * Cuts the middle of a long text, never its end: a timeline's replies and final answer are there,
+ * and so is the ask that follows a long paste in a prompt.
+ */
+function bounded(value: string, limit: number, head: number) {
+  if (value.length <= limit) return { value, truncated: false }
+  const omitted = value.length - limit
   return {
-    value: `${value.slice(0, TRANSCRIPT_HEAD_CHARS)}\n\n[${omitted} characters omitted by Arena utility-input limit]\n\n${value.slice(value.length - tail)}`,
+    value: `${value.slice(0, head)}\n\n[${omitted} characters omitted by Arena utility-input limit]\n\n${value.slice(value.length - (limit - head))}`,
     truncated: true,
   }
 }
 
-function bounded(value: string, limit: number) {
-  if (value.length <= limit) return { value, truncated: false }
-  return {
-    value: `${value.slice(0, limit)}\n\n[truncated by Arena utility-input limit]`,
-    truncated: true,
-  }
+function boundedPrompt(value: string) {
+  return bounded(value, MAX_PROMPT_CHARS, PROMPT_HEAD_CHARS).value
+}
+
+function boundedTimeline(value: string) {
+  return bounded(value, MAX_TRANSCRIPT_CHARS, TRANSCRIPT_HEAD_CHARS)
 }
 
 function number(value: unknown) {
@@ -167,7 +172,7 @@ async function nameChat(input: Pick<Input, "turnID" | "userPrompt" | "userAttach
     "Reply with the name alone.",
     "",
     "## User prompt",
-    bounded(input.userPrompt, MAX_PROMPT_CHARS).value,
+    boundedPrompt(input.userPrompt),
     ...(input.userAttachments ? ["", "## Attached to the user prompt", input.userAttachments] : []),
   ].join("\n")
   const started = Date.now()
@@ -286,8 +291,18 @@ export async function generate(input: Input) {
     "A computed comparison can cover complete contents without showing raw files. You may report preservation only for the specific file and side where the computed facts explicitly verify it. Equal counts or equal A/B results alone do not prove preservation against base. For omitted evidence, describe only shown changes and verified facts; never generalize them to other files.",
     "JSON locations with [id=...] match unique record ids; other array locations are positions. Array reordering does not imply that record payloads changed. Report a known A/B difference even when retained base excerpts look identical.",
     "Only report a concrete difference when the supplied evidence supports it; state uncertainty for unreviewed contents.",
+    // A contestant's text can recap code it never touched: from the second turn on, its history
+    // holds the earlier winners' work as its own. Read as edits, such a recap credited that side
+    // with the previous winner's changes.
+    "Only an agent's own base patch shows what it changed. Unless the evidence says files were omitted, it names every file either agent changed; any other file is unchanged by both.",
+    "A timeline shows what an agent said and which tools it ran, not what it changed: an agent may describe or recap code it never edited, including code already in the base. Never credit an agent with a change its base patch does not show.",
+    ...(input.turnIndex > 0
+      ? [
+          "This is a later turn of one chat. The base already holds the changes accepted in earlier turns, and both agents see that work as their own history, so their text may recap it. Neither agent made those changes in this turn.",
+        ]
+      : []),
     "Report exactly two sections and nothing else.",
-    "First, under the heading 'What each agent did': one or two sentences for Agent A, then one or two for Agent B, on what each changed against the base. Mention any shared implementation mistake supported by the code and the user's request in this section.",
+    "First, under the heading 'What each agent did': one or two sentences for Agent A, then one or two for Agent B, on what each changed against the base, as its base patch shows. Mention any shared implementation mistake supported by the code and the user's request in this section.",
     "Second, under the heading 'Where they differ': a markdown table with the columns Aspect, Agent A, Agent B, one row per difference that changes behavior, coverage, or scope. Leave out work both did identically.",
     "Keep the whole report under 180 words. No preamble, no closing remarks, no other sections.",
     "Do not infer model identity, recommend a winner, score either side, or discuss style unless it changes behavior.",
@@ -299,7 +314,7 @@ export async function generate(input: Input) {
       : []),
     "",
     "## User prompt",
-    bounded(input.userPrompt, MAX_PROMPT_CHARS).value,
+    boundedPrompt(input.userPrompt),
     "",
     ...(input.userAttachments ? ["## Attached to the user prompt", input.userAttachments, ""] : []),
     "## File evidence",
