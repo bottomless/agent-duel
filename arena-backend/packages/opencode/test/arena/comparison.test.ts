@@ -791,10 +791,93 @@ test("complete computed JSON evidence makes one call without a missing-evidence 
     },
   })
   expect(calls).toBe(1)
-  expect(result.promptVersion).toBe("arena-comparison-v12")
+  expect(result.promptVersion).toBe("arena-comparison-v13")
   expect(result.truncated).toBe(false)
   expect(result.omittedArtifacts).toEqual([])
   expect(result.utilityInputManifest.every((item) => !item.truncated)).toBe(true)
   expect(prompt).toContain("Base/A: record membership and values preserved; only order differs.")
   expect(prompt).not.toContain("Never claim all records")
+})
+
+async function summarize(input: {
+  userPrompt: string
+  baseToA: string
+  baseToB?: string
+  transcriptA: string
+  transcriptB: string
+}) {
+  setArenaCredentials({
+    mode: "hosted",
+    researchPartition: "test-research-partition",
+    researchAccountID: "test-account",
+    token: "test-key",
+    controlPlaneUrl: "https://control.test",
+    controlTokenHash: "0".repeat(64),
+  })
+  let comparison: ComparisonDocument | undefined
+  let prompt = ""
+  const result = await generate({
+    store: store({
+      saveComparison: async (value: ComparisonDocument) => (comparison = value),
+      updateComparison: async (_id: string, patch: Partial<ComparisonDocument>) =>
+        (comparison = { ...comparison!, ...patch }),
+      storeArtifact: async (value: { _id: string }) => value,
+    }),
+    turnID: "budget",
+    turnIndex: 1,
+    baseCommit: "base",
+    aCommit: "a",
+    bCommit: "b",
+    baseTree: "base-tree",
+    aTree: "a-tree",
+    bTree: "b-tree",
+    aToB: "",
+    aToBTruncated: false,
+    baseToB: gitPatch("after-b"),
+    baseToATruncated: false,
+    baseToBTruncated: false,
+    files: [],
+    artifactIDs: [],
+    ...input,
+    execute: async (_url, init) => {
+      prompt = JSON.parse(String(init?.body)).messages[0].content
+      return Response.json({ choices: [{ message: { content: "Compared" } }] })
+    },
+  })
+  return { result, prompt }
+}
+
+test("sends a long timeline whole and cuts a runaway one in the middle, keeping its final answer", async () => {
+  const long = `A-START${"a".repeat(25_000)}A-FINAL-ANSWER`
+  const runaway = `B-START${"b".repeat(100_000)}B-FINAL-ANSWER`
+  const { result, prompt } = await summarize({
+    userPrompt: "Fix the bug",
+    baseToA: gitPatch("after-a"),
+    transcriptA: long,
+    transcriptB: runaway,
+  })
+  expect(prompt).toContain(long)
+  expect(prompt).toContain("B-START")
+  expect(prompt).toContain("B-FINAL-ANSWER")
+  expect(prompt).toContain(`[${runaway.length - 40_000} characters omitted by Arena utility-input limit]`)
+  expect(result.omittedArtifacts).toEqual(["transcript_b_tail"])
+  expect(result.utilityInputManifest).toContainEqual(
+    expect.objectContaining({ kind: "transcript", side: "a", truncated: false }),
+  )
+  expect(result.utilityInputManifest).toContainEqual(
+    expect.objectContaining({ kind: "transcript", side: "b", truncated: true }),
+  )
+})
+
+test("keeps the whole input inside one budget when every part is oversized", async () => {
+  const { prompt } = await summarize({
+    userPrompt: `PROMPT-START${"p".repeat(200_000)}`,
+    baseToA: gitPatch("a".repeat(200_000)),
+    baseToB: gitPatch("b".repeat(200_000)),
+    transcriptA: "a".repeat(100_000),
+    transcriptB: "b".repeat(100_000),
+  })
+  expect(prompt).toContain("PROMPT-START")
+  expect(prompt).not.toContain("p".repeat(12_001))
+  expect(prompt.length).toBeLessThan(160_000)
 })

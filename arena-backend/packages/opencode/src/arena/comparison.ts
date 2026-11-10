@@ -8,11 +8,21 @@ import { prepareEvidence, type ComparisonFileFact } from "./comparison-evidence"
 // first choice here and the model that answered in `resolvedModel`.
 export const model = utilityModels[0].id
 export const provider = utilityModels[0].provider
-export const promptVersion = "arena-comparison-v12"
+export const promptVersion = "arena-comparison-v13"
 
-// Timelines carry only visible text and tool calls, so a real one runs a few thousand characters.
-// The cap is a guard against a runaway contestant, not a working budget.
-const MAX_TRANSCRIPT_CHARS = 12_000
+// The caps add up to one budget. Qwen on Cerebras lists a 65,536-token window; it accepted a
+// 51,909-token prompt, and OpenRouter refused one of about 62,000 for its length. Summaries run
+// 3.3 to 3.9 characters a token. The prompt, the file evidence (64,000, `comparison-evidence.ts`),
+// two timelines and the instructions come to about 160,000 characters at most, so at most about
+// 48,000 tokens. The longest report with its reasoning has used under 3,000. A denser input that
+// still overflows is refused and falls back to DeepSeek on Baseten, whose window is 1,048,576
+// tokens.
+const MAX_PROMPT_CHARS = 12_000
+// Timelines carry only visible text and tool calls, but a long or steered run still passes 12,000
+// characters, and its final answer is at the end.
+const MAX_TRANSCRIPT_CHARS = 40_000
+// A timeline over the cap keeps its start, which sets out the work, and gives the rest to its end.
+const TRANSCRIPT_HEAD_CHARS = 8_000
 // Waits between attempts at a transient failure. Each attempt already tries every utility model in
 // turn, but a shared upstream pool can refuse both with 429 for tens of seconds, which three
 // attempts a second or two apart never outlasted. A refused call costs nothing, and the vote never
@@ -64,6 +74,17 @@ type Input = {
   readonly files: readonly ComparisonFileFact[]
   readonly artifactIDs: readonly string[]
   readonly execute?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>
+}
+
+/** Cuts the middle of a long timeline, never its end: the replies and the final answer are there. */
+function boundedTimeline(value: string) {
+  if (value.length <= MAX_TRANSCRIPT_CHARS) return { value, truncated: false }
+  const tail = MAX_TRANSCRIPT_CHARS - TRANSCRIPT_HEAD_CHARS
+  const omitted = value.length - MAX_TRANSCRIPT_CHARS
+  return {
+    value: `${value.slice(0, TRANSCRIPT_HEAD_CHARS)}\n\n[${omitted} characters omitted by Arena utility-input limit]\n\n${value.slice(value.length - tail)}`,
+    truncated: true,
+  }
 }
 
 function bounded(value: string, limit: number) {
@@ -146,7 +167,7 @@ async function nameChat(input: Pick<Input, "turnID" | "userPrompt" | "userAttach
     "Reply with the name alone.",
     "",
     "## User prompt",
-    bounded(input.userPrompt, MAX_TRANSCRIPT_CHARS).value,
+    bounded(input.userPrompt, MAX_PROMPT_CHARS).value,
     ...(input.userAttachments ? ["", "## Attached to the user prompt", input.userAttachments] : []),
   ].join("\n")
   const started = Date.now()
@@ -241,10 +262,11 @@ export async function skip(
 export async function generate(input: Input) {
   const comparisonID = documentID(input.turnID)
   const evidence = prepareEvidence(input)
-  const transcriptA = bounded(input.transcriptA, MAX_TRANSCRIPT_CHARS)
-  const transcriptB = bounded(input.transcriptB, MAX_TRANSCRIPT_CHARS)
+  const transcriptA = boundedTimeline(input.transcriptA)
+  const transcriptB = boundedTimeline(input.transcriptB)
   const omittedArtifacts = [
     ...(evidence.partial ? ["comparison_partial_files"] : []),
+    // A timeline is now cut in the middle, but the app and stored records name the cut by these ids.
     ...(transcriptA.truncated ? ["transcript_a_tail"] : []),
     ...(transcriptB.truncated ? ["transcript_b_tail"] : []),
   ]
@@ -277,7 +299,7 @@ export async function generate(input: Input) {
       : []),
     "",
     "## User prompt",
-    input.userPrompt,
+    bounded(input.userPrompt, MAX_PROMPT_CHARS).value,
     "",
     ...(input.userAttachments ? ["## Attached to the user prompt", input.userAttachments, ""] : []),
     "## File evidence",
