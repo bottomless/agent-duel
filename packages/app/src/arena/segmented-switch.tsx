@@ -11,7 +11,8 @@ export interface ArenaSwitchOption<T extends string> {
 
 /**
  * The review's small segmented switch: a tinted track, the selected segment raised on the
- * surface. The review's Difference summary | Changes and the diff layout's Side by side | One
+ * surface with a faint edge. Medium weight, not semibold, so it reads as a control without
+ * competing with the vote. The review's Difference summary | Changes and the diff layout's Side by side | One
  * column share it, so the two controls in one row read as the same kind of thing.
  */
 export function ArenaSegmentedSwitch<T extends string>({
@@ -113,7 +114,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   selected: {
     backgroundColor: theme.colors.surface0,
-    borderColor: theme.colors.border,
+    borderColor: theme.colors.borderAccent,
   },
   hovered: {
     opacity: 0.8,
@@ -127,6 +128,6 @@ const styles = StyleSheet.create((theme) => ({
   },
   textSelected: {
     color: theme.colors.foreground,
-    fontWeight: theme.fontWeight.semibold,
+    fontWeight: theme.fontWeight.medium,
   },
 }));
