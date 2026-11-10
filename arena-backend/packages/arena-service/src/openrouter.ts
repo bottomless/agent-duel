@@ -1,6 +1,6 @@
 import { createHash, createHmac, randomUUID } from "crypto"
 import { recordAssignmentGenerationMetrics, reserveRoutingAssignment, type SingleAgentModelSize } from "./assignments"
-import { authorize, type ArenaContext, type Fetch } from "./context"
+import { authorize, type ArenaContext, type Fetch, type OpenRouterAttribution } from "./context"
 import { KEEP_ALIVE_HEADER, keepAliveAnswer, keepsCacheWarm } from "./keep-alive"
 import type { StoredGenerationMetrics, UsageTotals } from "./metrics"
 import {
@@ -391,6 +391,19 @@ function assignedRouting(model: ModelProfile, modelSize: SingleAgentModelSize | 
   }
 }
 
+// Battle calls only. A single-agent chat is not a battle, and keep-alive pings send `headers` as they are.
+function attributed(
+  headers: Headers,
+  attribution: OpenRouterAttribution | undefined,
+  assignment: { readonly modelSize?: SingleAgentModelSize },
+) {
+  if (!attribution || assignment.modelSize !== undefined) return headers
+  const credited = new Headers(headers)
+  credited.set("HTTP-Referer", attribution.url)
+  credited.set("X-OpenRouter-Title", attribution.title)
+  return credited
+}
+
 function assignmentHeaders(request: Request) {
   const assignmentHeader = request.headers.get("x-arena-assignment-id")
   const scopeHeader = request.headers.get("x-arena-scope-id")
@@ -666,7 +679,7 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
     body = new TextEncoder().encode(budget.body).buffer
     const sending = context.fetch(upstream, {
       method: request.method,
-      headers,
+      headers: attributed(headers, context.openRouterAttribution, routeAssignment),
       body,
       signal: request.signal,
     })

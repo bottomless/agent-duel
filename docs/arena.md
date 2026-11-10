@@ -89,6 +89,12 @@ whole history. Single-agent chats, keep-alive pings and the service's own compar
 calls are not kept. BYOK leaves capture off: its store is on the voter's machine, and those fields
 name the model.
 
+The production control plane credits battle calls to the Agent Duel app on OpenRouter with
+`HTTP-Referer` and `X-OpenRouter-Title` (`openRouterAttribution`), which is the usage OpenRouter's
+rankings and app directory read. Leave it unset everywhere else: development, preview and BYOK calls
+would count as the app's usage, and single-agent chats, keep-alive pings and the service's own
+summary, metadata and web search calls are not battle usage.
+
 The control plane also adds the endpoint's quantization to each stored request row, from a catalog of
 OpenRouter's endpoint lists that it saves itself (`arena-service/src/endpoint-label.ts`, `recordEndpointLabels`).
 OpenRouter never reports quantization for a call, so the label is what the catalog listed for that

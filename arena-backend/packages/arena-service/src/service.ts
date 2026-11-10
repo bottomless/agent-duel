@@ -1,5 +1,5 @@
 import type { ArenaDb } from "./collection"
-import type { ArenaContext, Caller, Fetch } from "./context"
+import type { ArenaContext, Caller, Fetch, OpenRouterAttribution } from "./context"
 import { validateOpenRouter, type ModelPool } from "./pool"
 import { handleAssignmentsRequest } from "./assignments"
 import { handleComparisonRequest } from "./comparison"
@@ -57,6 +57,13 @@ export type ArenaServiceOptions = {
    * (`endpoint-label.ts`). Off by default: only the control plane saves a catalog.
    */
   readonly recordEndpointLabels?: boolean
+  /**
+   * Credits battle calls to this OpenRouter app. Off by default: only the production deployment
+   * sets it, so development, preview and BYOK traffic never counts as the app's usage. Single-agent
+   * chats, keep-alive pings and the service's own comparison, metadata and web search calls are
+   * never attributed.
+   */
+  readonly openRouterAttribution?: OpenRouterAttribution
 }
 
 export type ArenaService = {
@@ -97,6 +104,7 @@ export function createArenaService(options: ArenaServiceOptions): ArenaService {
     streamRecovery: options.streamRecovery ?? true,
     captureGenerations: options.captureGenerations ?? false,
     readEndpointLabel: options.recordEndpointLabels ? endpointLabelReader(now) : undefined,
+    openRouterAttribution: options.openRouterAttribution,
   }
   const assignments = (request: Request) => handleAssignmentsRequest(request, context)
   const openrouter = (request: Request) => handleOpenRouterRequest(request, context)

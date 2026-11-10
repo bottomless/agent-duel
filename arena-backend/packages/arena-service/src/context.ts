@@ -32,6 +32,14 @@ export type ArenaContext = {
   readonly captureGenerations: boolean
   /** Adds the endpoint catalog's label to each call's stored metrics (`endpoint-label.ts`). */
   readonly readEndpointLabel?: EndpointLabelReader
+  /** Credits battle calls to an OpenRouter app (`OpenRouterAttribution`). */
+  readonly openRouterAttribution?: OpenRouterAttribution
+}
+
+/** The app OpenRouter credits a call to: `HTTP-Referer` identifies it, `X-OpenRouter-Title` names it. */
+export type OpenRouterAttribution = {
+  readonly url: string
+  readonly title: string
 }
 
 type Failure = (message: string, status: number) => Response

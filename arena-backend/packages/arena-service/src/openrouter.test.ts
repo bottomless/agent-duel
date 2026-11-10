@@ -1155,6 +1155,73 @@ describe("OpenRouter proxy", () => {
     }
   })
 
+  test("credits only battle calls to the OpenRouter app, and only when the deployment names one", async () => {
+    const claude = {
+      displayName: "Hidden Model",
+      slug: "anthropic/hidden-model",
+      canonicalSlug: "anthropic/hidden-model",
+      contextWindow: 200_000,
+      routing: { sort: "throughput" },
+    }
+    const singleScope = "single-agent|8:ses_chat|5:msg_1"
+    const db = fakeDb({
+      assignmentSets: (filter) =>
+        filter.scopeID === singleScope
+          ? [
+              {
+                userId: "user-1",
+                scopeID: singleScope,
+                assignments: [{ assignmentID: "chat-id", modelSize: "medium", model: pool[1] }],
+              },
+            ]
+          : [{ userId: "user-1", scopeID: "turn-1", assignments: [{ assignmentID: "battle-id", model: claude }] }],
+    })
+    spyOn(console, "info").mockImplementation(() => {})
+    const attribution = { url: "https://example.test", title: "Example App" }
+    const call = async (
+      options: Partial<ArenaServiceOptions>,
+      input: { assignmentID: string; scopeID: string; model: string; keepAlive?: boolean },
+    ) => {
+      let sent: Headers | undefined
+      const response = await openrouter({
+        db: async () => db,
+        fetch: async (_input, init) => {
+          sent = new Headers(init?.headers)
+          return Response.json({ choices: [] })
+        },
+        ...options,
+      })(
+        new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Arena-Assignment-ID": input.assignmentID,
+            "X-Arena-Scope-ID": input.scopeID,
+            // A caller cannot claim the app's credit for itself.
+            "HTTP-Referer": "https://caller.test",
+            "X-OpenRouter-Title": "Caller",
+            ...(input.keepAlive ? { "X-Arena-Keep-Alive": "1" } : {}),
+          },
+          body: JSON.stringify({ model: input.model, messages: [{ role: "user", content: "hi" }] }),
+        }),
+      )
+      await response.arrayBuffer()
+      expect(sent).toBeDefined()
+      return [sent?.get("http-referer") ?? null, sent?.get("x-openrouter-title") ?? null]
+    }
+    const battle = { assignmentID: "battle-id", scopeID: "turn-1", model: "contestant" }
+
+    expect(await call({ openRouterAttribution: attribution }, battle)).toEqual(["https://example.test", "Example App"])
+    expect(await call({}, battle)).toEqual([null, null])
+    expect(await call({ openRouterAttribution: attribution }, { ...battle, keepAlive: true })).toEqual([null, null])
+    expect(
+      await call(
+        { openRouterAttribution: attribution },
+        { assignmentID: "chat-id", scopeID: singleScope, model: "medium" },
+      ),
+    ).toEqual([null, null])
+  })
+
   test("keeps a single-agent chat on one opaque key across its messages", async () => {
     const sessionID = "ses_private-session"
     const scope = (session: string, message: string) =>

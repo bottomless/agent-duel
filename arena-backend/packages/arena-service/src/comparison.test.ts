@@ -47,6 +47,21 @@ describe("Arena comparison control plane", () => {
     })
   })
 
+  test("never credits the summary call to the OpenRouter app", async () => {
+    let sent: Headers | undefined
+    const response = await service({
+      openRouterAttribution: { url: "https://example.test", title: "Example App" },
+      fetch: async (_url, init) => {
+        sent = new Headers(init?.headers)
+        return Response.json({ choices: [{ message: { content: "A" } }] })
+      },
+    }).comparison(request({ scopeID: "turn-1", messages: [{ role: "user", content: "compare" }], temperature: 0 }))
+
+    expect(response.status).toBe(200)
+    expect(sent?.get("http-referer")).toBeNull()
+    expect(sent?.get("x-openrouter-title")).toBeNull()
+  })
+
   test("falls back to DeepSeek on Baseten with reasoning off when Qwen on Cerebras fails", async () => {
     const upstream: Record<string, unknown>[] = []
     const response = await service({
