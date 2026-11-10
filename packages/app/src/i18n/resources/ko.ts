@@ -111,7 +111,6 @@ export const ko: TranslationResources = {
     openTerminalIn: "에이전트 {{side}}의 worktree에서 터미널 열기",
     showBattle: "배틀 보기",
     hideBattle: "배틀 숨기기",
-    youKept: "에이전트 {{side}}을(를) 유지했습니다",
     keptAgent: "에이전트 {{side}} · 유지",
     actionFailed: "배틀 작업 실패",
     trunkUnavailable: "트렁크 사용 불가",

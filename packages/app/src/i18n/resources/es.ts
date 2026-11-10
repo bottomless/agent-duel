@@ -115,7 +115,6 @@ export const es: TranslationResources = {
     openTerminalIn: "Abrir una terminal en el worktree del agente {{side}}",
     showBattle: "Mostrar batalla",
     hideBattle: "Ocultar batalla",
-    youKept: "Te quedaste con el agente {{side}}",
     keptAgent: "Agente {{side}} · elegido",
     actionFailed: "Falló la acción de batalla",
     trunkUnavailable: "Trunk no disponible",

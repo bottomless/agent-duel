@@ -51,7 +51,6 @@ import {
   useComposerFullscreen,
   type ComposerEditingSession,
 } from "@/composer/editing-session";
-import { useWorkspaceHasDiffStat } from "@/composer/workspace-diff-stat";
 import {
   resolveComposerTrackControlClearance,
   resolveComposerTrackTailClearance,
@@ -1651,9 +1650,7 @@ const AgentStreamSection = memo(function AgentStreamSection({
   onOpenWorkspaceFile?: (request: WorkspaceFileOpenRequest) => void;
 }) {
   const isCompactFormFactor = useIsCompactFormFactor();
-  const hasWorkspaceDiffStat = useWorkspaceHasDiffStat(serverId, workspaceId);
-  const hasVisibleComposerTracks =
-    hasActiveComposer && (hasVisibleAgentTracks || hasWorkspaceDiffStat);
+  const hasVisibleComposerTracks = hasActiveComposer && hasVisibleAgentTracks;
   const bottomOverlayTailClearance = hasVisibleComposerTracks
     ? resolveComposerTrackTailClearance(isCompactFormFactor)
     : 0;
@@ -2003,7 +2000,7 @@ const AgentStreamSection = memo(function AgentStreamSection({
         turnPresentation={turnPresentation}
         onOpenWorkspaceFile={onOpenWorkspaceFile}
         afterItems={arenaAfterItems}
-        headlineUserMessageIds={battlePromptRowIds}
+        battlePromptIds={battlePromptRowIds}
         ruledItemIds={ruledRowIds}
         turnFooterEnds={keptFooterEnds}
         forkBoundaryAfterItemId={forkBoundaryAfterItemId}
