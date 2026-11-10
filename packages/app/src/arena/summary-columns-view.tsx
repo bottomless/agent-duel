@@ -99,9 +99,13 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: "column",
     rowGap: theme.spacing[6],
   },
+  // Each column opens with a hairline, a quiet echo of the answer's colour rule above it.
   column: {
     flex: 1,
     minWidth: 0,
+    paddingTop: theme.spacing[3],
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.border,
   },
   sentence: {
     color: theme.colors.foreground,

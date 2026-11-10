@@ -10,8 +10,10 @@ const BAR_HEIGHT = { touch: TOUCH_TARGET, pointer: 36 };
 
 // Shared header inner height from `md` up (excluding safe area insets and border).
 // Used by both agent header (ScreenHeader) and explorer sidebar header
-// This ensures both headers have the same visual height
-export const HEADER_INNER_HEIGHT = bySizing(BAR_HEIGHT).md;
+// This ensures both headers have the same visual height. Agent Duel's is 8px taller than Paseo's
+// 36 so the window's title row has room above and below; the macOS traffic lights move with it
+// (`DESKTOP_TRAFFIC_LIGHT_OFFSET_Y`).
+export const HEADER_INNER_HEIGHT = 44;
 export const HEADER_INNER_HEIGHT_MOBILE = 56;
 /** The tab rail and pane toolbars under the header. A breakpoint value for stylesheets. */
 export const WORKSPACE_SECONDARY_HEADER_HEIGHT = bySizing(BAR_HEIGHT);
@@ -77,6 +79,10 @@ export const DESKTOP_TRAFFIC_LIGHT_HEIGHT = 45;
 
 // Custom desktop window controls (minimize/maximize/close) — top-right
 export const DESKTOP_WINDOW_CONTROLS_HEIGHT = HEADER_INNER_HEIGHT;
+
+// The traffic lights' offset from Electron's 14px default, keeping them on the header's middle:
+// Paseo's -4 at a 36px header, plus half of the 8px Agent Duel adds.
+export const DESKTOP_TRAFFIC_LIGHT_OFFSET_Y = (HEADER_INNER_HEIGHT - 36) / 2 - 4;
 
 export {
   getIsElectron as getIsElectronRuntime,

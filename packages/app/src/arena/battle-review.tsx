@@ -2,7 +2,6 @@ import { i18n } from "@/i18n/i18next";
 import { useTranslation } from "react-i18next";
 import { useCallback, useEffect, useMemo, type ReactNode } from "react";
 import { Text, View, type LayoutChangeEvent } from "react-native";
-import { PressHighlight } from "@/components/ui/press-highlight";
 import { useContainerWidth } from "@/hooks/use-container-width";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import type {
@@ -15,7 +14,7 @@ import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import type { Theme } from "@/styles/theme";
 import { toErrorMessage } from "@/utils/error-messages";
 import { IdenticalBattleResult, SummaryOmissionNotice } from "./battle-summary";
-import { ArenaChangesList } from "./changes-list";
+import { ArenaChangesList, ArenaNoChangesColumns } from "./changes-list";
 import type { ArenaChangesRow } from "./changes-rows";
 import { useArenaDiffLayout, type ArenaDiffLayout } from "./diff-layout";
 import { DiffLayoutControl } from "./diff-layout-control";
@@ -24,6 +23,7 @@ import { useArenaFileDiff } from "./file-diff-query";
 import { InlineFileDiff, openChangesFiles, toggleChangesFile } from "./inline-file-diff";
 import { useArenaReviewState, useArenaReviewStore, type ArenaReviewTab } from "./review-state";
 import { VerdictBody } from "./verdict-body";
+import { ArenaSegmentedSwitch } from "./segmented-switch";
 import { parseSummaryColumns } from "./summary-columns";
 import { SummaryColumnsView } from "./summary-columns-view";
 
@@ -126,7 +126,7 @@ function ChangesTab({
   const { t } = useTranslation();
   const revision = diff ? comparisonRevision(diff) : undefined;
   const renderDiff = useCallback(
-    (file: string) => (
+    (file: string, onColumns: boolean) => (
       <InlineFileDiff
         serverId={serverId}
         agentId={agentId}
@@ -136,6 +136,7 @@ function ChangesTab({
         waitingFor={waitingFor ?? undefined}
         revision={revision}
         embedded
+        onColumns={onColumns}
       />
     ),
     [agentId, layout, revision, serverId, turnId, waitingFor],
@@ -165,7 +166,7 @@ function ChangesTab({
       </Text>
     );
   }
-  if (diff?.treesEqual && rows.length === 0) return <IdenticalBattleResult />;
+  if (diff?.treesEqual && rows.length === 0) return <ArenaNoChangesColumns />;
   if (rows.length === 0 || !diff) {
     return <Text style={styles.status}>{t("arena.baseUnavailable")}</Text>;
   }
@@ -184,48 +185,9 @@ function ChangesTab({
 }
 
 /**
- * One tab: its label, and under the selected one a 2px rule the width of the label, sitting on
- * the bottom of the tab row. Exported so the folded review can draw the same tabs in the decision
- * row; there nothing is selected, since nothing is showing.
- */
-function ReviewTab({
-  value,
-  label,
-  selected,
-  onSelect,
-  testID,
-}: {
-  value: ArenaReviewTab;
-  label: string;
-  selected: boolean;
-  onSelect: (tab: ArenaReviewTab) => void;
-  testID: string;
-}) {
-  const handlePress = useCallback(() => onSelect(value), [onSelect, value]);
-  const accessibilityState = useMemo(() => ({ selected }), [selected]);
-  return (
-    <PressHighlight
-      accessibilityRole="tab"
-      accessibilityState={accessibilityState}
-      aria-selected={selected}
-      onPress={handlePress}
-      style={reviewTabStyle}
-      testID={testID}
-    >
-      <Text style={[styles.tabText, selected && styles.tabTextSelected]}>{label}</Text>
-      {selected ? <View style={styles.tabIndicator} pointerEvents="none" /> : null}
-    </PressHighlight>
-  );
-}
-
-function reviewTabStyle({ hovered, pressed }: { hovered?: boolean; pressed: boolean }) {
-  return [styles.tab, (hovered || pressed) && styles.tabHovered];
-}
-
-/**
- * Two text tabs: the selected one in foreground at medium weight, the other muted, the same
- * reading as a selected sidebar item. A filled segmented control here outweighed the agent
- * headings above it, and the review is the complement, not the headline.
+ * A small segmented switch on the left rail, one rank below the agents' headings: a pair of
+ * underlined tabs over a rule across both answers read as a third heading at the agents' level.
+ * Without a summary the switch holds Changes alone, so the review keeps the same head.
  */
 function ReviewTabs({
   tabs,
@@ -240,32 +202,28 @@ function ReviewTabs({
   onChange: (tab: ArenaReviewTab) => void;
 }) {
   const { t } = useTranslation();
+  const summaryOption = {
+    value: "verdict" as const,
+    label: t("arena.summary"),
+    testID: "arena-review-tab-verdict",
+  };
+  const changesOption = {
+    value: "changes" as const,
+    label: changesLabel,
+    testID: "arena-review-tab-changes",
+  };
   return (
-    <View style={styles.tabs} accessibilityRole="tablist" testID="arena-review-tabs">
-      {tabs ? (
-        <ReviewTab
-          value="verdict"
-          label={t("arena.summary")}
-          selected={tab === "verdict"}
-          onSelect={onChange}
-          testID="arena-review-tab-verdict"
-        />
-      ) : null}
-      <ReviewTab
-        value="changes"
-        label={changesLabel}
-        selected={!tabs || tab === "changes"}
-        onSelect={onChange}
-        testID="arena-review-tab-changes"
-      />
-    </View>
+    <ArenaSegmentedSwitch
+      options={tabs ? [summaryOption, changesOption] : [changesOption]}
+      value={tabs ? tab : "changes"}
+      onChange={onChange}
+      role="tablist"
+      testID="arena-review-tabs"
+    />
   );
 }
 
-/**
- * The section's heading row: its tabs, the diff layout control, and the fold. Folding hands the
- * screen back to both agents' messages without losing the tab.
- */
+/** The section's heading row: its switch (or label), then the diff layout control. */
 function ReviewHeader({
   tabs,
   tab,
@@ -460,7 +418,7 @@ export function BattleReview({
   );
 }
 
-/** The review in the chat under the answers, on their text edge, set off by a hairline. */
+/** The review in the chat under the answers, on their text edge. */
 function ReviewFrame({
   onLayout,
   turnId,
@@ -486,55 +444,26 @@ function ReviewFrame({
 }
 
 const styles = StyleSheet.create((theme) => ({
+  // In the chat under the answers, on their text edge, with no rule across both of them.
   review: {
+    paddingTop: theme.spacing[4] + theme.spacing[1],
     paddingBottom: theme.spacing[3],
-    borderTopWidth: 1,
-    borderTopColor: theme.colors.border,
   },
   block: {
     gap: theme.spacing[2],
   },
-  // The tab row heads the section: its tabs, the diff layout control, and the fold.
+  // The switch, then the diff layout control at the end of the row.
   header: {
     flexDirection: "row",
     alignItems: "center",
     // The layout control drops to a second line when the battle narrows, rather than clipping.
     flexWrap: "wrap",
     columnGap: theme.spacing[6],
-    minHeight: 52,
+    rowGap: theme.spacing[2],
+    minHeight: 32,
   },
   content: {
-    paddingTop: theme.spacing[2] + theme.spacing[0.5],
-  },
-  tabs: {
-    flexDirection: "row",
-    alignItems: "stretch",
-    columnGap: theme.spacing[6],
-    alignSelf: "stretch",
-  },
-  tab: {
-    justifyContent: "center",
-    minHeight: 44,
-    borderRadius: theme.borderRadius.base,
-  },
-  tabHovered: {
-    opacity: 0.8,
-  },
-  tabText: {
-    color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.content,
-  },
-  tabTextSelected: {
-    color: theme.colors.foreground,
-    fontWeight: theme.fontWeight.semibold,
-  },
-  tabIndicator: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    bottom: 0,
-    height: 2,
-    backgroundColor: theme.colors.foreground,
+    paddingTop: theme.spacing[4],
   },
   spacer: {
     flex: 1,

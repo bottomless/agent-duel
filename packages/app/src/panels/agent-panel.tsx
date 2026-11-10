@@ -2178,7 +2178,7 @@ function ArenaAgentStream({
         turnPresentation={turnPresentation}
         onOpenWorkspaceFile={onOpenWorkspaceFile}
         afterItems={arenaAfterItems}
-        headlineUserMessageIds={battlePromptRowIds}
+        battlePromptIds={battlePromptRowIds}
         ruledItemIds={ruledRowIds}
         turnFooterEnds={keptFooterEnds}
         forkBoundaryAfterItemId={forkBoundaryAfterItemId}
