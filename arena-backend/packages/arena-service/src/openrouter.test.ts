@@ -118,6 +118,7 @@ describe("OpenRouter proxy", () => {
       limits: { context: 4_000, output: 500 },
     }
     let contacted = 0
+    let upstreamHeaders = new Headers()
     const db = fakeDb({
       assignmentSets: () => [
         { userId: "user-1", scopeID: "budget", assignments: [{ assignmentID: "opaque-id", model }] },
@@ -125,8 +126,9 @@ describe("OpenRouter proxy", () => {
     })
     const proxy = openrouter({
       db: async () => db,
-      fetch: async () => {
+      fetch: async (_url, init) => {
         contacted++
+        upstreamHeaders = new Headers(init?.headers)
         return Response.json({ choices: [] })
       },
     })
@@ -138,6 +140,8 @@ describe("OpenRouter proxy", () => {
             "Content-Type": "application/json",
             "X-Arena-Assignment-ID": "opaque-id",
             "X-Arena-Scope-ID": "budget",
+            "HTTP-Referer": "https://caller.example",
+            "X-OpenRouter-Title": "Caller title",
           },
           body: JSON.stringify({ model: "contestant", ...input }),
         }),
@@ -154,6 +158,9 @@ describe("OpenRouter proxy", () => {
     const large = await invoke()
     expect(large.status).toBe(200)
     expect(contacted).toBe(1)
+    expect(upstreamHeaders.get("HTTP-Referer")).toBe("https://agentduel.com")
+    expect(upstreamHeaders.get("X-OpenRouter-Title")).toBe("Agent Duel")
+    expect(upstreamHeaders.get("Authorization")).toBe("Bearer server-secret")
   })
 
   test("counts instructions, tools, response format and media allowance before contacting the provider", async () => {

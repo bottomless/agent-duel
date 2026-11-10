@@ -80,10 +80,12 @@ describe("Arena metadata route", () => {
 
   test("falls back to the second utility model when the first fails", async () => {
     const upstream: Record<string, unknown>[] = []
+    const upstreamHeaders: Record<string, string>[] = []
     const response = await service({
       fetch: async (_url, init) => {
         const body = JSON.parse(String(init?.body)) as Record<string, unknown>
         upstream.push(body)
+        upstreamHeaders.push(Object.fromEntries(new Headers(init?.headers)))
         if (body.model === utilityModels[0].id) return Response.json({ error: "unavailable" }, { status: 502 })
         return reply("Fix the login redirect")
       },
@@ -94,6 +96,14 @@ describe("Arena metadata route", () => {
     expect(upstream[1]?.reasoning).toEqual(utilityModels[1].reasoning)
     expect(upstream[1]?.provider).toEqual(utilityModels[1].routing)
     expect(upstream[1]?.max_tokens).toBe(1_024)
+    const attributedHeaders = {
+      accept: "application/json",
+      authorization: "Bearer server-secret",
+      "content-type": "application/json",
+      "http-referer": "https://agentduel.com",
+      "x-openrouter-title": "Agent Duel",
+    }
+    expect(upstreamHeaders).toEqual([attributedHeaders, attributedHeaders])
   })
 
   test("answers a pull request as a title and a body", async () => {

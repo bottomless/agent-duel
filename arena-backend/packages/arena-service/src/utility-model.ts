@@ -1,4 +1,5 @@
 import type { ArenaContext } from "./context"
+import { appAttributionHeaders } from "./app-attribution"
 
 // The comparison and the metadata text run on a cheap, fast model, tried in this order. Each entry
 // pins one provider, because the reasoning setting is tuned per provider: Baseten ignores
@@ -36,7 +37,7 @@ export async function requestUtilityModel(
     try {
       const response = await context.fetch("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST",
-        headers: input.headers,
+        headers: { ...input.headers, ...appAttributionHeaders },
         body: JSON.stringify({
           model: model.id,
           ...input.body,

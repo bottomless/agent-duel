@@ -1,4 +1,5 @@
 import { createHash, createHmac, randomUUID } from "crypto"
+import { appAttributionHeaders } from "./app-attribution"
 import { recordAssignmentGenerationMetrics, reserveRoutingAssignment, type SingleAgentModelSize } from "./assignments"
 import { authorize, type ArenaContext, type Fetch } from "./context"
 import { KEEP_ALIVE_HEADER, keepAliveAnswer, keepsCacheWarm } from "./keep-alive"
@@ -554,7 +555,7 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
   const suffix = url.pathname.replace(/^\/api\/openrouter/, "")
   if (!suffix.startsWith("/api/v1/")) return Response.json({ error: { message: "Not found" } }, { status: 404 })
   const upstream = new URL(`https://openrouter.ai${suffix}`)
-  const headers = new Headers()
+  const headers = new Headers(appAttributionHeaders)
   headers.set("Authorization", `Bearer ${apiKey}`)
   headers.set("Accept", request.headers.get("accept") || "application/json")
   const contentType = request.headers.get("content-type")
