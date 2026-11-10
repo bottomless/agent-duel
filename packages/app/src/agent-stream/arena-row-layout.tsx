@@ -7,10 +7,10 @@ import { BATTLE_RAIL } from "@/arena/battle-layout";
 /**
  * An Agent Duel chat lays its rows on the battle's rails, so the conversation after a battle starts
  * where the battle's answers did. Rows keep the chat's reading width from that left edge; a battle's
- * prompt, set as a heading, takes the battle's whole width.
+ * prompt is the chat's bubble at the battle's right edge, where the live battle shows it.
  */
 interface ArenaRowLayout {
-  fullWidthIds: ReadonlySet<string> | undefined;
+  promptIds: ReadonlySet<string> | undefined;
   /** Rows that start a new turn: a rule above them closes the turn before. */
   ruledIds: ReadonlySet<string> | undefined;
   /** What ends a turn's footer, at the battle's right edge, keyed by the footer's host row. */
@@ -21,14 +21,14 @@ const ArenaRowLayoutContext = createContext<ArenaRowLayout | null>(null);
 
 export function ArenaRowLayoutProvider({
   enabled,
-  fullWidthIds,
+  promptIds,
   ruledIds,
   footerEnds,
   children,
 }: ArenaRowLayout & { enabled: boolean; children: ReactNode }) {
   const value = useMemo(
-    () => (enabled ? { fullWidthIds, ruledIds, footerEnds } : null),
-    [enabled, footerEnds, fullWidthIds, ruledIds],
+    () => (enabled ? { promptIds, ruledIds, footerEnds } : null),
+    [enabled, footerEnds, promptIds, ruledIds],
   );
   return <ArenaRowLayoutContext.Provider value={value}>{children}</ArenaRowLayoutContext.Provider>;
 }
@@ -43,17 +43,22 @@ export function useArenaRowLayout(): ArenaRowLayout | null {
  * window width. A ruled row draws its rule between the rails.
  */
 export function ArenaRow({
-  fullWidth,
+  fullWidth = false,
+  prompt = false,
   ruled = false,
   style,
   children,
 }: {
-  fullWidth: boolean;
+  fullWidth?: boolean;
+  /** A battle's prompt: its bubble, at the reading width, ends at the battle's right edge. */
+  prompt?: boolean;
   ruled?: boolean;
   style?: object;
   children: ReactNode;
 }) {
-  const content = fullWidth ? children : <View style={styles.reading}>{children}</View>;
+  let content = children;
+  if (prompt) content = <View style={styles.prompt}>{children}</View>;
+  else if (!fullWidth) content = <View style={styles.reading}>{children}</View>;
   return (
     <View style={[styles.row, style]}>
       {ruled ? <View style={styles.rule}>{content}</View> : content}
@@ -74,6 +79,11 @@ const styles = StyleSheet.create((theme) => ({
   reading: {
     width: "100%",
     maxWidth: theme.contentMaxWidth,
+  },
+  prompt: {
+    width: "100%",
+    maxWidth: theme.contentMaxWidth,
+    alignSelf: "flex-end",
   },
   // The turn before ends with its footer's own space below; the rule adds a little more.
   rule: {

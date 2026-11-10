@@ -197,16 +197,23 @@ battle in the transcript is for reading. The contestant responses and their inli
 share one surface, without another Responses/Review switch. The battle uses no side panel tab:
 it has the chat's width, and a panel beside it would narrow it to show the same thing.
 
-The battle has no frame. Its prompt is its headline (`UserMessage` `variant="headline"`), and the
-prompt, both answers, the review's columns and the decision row share two rails (`battle-layout.ts`).
+The battle has no frame. Its prompt is the chat's own grey bubble, at the reading width and right-
+aligned to the battle's right edge, where it stays once the battle is history. The owner turned down
+the prompt as a bold heading: across the battle's width it read as a document's section title, not
+as something you said. The prompt, both answers, the review's columns and the decision row share
+two rails (`battle-layout.ts`).
 Each answer is headed by a rule in its side's colour, the colour of its Choose button, then the
 agent's name with its state and time. The size of each change is read in the Changes tab, beside the
 other side's. The heading ends with the agent's tools (`pane-actions.tsx`): Preview when it runs an
 app, a terminal in its worktree, and a menu with the worktree path, Copy path, Expand, and its
-services.
+services. Side by side, both headings are one row that sticks to the top of the chat for the whole
+battle (`BattlePaneHeader` in `battle-view.tsx`), so the names stay in view over the answers' ends and
+the review on their columns. The row is a child of the battle, not of the panes: a pane is only as
+tall as its thread, so a heading inside it scrolled away before the review. Stacked panes keep their
+own headings.
 
-Review has two tabs: **Difference summary**, the generated comparison, and **Changes**, the file
-rows with Git's status for each pair. It appears when the first side has a result
+Review has two tabs: **Difference summary**, the generated comparison, and **Changes**, each
+changed file with what A and B did to it. It appears when the first side has a result
 (`battleReviewPhase` in `comparison-visibility.ts`), before an early choice. The summary tab says
 the other side is working; Changes shows the finished side against a hatched placeholder sized to
 its diff, with no pair verdict yet. Only the finished side expands. The unfinished side stands in
@@ -240,13 +247,26 @@ resolution, and a decided turn's failed summary shows neither the error nor Retr
 already on its way when the vote lands still shows.
 
 Keep agent responses above review in the visual hierarchy. The review sits in the chat under the
-answers, on their text edge behind a plain hairline, the same for a live battle (`ArenaLiveReview`
-in `battle-judging.tsx`) as under Show battle. Do not pin it under the chat: a pinned review stayed
-in view over turns it did not belong to, and the owner did not want it fixed while voting either.
-Only the decision row is pinned. Its tabs head it with no strip of their own; the selected one is semibold with a 2px
-underline the width of its label. The summary sits on the answers' columns: each side's sentences
-and its value in each row of the differences table under that side's answer
-(`summary-columns.ts`). The judge is asked for that shape, but nothing enforces it, so a report that
+answers, on their text edge, the same for a live battle (`ArenaLiveReview` in `battle-judging.tsx`)
+as under Show battle. Do not pin it under the chat: a pinned review stayed in view over turns it did
+not belong to, and the owner did not want it fixed while voting either. Only the decision row is
+pinned, at the bottom of the window. A small segmented switch on the left rail heads the review,
+with no rule across both answers: underlined tabs over a full-width hairline read as a third
+heading at the agents' rank. With no summary the switch holds Changes alone, so every review has
+the same head. Do not mark the columns with A and B letters; the owner turned them down, and the
+columns sit under their answers.
+
+Everything about one side sits under that side, and only what is about both spans the columns. Each
+column opens with a hairline. The summary puts each side's sentences and its value in each row of
+the differences table under that side's answer (`summary-columns.ts`). Changes heads each column
+with that side's file count and total, then gives each file one row: what A did under A, what B did
+under B, "unchanged" on the side that left it alone (`SplitChangesRow` in `changes-list.tsx`).
+An opened file puts A's code in a box under A and B's in a box under B, across the same gutter, with
+only each side's expand above it (`onColumns` in `base-relative-view.tsx`). The review's switch and
+the diff layout toggle are the same control (`segmented-switch.tsx`).
+Below the width at which the answers stack, a row keeps both counts on one line. When neither side
+changed a file, each column says so under its own answer; one sentence starting under A read as
+A's. The judge is asked for that shape, but nothing enforces it, so a report that
 does not split cleanly shows whole, as compact Markdown with flat headings and paragraphs capped at
 `proseMeasure`. The diff layout toggle uses the `xs` tier. [Design](design.md) owns the tokens and
 control conventions.
@@ -1409,13 +1429,14 @@ it, its time, and Show battle end that answer's footer at the battle's right edg
 (`ArenaKeptByline`, keyed by `arenaKeptAnswerFooterRowId`), in place of the footer's own duration.
 They are small on purpose: in a long chat a large name above each answer drew the eye from the
 answers. The chat after a battle sits on the battle's rails (`agent-stream/arena-row-layout.tsx`):
-a battle's prompt takes the battle's width as a heading, and the rest keeps the reading width from
-the same left edge, so nothing moves sideways when a battle closes. A rule goes above each turn's
+a battle's prompt keeps its bubble at the battle's right edge (`ArenaRow` `prompt`), and the rest
+keeps the reading width from the same left edge, so nothing moves sideways when a battle closes. A rule goes above each turn's
 prompt after the chat's first row, live battles' included, never between a prompt and its answer:
 under the prompt it read as the previous answer belonging to the next prompt. Show battle opens the
 battle in place of its kept answer (`shown-battle.ts`, `arenaKeptAnswerRowIds`), with the vote's
-names in place of Agent A and B, its review under them, and what was kept with Hide battle at its
-end. It also retains the transition report.
+names in place of Agent A and B and its review under them. It ends with the decision row as it was
+left (`ArenaPastDecision` in `decision-bar.tsx`): the same three buttons, the one taken marked and
+the others quiet, with Hide battle where Ask a follow-up was. It also retains the transition report.
 
 A battle chat's header names the project only, with no rule under it: the battle's prompt heads the
 page. Commit shows once a battle is decided, and the editor, environment, scripts and changes sit in
