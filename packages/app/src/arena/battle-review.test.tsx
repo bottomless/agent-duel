@@ -104,6 +104,7 @@ function render(input: {
   waitingFor?: "a" | "b";
   onOpenInPanel?: (file: string | null) => void;
   diff?: ReturnType<typeof shortConflict>;
+  comparison?: typeof COMPARISON;
 }) {
   const diff = input.diff ?? shortConflict();
   act(() => {
@@ -116,7 +117,7 @@ function render(input: {
         summaryPending={false}
         summaryFailed={false}
         waitingFor={input.waitingFor ?? null}
-        comparison={COMPARISON}
+        comparison={input.comparison ?? COMPARISON}
         retrying={false}
         onRetry={NOOP}
         onRetryDiff={NOOP}
@@ -238,6 +239,30 @@ describe("BattleReview", () => {
     });
     expect(byTestId("arena-verdict-more")).toBeNull();
     expect(container.textContent).toContain("The judge's report");
+  });
+
+  it("folds a long report laid out on the answers' columns the same way", () => {
+    const columnsReport = [
+      "What each agent did",
+      "Agent A created the draft and started the server. Agent B created the same draft.",
+      "",
+      "Where they differ",
+      "| Aspect | Agent A | Agent B |",
+      "| --- | --- | --- |",
+      "| Frontmatter timestamp | 10:30:46 | 10:30:55 |",
+    ].join("\n");
+    render({
+      summaryAvailable: true,
+      comparison: { state: "completed", output: columnsReport } as never,
+    });
+    expect(byTestId("arena-summary-columns")).not.toBeNull();
+    layoutProse(900);
+    expect(byTestId("arena-verdict-more")).not.toBeNull();
+    act(() => {
+      fireEvent.click(byTestId("arena-verdict-more") as HTMLElement);
+    });
+    expect(byTestId("arena-verdict-more")).toBeNull();
+    expect(byTestId("arena-summary-columns")).not.toBeNull();
   });
 
   it("folds only above the height a short report stays under", () => {

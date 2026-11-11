@@ -22,7 +22,7 @@ import { comparisonRevision } from "./comparison-visibility";
 import { useArenaFileDiff } from "./file-diff-query";
 import { InlineFileDiff, openChangesFiles, toggleChangesFile } from "./inline-file-diff";
 import { useArenaReviewState, useArenaReviewStore, type ArenaReviewTab } from "./review-state";
-import { VerdictBody } from "./verdict-body";
+import { VerdictBody, VerdictFold } from "./verdict-body";
 import { ArenaSegmentedSwitch } from "./segmented-switch";
 import { parseSummaryColumns } from "./summary-columns";
 import { SummaryColumnsView } from "./summary-columns-view";
@@ -61,7 +61,9 @@ function Verdict({
         <>
           <SummaryOmissionNotice comparison={comparison} />
           {columns ? (
-            <SummaryColumnsView columns={columns} />
+            <VerdictFold turnId={turnId}>
+              <SummaryColumnsView columns={columns} />
+            </VerdictFold>
           ) : (
             <VerdictBody turnId={turnId} output={output} />
           )}
