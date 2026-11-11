@@ -147,7 +147,7 @@ import {
 } from "@/arena/composer-state";
 import { ArenaDecisionBar } from "@/arena/decision-bar";
 import { arenaSetupStatus } from "@/arena/transition-progress";
-import { ArenaDecisionPill } from "@/arena/decision-pill";
+import { ArenaDecisionPill, arenaDecisionRowVisible } from "@/arena/decision-pill";
 import { arenaDecisionPhase } from "@/arena/decision-state";
 import { useArenaBattleActions } from "@/arena/use-battle-actions";
 import { showsArenaDecisionBar } from "@/arena/decision-state";
@@ -2123,8 +2123,9 @@ const AgentComposerSection = memo(function AgentComposerSection({
       </View>
     );
   }
+  const band = arenaSession.data ? arenaDecisionRowVisible(arenaSession.data) : false;
   return (
-    <View style={styles.composerSlot}>
+    <View style={[styles.composerSlot, band && styles.composerBand]}>
       {arenaSession.data ? (
         <ArenaDecisionPill
           serverId={serverId}
@@ -2900,6 +2901,10 @@ const styles = StyleSheet.create((theme) => ({
     position: "relative",
     zIndex: 1,
   },
+  // While a battle's decision row is up, the composer's area continues the review's band.
+  composerBand: {
+    backgroundColor: theme.colors.surface1,
+  },
   contentContainer: {
     flex: 1,
     overflow: "hidden",
@@ -2996,9 +3001,10 @@ const styles = StyleSheet.create((theme) => ({
     fontSize: theme.fontSize.base,
     color: theme.colors.foregroundMuted,
   },
-  // Scroll the last review lines above the floating vote, including its stopped-battle hint.
+  // The decision row's own height is already kept clear below the chat (`bottomOverlayHeight`), so
+  // this is only a breath after the review's last line.
   activeBattleContent: {
-    paddingBottom: theme.spacing[20],
+    paddingBottom: theme.spacing[2],
   },
   arenaReadyContent: {
     gap: theme.spacing[3],

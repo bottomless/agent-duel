@@ -378,7 +378,7 @@ const styles = StyleSheet.create((theme) => ({
     bottom: "100%",
     left: 0,
     right: 0,
-    backgroundColor: theme.colors.surface0,
+    backgroundColor: theme.colors.surface1,
     alignItems: "center",
     paddingTop: theme.spacing[3],
     paddingBottom: theme.spacing[3],
@@ -387,7 +387,7 @@ const styles = StyleSheet.create((theme) => ({
   // In the composer's place while the composer is put away.
   dock: {
     width: "100%",
-    backgroundColor: theme.colors.surface0,
+    backgroundColor: theme.colors.surface1,
     alignItems: "center",
     paddingTop: theme.spacing[4],
     paddingBottom: theme.spacing[4] + theme.spacing[1],

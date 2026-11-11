@@ -959,7 +959,7 @@ export function ArenaBattleView({
               <ArenaTransitionRow transition={turn.transition} />
             </View>
           ) : null}
-          <View style={styles.reviewSection}>
+          <View style={[styles.reviewSection, styles.reviewBand]}>
             <ArenaLiveReview
               serverId={serverId}
               agentId={agentId}
@@ -1053,6 +1053,21 @@ const styles = StyleSheet.create((theme) => ({
   // The review draws its own edge, on the answers' text edge.
   reviewSection: {
     paddingHorizontal: BATTLE_RAIL,
+  },
+  // The review and the decision row share one faint surface, edge to edge, so judging reads as
+  // its own zone under the answers without a separating line.
+  reviewBand: {
+    backgroundColor: theme.colors.surface1,
+    marginTop: theme.spacing[6],
+    // Carries the colour past the reading column to the pane's edges, clipped to the band's height.
+    ...(isWeb
+      ? ({
+          boxShadow: `0 0 0 100vmax ${theme.colors.surface1}`,
+          // Open at the bottom too, so the band runs on under the empty end of the chat into the
+          // decision row's band without a white gap.
+          clipPath: "inset(0 -100vmax -100vmax)",
+        } as unknown as Record<never, never>)
+      : {}),
   },
   battleReadingColumn: {
     width: "100%",

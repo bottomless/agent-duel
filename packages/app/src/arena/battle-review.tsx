@@ -23,7 +23,7 @@ import { useArenaFileDiff } from "./file-diff-query";
 import { InlineFileDiff, openChangesFiles, toggleChangesFile } from "./inline-file-diff";
 import { useArenaReviewState, useArenaReviewStore, type ArenaReviewTab } from "./review-state";
 import { VerdictBody, VerdictFold } from "./verdict-body";
-import { ArenaSegmentedSwitch } from "./segmented-switch";
+import { SegmentedControl } from "@/components/ui/segmented-control";
 import { parseSummaryColumns } from "./summary-columns";
 import { SummaryColumnsView } from "./summary-columns-view";
 
@@ -206,11 +206,11 @@ function ReviewTabs({
     testID: "arena-review-tab-changes",
   };
   return (
-    <ArenaSegmentedSwitch
+    <SegmentedControl
       options={tabs ? [summaryOption, changesOption] : [changesOption]}
       value={tabs ? tab : "changes"}
-      onChange={onChange}
-      role="tablist"
+      onValueChange={onChange}
+      size="md"
       testID="arena-review-tabs"
     />
   );
@@ -482,8 +482,10 @@ const styles = StyleSheet.create((theme) => ({
     rowGap: theme.spacing[2],
     minHeight: 32,
   },
+  // A clear step between the switch and what it shows, so the pills read as the review's head
+  // rather than the first line of its content.
   content: {
-    paddingTop: theme.spacing[4],
+    paddingTop: theme.spacing[8],
   },
   spacer: {
     flex: 1,
