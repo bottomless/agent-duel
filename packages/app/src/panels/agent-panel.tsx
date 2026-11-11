@@ -1830,12 +1830,21 @@ const AgentStreamSection = memo(function AgentStreamSection({
     );
   }, [agent.id, serverId, summaryAnchorKey, summaryPlacement.inline, workspaceId]);
 
+  // While the composer is out, the decision row floats over the end of the chat and reserves no
+  // space of its own (`bottomOverlayHeight` only places the scroll button), so the battle keeps the
+  // row's measured height clear below its last line. Docked in the composer's place, the row is in
+  // the layout and reports 0, leaving only the breath.
+  const bottomClearance = useMemo(
+    () => ({ paddingBottom: bottomOverlayHeight + ACTIVE_BATTLE_BREATH }),
+    [bottomOverlayHeight],
+  );
+
   // The active battle owns setup progress and the contestant panes in the stream.
   const activeBattle = useMemo(() => {
     const snapshot = arenaSession.data;
     if (!snapshot || !arenaBattleOnScreen) return null;
     return (
-      <View style={styles.activeBattleContent}>
+      <View style={bottomClearance}>
         <ArenaBattleView
           serverId={serverId}
           workspaceId={workspaceId}
@@ -1850,6 +1859,7 @@ const AgentStreamSection = memo(function AgentStreamSection({
     agent.id,
     arenaBattleOnScreen,
     arenaSession.data,
+    bottomClearance,
     chatHasRows,
     serverId,
     startingBattle,
@@ -2888,6 +2898,9 @@ const animatedStaticStyles = RNStyleSheet.create({
   },
 });
 
+// Space after the battle's last line, above the decision row.
+const ACTIVE_BATTLE_BREATH = 12;
+
 const styles = StyleSheet.create((theme) => ({
   root: {
     flex: 1,
@@ -3000,11 +3013,6 @@ const styles = StyleSheet.create((theme) => ({
     textAlign: "center",
     fontSize: theme.fontSize.base,
     color: theme.colors.foregroundMuted,
-  },
-  // The decision row's own height is already kept clear below the chat (`bottomOverlayHeight`), so
-  // this is only a breath after the review's last line.
-  activeBattleContent: {
-    paddingBottom: theme.spacing[2],
   },
   arenaReadyContent: {
     gap: theme.spacing[3],
