@@ -291,8 +291,10 @@ workspace; a removed side cannot read its old worktree. Images larger than 25 Mi
 unavailable so a reply cannot pull an unbounded file into the window. The battle is one card
 (`packages/app/src/arena/battle-view.tsx`). The chat's reading-width preference controls collapsed
 summaries. An expanded battle keeps its own width limit, twice the default reading column, and runs
-edge to edge below that limit. On wider panels it is a bordered, rounded card centered at that
-width. Everything in the battle shares the card's width — the two threads and the Changes
+edge to edge below that limit. On a panel wide enough for the chat outline, which floats over the
+panel's left edge, the edge-to-edge card insets its content so text starts clear of the outline. Past
+that limit it is a bordered, rounded card centered at that width. Everything in the battle
+shares the card's width — the two threads and the Changes
 review — so the page has two widths: the chat's reading column for the prompt and the
 composer, and the card for the battle. Inside the card, sections separate with
 one top border each, the way rows in a settings card do, and text starts on one rail. A and B each

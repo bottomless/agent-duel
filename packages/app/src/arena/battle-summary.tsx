@@ -66,7 +66,7 @@ import { ArenaRunThread } from "./run-thread";
 import { arenaSessionQueryKey, useArenaStartMutation } from "./use-arena-session";
 import { ArenaTransitionRow } from "./transition-row";
 import { PressHighlight } from "@/components/ui/press-highlight";
-import { useArenaCardBleed } from "./content-column";
+import { useArenaCardBesideOutline, useArenaCardBleed } from "./content-column";
 
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
 const ThemedChevronDown = withUnistyles(ChevronDown);
@@ -796,7 +796,9 @@ function DecidedBattleSummary({
   const [expanded, setExpanded] = useState(false);
   const contentMaxWidth = resolveContentMaxWidth(useAppSettings().settings);
   const cardMaxWidth = useSharedValue(contentMaxWidth);
-  const bleed = useArenaCardBleed(expanded ? ARENA_MAX_CONTENT_WIDTH : contentMaxWidth);
+  const cardWidth = expanded ? ARENA_MAX_CONTENT_WIDTH : contentMaxWidth;
+  const bleed = useArenaCardBleed(cardWidth);
+  const besideOutline = useArenaCardBesideOutline(cardWidth);
   const handleToggle = useCallback(() => {
     setExpanded((value) => {
       const next = !value;
@@ -811,7 +813,12 @@ function DecidedBattleSummary({
 
   return (
     <Animated.View
-      style={[styles.card, bleed && styles.cardBleed, cardAnimatedStyle]}
+      style={[
+        styles.card,
+        bleed && styles.cardBleed,
+        besideOutline && styles.cardBesideOutline,
+        cardAnimatedStyle,
+      ]}
       testID={`arena-summary-${item.id}`}
     >
       <BattleSummaryHeader expanded={expanded} item={item} onToggle={handleToggle} />
@@ -845,6 +852,10 @@ const styles = StyleSheet.create((theme) => ({
     borderLeftWidth: 0,
     borderRightWidth: 0,
     borderRadius: 0,
+  },
+  // With the rows' own spacing[3], text starts 44px in, where the chat outline's strip ends.
+  cardBesideOutline: {
+    paddingHorizontal: theme.spacing[8],
   },
   failedStart: {
     flexDirection: "row",

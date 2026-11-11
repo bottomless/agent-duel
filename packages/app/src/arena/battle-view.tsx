@@ -61,7 +61,7 @@ import { ArenaTransitionRow, arenaTransitionRowVisible } from "./transition-row"
 import { ArenaTransitionTimeline } from "./transition-timeline";
 import { arenaResolutionStatus, arenaSetupStatus } from "./transition-progress";
 import { ArenaWorktreeMenuButton } from "./worktree-menu";
-import { useArenaCardBleed } from "./content-column";
+import { useArenaCardBesideOutline, useArenaCardBleed } from "./content-column";
 import { PaneIconAction } from "./pane-icon-action";
 import { isArenaBattleOnScreen } from "./summary-anchor";
 import { arenaPromptAttachmentPills } from "./prompt-attachment-pills";
@@ -104,8 +104,12 @@ function useArenaPaneMaxHeight(): number {
 /** The card's frame. Edge to edge it keeps only its top and bottom edges; see `useArenaCardBleed`. */
 function BattleCard({ children, testID }: { children: ReactNode; testID: string }) {
   const bleed = useArenaCardBleed();
+  const besideOutline = useArenaCardBesideOutline();
   return (
-    <View style={[styles.root, bleed && styles.rootBleed]} testID={testID}>
+    <View
+      style={[styles.root, bleed && styles.rootBleed, besideOutline && styles.rootBesideOutline]}
+      testID={testID}
+    >
       {children}
     </View>
   );
@@ -955,6 +959,10 @@ const styles = StyleSheet.create((theme) => ({
     borderLeftWidth: 0,
     borderRightWidth: 0,
     borderRadius: 0,
+  },
+  // With the sections' own spacing[3], text starts 44px in, where the chat outline's strip ends.
+  rootBesideOutline: {
+    paddingHorizontal: theme.spacing[8],
   },
   panesNarrow: { flexDirection: "column" },
   panes: {

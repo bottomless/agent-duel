@@ -7,6 +7,10 @@ import { ARENA_MAX_CONTENT_WIDTH } from "@/constants/layout";
 // gutter, so the gutter is part of the width the card would take.
 const STREAM_GUTTER = 16;
 
+// The chat outline (`agent-stream/chat-outline/rail.web.tsx`) floats over the panel's left 44px
+// once the panel is at least this wide.
+const OUTLINE_MIN_PANEL_WIDTH = 918;
+
 const ArenaBleedContext = createContext<number | null>(null);
 
 /**
@@ -17,6 +21,15 @@ const ArenaBleedContext = createContext<number | null>(null);
 export function useArenaCardBleed(maxWidth = ARENA_MAX_CONTENT_WIDTH): boolean {
   const hostWidth = useContext(ArenaBleedContext);
   return hostWidth !== null && hostWidth <= maxWidth;
+}
+
+/**
+ * Whether an edge-to-edge card shares its panel with the chat outline, which floats over the
+ * panel's left edge. The card then insets its content so its text starts clear of the outline.
+ */
+export function useArenaCardBesideOutline(maxWidth = ARENA_MAX_CONTENT_WIDTH): boolean {
+  const hostWidth = useContext(ArenaBleedContext);
+  return hostWidth !== null && hostWidth <= maxWidth && hostWidth >= OUTLINE_MIN_PANEL_WIDTH;
 }
 
 /**
