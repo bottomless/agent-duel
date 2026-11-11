@@ -271,7 +271,8 @@ control conventions.
 
 The judge writes a short report (`arena/comparison.ts`): what each agent did, including shared task
 violations, then a table of differences. Show it whole unless it exceeds a screen of the card, when
-`Show full summary` folds it (`verdict-body.tsx`). Do not trim the requested report to make it fit:
+`Show full summary` folds it (`VerdictFold` in `verdict-body.tsx`), in the column layout as in the
+Markdown one; the columns once skipped the fold and a long report pushed the vote out of view. Do not trim the requested report to make it fit:
 that spends latency on prose the voter must then unfold. Identical file results do not prove that
 the text answers agree, though equal trees skip the report. A failed side also skips it and leaves
 only Changes.
