@@ -246,6 +246,25 @@ function ReviewHeader({
 }
 
 /**
+ * Whether the review has nothing to show, so it stays out of the chat. While one side still works
+ * and the other changed nothing, there is no summary yet and no file to open, so both tabs would only
+ * say "nothing yet"; the decision row already says who is still working. Once both are in with no
+ * file changed by either, the engine writes no summary (identical results), so a Changes tab over
+ * "No changes" under each answer would be all there is. A failed read still shows, with its retry.
+ */
+function reviewHasNothingToShow(input: {
+  waitingFor: ArenaSide | null;
+  summaryAvailable: boolean;
+  treesEqual: boolean;
+  rowCount: number;
+  failed: boolean;
+}): boolean {
+  if (input.failed || input.rowCount > 0) return false;
+  if (input.waitingFor !== null) return true;
+  return !input.summaryAvailable && input.treesEqual;
+}
+
+/**
  * The review region of the card once a result is in. Two tabs share it,
  * as they did in PR #46: the judge's verdict, and the changed files, each
  * opening its diff right under its row. While one side still works, its
@@ -344,13 +363,16 @@ export function BattleReview({
   const shownTab: ArenaReviewTab = tab === "verdict" && tabs ? "verdict" : "changes";
   const showChanges = shownTab === "changes";
   const showLayoutControl = showChanges;
-  // While one side still works and the other changed nothing, there is no summary yet and no file
-  // to open, so both tabs would only say "nothing yet". The review waits for something to show;
-  // the decision row already says who is still working.
-  const nothingYet = waitingFor !== null && rows.length === 0 && !diffError;
+  const hidden = reviewHasNothingToShow({
+    waitingFor,
+    summaryAvailable,
+    treesEqual: diff?.treesEqual === true,
+    rowCount: rows.length,
+    failed: Boolean(diffError),
+  });
   useEffect(() => {
-    if (!nothingYet) setShownTab(turnId, shownTab);
-  }, [nothingYet, setShownTab, shownTab, turnId]);
+    if (!hidden) setShownTab(turnId, shownTab);
+  }, [hidden, setShownTab, shownTab, turnId]);
   // The default diff counts as read the first time Changes shows it. Files the reader opens
   // afterwards are recorded by the toggle above.
   const arrivalFile = chosen.shownFile === undefined ? openFiles[openFiles.length - 1] : undefined;
@@ -399,7 +421,7 @@ export function BattleReview({
     );
   }
 
-  if (nothingYet) return null;
+  if (hidden) return null;
   return (
     <ReviewFrame onLayout={onLayout} turnId={turnId}>
       <ReviewHeader

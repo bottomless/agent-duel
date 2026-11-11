@@ -267,8 +267,11 @@ An opened file puts A's code in a box under A and B's in a box under B, across t
 only each side's expand above it (`onColumns` in `base-relative-view.tsx`). The review's switch and
 the diff layout toggle are the same control (`segmented-switch.tsx`).
 Below the width at which the answers stack, a row keeps both counts on one line. When neither side
-changed a file, each column says so under its own answer; one sentence starting under A read as
-A's. The judge is asked for that shape, but nothing enforces it, so a report that
+changed a file, the engine writes no summary (identical results skip it, `comparison.ts`), so the
+review would be a lone Changes pill over "No changes" twice: it shows nothing at all
+(`reviewHasNothingToShow` in `battle-review.tsx`). It waits the same way while one side works and the
+other changed nothing. A summary that does exist beside no changes still shows, with each column's
+"No changes" under its own answer; one sentence starting under A read as A's. The judge is asked for that shape, but nothing enforces it, so a report that
 does not split cleanly shows whole, as compact Markdown with flat headings and paragraphs capped at
 `proseMeasure`. The diff layout toggle uses the `xs` tier. [Design](design.md) owns the tokens and
 control conventions.

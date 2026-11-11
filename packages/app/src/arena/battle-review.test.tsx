@@ -216,6 +216,17 @@ describe("BattleReview", () => {
     expect(byTestId("arena-review-tabs")).not.toBeNull();
   });
 
+  it("shows nothing once both are in when neither changed a file and there is no summary", () => {
+    render({
+      summaryAvailable: false,
+      diff: comparisonDiff({ treesEqual: true, files: [], divergence: [] }),
+    });
+    // Identical results get no summary, and every column would say "No changes".
+    expect(byTestId("arena-review-tabs")).toBeNull();
+    expect(container.textContent).toBe("");
+    expect(useArenaReviewStore.getState().byTurn["turn-1"]?.shownTab).toBeUndefined();
+  });
+
   it("shows a short verdict whole, with nothing to unfold", () => {
     render({ summaryAvailable: true });
     expect(byTestId("arena-verdict-body")).not.toBeNull();
