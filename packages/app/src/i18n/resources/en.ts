@@ -1939,7 +1939,6 @@ export const en = {
     },
   },
   newWorkspace: {
-    create: "Create",
     isolation: {
       local: "Local",
       worktree: "New worktree",

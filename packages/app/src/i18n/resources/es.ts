@@ -1981,7 +1981,6 @@ export const es: TranslationResources = {
     },
   },
   newWorkspace: {
-    create: "Crear",
     isolation: {
       local: "Local",
       worktree: "Nuevo worktree",

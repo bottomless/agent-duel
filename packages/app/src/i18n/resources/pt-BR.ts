@@ -1970,7 +1970,6 @@ export const ptBR: TranslationResources = {
     },
   },
   newWorkspace: {
-    create: "Criar",
     isolation: {
       local: "Local",
       worktree: "Novo worktree",

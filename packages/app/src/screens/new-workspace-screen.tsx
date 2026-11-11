@@ -1655,8 +1655,7 @@ export function NewWorkspaceScreen({
           serverId={selectedServerId}
           isPaneFocused={true}
           onSubmitMessage={handleSubmitNewWorkspace}
-          allowEmptySubmit={true}
-          submitButtonAccessibilityLabel={t("newWorkspace.create")}
+          keepSubmitWhenEmpty
           submitButtonTestID="workspace-create-submit"
           submitIcon="return"
           isSubmitLoading={isPending}

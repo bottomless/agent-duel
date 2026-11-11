@@ -8,7 +8,7 @@ import { connectDaemonClient } from "../support/helpers/daemon-client-loader";
 import { gotoWorkspace } from "../support/helpers/launcher";
 import {
   openGlobalNewWorkspaceComposer,
-  submitNewWorkspaceEmpty,
+  submitNewWorkspaceDraft,
   submitNewWorkspacePrompt,
 } from "../support/helpers/new-workspace";
 import { seedWorkspace } from "../support/helpers/seed-client";
@@ -94,7 +94,7 @@ for (const hostStatus of ["ready", "unavailable"] as const) {
           await expectRememberedModel(page, LABEL);
         });
       }
-      await submitNewWorkspaceEmpty(page);
+      await submitNewWorkspaceDraft(page);
       await expect(page).toHaveURL(/\/workspace\//);
       await openGlobalNewWorkspaceComposer(page);
       await expectSavedSelection(page, PROVIDER, MODEL);

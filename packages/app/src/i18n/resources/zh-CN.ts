@@ -1892,7 +1892,6 @@ export const zhCN: TranslationResources = {
     },
   },
   newWorkspace: {
-    create: "创建",
     isolation: {
       local: "本地",
       worktree: "新建 worktree",
