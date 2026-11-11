@@ -149,7 +149,10 @@ The daemon password and account session are separate credentials; a remote clien
   explains it. The report waits for the next launch, where the app asks whether to send it and
   takes the user's account of what happened as the feedback message
   (`packages/app/src/feedback/crash-report-review.tsx`). The control plane must store that
-  message before a release sends it; an older one drops it without an error.
+  message before a release sends it; an older one drops it without an error. Electron's `killed`
+  reason also covers a process the app ends itself, so a caller that does must say so: the macOS
+  compositor watchdog announces its GPU restart before it kills (`noteGpuRestart`), and that end
+  is not reported.
 - A daemon killed after it began a requested shutdown is a normal exit. Quitting the desktop app
   kills a daemon that is still stopping after 5 seconds, so the worker marks its running marker
   as stopping (`recordMarkerStopping`) before anything that can hang. A Windows shut down, restart

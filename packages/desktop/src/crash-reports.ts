@@ -9,6 +9,7 @@ import {
   releaseRunningMarker,
   resolvePaseoHome,
 } from "@getpaseo/server";
+import { isExpectedGpuRestart } from "./window/compositor-watchdog/gpu-restart.js";
 
 type CrashInput = Parameters<typeof recordCrashReport>[0]["crash"];
 
@@ -83,6 +84,9 @@ export function startCrashReporting(): void {
   });
   app.on("child-process-gone", (_event, details) => {
     if (details.reason === "clean-exit" || quitting) return;
+    // The macOS compositor watchdog SIGKILLs the GPU process to unfreeze a window. That is the
+    // app's own recovery, not something outside it ending a process.
+    if (isExpectedGpuRestart(details.type)) return;
     record({
       process: "app",
       kind: "exit",

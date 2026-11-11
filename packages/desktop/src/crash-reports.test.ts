@@ -21,6 +21,7 @@ vi.mock("@getpaseo/server", () => ({
 }));
 
 import { startCrashReporting } from "./crash-reports.js";
+import { noteGpuRestart } from "./window/compositor-watchdog/gpu-restart.js";
 
 beforeEach(() => {
   mocks.app.on.mockClear();
@@ -84,6 +85,34 @@ test("the end of the Windows session marks every run as stopping and reports not
       { type: "Utility", reason: "killed", exitCode: 1073807364, name: "Audio Service" },
     );
     expect(mocks.record).not.toHaveBeenCalled();
+  } finally {
+    on.mockRestore();
+  }
+});
+
+test("the compositor watchdog's own GPU restart is not reported as a crash", () => {
+  const on = vi.spyOn(process, "on").mockReturnValue(process);
+  try {
+    startCrashReporting();
+    const childGone = appListener("child-process-gone");
+    // What production reported: macOS, exit code 9, `killed`.
+    const gpuKilled = { type: "GPU", reason: "killed", exitCode: 9 };
+
+    // A GPU process something else ended is still a crash.
+    childGone({}, gpuKilled);
+    expect(mocks.record).toHaveBeenCalledTimes(1);
+    mocks.record.mockClear();
+
+    noteGpuRestart();
+    childGone({}, gpuKilled);
+    expect(mocks.record).not.toHaveBeenCalled();
+
+    // The announcement covers the GPU process alone.
+    childGone(
+      {},
+      { type: "Utility", reason: "killed", exitCode: 1073807364, name: "Audio Service" },
+    );
+    expect(mocks.record).toHaveBeenCalledTimes(1);
   } finally {
     on.mockRestore();
   }
