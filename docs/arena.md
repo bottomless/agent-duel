@@ -248,7 +248,9 @@ Keep agent responses above review in the visual hierarchy. The review sits in th
 answers, on their text edge, the same for a live battle (`ArenaLiveReview` in `battle-judging.tsx`)
 as under Show battle. Do not pin it under the chat: a pinned review stayed in view over turns it did
 not belong to, and the owner did not want it fixed while voting either. Only the decision row is
-pinned, at the bottom of the window. A small segmented switch on the left rail heads the review,
+pinned, at the bottom of the window. A small segmented switch heads the review on the battle's
+centre line, as Stop does, since it is about both answers (it falls back to the left rail when the
+row cannot hold the diff layout toggle's width on both sides),
 with no rule across both answers: underlined tabs over a full-width hairline read as a third
 heading at the agents' rank. With no summary the switch holds Changes alone, so every review has
 the same head. Do not mark the columns with A and B letters; the owner turned them down, and the
