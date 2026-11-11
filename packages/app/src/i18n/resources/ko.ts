@@ -109,6 +109,7 @@ export const ko: TranslationResources = {
     askFollowUp: "후속 질문하기",
     openTerminalIn: "에이전트 {{side}}의 worktree에서 터미널 열기",
     keptOver: "({{model}} 대신)",
+    keptTied: "({{model}}와 무승부)",
     showBattle: "배틀 보기",
     hideBattle: "배틀 숨기기",
     keptAgent: "에이전트 {{side}} · 유지",

@@ -14,6 +14,7 @@ import type {
 import {
   battleChoiceLabel,
   battleFailedToStart,
+  battleKeptSide,
   battleWinnerSide,
   divergenceFilesLabel,
   gitApplicationNotice,
@@ -835,6 +836,18 @@ describe("battleWinnerSide", () => {
 
   it("does not mark the applied tie side as a winner", () => {
     expect(battleWinnerSide({ ...historyItem, vote: "tie", appliedSide: "a" })).toBeUndefined();
+  });
+});
+
+describe("battleKeptSide", () => {
+  it("keeps the winner, and the side a tie applied", () => {
+    expect(battleKeptSide({ ...historyItem, vote: "b", appliedSide: "b" })).toBe("b");
+    expect(battleKeptSide({ ...historyItem, vote: "tie", appliedSide: "a" })).toBe("a");
+  });
+
+  it("keeps the side Stop then Keep applied, and nothing when nothing was applied", () => {
+    expect(battleKeptSide({ ...historyItem, appliedSide: "b" })).toBe("b");
+    expect(battleKeptSide(historyItem)).toBeUndefined();
   });
 });
 

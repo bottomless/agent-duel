@@ -1427,10 +1427,13 @@ in one compare-and-set. Acknowledge votes, kept sides, and review answers after 
 including `application_failed` and `canonicalization_failed`.
 
 Keep the battle open during application, then collapse it to the kept answer. The model that wrote
-it, the model it was chosen over (`over Qwen 3.8 Max`, muted), its time, and Show battle end that
+it, the model it was chosen over (`over Qwen 3.8 Max`, muted; `tied with …` after a tie), its time,
+and Show battle end that
 answer's footer at the battle's right edge (`ArenaKeptByline`, keyed by
 `arenaKeptAnswerFooterRowId`), in place of the footer's own duration. Name both: with only the
-winner the reveal was half a reveal, and the other contestant left no trace in the chat. They are
+winner the reveal was half a reveal, and the other contestant left no trace in the chat. Every kept side gets this footer (`battleKeptSide`): the winner, and the side a tie, an early
+pick or Stop then Keep applied. Ties used to fall back to the old collapsible summary card in the
+reading column, off the battle's rails. They are
 small on purpose: in a long chat a large name above each answer drew the eye from the answers. The chat after a battle sits on the battle's rails (`agent-stream/arena-row-layout.tsx`):
 a battle's prompt keeps its bubble at the battle's right edge (`ArenaRow` `prompt`), and the rest
 keeps the reading width from the same left edge, so nothing moves sideways when a battle closes. A rule goes above each turn's

@@ -106,6 +106,7 @@ export const ar: TranslationResources = {
     askFollowUp: "اطرح سؤال متابعة",
     openTerminalIn: "افتح طرفية في worktree الخاص بالوكيل {{side}}",
     keptOver: "بدلاً من {{model}}",
+    keptTied: "تعادل مع {{model}}",
     showBattle: "عرض المعركة",
     hideBattle: "إخفاء المعركة",
     keptAgent: "الوكيل {{side}} · محتفَظ به",
