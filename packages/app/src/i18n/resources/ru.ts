@@ -1955,7 +1955,6 @@ export const ru: TranslationResources = {
     },
   },
   newWorkspace: {
-    create: "Создать",
     isolation: {
       local: "Локально",
       worktree: "Новый worktree",

@@ -1954,7 +1954,6 @@ export const ja: TranslationResources = {
     },
   },
   newWorkspace: {
-    create: "作成",
     isolation: {
       local: "ローカル",
       worktree: "新しいワークツリー",

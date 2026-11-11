@@ -1921,7 +1921,6 @@ export const ar: TranslationResources = {
     },
   },
   newWorkspace: {
-    create: "يخلق",
     isolation: {
       local: "محلي",
       worktree: "شجرة عمل جديدة",

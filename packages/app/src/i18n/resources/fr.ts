@@ -1987,7 +1987,6 @@ export const fr: TranslationResources = {
     },
   },
   newWorkspace: {
-    create: "Créer",
     isolation: {
       local: "Local",
       worktree: "Nouveau worktree",
