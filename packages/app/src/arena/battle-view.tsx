@@ -181,7 +181,7 @@ function BattlePaneHeader({
       <View style={[styles.paneRule, side === "a" ? styles.paneRuleA : styles.paneRuleB]} />
       <View style={styles.paneHeaderRow}>
         <View style={styles.paneHeading}>
-          <Text style={styles.agentName}>
+          <Text style={styles.agentName} numberOfLines={1}>
             {t("arena.agent")} {side.toUpperCase()}
           </Text>
           {dispatched ? (
@@ -199,16 +199,18 @@ function BattlePaneHeader({
             <ArenaRunTurnsMenu run={dispatched} side={side} onJumpToMessage={onJumpToMessage} />
           ) : null}
         </View>
-        <ArenaPaneActions
-          serverId={serverId}
-          workspaceId={workspaceId}
-          agentId={agentId}
-          turnId={turnId}
-          side={side}
-          run={run}
-          expanded={expanded}
-          onToggleExpanded={expanded ? handleRestore : handleExpand}
-        />
+        <View style={styles.paneActionsSlot}>
+          <ArenaPaneActions
+            serverId={serverId}
+            workspaceId={workspaceId}
+            agentId={agentId}
+            turnId={turnId}
+            side={side}
+            run={run}
+            expanded={expanded}
+            onToggleExpanded={expanded ? handleRestore : handleExpand}
+          />
+        </View>
       </View>
     </View>
   );
@@ -884,6 +886,9 @@ export function ArenaBattleView({
   );
 }
 
+// The height of a pane name's line, which the pane's actions centre on.
+const PANE_NAME_LINE = 32;
+
 const styles = StyleSheet.create((theme) => ({
   // The gap the stream's own row puts between a prompt and what answers it.
   preparingBattle: {
@@ -1000,12 +1005,17 @@ const styles = StyleSheet.create((theme) => ({
   paneRuleB: {
     backgroundColor: theme.colors.statusDotWarning,
   },
+  // On a narrow pane the status wraps under the name, so the row aligns to its top and the
+  // actions centre on the name's line rather than on the whole heading.
   paneHeaderRow: {
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
     gap: theme.spacing[2],
-    minHeight: 32,
     marginTop: theme.spacing[4],
+  },
+  paneActionsSlot: {
+    height: PANE_NAME_LINE,
+    justifyContent: "center",
   },
   paneHeading: {
     flex: 1,
@@ -1017,6 +1027,8 @@ const styles = StyleSheet.create((theme) => ({
   },
   // The contestants are the headline of the battle, so their names are the largest type in it.
   agentName: {
+    flexShrink: 0,
+    lineHeight: PANE_NAME_LINE,
     color: theme.colors.foreground,
     fontSize: theme.fontSize["2xl"],
     fontWeight: theme.fontWeight.semibold,
