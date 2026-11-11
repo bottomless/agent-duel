@@ -1,6 +1,6 @@
 import { i18n } from "@/i18n/i18next";
 import { useTranslation } from "react-i18next";
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Text, View, type LayoutChangeEvent } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { ARENA_MAX_CONTENT_WIDTH } from "@/constants/layout";
@@ -183,14 +183,16 @@ export function arenaDecisionRowVisible(snapshot: ArenaSnapshot): boolean {
 function DecisionChoices({
   phase,
   actions,
+  onLayout,
 }: {
   phase: ArenaDecisionPhase;
   actions: ArenaBattleActions;
+  onLayout: (event: LayoutChangeEvent) => void;
 }) {
   const stopped = phase.kind === "awaiting_stop_resolution";
   const interrupted = phase.kind === "awaiting_vote" && phase.canResume;
   return (
-    <View style={styles.choices} testID="arena-battle-choice-row">
+    <View style={styles.choices} onLayout={onLayout} testID="arena-battle-choice-row">
       {phase.kind === "running"
         ? arenaRunningDecisionOrder(phase).map((choice) =>
             choice === "stop" ? (
@@ -211,7 +213,9 @@ function DecisionChoices({
       {phase.kind !== "running" && !interrupted ? (
         <>
           <BattlePaneDecision side="a" phase={phase} actions={actions} />
-          {phase.kind === "awaiting_vote" && phase.canTie ? <VoteDecision actions={actions} /> : null}
+          {phase.kind === "awaiting_vote" && phase.canTie ? (
+            <VoteDecision actions={actions} />
+          ) : null}
           {stopped || (phase.kind === "awaiting_vote" && phase.canDiscard) ? (
             <DiscardDecision actions={actions} />
           ) : null}
@@ -253,6 +257,10 @@ export function ArenaDecisionPill({
     (event: LayoutChangeEvent) => onHeightChange(event.nativeEvent.layout.height),
     [onHeightChange],
   );
+  const fit = useRowFit();
+  // Ask a follow-up sits beside the choices only while an equal space on the other side still
+  // keeps them centred; otherwise it drops under them instead of covering Choose B.
+  const besideChoices = !onAskFollowUp || fit.fits;
   useEffect(() => {
     if (!visible) onHeightChange(0);
     return () => onHeightChange(0);
@@ -267,26 +275,56 @@ export function ArenaDecisionPill({
       testID="arena-decision-pill"
     >
       {hint ? <Text style={styles.hint}>{hint}</Text> : null}
-      <View style={styles.row} pointerEvents="box-none">
-        <View style={styles.start} pointerEvents="box-none" />
-        <DecisionChoices phase={phase} actions={actions} />
-        <View style={[styles.start, styles.end]} pointerEvents="box-none">
+      <View
+        style={[styles.row, !besideChoices && styles.stacked]}
+        onLayout={fit.onRowLayout}
+        pointerEvents="box-none"
+      >
+        {besideChoices ? <View style={styles.start} pointerEvents="box-none" /> : null}
+        <DecisionChoices phase={phase} actions={actions} onLayout={fit.onChoicesLayout} />
+        <View style={besideChoices ? [styles.start, styles.end] : null} pointerEvents="box-none">
           {onAskFollowUp ? (
-            <Button
-              variant="outline"
-              size="md"
-              style={styles.followUp}
-              textStyle={styles.followUpText}
-              onPress={onAskFollowUp}
-              testID="arena-ask-follow-up"
-            >
-              {t("arena.askFollowUp")}
-            </Button>
+            <View onLayout={fit.onFollowUpLayout}>
+              <Button
+                variant="outline"
+                size="md"
+                style={styles.followUp}
+                textStyle={styles.followUpText}
+                onPress={onAskFollowUp}
+                testID="arena-ask-follow-up"
+              >
+                {t("arena.askFollowUp")}
+              </Button>
+            </View>
           ) : null}
         </View>
       </View>
     </View>
   );
+}
+
+const ROW_GAP = 16;
+
+/**
+ * Measures the row, the choices and Ask a follow-up. The choices fit centred with the button
+ * beside them when the row holds the choices plus the button's width (and the gap) on both sides.
+ */
+function useRowFit() {
+  const [row, setRow] = useState(0);
+  const [choices, setChoices] = useState(0);
+  const [followUp, setFollowUp] = useState(0);
+  const onRowLayout = useCallback((event: LayoutChangeEvent) => {
+    setRow(event.nativeEvent.layout.width - 2 * BATTLE_RAIL);
+  }, []);
+  const onChoicesLayout = useCallback((event: LayoutChangeEvent) => {
+    setChoices(event.nativeEvent.layout.width);
+  }, []);
+  const onFollowUpLayout = useCallback((event: LayoutChangeEvent) => {
+    setFollowUp(event.nativeEvent.layout.width);
+  }, []);
+  const measured = row > 0 && choices > 0 && followUp > 0;
+  const fits = !measured || row >= choices + 2 * (followUp + ROW_GAP);
+  return { fits, onRowLayout, onChoicesLayout, onFollowUpLayout };
 }
 
 const styles = StyleSheet.create((theme) => ({
@@ -317,7 +355,12 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: BATTLE_RAIL,
-    gap: theme.spacing[4],
+    gap: ROW_GAP,
+  },
+  // Too narrow for the button beside the choices: it goes under them, both centred.
+  stacked: {
+    flexDirection: "column",
+    gap: theme.spacing[2],
   },
   // The two ends share the space evenly, so the choices stay centred between the answers.
   start: {
