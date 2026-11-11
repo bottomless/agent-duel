@@ -113,6 +113,7 @@ export const es: TranslationResources = {
     restoreSplit: "Restaurar vista dividida",
     askFollowUp: "Hacer una pregunta de seguimiento",
     openTerminalIn: "Abrir una terminal en el worktree del agente {{side}}",
+    keptOver: "en lugar de {{model}}",
     showBattle: "Mostrar batalla",
     hideBattle: "Ocultar batalla",
     keptAgent: "Agente {{side}} · elegido",
