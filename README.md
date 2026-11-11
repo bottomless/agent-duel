@@ -31,15 +31,15 @@ E-mail signup required for use. No cost for unlimited inference with frontier mo
 
 The hosted version draws from:
 
-- Claude Fable 5.1
+- Claude Fable 5.2
 - Claude Opus 5.5
 - GPT-6 Astra
 - GPT-6.1 Sol
-- Kimi K3
+- Kimi K3.1 Pro
 - Muse Wonder
 - Grok 4.7
 - Qwen 3.8 Max
-- Gemini 4 Argon
+- Gemini Carbon
 - DeepSeek V4.1 Flash 1017
 - MiMo-V2.6 Flash
 

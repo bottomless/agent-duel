@@ -47,6 +47,8 @@ export const ja: TranslationResources = {
     lastRatedModel: "最後に評価したモデル: {{model}}",
     battle: "バトル",
     battleMode: "バトルモード",
+    battleHint:
+      "オン: 2 つのエージェントが各プロンプトに回答し、良いほうを残します。投票するまでモデルは表示されません。オフ: 1 つのエージェントが回答します。",
     autoAccept: "自動承認",
     askBeforeTools: "ツール使用前に確認",
     toolPermissions: "ツールの権限",
@@ -1952,7 +1954,6 @@ export const ja: TranslationResources = {
     },
   },
   newWorkspace: {
-    create: "作成",
     isolation: {
       local: "ローカル",
       worktree: "新しいワークツリー",
@@ -2028,8 +2029,10 @@ export const ja: TranslationResources = {
   },
   battleRepository: {
     title: "Agent Duel にはコミットが必要です",
-    notGitMessage: "空の最初のコミットで Git リポジトリを作成しますか？",
-    noCommitMessage: "空の最初のコミットを作成しますか？",
+    notGitMessage:
+      "各エージェントはこのフォルダーの専用コピーで作業します。コピーを作るには Git のコミットが必要です。Agent Duel はここに Git リポジトリ（.git フォルダー）と空のコミットを 1 つ追加します。ファイルはそのまま残り、コミットされません。",
+    noCommitMessage:
+      "各エージェントはこのフォルダーの専用コピーで作業します。コピーを作るには Git のコミットが必要です。このリポジトリにはまだコミットがないため、Agent Duel は空のコミットを 1 つ追加します。ファイルはそのまま残り、コミットされません。",
     confirm: "コミットを作成",
     declined: "バトルには Git コミットが必要です。",
     failed: "最初のコミットを作成できませんでした: {{error}}",

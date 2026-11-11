@@ -48,6 +48,8 @@ export const es: TranslationResources = {
     lastRatedModel: "Último modelo calificado: {{model}}",
     battle: "Batalla",
     battleMode: "Modo batalla",
+    battleHint:
+      "Activado: dos agentes responden a cada prompt y te quedas con la mejor respuesta. Sus modelos permanecen ocultos hasta que votas. Desactivado: responde un solo agente.",
     autoAccept: "Aceptar automáticamente",
     askBeforeTools: "Preguntar antes de usar herramientas",
     toolPermissions: "Permisos de herramientas",
@@ -1979,7 +1981,6 @@ export const es: TranslationResources = {
     },
   },
   newWorkspace: {
-    create: "Crear",
     isolation: {
       local: "Local",
       worktree: "Nuevo worktree",
@@ -2053,8 +2054,10 @@ export const es: TranslationResources = {
   },
   battleRepository: {
     title: "Agent Duel necesita un commit",
-    notGitMessage: "¿Crear un repositorio Git con un primer commit vacío?",
-    noCommitMessage: "¿Crear un primer commit vacío?",
+    notGitMessage:
+      "Cada agente trabaja en su propia copia de esta carpeta, y Git necesita un commit para crear esas copias. Agent Duel añadirá aquí un repositorio Git (una carpeta .git) con un commit vacío. Tus archivos se quedan como están y no se incluyen en ningún commit.",
+    noCommitMessage:
+      "Cada agente trabaja en su propia copia de esta carpeta, y Git necesita un commit para crear esas copias. Este repositorio aún no tiene commits, así que Agent Duel añadirá un commit vacío. Tus archivos se quedan como están y no se incluyen en ningún commit.",
     confirm: "Crear commit",
     declined: "Una batalla necesita un commit de Git.",
     failed: "No se pudo crear el primer commit: {{error}}",

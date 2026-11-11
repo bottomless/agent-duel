@@ -1,4 +1,4 @@
-import { expect, type BrowserContext, type Page } from "@playwright/test";
+import { expect, type BrowserContext, type Locator, type Page } from "@playwright/test";
 import type { CreateAgentRequestMessage, SessionInboundMessage } from "@getpaseo/protocol/messages";
 import type { DaemonClient as InternalDaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { decodeWorkspaceIdFromPathSegment } from "@/utils/host-routes";
@@ -321,11 +321,32 @@ export async function submitNewWorkspacePrompt(
   const composer = page.getByRole("textbox", { name: "Message agent..." });
   await expect(composer).toBeVisible({ timeout: 30_000 });
   await composer.fill(prompt);
-  const createButton = page
-    .getByTestId("message-input-root")
-    .getByRole("button", { name: "Create" });
-  await expect(createButton).toBeVisible({ timeout: 30_000 });
-  await createButton.click();
+  await clickNewWorkspaceSend(page);
+}
+
+/** Sends what the test already typed, so a prompt the test checks afterwards stays its own. */
+export async function submitNewWorkspaceDraft(page: Page): Promise<void> {
+  const composer = page
+    .getByRole("textbox", { name: "Message agent..." })
+    .filter({ visible: true });
+  await expect(composer).toBeVisible({ timeout: 30_000 });
+  // A new chat cannot start empty, so an empty draft gets a prompt.
+  if (!(await composer.inputValue()).trim()) {
+    await composer.fill("Hello from e2e");
+  }
+  await clickNewWorkspaceSend(page);
+}
+
+/** Retained screens keep hidden copies of the new-chat composer; only the visible Send counts. */
+export function newWorkspaceSendButton(page: Page): Locator {
+  return page.getByTestId("workspace-create-submit").filter({ visible: true });
+}
+
+async function clickNewWorkspaceSend(page: Page): Promise<void> {
+  // Send stays disabled until the draft has text.
+  const sendButton = newWorkspaceSendButton(page);
+  await expect(sendButton).toBeEnabled({ timeout: 30_000 });
+  await sendButton.click();
 }
 
 export async function clickNewWorkspaceButton(
@@ -365,14 +386,6 @@ export async function selectWorkspaceIsolation(
   const option = page.getByTestId(`workspace-create-isolation-${isolation}`);
   await expect(option).toBeVisible({ timeout: 30_000 });
   await option.click();
-}
-
-export async function submitNewWorkspaceEmpty(page: Page): Promise<void> {
-  const createButton = page
-    .getByTestId("message-input-root")
-    .getByRole("button", { name: "Create" });
-  await expect(createButton).toBeVisible({ timeout: 30_000 });
-  await createButton.click();
 }
 
 export async function openStartingRefPicker(page: Page): Promise<void> {

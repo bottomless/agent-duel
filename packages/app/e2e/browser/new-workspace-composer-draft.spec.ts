@@ -12,6 +12,7 @@ import {
   expectNewWorkspaceDraft,
   expectNewWorkspaceProjectSelected,
   fillNewWorkspaceDraft,
+  newWorkspaceSendButton,
   openGlobalNewWorkspaceComposer,
   openNewWorkspaceComposer,
   selectNewWorkspaceHost,
@@ -107,9 +108,10 @@ test.describe("New workspace composer draft", () => {
       const composer = page.getByRole("textbox", { name: "Message agent..." });
       const createButton = page.getByTestId("workspace-create-submit");
       await expect(composer).toBeEditable({ timeout: 30_000 });
-      await expect(createButton).toBeEnabled({ timeout: 30_000 });
+      // Send stays visible but disabled until the draft has text.
+      await expect(createButton).toBeVisible({ timeout: 30_000 });
 
-      await composer.evaluate((element, draft) => {
+      await composer.evaluate(async (element, draft) => {
         if (!(element instanceof HTMLTextAreaElement)) {
           throw new Error("Composer input is not a textarea");
         }
@@ -128,7 +130,12 @@ test.describe("New workspace composer draft", () => {
         );
         const button = document.querySelector('[data-testid="workspace-create-submit"]');
         if (!(button instanceof HTMLElement)) {
-          throw new Error("Create button is unavailable");
+          throw new Error("Send button is unavailable");
+        }
+        // Send turns on once the composer renders the text; click on that first frame.
+        for (let frame = 0; button.getAttribute("aria-disabled") === "true"; frame += 1) {
+          if (frame > 60) throw new Error("Send stayed disabled after typing");
+          await new Promise((resolve) => requestAnimationFrame(resolve));
         }
         button.click();
       }, DRAFT);
@@ -154,14 +161,14 @@ test("fullscreen creation returns inline and keeps submission locked when reopen
     await resizeComposerViewport(page, "portrait");
     await fillNewWorkspaceDraft(page, DRAFT);
     await enterComposerFullscreen(page);
-    await page.getByRole("button", { name: "Create", exact: true }).click();
+    await newWorkspaceSendButton(page).click();
     await delay.waitForCreateRequest();
 
     await test.step("submission returns inline with the original draft and spinner", async () => {
       await expect(page.getByTestId("composer-fullscreen")).toHaveCount(0);
       await expect(composerLocator(page)).toHaveValue(DRAFT);
       await expect(composerLocator(page)).not.toBeEditable();
-      await expect(page.getByRole("button", { name: "Create", exact: true })).toBeDisabled();
+      await expect(newWorkspaceSendButton(page)).toBeDisabled();
       await expect(page.getByRole("progressbar")).toBeVisible();
     });
     await test.step("fullscreen can reopen while pending without unlocking or duplicating submission", async () => {
@@ -169,7 +176,7 @@ test("fullscreen creation returns inline and keeps submission locked when reopen
       await expect(page.getByTestId("composer-fullscreen")).toBeVisible();
       await expect(composerLocator(page)).toHaveValue(DRAFT);
       await expect(composerLocator(page)).not.toBeEditable();
-      await expect(page.getByRole("button", { name: "Create", exact: true })).toBeDisabled();
+      await expect(newWorkspaceSendButton(page)).toBeDisabled();
       await expect(page.getByRole("progressbar")).toBeVisible();
       await exitComposerFullscreen(page);
     });

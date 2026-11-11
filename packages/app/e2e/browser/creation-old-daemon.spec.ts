@@ -103,7 +103,7 @@ for (const version of ["0.2.5", "0.7.2", "0.8.0"]) {
       await selectWorkspaceIsolation(page, "worktree");
       const prompt = "Create this workspace: emit 1 coalesced agent stream updates";
       await fillComposerDraft(page, prompt);
-      await pressSubmitBeforeTheNextRender(page, "Create");
+      await pressSubmitBeforeTheNextRender(page, "Send message");
       await gate.waitForRequest();
       await expect(page).toHaveURL(/\/workspace\//);
       await expect(

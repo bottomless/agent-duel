@@ -27,6 +27,7 @@ import {
 } from "../support/helpers/composer";
 import {
   delayBrowserAgentCreatedStatus,
+  newWorkspaceSendButton,
   openNewWorkspaceComposer,
 } from "../support/helpers/new-workspace";
 import { gotoAppShell } from "../support/helpers/app";
@@ -289,9 +290,7 @@ test.describe("Composer attachments", () => {
         projectDisplayName: workspace.projectDisplayName,
       });
       await fillComposerDraft(page, "lock test prompt");
-      const createButton = page
-        .getByTestId("message-input-root")
-        .getByRole("button", { name: "Create" });
+      const createButton = newWorkspaceSendButton(page);
       await expect(createButton).toBeVisible({ timeout: 30_000 });
       await createButton.click();
 

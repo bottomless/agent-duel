@@ -47,6 +47,8 @@ export const zhCN: TranslationResources = {
     lastRatedModel: "最近评价的模型：{{model}}",
     battle: "对战",
     battleMode: "对战模式",
+    battleHint:
+      "开启：两个智能体回答每条提示，你保留更好的那个。投票前不会显示它们的模型。关闭：由一个智能体回答。",
     autoAccept: "自动接受",
     askBeforeTools: "使用工具前询问",
     toolPermissions: "工具权限",
@@ -1890,7 +1892,6 @@ export const zhCN: TranslationResources = {
     },
   },
   newWorkspace: {
-    create: "创建",
     isolation: {
       local: "本地",
       worktree: "新建 worktree",
@@ -1964,8 +1965,10 @@ export const zhCN: TranslationResources = {
   },
   battleRepository: {
     title: "Agent Duel 需要一个提交",
-    notGitMessage: "要创建一个带空初始提交的 Git 仓库吗？",
-    noCommitMessage: "要创建一个空的初始提交吗？",
+    notGitMessage:
+      "每个智能体都在此文件夹的独立副本中工作，而 Git 需要一个提交才能创建这些副本。Agent Duel 会在这里添加一个 Git 仓库（.git 文件夹）和一个空提交。你的文件保持原样，不会被提交。",
+    noCommitMessage:
+      "每个智能体都在此文件夹的独立副本中工作，而 Git 需要一个提交才能创建这些副本。此仓库还没有提交，因此 Agent Duel 会添加一个空提交。你的文件保持原样，不会被提交。",
     confirm: "创建提交",
     declined: "对战需要一个 Git 提交。",
     failed: "无法创建初始提交：{{error}}",

@@ -12,6 +12,7 @@ import {
   readLocalCredentialForTarget,
   type DaemonInstance,
 } from "@getpaseo/server/daemon-control";
+import { releaseStoppedMarker } from "@getpaseo/server";
 import {
   copyAttachmentFileToManagedStorage,
   deleteManagedAttachmentFile,
@@ -371,13 +372,29 @@ export async function stopDesktopDaemon(
     );
   if (!instance || (!owned && !explicit)) return resolveDesktopDaemonStatus();
   logDesktopDaemonLifecycle("stopping captured supervisor", { reason, pid: instance.pid, owned });
-  await stopDaemonInstance(home, {
+  // Windows has no signal a daemon can handle, so the stop goes through the CLI's lifecycle RPC. A
+  // daemon with accounts refuses every connection without a signed-in session, and the CLI never
+  // has one, so the RPC fails signed in or not. Without force that failure left the daemon running
+  // after quit and failed every Install & restart. The instance is pinned above and checked again
+  // before the kill, so ending its process tree is the same stop, not a guess.
+  const forceOnWindows = process.platform === "win32";
+  const result = await stopDaemonInstance(home, {
     instance,
     timeoutMs: 15_000,
+    force: forceOnWindows,
     requestShutdown: async (ready) => {
       await runExternalCliJsonCommand(["daemon", "stop", "--host", ready.listen, "--json"]);
     },
   });
+  if (result.forced && !result.usedLifecycleRpc) {
+    // Asked for, not a crash: release its marker so the next start shows no crash report. A daemon
+    // that took the RPC and then hung is still reported.
+    releaseStoppedMarker({ home, name: "daemon" });
+    logDesktopDaemonLifecycle("ended the daemon's process tree after the stop request failed", {
+      reason,
+      pid: instance.pid,
+    });
+  }
   if (owned) ownedLaunch = null;
   return resolveDesktopDaemonStatus();
 }
