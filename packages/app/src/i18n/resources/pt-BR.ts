@@ -111,6 +111,7 @@ export const ptBR: TranslationResources = {
     restoreSplit: "Restaurar visualização dividida",
     askFollowUp: "Fazer uma pergunta de acompanhamento",
     openTerminalIn: "Abrir um terminal no worktree do agente {{side}}",
+    keptOver: "em vez de {{model}}",
     showBattle: "Mostrar batalha",
     hideBattle: "Ocultar batalha",
     keptAgent: "Agente {{side}} · mantido",

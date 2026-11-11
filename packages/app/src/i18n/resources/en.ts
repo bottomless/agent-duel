@@ -101,6 +101,8 @@ export const en = {
     restoreSplit: "Restore split view",
     askFollowUp: "Ask a follow-up",
     openTerminalIn: "Open a terminal in Agent {{side}}'s worktree",
+    // After the kept model in its answer's footer: the model it was chosen over.
+    keptOver: "over {{model}}",
     showBattle: "Show battle",
     hideBattle: "Hide battle",
     keptAgent: "Agent {{side}} · kept",

@@ -104,6 +104,7 @@ export const ar: TranslationResources = {
     restoreSplit: "استعادة العرض المقسم",
     askFollowUp: "اطرح سؤال متابعة",
     openTerminalIn: "افتح طرفية في worktree الخاص بالوكيل {{side}}",
+    keptOver: "بدلاً من {{model}}",
     showBattle: "عرض المعركة",
     hideBattle: "إخفاء المعركة",
     keptAgent: "الوكيل {{side}} · محتفَظ به",

@@ -112,6 +112,7 @@ export const fr: TranslationResources = {
     restoreSplit: "Rétablir la vue divisée",
     askFollowUp: "Poser une question de suivi",
     openTerminalIn: "Ouvrir un terminal dans le worktree de l’agent {{side}}",
+    keptOver: "plutôt que {{model}}",
     showBattle: "Afficher la bataille",
     hideBattle: "Masquer la bataille",
     keptAgent: "Agent {{side}} · gardé",

@@ -107,6 +107,7 @@ export const ja: TranslationResources = {
     restoreSplit: "分割表示に戻す",
     askFollowUp: "フォローアップを送る",
     openTerminalIn: "エージェント{{side}}のworktreeでターミナルを開く",
+    keptOver: "（{{model}} ではなく）",
     showBattle: "バトルを表示",
     hideBattle: "バトルを隠す",
     keptAgent: "エージェント{{side}} · 採用",

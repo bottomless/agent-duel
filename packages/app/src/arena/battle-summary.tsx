@@ -329,11 +329,17 @@ export function ArenaKeptByline({ agentId, item }: { agentId: string; item: Aren
   const handleShow = useCallback(() => show(agentId, item.id), [agentId, item.id, show]);
   const model = keptModel(item);
   if (!model) return null;
+  const opponent = opponentModel(item);
   return (
     <View style={styles.byline} testID={`arena-winner-${item.id}`}>
       <Text style={styles.bylineName} numberOfLines={1}>
         {arenaModelDisplayName(model)}
       </Text>
+      {opponent ? (
+        <Text style={styles.bylineMeta} numberOfLines={1} testID={`arena-opponent-${item.id}`}>
+          {t("arena.keptOver", { model: arenaModelDisplayName(opponent) })}
+        </Text>
+      ) : null}
       <BylineNotes item={item} />
       <PressHighlight
         accessibilityRole="button"
@@ -388,6 +394,16 @@ function BylineNotes({ item }: { item: ArenaHistoryItem }) {
 function keptModel(item: ArenaHistoryItem): string | undefined {
   const winner = battleWinnerSide(item);
   return winner ? item.identities?.[winner].name : undefined;
+}
+
+/**
+ * The model the kept one was chosen over. The kept answer becomes the chat's history, so without it
+ * the reveal named only the winner and the other contestant left no trace in the chat.
+ */
+function opponentModel(item: ArenaHistoryItem): string | undefined {
+  const winner = battleWinnerSide(item);
+  if (!winner) return undefined;
+  return item.identities?.[winner === "a" ? "b" : "a"].name;
 }
 
 function showBattleStyle() {

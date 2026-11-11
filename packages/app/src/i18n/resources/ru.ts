@@ -106,6 +106,7 @@ export const ru: TranslationResources = {
     restoreSplit: "Вернуть разделённый вид",
     askFollowUp: "Задать уточняющий вопрос",
     openTerminalIn: "Открыть терминал в worktree агента {{side}}",
+    keptOver: "вместо {{model}}",
     showBattle: "Показать битву",
     hideBattle: "Скрыть битву",
     keptAgent: "Агент {{side}} · оставлен",
