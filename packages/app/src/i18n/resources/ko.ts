@@ -47,6 +47,8 @@ export const ko: TranslationResources = {
     lastRatedModel: "최근 평가한 모델: {{model}}",
     battle: "배틀",
     battleMode: "배틀 모드",
+    battleHint:
+      "켜짐: 두 에이전트가 각 프롬프트에 답하고, 더 나은 답을 남깁니다. 투표할 때까지 모델은 숨겨집니다. 꺼짐: 에이전트 하나가 답합니다.",
     autoAccept: "자동 승인",
     askBeforeTools: "도구 사용 전 확인",
     toolPermissions: "도구 권한",
@@ -2009,8 +2011,10 @@ export const ko: TranslationResources = {
   },
   battleRepository: {
     title: "Agent Duel에는 커밋이 필요합니다",
-    notGitMessage: "빈 첫 커밋으로 Git 저장소를 만들까요?",
-    noCommitMessage: "빈 첫 커밋을 만들까요?",
+    notGitMessage:
+      "각 에이전트는 이 폴더의 자체 사본에서 작업하며, 사본을 만들려면 Git 커밋이 필요합니다. Agent Duel이 여기에 Git 저장소(.git 폴더)와 빈 커밋 하나를 추가합니다. 파일은 그대로 유지되며 커밋되지 않습니다.",
+    noCommitMessage:
+      "각 에이전트는 이 폴더의 자체 사본에서 작업하며, 사본을 만들려면 Git 커밋이 필요합니다. 이 저장소에는 아직 커밋이 없으므로 Agent Duel이 빈 커밋 하나를 추가합니다. 파일은 그대로 유지되며 커밋되지 않습니다.",
     confirm: "커밋 만들기",
     declined: "배틀에는 Git 커밋이 필요합니다.",
     failed: "첫 커밋을 만들 수 없습니다: {{error}}",

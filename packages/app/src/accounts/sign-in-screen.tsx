@@ -270,7 +270,8 @@ export function SignInScreen({ endpoint, methods, documents, expired }: SignInSc
           <View style={styles.heading}>
             <Text style={styles.title}>Sign in to Agent Duel</Text>
             <Text style={styles.subtitle}>
-              Two blinded agents answer every prompt. You decide which one wins.
+              Two agents answer every prompt. You don&apos;t see which models they are until you
+              pick the better one.
             </Text>
           </View>
 
