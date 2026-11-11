@@ -113,6 +113,7 @@ export const ptBR: TranslationResources = {
     askFollowUp: "Fazer uma pergunta de acompanhamento",
     openTerminalIn: "Abrir um terminal no worktree do agente {{side}}",
     keptOver: "em vez de {{model}}",
+    keptTied: "empate com {{model}}",
     showBattle: "Mostrar batalha",
     hideBattle: "Ocultar batalha",
     keptAgent: "Agente {{side}} · mantido",

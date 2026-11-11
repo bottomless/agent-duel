@@ -114,6 +114,7 @@ export const fr: TranslationResources = {
     askFollowUp: "Poser une question de suivi",
     openTerminalIn: "Ouvrir un terminal dans le worktree de l’agent {{side}}",
     keptOver: "plutôt que {{model}}",
+    keptTied: "à égalité avec {{model}}",
     showBattle: "Afficher la bataille",
     hideBattle: "Masquer la bataille",
     keptAgent: "Agent {{side}} · gardé",

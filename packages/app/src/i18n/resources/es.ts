@@ -113,6 +113,7 @@ export const es: TranslationResources = {
     askFollowUp: "Hacer una pregunta de seguimiento",
     openTerminalIn: "Abrir una terminal en el worktree del agente {{side}}",
     keptOver: "en lugar de {{model}}",
+    keptTied: "empate con {{model}}",
     showBattle: "Mostrar batalla",
     hideBattle: "Ocultar batalla",
     keptAgent: "Agente {{side}} · elegido",

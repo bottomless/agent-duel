@@ -105,6 +105,7 @@ export const zhCN: TranslationResources = {
     askFollowUp: "追问",
     openTerminalIn: "在智能体 {{side}} 的 worktree 中打开终端",
     keptOver: "（而非 {{model}}）",
+    keptTied: "（与 {{model}} 平局）",
     showBattle: "显示对战",
     hideBattle: "隐藏对战",
     keptAgent: "智能体 {{side}} · 已保留",
