@@ -1,6 +1,6 @@
 import { i18n } from "@/i18n/i18next";
 import { useTranslation } from "react-i18next";
-import { useCallback, useEffect, useMemo, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Text, View, type LayoutChangeEvent } from "react-native";
 import { useContainerWidth } from "@/hooks/use-container-width";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
@@ -236,14 +236,48 @@ function ReviewHeader({
   agentId: string;
   width: number | null;
 }) {
+  const [tabsWidth, setTabsWidth] = useState(0);
+  const [controlWidth, setControlWidth] = useState(0);
+  const onTabsLayout = useCallback((event: LayoutChangeEvent) => {
+    setTabsWidth(Math.ceil(event.nativeEvent.layout.width));
+  }, []);
+  const onControlLayout = useCallback((event: LayoutChangeEvent) => {
+    setControlWidth(Math.ceil(event.nativeEvent.layout.width));
+  }, []);
+  // The switch is about both answers, so it sits on the centre line between them, as Stop does.
+  // That needs room for the layout control's width on both sides; without it the row keeps the
+  // switch on the left rail and lets the control wrap, rather than covering one with the other.
+  const sideNeeded = layoutControl ? controlWidth + REVIEW_HEADER_GAP : 0;
+  const centred = width === null || width >= tabsWidth + 2 * sideNeeded;
+  const tabsNode = (
+    <View onLayout={onTabsLayout}>
+      <ReviewTabs tabs={tabs} tab={tab} changesLabel={changesLabel} onChange={onTabChange} />
+    </View>
+  );
+  const control = layoutControl ? (
+    <View onLayout={onControlLayout}>
+      <DiffLayoutControl agentId={agentId} width={width} />
+    </View>
+  ) : null;
+  if (centred) {
+    return (
+      <View style={[styles.header, styles.headerCentred]} testID="arena-review-header">
+        <View style={styles.headerSide} />
+        {tabsNode}
+        <View style={[styles.headerSide, styles.headerSideEnd]}>{control}</View>
+      </View>
+    );
+  }
   return (
     <View style={styles.header} testID="arena-review-header">
-      <ReviewTabs tabs={tabs} tab={tab} changesLabel={changesLabel} onChange={onTabChange} />
+      {tabsNode}
       <View style={styles.spacer} />
-      {layoutControl ? <DiffLayoutControl agentId={agentId} width={width} /> : null}
+      {control}
     </View>
   );
 }
+
+const REVIEW_HEADER_GAP = 16;
 
 /**
  * Whether the review has nothing to show, so it stays out of the chat. While one side still works
@@ -481,6 +515,20 @@ const styles = StyleSheet.create((theme) => ({
     columnGap: theme.spacing[6],
     rowGap: theme.spacing[2],
     minHeight: 32,
+  },
+  headerCentred: {
+    flexWrap: "nowrap",
+    columnGap: REVIEW_HEADER_GAP,
+  },
+  // The two ends share the row evenly, so the switch between them sits on the battle's centre line.
+  headerSide: {
+    flex: 1,
+    flexBasis: 0,
+    minWidth: 0,
+    flexDirection: "row",
+  },
+  headerSideEnd: {
+    justifyContent: "flex-end",
   },
   content: {
     paddingTop: theme.spacing[4],
