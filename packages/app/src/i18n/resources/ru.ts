@@ -80,7 +80,6 @@ export const ru: TranslationResources = {
     loadingBaseChanges: "Загрузка изменений относительно базы…",
     baseChanges: "Изменения относительно базы",
     retryChanges: "Повторить загрузку изменений",
-    noChangesWhile: "не внёс изменений ·",
     baseUnavailable: "Изменения относительно базы недоступны",
     summary: "Сводка различий",
     changes: "Изменения",

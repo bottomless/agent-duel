@@ -15,8 +15,7 @@ import {
 } from "./decision-bar";
 import {
   arenaDecisionPhase,
-  arenaRunningDecisionHint,
-  arenaRunningDecisionOrder,
+  arenaRunningWaitingSide,
   type ArenaDecisionPhase,
 } from "./decision-state";
 import { isArenaBattleOnScreen } from "./summary-anchor";
@@ -154,7 +153,8 @@ function stoppedHint(phase: Extract<ArenaDecisionPhase, { kind: "awaiting_stop_r
 
 /** The line above the pill that says why the usual choices changed, if they did. */
 function decisionHint(phase: ArenaDecisionPhase): string | null {
-  if (phase.kind === "running") return arenaRunningDecisionHint(phase);
+  // While running, the side still working is named in its own place in the row instead.
+  if (phase.kind === "running") return null;
   if (phase.kind === "awaiting_stop_resolution") return stoppedHint(phase);
   if (phase.kind !== "awaiting_vote") return null;
   if (phase.canResume) return i18n.t("arena.closedBattle");
@@ -225,15 +225,7 @@ function DecisionChoices({
   const interrupted = phase.kind === "awaiting_vote" && phase.canResume;
   return (
     <View style={styles.choices} onLayout={onLayout} testID="arena-battle-choice-row">
-      {phase.kind === "running"
-        ? arenaRunningDecisionOrder(phase).map((choice) =>
-            choice === "stop" ? (
-              <BattleStopDecision key="stop" phase={phase} actions={actions} />
-            ) : (
-              <BattlePaneDecision key={choice} side={choice} phase={phase} actions={actions} />
-            ),
-          )
-        : null}
+      {phase.kind === "running" ? <BattleStopDecision phase={phase} actions={actions} /> : null}
       {interrupted ? (
         <>
           <ResumeDecision actions={actions} />
@@ -250,6 +242,54 @@ function DecisionChoices({
           <BattlePaneDecision side="b" phase={phase} actions={actions} />
         </>
       ) : null}
+    </View>
+  );
+}
+
+/** A side still working, named in its own place in the row with its colour. */
+function WorkingStatus({ side }: { side: ArenaSide }) {
+  const { t } = useTranslation();
+  return (
+    <View style={styles.working} testID={`arena-working-${side}`}>
+      <View style={[styles.workingDot, side === "a" ? styles.workingDotA : styles.workingDotB]} />
+      <Text style={styles.workingText}>
+        {t("arena.agentWaiting", { side: side.toUpperCase() })}
+      </Text>
+    </View>
+  );
+}
+
+/**
+ * Once one side has finished, Stop sits exactly between the answers and each side's place holds
+ * what applies to it: its Choose early once it has finished, its status while it works. While both
+ * run there is nothing to put either side, so the row keeps Stop alone.
+ */
+function RunningSides({
+  phase,
+  actions,
+}: {
+  phase: Extract<ArenaDecisionPhase, { kind: "running" }>;
+  actions: ArenaBattleActions;
+}) {
+  const waiting = arenaRunningWaitingSide(phase);
+  const slot = (side: ArenaSide) => {
+    const canPick = side === "a" ? phase.canPickA : phase.canPickB;
+    if (canPick) return <BattlePaneDecision side={side} phase={phase} actions={actions} />;
+    return waiting === side ? <WorkingStatus side={side} /> : null;
+  };
+  return (
+    <View
+      style={[styles.row, styles.runningRow]}
+      pointerEvents="box-none"
+      testID="arena-battle-choice-row"
+    >
+      <View style={[styles.start, styles.end]} pointerEvents="box-none">
+        {slot("a")}
+      </View>
+      <BattleStopDecision phase={phase} actions={actions} />
+      <View style={styles.start} pointerEvents="box-none">
+        {slot("b")}
+      </View>
     </View>
   );
 }
@@ -302,32 +342,36 @@ export function ArenaDecisionPill({
       testID="arena-decision-pill"
     >
       <DecisionHintRow phase={phase} actions={actions} />
-      <View
-        style={[styles.row, !besideChoices && styles.stacked]}
-        onLayout={fit.onRowLayout}
-        pointerEvents="box-none"
-      >
-        {besideChoices ? <View style={styles.start} pointerEvents="box-none" /> : null}
-        {pillHasChoice(phase) ? (
-          <DecisionChoices phase={phase} actions={actions} onLayout={fit.onChoicesLayout} />
-        ) : null}
-        <View style={besideChoices ? [styles.start, styles.end] : null} pointerEvents="box-none">
-          {onAskFollowUp ? (
-            <View onLayout={fit.onFollowUpLayout}>
-              <Button
-                variant="outline"
-                size="md"
-                style={styles.followUp}
-                textStyle={styles.followUpText}
-                onPress={onAskFollowUp}
-                testID="arena-ask-follow-up"
-              >
-                {t("arena.askFollowUp")}
-              </Button>
-            </View>
+      {phase.kind === "running" && (phase.canPickA || phase.canPickB) ? (
+        <RunningSides phase={phase} actions={actions} />
+      ) : (
+        <View
+          style={[styles.row, !besideChoices && styles.stacked]}
+          onLayout={fit.onRowLayout}
+          pointerEvents="box-none"
+        >
+          {besideChoices ? <View style={styles.start} pointerEvents="box-none" /> : null}
+          {pillHasChoice(phase) ? (
+            <DecisionChoices phase={phase} actions={actions} onLayout={fit.onChoicesLayout} />
           ) : null}
+          <View style={besideChoices ? [styles.start, styles.end] : null} pointerEvents="box-none">
+            {onAskFollowUp ? (
+              <View onLayout={fit.onFollowUpLayout}>
+                <Button
+                  variant="outline"
+                  size="md"
+                  style={styles.followUp}
+                  textStyle={styles.followUpText}
+                  onPress={onAskFollowUp}
+                  testID="arena-ask-follow-up"
+                >
+                  {t("arena.askFollowUp")}
+                </Button>
+              </View>
+            ) : null}
+          </View>
         </View>
-      </View>
+      )}
     </View>
   );
 }
@@ -426,5 +470,31 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.foregroundMuted,
     fontSize: theme.fontSize.sm,
     textAlign: "center",
+  },
+  // Stop between the two sides' places, a button's width apart.
+  runningRow: {
+    gap: theme.spacing[2],
+  },
+  working: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[2],
+    paddingHorizontal: theme.spacing[1.5],
+  },
+  // The side's colour, as on its pane's rule and its Choose button.
+  workingDot: {
+    width: 7,
+    height: 7,
+    borderRadius: theme.borderRadius.full,
+  },
+  workingDotA: {
+    backgroundColor: theme.colors.statusDotRunning,
+  },
+  workingDotB: {
+    backgroundColor: theme.colors.statusDotWarning,
+  },
+  workingText: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.base,
   },
 }));
