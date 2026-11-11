@@ -76,7 +76,6 @@ export const zhCN: TranslationResources = {
     loadingBaseChanges: "正在加载相对于基础版本的更改…",
     baseChanges: "相对于基础版本的更改",
     retryChanges: "重试更改",
-    noChangesWhile: "未进行更改 ·",
     baseUnavailable: "无法获取相对于基础版本的更改",
     summary: "差异摘要",
     changes: "更改",

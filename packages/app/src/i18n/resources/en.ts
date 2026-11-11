@@ -74,7 +74,6 @@ export const en = {
     loadingBaseChanges: "Loading changes from base…",
     baseChanges: "Changes from base",
     retryChanges: "Retry changes",
-    noChangesWhile: "made no changes ·",
     baseUnavailable: "Changes from base are unavailable",
     summary: "Difference summary",
     changes: "Changes",

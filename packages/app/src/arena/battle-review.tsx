@@ -80,7 +80,6 @@ function Verdict({
 }
 
 const sideName = (side: ArenaSide) => i18n.t("arena.agentSide", { side: side.toUpperCase() });
-const otherSide = (side: ArenaSide): ArenaSide => (side === "a" ? "b" : "a");
 
 /** The summary tab while one side still works: nothing to compare yet, and it says so. */
 function WaitingSummary({ waitingFor }: { waitingFor: ArenaSide }) {
@@ -158,14 +157,6 @@ function ChangesTab({
         </Button>
       </View>
     );
-  if (waitingFor && diff && rows.length === 0) {
-    return (
-      <Text style={styles.status} testID="arena-changes-none">
-        {sideName(otherSide(waitingFor))} {t("arena.noChangesWhile")} {sideName(waitingFor)}{" "}
-        {t("arena.workingStill")}{" "}
-      </Text>
-    );
-  }
   if (diff?.treesEqual && rows.length === 0) return <ArenaNoChangesColumns />;
   if (rows.length === 0 || !diff) {
     return <Text style={styles.status}>{t("arena.baseUnavailable")}</Text>;
@@ -351,9 +342,13 @@ export function BattleReview({
   const shownTab: ArenaReviewTab = tab === "verdict" && tabs ? "verdict" : "changes";
   const showChanges = shownTab === "changes";
   const showLayoutControl = showChanges;
+  // While one side still works and the other changed nothing, there is no summary yet and no file
+  // to open, so both tabs would only say "nothing yet". The review waits for something to show;
+  // the decision row already says who is still working.
+  const nothingYet = waitingFor !== null && rows.length === 0 && !diffError;
   useEffect(() => {
-    setShownTab(turnId, shownTab);
-  }, [setShownTab, shownTab, turnId]);
+    if (!nothingYet) setShownTab(turnId, shownTab);
+  }, [nothingYet, setShownTab, shownTab, turnId]);
   // The default diff counts as read the first time Changes shows it. Files the reader opens
   // afterwards are recorded by the toggle above.
   const arrivalFile = chosen.shownFile === undefined ? openFiles[openFiles.length - 1] : undefined;
@@ -402,6 +397,7 @@ export function BattleReview({
     );
   }
 
+  if (nothingYet) return null;
   return (
     <ReviewFrame onLayout={onLayout} turnId={turnId}>
       <ReviewHeader

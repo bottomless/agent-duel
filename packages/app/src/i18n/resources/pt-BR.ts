@@ -82,7 +82,6 @@ export const ptBR: TranslationResources = {
     loadingBaseChanges: "Carregando alterações em relação à base…",
     baseChanges: "Alterações em relação à base",
     retryChanges: "Tentar alterações novamente",
-    noChangesWhile: "não fez alterações ·",
     baseUnavailable: "Alterações em relação à base indisponíveis",
     summary: "Resumo das diferenças",
     changes: "Alterações",

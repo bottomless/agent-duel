@@ -82,7 +82,6 @@ export const fr: TranslationResources = {
     loadingBaseChanges: "Chargement des modifications depuis la base…",
     baseChanges: "Modifications depuis la base",
     retryChanges: "Réessayer les modifications",
-    noChangesWhile: "n’a rien modifié ·",
     baseUnavailable: "Les modifications depuis la base sont indisponibles",
     summary: "Résumé des différences",
     changes: "Modifications",

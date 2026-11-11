@@ -81,7 +81,6 @@ export const es: TranslationResources = {
     loadingBaseChanges: "Cargando cambios respecto a la base…",
     baseChanges: "Cambios respecto a la base",
     retryChanges: "Reintentar cambios",
-    noChangesWhile: "no hizo cambios ·",
     baseUnavailable: "Los cambios respecto a la base no están disponibles",
     summary: "Resumen de diferencias",
     changes: "Cambios",

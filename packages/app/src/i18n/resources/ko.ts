@@ -78,7 +78,6 @@ export const ko: TranslationResources = {
     loadingBaseChanges: "기준 대비 변경 사항 로드 중…",
     baseChanges: "기준 대비 변경 사항",
     retryChanges: "변경 사항 다시 시도",
-    noChangesWhile: "변경 사항 없음 ·",
     baseUnavailable: "기준 대비 변경 사항을 볼 수 없습니다",
     summary: "차이 요약",
     changes: "변경 사항",
