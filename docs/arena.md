@@ -214,7 +214,9 @@ own headings.
 
 Review has two tabs: **Difference summary**, the generated comparison, and **Changes**, each
 changed file with what A and B did to it. It appears when the first side has a result
-(`battleReviewPhase` in `comparison-visibility.ts`), before an early choice. The summary tab says
+(`battleReviewPhase` in `comparison-visibility.ts`), before an early choice, if that side changed
+files; a finished side with no changes shows nothing until both are in, since both tabs would only
+say "nothing yet" and the decision row already names the side still working. The summary tab says
 the other side is working; Changes shows the finished side against a hatched placeholder sized to
 its diff, with no pair verdict yet. Only the finished side expands. The unfinished side stands in
 as the frozen base, as in a stopped battle.
@@ -436,9 +438,11 @@ Anchor it over the transcript above the composer, with a gray surface inside the
 transparent, click-through area around it. It stays reachable while reviewing either thread or
 the diff. A stopped battle uses the same pill for `Keep A`, `Discard`, and `Keep B`; an early
 choice while the battle runs sits there too. While neither result is selectable, show one `Stop`
-button. When one result becomes selectable, put `Choose A early` or `Choose B early` in its side
-and `Stop` in the other side, and name the side still working above the pill
-(`Agent A is still working`). At the vote the pill reads `Choose A`, `Tie`, `Choose B`.
+button. When one result becomes selectable, `Stop` moves to the exact centre between the answers
+and each side's place holds what applies to it: `Choose A early` or `Choose B early` on the
+finished side, and the working side's status (`Agent A is still working`, with its colour dot) on
+the other. A hint line above the buttons left the status unattached to either side. While both
+run, keep `Stop` alone; there is nothing to put on either side. At the vote the pill reads `Choose A`, `Tie`, `Choose B`.
 `Tie` shows only when both results can be chosen. A failed side shows `Accept B` in its Choose's
 place when its result was saved, and nothing when it was not. Discard is not one of the vote's
 choices: two results that can be chosen get a vote, so it shows only after a failure, as an

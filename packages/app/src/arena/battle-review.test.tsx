@@ -196,17 +196,23 @@ describe("BattleReview", () => {
     expect(byTestId("arena-changes-diff-src/f1.py")).toBeNull();
   });
 
-  it("says so when the finished side changed nothing", () => {
+  it("waits to show anything while the finished side changed nothing", () => {
     render({
       summaryAvailable: false,
       waitingFor: "a",
       diff: comparisonDiff({ treesEqual: true, files: [], divergence: [] }),
     });
-    act(() => fireEvent.click(byTestId("arena-review-tab-changes") as HTMLElement));
-    expect(byTestId("arena-changes-none")?.textContent).toBe(
-      "Agent B made no changes · Agent A is still working",
-    );
-    expect(container.textContent).not.toContain("Results are identical");
+    // No summary yet and no file to open: no tabs that would only say "nothing yet".
+    expect(byTestId("arena-review-tabs")).toBeNull();
+    expect(container.textContent).toBe("");
+    expect(useArenaReviewStore.getState().byTurn["turn-1"]?.shownTab).toBeUndefined();
+
+    // Once both are in, the review shows as usual.
+    render({
+      summaryAvailable: true,
+      diff: comparisonDiff({ treesEqual: true, files: [], divergence: [] }),
+    });
+    expect(byTestId("arena-review-tabs")).not.toBeNull();
   });
 
   it("shows a short verdict whole, with nothing to unfold", () => {
