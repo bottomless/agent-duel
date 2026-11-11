@@ -428,16 +428,23 @@ function ArenaModeControls({
   return (
     <View style={styles.arenaControls} testID="arena-agent-controls">
       {!battleToggleHidden ? (
-        <View style={styles.battleToggle}>
-          <Text style={styles.battleLabel}>{t("arena.battle")}</Text>
-          <Switch
-            value={battleMode}
-            onValueChange={onBattleModeChange}
-            disabled={controlsDisabled || battleModeDisabled}
-            accessibilityLabel={t("arena.battleMode")}
-            testID="arena-battle-toggle"
-          />
-        </View>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <View style={styles.battleToggle}>
+              <Text style={styles.battleLabel}>{t("arena.battle")}</Text>
+              <Switch
+                value={battleMode}
+                onValueChange={onBattleModeChange}
+                disabled={controlsDisabled || battleModeDisabled}
+                accessibilityLabel={t("arena.battleMode")}
+                testID="arena-battle-toggle"
+              />
+            </View>
+          </TooltipTrigger>
+          <TooltipContent side="top" align="center" offset={8}>
+            <Text style={styles.tooltipText}>{t("arena.battleHint")}</Text>
+          </TooltipContent>
+        </Tooltip>
       ) : null}
       {showSingleAgent ? (
         <SingleAgentSizeControl
