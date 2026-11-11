@@ -58,7 +58,7 @@ import { ArenaTransitionRow, arenaTransitionRowVisible } from "./transition-row"
 import { ArenaTransitionTimeline } from "./transition-timeline";
 import { arenaResolutionStatus, arenaSetupStatus } from "./transition-progress";
 import { useArenaCardBleed } from "./content-column";
-import { ArenaPaneActions } from "./pane-actions";
+import { ArenaPaneActions, ArenaPanePreview } from "./pane-actions";
 import { BATTLE_GUTTER, BATTLE_RAIL } from "./battle-layout";
 import { isArenaBattleOnScreen } from "./summary-anchor";
 import { arenaPromptAttachmentPills } from "./prompt-attachment-pills";
@@ -154,6 +154,8 @@ function BattlePaneHeader({
   paneView,
   onPaneViewChange,
   onJumpToMessage,
+  statusBelow,
+  onFitChange,
 }: {
   serverId: string;
   workspaceId: string;
@@ -164,6 +166,9 @@ function BattlePaneHeader({
   paneView: ArenaPaneView;
   onPaneViewChange: (value: ArenaPaneView) => void;
   onJumpToMessage: JumpToMessage;
+  /** Set by the side-by-side headings so both put the status under the name together. */
+  statusBelow?: boolean;
+  onFitChange?: (side: ArenaSide, fit: PaneHeadingFit) => void;
 }) {
   const { t } = useTranslation();
   const active = useRetainedPanelActive();
@@ -176,35 +181,52 @@ function BattlePaneHeader({
   const handleRestore = useCallback(() => {
     onPaneViewChange("both");
   }, [onPaneViewChange]);
+  const fit = usePaneHeadingFit();
+  useEffect(() => {
+    onFitChange?.(side, fit.fit);
+  }, [fit.fit, onFitChange, side]);
+  // Preview on the status line implies the status line, whatever the other heading does.
+  const below = (statusBelow ?? false) || fit.fit !== "inline";
+  const previewInline = fit.fit !== "preview_below";
+  const status = (
+    <View style={styles.paneStatus} onLayout={fit.onStatus}>
+      {dispatched ? (
+        <ArenaRunMeta
+          run={dispatched}
+          side={side}
+          active={active}
+          onOpenChanges={openChanges}
+          showChangeSize={false}
+        />
+      ) : (
+        <Text style={styles.status}>{t("arena.preparing")}</Text>
+      )}
+      {dispatched ? (
+        <ArenaRunTurnsMenu run={dispatched} side={side} onJumpToMessage={onJumpToMessage} />
+      ) : null}
+    </View>
+  );
+  const preview = (
+    <View style={styles.paneActionsSlot} onLayout={fit.onPreview}>
+      <ArenaPanePreview turnId={turnId} side={side} run={run} />
+    </View>
+  );
   return (
     <View style={styles.paneHeader} testID={`arena-pane-header-${side}`}>
       <View style={[styles.paneRule, side === "a" ? styles.paneRuleA : styles.paneRuleB]} />
-      <View style={styles.paneHeaderRow}>
+      <View style={styles.paneHeaderRow} onLayout={fit.onRow}>
         <View style={styles.paneHeading}>
-          <Text style={styles.agentName} numberOfLines={1}>
+          <Text style={styles.agentName} onLayout={fit.onName}>
             {t("arena.agent")} {side.toUpperCase()}
           </Text>
-          {dispatched ? (
-            <ArenaRunMeta
-              run={dispatched}
-              side={side}
-              active={active}
-              onOpenChanges={openChanges}
-              showChangeSize={false}
-            />
-          ) : (
-            <Text style={styles.status}>{t("arena.preparing")}</Text>
-          )}
-          {dispatched ? (
-            <ArenaRunTurnsMenu run={dispatched} side={side} onJumpToMessage={onJumpToMessage} />
-          ) : null}
+          {below ? null : status}
         </View>
-        <View style={styles.paneActionsSlot}>
+        {previewInline ? preview : null}
+        <View style={styles.paneActionsSlot} onLayout={fit.onActions}>
           <ArenaPaneActions
             serverId={serverId}
             workspaceId={workspaceId}
             agentId={agentId}
-            turnId={turnId}
             side={side}
             run={run}
             expanded={expanded}
@@ -212,8 +234,65 @@ function BattlePaneHeader({
           />
         </View>
       </View>
+      {below ? (
+        <View style={styles.paneStatusLine}>
+          {status}
+          {previewInline ? null : <View style={styles.paneStatusLinePreview}>{preview}</View>}
+        </View>
+      ) : null}
     </View>
   );
+}
+
+const PANE_HEADER_GAP = 8;
+const PANE_HEADING_GAP = 10;
+
+/**
+ * How a pane's heading fits its line. `inline`: the name, status, Preview and icons all fit.
+ * `status_below`: the status takes its own line under the name; Preview stays beside the icons.
+ * `preview_below`: even the name, Preview and icons do not fit, so Preview joins the status line
+ * at its right end.
+ */
+export type PaneHeadingFit = "inline" | "status_below" | "preview_below";
+
+const FIT_ORDER: Record<PaneHeadingFit, number> = { inline: 0, status_below: 1, preview_below: 2 };
+
+function usePaneHeadingFit() {
+  const [widths, setWidths] = useState({ row: 0, name: 0, status: 0, preview: 0, actions: 0 });
+  const measure = useCallback(
+    (key: keyof typeof widths) => (event: LayoutChangeEvent) => {
+      const width = Math.ceil(event.nativeEvent.layout.width);
+      setWidths((current) => (current[key] === width ? current : { ...current, [key]: width }));
+    },
+    [],
+  );
+  const handlers = useMemo(
+    () => ({
+      onRow: measure("row"),
+      onName: measure("name"),
+      onStatus: measure("status"),
+      onPreview: measure("preview"),
+      onActions: measure("actions"),
+    }),
+    [measure],
+  );
+  return { ...handlers, fit: paneHeadingFit(widths) };
+}
+
+function paneHeadingFit(widths: {
+  row: number;
+  name: number;
+  status: number;
+  preview: number;
+  actions: number;
+}): PaneHeadingFit {
+  if (widths.row === 0) return "inline";
+  const end = (widths.preview > 0 ? widths.preview + PANE_HEADER_GAP : 0) + widths.actions;
+  if (widths.row >= widths.name + PANE_HEADING_GAP + widths.status + PANE_HEADER_GAP + end) {
+    return "inline";
+  }
+  if (widths.row >= widths.name + PANE_HEADER_GAP + end) return "status_below";
+  return widths.preview > 0 ? "preview_below" : "status_below";
 }
 
 function BattlePane({
@@ -596,7 +675,27 @@ function BattlePanes({
   const jumpRefB = useRef<JumpToMessage | null>(null);
   const jumpA = useCallback<JumpToMessage>((messageId) => jumpRefA.current?.(messageId), []);
   const jumpB = useCallback<JumpToMessage>((messageId) => jumpRefB.current?.(messageId), []);
-  const headerProps = { serverId, workspaceId, agentId, turnId, paneView, onPaneViewChange };
+  const [fits, setFits] = useState<Record<ArenaSide, PaneHeadingFit>>({
+    a: "inline",
+    b: "inline",
+  });
+  const handleFitChange = useCallback((side: ArenaSide, fit: PaneHeadingFit) => {
+    setFits((current) => (current[side] === fit ? current : { ...current, [side]: fit }));
+  }, []);
+  // Side by side, both headings put the status under the name as soon as either needs to, so the
+  // two headings keep one shape. A hidden pane's heading does not count.
+  const visibleFits = paneView === "both" ? [fits.a, fits.b] : [paneView === "a" ? fits.a : fits.b];
+  const statusBelow = visibleFits.some((fit) => FIT_ORDER[fit] >= FIT_ORDER.status_below);
+  const headerProps = {
+    serverId,
+    workspaceId,
+    agentId,
+    turnId,
+    paneView,
+    onPaneViewChange,
+    statusBelow,
+    onFitChange: handleFitChange,
+  };
   return (
     <>
       {/* A child of the battle, not of the panes, so it stays stuck through the review below. */}
@@ -1010,12 +1109,25 @@ const styles = StyleSheet.create((theme) => ({
   paneHeaderRow: {
     flexDirection: "row",
     alignItems: "flex-start",
-    gap: theme.spacing[2],
+    gap: PANE_HEADER_GAP,
     marginTop: theme.spacing[4],
   },
   paneActionsSlot: {
     height: PANE_NAME_LINE,
     justifyContent: "center",
+  },
+  // The status under the name when the heading's line is full, with Preview at its right end
+  // when even that line had no room for it.
+  paneStatusLine: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    flexWrap: "wrap",
+    gap: PANE_HEADER_GAP,
+  },
+  // Stays at the right end even when the line is too short for both and it wraps.
+  paneStatusLinePreview: {
+    marginLeft: "auto",
   },
   paneHeading: {
     flex: 1,
@@ -1023,9 +1135,15 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: "row",
     alignItems: "baseline",
     flexWrap: "wrap",
-    columnGap: theme.spacing[2] + theme.spacing[0.5],
+    columnGap: PANE_HEADING_GAP,
+  },
+  paneStatus: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    columnGap: PANE_HEADING_GAP,
   },
   // The contestants are the headline of the battle, so their names are the largest type in it.
+  // Never shrinks or truncates: the heading measures its full width to decide what moves.
   agentName: {
     flexShrink: 0,
     lineHeight: PANE_NAME_LINE,
