@@ -264,7 +264,9 @@ function isProcessAlive(pid: number) {
  * own report, so a marker left behind is the only trace of the rest.
  *
  * A run that started before this boot ended with the machine: Windows ends the daemon at shutdown
- * or restart without a signal it can handle, so that marker is not a crash.
+ * or restart without a signal it can handle, so that marker is not a crash. A Windows shut down
+ * with Fast Startup keeps the uptime, so the app also marks every run at the session's end
+ * (`recordSessionEnding`).
  */
 export function claimRunningMarker(input: {
   readonly home: string;
@@ -345,6 +347,34 @@ export function recordMarkerStopping(home: string, name: string): void {
     writeFileSync(file, JSON.stringify({ ...marker, stoppingAt: new Date().toISOString() }));
   } catch {
     // No marker of this process: nothing would report its end anyway.
+  }
+}
+
+/**
+ * Records that the computer is ending the user's session (shut down, restart, sign out), so no run
+ * it takes down reports a crash, whichever process it belongs to. Windows tells only the app's
+ * windows, then ends every process without a signal, the daemon included, and a shut down with
+ * Fast Startup keeps the uptime that `claimRunningMarker` checks. Synchronous: the system may end
+ * the process as soon as the app has handled the notice.
+ */
+export function recordSessionEnding(home: string): void {
+  const directory = crashReportsDirectory(home);
+  let names: string[];
+  try {
+    names = readdirSync(directory).filter((name) => name.endsWith(".running"));
+  } catch {
+    return;
+  }
+  const stoppingAt = new Date().toISOString();
+  for (const name of names) {
+    const file = path.join(directory, name);
+    try {
+      const marker = runningMarkerSchema.parse(JSON.parse(readFileSync(file, "utf8")));
+      if (marker.stoppingAt) continue;
+      writeFileSync(file, JSON.stringify({ ...marker, stoppingAt }));
+    } catch {
+      // Unreadable: the next start reads it as no marker, so it reports nothing either.
+    }
   }
 }
 

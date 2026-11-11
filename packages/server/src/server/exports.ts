@@ -7,6 +7,7 @@ export {
   describeError,
   describeUncleanShutdown,
   recordCrashReport,
+  recordSessionEnding,
   releaseRunningMarker,
   releaseStoppedMarker,
 } from "./crash-reports/store.js";

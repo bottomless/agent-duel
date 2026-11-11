@@ -152,7 +152,11 @@ The daemon password and account session are separate credentials; a remote clien
   message before a release sends it; an older one drops it without an error.
 - A daemon killed after it began a requested shutdown is a normal exit. Quitting the desktop app
   kills a daemon that is still stopping after 5 seconds, so the worker marks its running marker
-  as stopping (`recordMarkerStopping`) before anything that can hang.
+  as stopping (`recordMarkerStopping`) before anything that can hang. A Windows shut down, restart
+  or sign out skips `before-quit` and ends the app and the daemon without a signal. Only the app's
+  windows hear of it (`session-end`), so the app marks every marker then (`recordSessionEnding`).
+  The boot-time check in `claimRunningMarker` misses it: a shut down with Fast Startup keeps the
+  uptime.
 - The control plane can refuse builds below a minimum version or on a blocklist. It then answers
   `/api/auth/methods` with `updateRequired: true`, and the account gate shows the update screen
   (`packages/app/src/accounts/update-required.tsx`) in place of sign-in, terms and the app. The
