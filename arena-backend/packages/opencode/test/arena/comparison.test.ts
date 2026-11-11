@@ -857,7 +857,7 @@ test("complete computed JSON evidence makes one call without a missing-evidence 
     },
   })
   expect(calls).toBe(1)
-  expect(result.promptVersion).toBe("arena-comparison-v14")
+  expect(result.promptVersion).toBe("arena-comparison-v15")
   expect(result.truncated).toBe(false)
   expect(result.omittedArtifacts).toEqual([])
   expect(result.utilityInputManifest.every((item) => !item.truncated)).toBe(true)
@@ -871,6 +871,8 @@ async function summarize(input: {
   baseToB?: string
   transcriptA: string
   transcriptB: string
+  earlierFiles?: string[]
+  files?: Parameters<typeof generate>[0]["files"]
 }) {
   setArenaCredentials({
     mode: "hosted",
@@ -960,4 +962,84 @@ test("keeps the ask that follows a long paste in an oversized prompt", async () 
   expect(prompt).toContain("ASK-AT-END: why does the build fail?")
   expect(prompt).toContain(`[${userPrompt.length - 12_000} characters omitted by Arena utility-input limit]`)
   expect(prompt).not.toContain(userPrompt)
+})
+
+const changedBoth = (file: string) => ({
+  file,
+  changedA: true,
+  changedB: true,
+  sameResult: true,
+  additionsA: 0,
+  deletionsA: 1,
+  additionsB: 0,
+  deletionsB: 1,
+  binaryA: false,
+  binaryB: false,
+})
+const earlierSection = (prompt: string) => {
+  const start = prompt.indexOf("## Files changed earlier in this chat")
+  return start === -1 ? "" : prompt.slice(start, prompt.indexOf("## Visible current-turn timeline A"))
+}
+
+test("names the files the chat changed before the turn, apart from the ones this turn changed", async () => {
+  const { prompt } = await summarize({
+    userPrompt: "Keep the rule, drop its test",
+    baseToA: gitPatch("after-a"),
+    transcriptA: "Removed the test.",
+    transcriptB: "Removed the test. The rule added in prompts/system.md stays.",
+    earlierFiles: ["prompts/system.md", "code.ts", 'odd "name".md'],
+    files: [changedBoth("code.ts")],
+  })
+  const section = earlierSection(prompt)
+  expect(section).toContain("Neither agent changed them in this turn:")
+  expect(section).toContain('"prompts/system.md", "odd \\"name\\".md"')
+  expect(section).not.toContain("code.ts")
+  expect(prompt.indexOf("## File evidence")).toBeLessThan(prompt.indexOf(section))
+})
+
+test("leaves the earlier-files section out when it would name nothing", async () => {
+  const input = {
+    userPrompt: "Fix the bug",
+    baseToA: gitPatch("after-a"),
+    transcriptA: "Done",
+    transcriptB: "Done",
+  }
+  expect(earlierSection((await summarize(input)).prompt)).toBe("")
+  const sameFiles = await summarize({ ...input, earlierFiles: ["code.ts"], files: [changedBoth("code.ts")] })
+  expect(earlierSection(sameFiles.prompt)).toBe("")
+})
+
+test("stops a long chat's earlier-files list and says how many more there are", async () => {
+  const { prompt } = await summarize({
+    userPrompt: "Fix the bug",
+    baseToA: gitPatch("after-a"),
+    transcriptA: "Done",
+    transcriptB: "Done",
+    earlierFiles: Array.from({ length: 100 }, (_, index) => `src/file-${index}.ts`),
+  })
+  const section = earlierSection(prompt)
+  expect(section).toContain('"src/file-39.ts", and 60 more')
+  expect(section).not.toContain("src/file-40.ts")
+  const long = await summarize({
+    userPrompt: "Fix the bug",
+    baseToA: gitPatch("after-a"),
+    transcriptA: "Done",
+    transcriptB: "Done",
+    earlierFiles: Array.from({ length: 30 }, (_, index) => `${"deep/".repeat(40)}file-${index}.ts`),
+  })
+  expect(earlierSection(long.prompt).length).toBeLessThan(2_400)
+  expect(earlierSection(long.prompt)).toMatch(/, and \d+ more\n/)
+})
+
+test("says the attribution rule once more after the timelines", async () => {
+  const { prompt } = await summarize({
+    userPrompt: "Fix the bug",
+    baseToA: gitPatch("after-a"),
+    transcriptA: "A-FINAL-ANSWER",
+    transcriptB: "B-FINAL-ANSWER",
+  })
+  const reminder = prompt.slice(prompt.indexOf("B-FINAL-ANSWER"))
+  expect(reminder).toContain("## Reminder")
+  expect(reminder).toContain("never credit an agent with a change its base patch does not show.")
+  expect(prompt.endsWith("does not show.")).toBe(true)
 })
