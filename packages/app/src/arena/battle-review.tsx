@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, type ReactNode } from "react";
 import { Text, View, type LayoutChangeEvent } from "react-native";
 import { useContainerWidth } from "@/hooks/use-container-width";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
+import { isWeb } from "@/constants/platform";
 import type {
   ArenaComparisonDiff,
   ArenaSide,
@@ -287,6 +288,7 @@ export function BattleReview({
   rows,
   onRetryDiff,
   retryingDiff,
+  band = false,
 }: {
   serverId: string;
   agentId: string;
@@ -304,6 +306,8 @@ export function BattleReview({
   rows: readonly ArenaChangesRow[];
   onRetryDiff: () => void;
   retryingDiff: boolean;
+  /** On the judging band: only the live battle's review, when it shows. */
+  band?: boolean;
 }) {
   const { t } = useTranslation();
   // The reader's choices live in the review store so review telemetry can
@@ -423,7 +427,7 @@ export function BattleReview({
 
   if (hidden) return null;
   return (
-    <ReviewFrame onLayout={onLayout} turnId={turnId}>
+    <ReviewFrame onLayout={onLayout} turnId={turnId} band={band}>
       <ReviewHeader
         tabs={tabs}
         tab={tab}
@@ -442,10 +446,12 @@ export function BattleReview({
 function ReviewFrame({
   onLayout,
   turnId,
+  band,
   children,
 }: {
   onLayout: (event: LayoutChangeEvent) => void;
   turnId: string;
+  band: boolean;
   children: ReactNode;
 }) {
   // Review telemetry listens to scrolls on the whole document; this tells it which diffs are
@@ -453,7 +459,7 @@ function ReviewFrame({
   const reviewData = useMemo(() => ({ reviewTurn: turnId }), [turnId]);
   return (
     <View
-      style={styles.review}
+      style={band ? [styles.review, styles.band] : styles.review}
       onLayout={onLayout}
       testID="arena-battle-comparison"
       dataSet={reviewData}
@@ -464,6 +470,22 @@ function ReviewFrame({
 }
 
 const styles = StyleSheet.create((theme) => ({
+  // The review and the decision row share one faint surface, edge to edge, so judging reads as its
+  // own zone under the answers without a separating line. Painted by the review itself, so a battle
+  // with nothing to review yet, such as while both sides work, has no empty band above Stop.
+  band: {
+    backgroundColor: theme.colors.surface1,
+    marginTop: theme.spacing[6],
+    // Carries the colour past the reading column to the pane's edges, clipped to the band's height.
+    ...(isWeb
+      ? ({
+          boxShadow: `0 0 0 100vmax ${theme.colors.surface1}`,
+          // Open at the bottom too, so the band runs on under the empty end of the chat into the
+          // decision row's band without a white gap.
+          clipPath: "inset(0 -100vmax -100vmax)",
+        } as unknown as Record<never, never>)
+      : {}),
+  },
   // In the chat under the answers, on their text edge, with no rule across both of them.
   review: {
     paddingTop: theme.spacing[4] + theme.spacing[1],

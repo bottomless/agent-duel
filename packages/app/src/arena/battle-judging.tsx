@@ -73,6 +73,7 @@ function BattleJudging({
   phase,
   retrying,
   onRetry,
+  band = false,
 }: {
   serverId: string;
   agentId: string;
@@ -86,6 +87,8 @@ function BattleJudging({
   phase: Exclude<BattleReviewPhase, { kind: "none" }>;
   retrying: boolean;
   onRetry: () => void;
+  /** The live battle's review sits on the judging band; a shown battle's does not. */
+  band?: boolean;
 }) {
   // A turn's comparison is pending from its creation, which while one side still works would
   // read as a summary on its way; nothing starts until both sides finish.
@@ -127,6 +130,7 @@ function BattleJudging({
       rows={rows}
       onRetryDiff={retryDiff}
       retryingDiff={diffQuery.isFetching}
+      band={band}
     />
   );
 }
@@ -164,6 +168,7 @@ export function ArenaLiveReview({
       phase={phase}
       retrying={actions.pendingAction?.kind === "retry_comparison"}
       onRetry={actions.retryComparison}
+      band
     />
   );
 }
