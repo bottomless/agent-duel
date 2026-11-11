@@ -118,6 +118,7 @@ import {
 import {
   acceptWinnerConflicts,
   battleRefs,
+  changedBetweenBases,
   compare,
   comparisonFiles,
   comparisonTrees,
@@ -5460,6 +5461,19 @@ export const layer: Layer.Layer<
           ),
         { concurrency: 3, discard: true },
       )
+      // What the chat changed before this turn. A contestant's text can recap that work as its own,
+      // so the report is told which files it covers. Best effort: the report never waits on it.
+      const earlierFiles =
+        turn.turnIndex > 0
+          ? yield* promise(() => store.turnsForChat(turn.chatID)).pipe(
+              Effect.flatMap(([first]) =>
+                first && first._id !== turn._id
+                  ? withGit(changedBetweenBases({ canonical, from: first.frozenBaseSHA, to: turn.frozenBaseSHA }))
+                  : Effect.succeed<string[]>([]),
+              ),
+              Effect.catch(() => Effect.succeed<string[]>([])),
+            )
+          : []
       const comparison = yield* promise(() =>
         generateComparison({
           store,
@@ -5467,6 +5481,7 @@ export const layer: Layer.Layer<
           turnIndex: turn.turnIndex,
           userPrompt: turn.userPrompt,
           userAttachments: ArenaAttachments.describeForJudge(turn.userAttachments),
+          earlierFiles,
           baseCommit: turn.frozenBaseSHA,
           aCommit: a.result.finalCommit,
           bCommit: b.result.finalCommit,

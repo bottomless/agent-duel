@@ -8,15 +8,15 @@ import { prepareEvidence, type ComparisonFileFact } from "./comparison-evidence"
 // first choice here and the model that answered in `resolvedModel`.
 export const model = utilityModels[0].id
 export const provider = utilityModels[0].provider
-export const promptVersion = "arena-comparison-v14"
+export const promptVersion = "arena-comparison-v15"
 
 // The caps add up to one budget. Qwen on Cerebras lists a 65,536-token window; it accepted a
 // 51,909-token prompt, and OpenRouter refused one of about 62,000 for its length. Summaries run
 // 3.3 to 3.9 characters a token. The prompt, the file evidence (64,000, `comparison-evidence.ts`),
-// two timelines and the instructions come to about 160,000 characters at most, so at most about
-// 48,000 tokens. The longest report with its reasoning has used under 3,000. A denser input that
-// still overflows is refused and falls back to DeepSeek on Baseten, whose window is 1,048,576
-// tokens.
+// two timelines, the instructions and the earlier-files list come to about 160,000 characters at
+// most, so at most about 48,000 tokens. The longest report with its reasoning has used under
+// 3,000. A denser input that still overflows is refused and falls back to DeepSeek on Baseten,
+// whose window is 1,048,576 tokens.
 const MAX_PROMPT_CHARS = 12_000
 // A prompt over the cap is cut like a timeline: a pasted log or file usually comes first and the
 // ask after it, so a head-only cut sent the summary a paste without its question.
@@ -35,6 +35,10 @@ const MAX_RETRY_AFTER_MS = 30_000
 // How often a wait between attempts checks whether the turn was decided meanwhile.
 const DECIDED_POLL_MS = 1_000
 const MAX_TITLE_CHARS = 80
+// The list of files a chat changed before the turn is a hint for reading recaps, not evidence to
+// weigh, so a long chat's list stops here and says how many more there are.
+const MAX_EARLIER_FILES = 40
+const MAX_EARLIER_FILES_CHARS = 2_000
 const encoder = new TextEncoder()
 
 /**
@@ -60,6 +64,8 @@ type Input = {
   readonly userPrompt: string
   /** What the prompt carried besides text, as `ArenaAttachments.describeForJudge` renders it. */
   readonly userAttachments?: string
+  /** Files that differ between the chat's first base and this turn's, from `ArenaGit.changedBetweenBases`. */
+  readonly earlierFiles?: readonly string[]
   readonly baseCommit: string
   readonly aCommit: string
   readonly bCommit: string
@@ -98,6 +104,31 @@ function boundedPrompt(value: string) {
 
 function boundedTimeline(value: string) {
   return bounded(value, MAX_TRANSCRIPT_CHARS, TRANSCRIPT_HEAD_CHARS)
+}
+
+/**
+ * The files the chat changed before this turn that neither side touched in it. A side's text often
+ * recaps that work as its own; naming the files lets the report match the recap to a computed fact.
+ */
+function earlierSection(input: Pick<Input, "earlierFiles" | "files">) {
+  const changedNow = new Set(input.files.map((fact) => fact.file))
+  const earlier = (input.earlierFiles ?? []).filter((file) => !changedNow.has(file))
+  const listed: string[] = []
+  let chars = 0
+  for (const file of earlier.slice(0, MAX_EARLIER_FILES)) {
+    const name = JSON.stringify(file)
+    if (chars + name.length > MAX_EARLIER_FILES_CHARS) break
+    listed.push(name)
+    chars += name.length + 2
+  }
+  if (!listed.length) return []
+  const more = earlier.length - listed.length
+  return [
+    "## Files changed earlier in this chat",
+    "Computed from git. These files were changed before this turn and are part of the base. Neither agent changed them in this turn:",
+    `${listed.join(", ")}${more > 0 ? `, and ${more} more` : ""}`,
+    "",
+  ]
 }
 
 function number(value: unknown) {
@@ -320,11 +351,18 @@ export async function generate(input: Input) {
     "## File evidence",
     evidence.text,
     "",
+    ...earlierSection(input),
     "## Visible current-turn timeline A",
     transcriptA.value,
     "",
     "## Visible current-turn timeline B",
     transcriptB.value,
+    "",
+    // The rules above sit before as much as 150,000 characters of evidence and timelines. The
+    // timelines come last and end on each side's own account of its work, so the attribution rule
+    // is said once more after them.
+    "## Reminder",
+    "Only an agent's own base patch shows what it changed. The timelines above show what the agents said, not what they changed: never credit an agent with a change its base patch does not show.",
   ].join("\n")
   const requestBody = JSON.stringify({
     model,

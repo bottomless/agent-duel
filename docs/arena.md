@@ -1316,14 +1316,17 @@ establishes who changed what and exposes shared mistakes; A/B differences keep a
 visible beside large generated files. The timelines never establish who changed what: from the
 second turn on, each contestant's history holds the earlier winners' work as its own, so its text
 can recap code it never touched, and a judge that read the recap as an edit credited that side
-with the previous winner's work. Compare complete JSON before budgeting, preserving numeric
-tokens and duplicate keys. Match array records by id only when both arrays have unique scalar
-ids; otherwise retain positions. A missing excerpt is unknown. File equality and equal
-record counts do not prove correctness or preservation against the task. A complete computed
-comparison can establish file-specific facts without sending the raw contents. Summarization
-alone is not missing evidence: warn on live and archived summaries only when comparison details
-were omitted. Preservation claims must stay scoped to the file and side actually verified.
-Use one utility request; increase evidence quality before adding model passes.
+with the previous winner's work. A later turn's request therefore names the files the chat
+changed before it and neither side touched in it, computed from the first turn's base, so a
+recap meets a fact about that file. It repeats the attribution rule after the timelines, because
+they come last and end on each side's own account of its work. Compare complete JSON before
+budgeting, preserving numeric tokens and duplicate keys. Match array records by id only when both
+arrays have unique scalar ids; otherwise retain positions. A missing excerpt is unknown. File
+equality and equal record counts do not prove correctness or preservation against the task. A
+complete computed comparison can establish file-specific facts without sending the raw contents.
+Summarization alone is not missing evidence: warn on live and archived summaries only when
+comparison details were omitted. Preservation claims must stay scoped to the file and side
+actually verified. Use one utility request; increase evidence quality before adding model passes.
 
 ## Resolving
 

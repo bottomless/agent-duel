@@ -5718,6 +5718,20 @@ export const compare = Effect.fn("ArenaGit.compare")(
 )
 
 /**
+ * The files that differ between an earlier turn's base and a later one's: what the chat changed in
+ * between, which is in the later base and is neither contestant's work in that turn.
+ */
+export const changedBetweenBases = Effect.fn("ArenaGit.changedBetweenBases")(function* (input: {
+  readonly canonical: string
+  readonly from: string
+  readonly to: string
+}) {
+  const git = yield* Git.Service
+  const root = yield* readRoot(git, input.canonical, "find_canonical_root")
+  return yield* changedPaths(git, root, input.from, input.to)
+}, comparisonDeadline)
+
+/**
  * One changed file's contents at the base and on each side, and git's merge of the two where both
  * touched it. Refuses a path neither side changed, so the read stays inside the battle's diff.
  */
