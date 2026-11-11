@@ -106,6 +106,7 @@ export const ru: TranslationResources = {
     askFollowUp: "Задать уточняющий вопрос",
     openTerminalIn: "Открыть терминал в worktree агента {{side}}",
     keptOver: "вместо {{model}}",
+    keptTied: "вничью с {{model}}",
     showBattle: "Показать битву",
     hideBattle: "Скрыть битву",
     keptAgent: "Агент {{side}} · оставлен",

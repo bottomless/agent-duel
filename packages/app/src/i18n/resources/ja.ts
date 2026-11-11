@@ -107,6 +107,7 @@ export const ja: TranslationResources = {
     askFollowUp: "フォローアップを送る",
     openTerminalIn: "エージェント{{side}}のworktreeでターミナルを開く",
     keptOver: "（{{model}} ではなく）",
+    keptTied: "（{{model}} と引き分け）",
     showBattle: "バトルを表示",
     hideBattle: "バトルを隠す",
     keptAgent: "エージェント{{side}} · 採用",

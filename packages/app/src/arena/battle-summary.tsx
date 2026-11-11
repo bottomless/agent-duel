@@ -35,6 +35,7 @@ import { ARENA_MAX_CONTENT_WIDTH, ARENA_PANE_BASIS_WIDTH } from "@/constants/lay
 import { ICON_SIZE, type Theme } from "@/styles/theme";
 import {
   battleFailedToStart,
+  battleKeptSide,
   battleWinnerSide,
   gitApplicationNotice,
   isStoppedByEarlyPick,
@@ -337,7 +338,9 @@ export function ArenaKeptByline({ agentId, item }: { agentId: string; item: Aren
       </Text>
       {opponent ? (
         <Text style={styles.bylineMeta} numberOfLines={1} testID={`arena-opponent-${item.id}`}>
-          {t("arena.keptOver", { model: arenaModelDisplayName(opponent) })}
+          {t(item.vote === "tie" ? "arena.keptTied" : "arena.keptOver", {
+            model: arenaModelDisplayName(opponent),
+          })}
         </Text>
       ) : null}
       <BylineNotes item={item} />
@@ -392,8 +395,8 @@ function BylineNotes({ item }: { item: ArenaHistoryItem }) {
 
 /** The model a decided battle kept, when one was kept and named. */
 function keptModel(item: ArenaHistoryItem): string | undefined {
-  const winner = battleWinnerSide(item);
-  return winner ? item.identities?.[winner].name : undefined;
+  const kept = battleKeptSide(item);
+  return kept ? item.identities?.[kept].name : undefined;
 }
 
 /**
@@ -401,9 +404,9 @@ function keptModel(item: ArenaHistoryItem): string | undefined {
  * the reveal named only the winner and the other contestant left no trace in the chat.
  */
 function opponentModel(item: ArenaHistoryItem): string | undefined {
-  const winner = battleWinnerSide(item);
-  if (!winner) return undefined;
-  return item.identities?.[winner === "a" ? "b" : "a"].name;
+  const kept = battleKeptSide(item);
+  if (!kept) return undefined;
+  return item.identities?.[kept === "a" ? "b" : "a"].name;
 }
 
 function showBattleStyle() {
