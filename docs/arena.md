@@ -254,6 +254,12 @@ heading at the agents' rank. With no summary the switch holds Changes alone, so 
 the same head. Do not mark the columns with A and B letters; the owner turned them down, and the
 columns sit under their answers.
 
+The review, the decision row and the composer's area sit on one `surface1` band, edge to edge,
+with the answers on the page above it. That separates judging from the answers without a line: the
+owner removed the rules that used to do it and does not want them back. The band runs on under the
+empty end of the chat into the decision row (`reviewBand` in `battle-view.tsx`; on web a clipped
+spread shadow carries it past the reading column).
+
 Everything about one side sits under that side, and only what is about both spans the columns. Each
 column opens with a hairline. The summary puts each side's sentences and its value in each row of
 the differences table under that side's answer (`summary-columns.ts`). Changes heads each column
@@ -261,7 +267,8 @@ with that side's file count and total, then gives each file one row: what A did 
 under B, "unchanged" on the side that left it alone (`SplitChangesRow` in `changes-list.tsx`).
 An opened file puts A's code in a box under A and B's in a box under B, across the same gutter, with
 only each side's expand above it (`onColumns` in `base-relative-view.tsx`). The review's switch and
-the diff layout toggle are the same control (`segmented-switch.tsx`).
+the diff layout toggle are the design system's `SegmentedControl`, like the composer's reply
+target: custom switch styles drawn for the review never matched the rest of the app.
 Below the width at which the answers stack, a row keeps both counts on one line. When neither side
 changed a file, the engine writes no summary (identical results skip it, `comparison.ts`), so the
 review would be a lone Changes pill over "No changes" twice: it shows nothing at all

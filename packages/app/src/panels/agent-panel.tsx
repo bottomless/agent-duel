@@ -147,7 +147,7 @@ import {
 } from "@/arena/composer-state";
 import { ArenaDecisionBar } from "@/arena/decision-bar";
 import { arenaSetupStatus } from "@/arena/transition-progress";
-import { ArenaDecisionPill } from "@/arena/decision-pill";
+import { ArenaDecisionPill, arenaDecisionRowVisible } from "@/arena/decision-pill";
 import { arenaDecisionPhase } from "@/arena/decision-state";
 import { useArenaBattleActions } from "@/arena/use-battle-actions";
 import { showsArenaDecisionBar } from "@/arena/decision-state";
@@ -1830,12 +1830,21 @@ const AgentStreamSection = memo(function AgentStreamSection({
     );
   }, [agent.id, serverId, summaryAnchorKey, summaryPlacement.inline, workspaceId]);
 
+  // While the composer is out, the decision row floats over the end of the chat and reserves no
+  // space of its own (`bottomOverlayHeight` only places the scroll button), so the battle keeps the
+  // row's measured height clear below its last line. Docked in the composer's place, the row is in
+  // the layout and reports 0, leaving only the breath.
+  const bottomClearance = useMemo(
+    () => ({ paddingBottom: bottomOverlayHeight + ACTIVE_BATTLE_BREATH }),
+    [bottomOverlayHeight],
+  );
+
   // The active battle owns setup progress and the contestant panes in the stream.
   const activeBattle = useMemo(() => {
     const snapshot = arenaSession.data;
     if (!snapshot || !arenaBattleOnScreen) return null;
     return (
-      <View style={styles.activeBattleContent}>
+      <View style={bottomClearance}>
         <ArenaBattleView
           serverId={serverId}
           workspaceId={workspaceId}
@@ -1850,6 +1859,7 @@ const AgentStreamSection = memo(function AgentStreamSection({
     agent.id,
     arenaBattleOnScreen,
     arenaSession.data,
+    bottomClearance,
     chatHasRows,
     serverId,
     startingBattle,
@@ -2123,8 +2133,9 @@ const AgentComposerSection = memo(function AgentComposerSection({
       </View>
     );
   }
+  const band = arenaSession.data ? arenaDecisionRowVisible(arenaSession.data) : false;
   return (
-    <View style={styles.composerSlot}>
+    <View style={[styles.composerSlot, band && styles.composerBand]}>
       {arenaSession.data ? (
         <ArenaDecisionPill
           serverId={serverId}
@@ -2887,6 +2898,9 @@ const animatedStaticStyles = RNStyleSheet.create({
   },
 });
 
+// Space after the battle's last line, above the decision row.
+const ACTIVE_BATTLE_BREATH = 12;
+
 const styles = StyleSheet.create((theme) => ({
   root: {
     flex: 1,
@@ -2899,6 +2913,10 @@ const styles = StyleSheet.create((theme) => ({
   composerSlot: {
     position: "relative",
     zIndex: 1,
+  },
+  // While a battle's decision row is up, the composer's area continues the review's band.
+  composerBand: {
+    backgroundColor: theme.colors.surface1,
   },
   contentContainer: {
     flex: 1,
@@ -2995,10 +3013,6 @@ const styles = StyleSheet.create((theme) => ({
     textAlign: "center",
     fontSize: theme.fontSize.base,
     color: theme.colors.foregroundMuted,
-  },
-  // Scroll the last review lines above the floating vote, including its stopped-battle hint.
-  activeBattleContent: {
-    paddingBottom: theme.spacing[20],
   },
   arenaReadyContent: {
     gap: theme.spacing[3],

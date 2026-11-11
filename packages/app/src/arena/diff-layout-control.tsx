@@ -1,12 +1,12 @@
 import { useTranslation } from "react-i18next";
 import { useCallback } from "react";
+import { SegmentedControl } from "@/components/ui/segmented-control";
 import {
   diffLayoutOptions,
   useArenaDiffLayout,
   useArenaDiffLayoutStore,
   type ArenaDiffLayout,
 } from "./diff-layout";
-import { ArenaSegmentedSwitch } from "./segmented-switch";
 
 /**
  * The one control over how a chat's diffs are laid out: A beside B, or one
@@ -21,11 +21,10 @@ export function DiffLayoutControl({ agentId, width }: { agentId: string; width: 
     [agentId, setLayout],
   );
   return (
-    <ArenaSegmentedSwitch
+    <SegmentedControl
       options={diffLayoutOptions(t)}
       value={layout}
-      onChange={onChange}
-      role="radiogroup"
+      onValueChange={onChange}
       size="xs"
       testID="arena-diff-layout"
     />
