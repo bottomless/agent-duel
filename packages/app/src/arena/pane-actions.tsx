@@ -30,15 +30,34 @@ const ThemedMaximize2 = withUnistyles(Maximize2);
 const ThemedMinimize2 = withUnistyles(Minimize2);
 const mutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
 
+/** The pane's running app, if it has one. The heading places it beside its actions or under them. */
+export function ArenaPanePreview({
+  turnId,
+  side,
+  run,
+}: {
+  turnId: string;
+  side: ArenaSide;
+  run: ArenaRun | undefined;
+}) {
+  const preview = useMemo(
+    () => (run ? lifecycleServiceEntries(run) : []).find((entry) => entry.preview),
+    [run],
+  );
+  if (!preview) return null;
+  return (
+    <PreviewButton turnId={turnId} entry={preview} side={side} testID={`arena-preview-${side}`} />
+  );
+}
+
 /**
- * Where each answer came from, at the end of its heading: the running app, a shell in the agent's
- * worktree, and a menu with the rest (its path, its services, room for this answer alone).
+ * Where each answer came from, at the end of its heading: a shell in the agent's worktree and a
+ * menu with the rest (its path, its services, room for this answer alone).
  */
 export function ArenaPaneActions({
   serverId,
   workspaceId,
   agentId,
-  turnId,
   side,
   run,
   expanded,
@@ -47,25 +66,15 @@ export function ArenaPaneActions({
   serverId: string;
   workspaceId: string;
   agentId: string;
-  turnId: string;
   side: ArenaSide;
   run: ArenaRun | undefined;
   expanded: boolean;
   onToggleExpanded: () => void;
 }) {
   const entries = useMemo(() => (run ? lifecycleServiceEntries(run) : []), [run]);
-  const preview = entries.find((entry) => entry.preview);
   const worktree = run?.worktree && run.worktreeActive ? run.worktree : null;
   return (
     <View style={styles.actions}>
-      {preview ? (
-        <PreviewButton
-          turnId={turnId}
-          entry={preview}
-          side={side}
-          testID={`arena-preview-${side}`}
-        />
-      ) : null}
       {worktree ? (
         <WorktreeActions
           serverId={serverId}
