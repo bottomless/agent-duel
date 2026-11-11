@@ -79,7 +79,6 @@ export const ar: TranslationResources = {
     loadingBaseChanges: "جارٍ تحميل التغييرات عن الأساس…",
     baseChanges: "التغييرات عن الأساس",
     retryChanges: "إعادة تحميل التغييرات",
-    noChangesWhile: "لم يُجرِ تغييرات ·",
     baseUnavailable: "التغييرات عن الأساس غير متاحة",
     summary: "ملخص الفروق",
     changes: "التغييرات",

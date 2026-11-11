@@ -80,7 +80,6 @@ export const ja: TranslationResources = {
     loadingBaseChanges: "ベースからの変更を読み込み中…",
     baseChanges: "ベースからの変更",
     retryChanges: "変更を再読み込み",
-    noChangesWhile: "は変更なし ·",
     baseUnavailable: "ベースからの変更は表示できません",
     summary: "差分の要約",
     changes: "変更",
