@@ -33,7 +33,6 @@ import {
 } from "./comparison-visibility";
 import { comparisonDiff, threeWayFile } from "./review-fixtures.test-helpers";
 import {
-  arenaKeptAnswerFooterRowId,
   arenaKeptAnswerRowIds,
   arenaSummaryAnchor,
   arenaSummaryAnchors,
@@ -301,15 +300,6 @@ describe("a battle with replies sent inside it", () => {
       "msg_0150",
       "answer-3",
     ]);
-  });
-
-  it("names the kept model in the footer under the battle's last text, not a later turn's", () => {
-    const stream = { tail: [...battleRows, ...later], head: [] };
-    expect(arenaKeptAnswerFooterRowId(battle, stream)).toBe("answer-3");
-    // Work after the last text stays in the turn; the footer still hangs off that text.
-    const withTrailingWork = { tail: [...battleRows, shellCall("tool-3"), ...later], head: [] };
-    expect(arenaKeptAnswerFooterRowId(battle, withTrailingWork)).toBe("answer-3");
-    expect(arenaKeptAnswerFooterRowId(battle, { tail: later, head: [] })).toBeNull();
   });
 
   it("anchors a turn grafted without the bound at its own prompt too", () => {

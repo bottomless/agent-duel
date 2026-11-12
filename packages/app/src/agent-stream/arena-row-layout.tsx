@@ -3,18 +3,22 @@ import { View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { ARENA_MAX_CONTENT_WIDTH } from "@/constants/layout";
 import { BATTLE_RAIL } from "@/arena/battle-layout";
+import { ArenaAnswerColumn } from "@/arena/turn-head";
 
 /**
  * An Agent Duel chat lays its rows on the battle's rails, so the conversation after a battle starts
  * where the battle's answers did. Rows keep the chat's reading width from that left edge; a battle's
- * prompt is the chat's bubble at the battle's right edge, where the live battle shows it.
+ * prompt is the chat's bubble at the battle's right edge, where the live battle shows it. Answers
+ * sit after an avatar column, each opened by its author's avatar and name (`ArenaTurnHead`).
  */
 interface ArenaRowLayout {
   promptIds: ReadonlySet<string> | undefined;
   /** Rows that start a new turn: a rule above them closes the turn before. */
   ruledIds: ReadonlySet<string> | undefined;
-  /** What ends a turn's footer, at the battle's right edge, keyed by the footer's host row. */
-  footerEnds: ReadonlyMap<string, ReactNode> | undefined;
+  /** Every prompt row: the rest of the chat is answers, set after the avatar column. */
+  userRowIds: ReadonlySet<string> | undefined;
+  /** The head that opens each answer, keyed by the answer's first row. */
+  heads: ReadonlyMap<string, ReactNode> | undefined;
 }
 
 const ArenaRowLayoutContext = createContext<ArenaRowLayout | null>(null);
@@ -23,12 +27,13 @@ export function ArenaRowLayoutProvider({
   enabled,
   promptIds,
   ruledIds,
-  footerEnds,
+  userRowIds,
+  heads,
   children,
 }: ArenaRowLayout & { enabled: boolean; children: ReactNode }) {
   const value = useMemo(
-    () => (enabled ? { promptIds, ruledIds, footerEnds } : null),
-    [enabled, footerEnds, promptIds, ruledIds],
+    () => (enabled ? { promptIds, ruledIds, userRowIds, heads } : null),
+    [enabled, heads, promptIds, ruledIds, userRowIds],
   );
   return <ArenaRowLayoutContext.Provider value={value}>{children}</ArenaRowLayoutContext.Provider>;
 }
@@ -46,6 +51,8 @@ export function ArenaRow({
   fullWidth = false,
   prompt = false,
   ruled = false,
+  answer = false,
+  head,
   style,
   children,
 }: {
@@ -53,12 +60,16 @@ export function ArenaRow({
   /** A battle's prompt: its bubble, at the reading width, ends at the battle's right edge. */
   prompt?: boolean;
   ruled?: boolean;
+  /** Part of an answer: set after the avatar column. */
+  answer?: boolean;
+  /** The answer's head, when this row opens it. */
+  head?: ReactNode;
   style?: object;
   children: ReactNode;
 }) {
-  let content = children;
-  if (prompt) content = <View style={styles.prompt}>{children}</View>;
-  else if (!fullWidth) content = <View style={styles.reading}>{children}</View>;
+  let content = answer ? <ArenaAnswerColumn head={head}>{children}</ArenaAnswerColumn> : children;
+  if (prompt) content = <View style={styles.prompt}>{content}</View>;
+  else if (!fullWidth) content = <View style={styles.reading}>{content}</View>;
   return (
     <View style={[styles.row, style]}>
       {ruled ? <View style={styles.rule}>{content}</View> : content}

@@ -220,21 +220,6 @@ export function arenaKeptAnswerRowIds(
   return new Set(items.slice(promptIndex + 1, endIndex + 1).map((streamItem) => streamItem.id));
 }
 
-/**
- * The row whose footer closes a decided battle's kept answer: its last text. A turn's footer hangs
- * off the turn's latest assistant message (`layoutStream`), so that is where the kept model's name
- * and Show battle go. Null when the answer has no text, or is not loaded.
- */
-export function arenaKeptAnswerFooterRowId(
-  item: ArenaHistoryItem,
-  stream: ArenaPresentedStream,
-): string | null {
-  const kept = arenaKeptAnswerRowIds(item, stream);
-  if (kept.size === 0) return null;
-  const rows = [...stream.tail, ...stream.head];
-  return rows.findLast((row) => row.kind === "assistant_message" && kept.has(row.id))?.id ?? null;
-}
-
 /** The rows that show battles' own prompts, which the chat sets as headings. */
 export function arenaBattlePromptRowIds(
   history: readonly ArenaHistoryItem[],
