@@ -45,9 +45,9 @@ describe("ensureBattleRepository", () => {
   });
 
   it.each([
-    ["not_git", "Create a Git repository with an empty first commit?"],
-    ["no_commit", "Create an empty first commit?"],
-  ] as const)("asks before creating the first commit for %s", async (state, explanation) => {
+    ["not_git", "Agent Duel will add a Git repository here (a .git folder) with one empty commit."],
+    ["no_commit", "This repository has no commits yet, so Agent Duel will add one empty commit."],
+  ] as const)("asks before creating the first commit for %s", async (state, action) => {
     const { client, calls } = createClient({ state });
     const { dialogs, confirm } = recordConfirm(true);
 
@@ -59,7 +59,10 @@ describe("ensureBattleRepository", () => {
       confirmLabel: "Create commit",
       cancelLabel: "Cancel",
     });
-    expect(dialogs[0]?.message).toBe(explanation);
+    // Says why a battle needs the commit, what happens to the folder, and that files stay as they are.
+    expect(dialogs[0]?.message).toContain("Each agent works in its own copy of this folder");
+    expect(dialogs[0]?.message).toContain(action);
+    expect(dialogs[0]?.message).toContain("Your files stay as they are and aren't committed.");
     expect(calls).toEqual(["inspect:/folder", "initialize:/folder"]);
   });
 

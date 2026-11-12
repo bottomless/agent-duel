@@ -1,10 +1,11 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawn, type ChildProcess } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DEFAULT_DESKTOP_SETTINGS } from "../settings/desktop-settings";
-import { createDaemonCommandHandlers } from "./daemon-manager";
+import { createDaemonCommandHandlers, stopDesktopDaemon } from "./daemon-manager";
 
 const mocks = vi.hoisted(() => ({
   paseoHome: "",
@@ -275,5 +276,78 @@ describe("daemon-manager commands", () => {
     expect(env?.PASEO_ARENA_BACKEND_EXECUTABLE).toContain("agent-duel-arena");
     expect(env?.PASEO_CONTROL_PLANE_URL).toBeUndefined();
     expect(env?.PASEO_SESSION_PUBLIC_KEY).toBeUndefined();
+  });
+});
+
+describe.runIf(process.platform === "win32")("stopping the managed daemon on Windows", () => {
+  let fixtureRoot: string;
+  let supervisor: ChildProcess | undefined;
+
+  beforeEach(() => {
+    Object.defineProperty(process, "resourcesPath", {
+      configurable: true,
+      value: "/tmp/paseo-desktop-daemon-manager-test-resources",
+    });
+    fixtureRoot = mkdtempSync(path.join(tmpdir(), "paseo daemon stop "));
+    mocks.paseoHome = path.join(fixtureRoot, "home");
+    mkdirSync(path.join(mocks.paseoHome, "crash-reports"), { recursive: true });
+    mocks.settings = DEFAULT_DESKTOP_SETTINGS;
+    mocks.deploymentConfig = HOSTED_DEPLOYMENT_CONFIG;
+    mocks.runExternalCliJsonCommand.mockReset();
+    mocks.startDaemonInstance.mockReset();
+    mocks.createNodeEntrypointInvocation.mockReturnValue({ command: "node", args: [], env: {} });
+  });
+
+  afterEach(() => {
+    delete process.resourcesPath;
+    supervisor?.kill("SIGKILL");
+    supervisor = undefined;
+    rmSync(fixtureRoot, { recursive: true, force: true });
+  });
+
+  it("ends the daemon it launched when the CLI is refused for want of a signed-in account", async () => {
+    const markerPath = path.join(mocks.paseoHome, "crash-reports", "daemon.running");
+    mocks.startDaemonInstance.mockImplementation(
+      async (input: { onAcquired?: (instance: unknown) => void }) => {
+        supervisor = spawn(process.execPath, ["-e", "setTimeout(() => {}, 120_000)"], {
+          stdio: "ignore",
+        });
+        const pid = supervisor.pid;
+        if (pid === undefined) throw new Error("supervisor did not start");
+        const instance = {
+          pid,
+          startedAt: new Date().toISOString(),
+          hostname: hostname(),
+          uid: 0,
+          listen: "127.0.0.1:6798",
+          desktopManaged: true,
+        };
+        writeFileSync(path.join(mocks.paseoHome, "paseo.pid"), JSON.stringify(instance));
+        writeFileSync(
+          markerPath,
+          JSON.stringify({ pid, version: "0.4.0", startedAt: instance.startedAt }),
+        );
+        input.onAcquired?.(instance);
+        return { instance, spawned: true };
+      },
+    );
+    // What a daemon with accounts answers the CLI, which carries no account session.
+    mocks.runExternalCliJsonCommand.mockImplementation(async (args: string[]) => {
+      if (args[0] === "daemon" && args[1] === "stop")
+        throw new Error('{"error":{"code":"SIGN_IN_REQUIRED"}}');
+      return { localDaemon: "stopped" };
+    });
+    await createDaemonCommandHandlers().start_desktop_daemon();
+    const exited = new Promise<void>((resolve) => supervisor?.once("exit", () => resolve()));
+
+    await stopDesktopDaemon("quit");
+
+    await exited;
+    expect(mocks.runExternalCliJsonCommand).toHaveBeenCalledWith(
+      expect.arrayContaining(["daemon", "stop", "--host", "127.0.0.1:6798"]),
+    );
+    expect(existsSync(path.join(mocks.paseoHome, "paseo.pid"))).toBe(false);
+    // Asked for, so the next start must not report it as a crash.
+    expect(existsSync(markerPath)).toBe(false);
   });
 });

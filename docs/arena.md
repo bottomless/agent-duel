@@ -398,13 +398,16 @@ the diff. A stopped battle uses the same pill for `Keep A`, `Discard`, and `Keep
 choice while the battle runs sits there too. While neither result is selectable, show one `Stop`
 button. When one result becomes selectable, put `Choose A early` or `Choose B early` in its side
 and `Stop` in the other side, and name the side still working above the pill
-(`Agent A is still working`). At the vote the pill reads `Choose A`, `Tie`, `Discard`, `Choose B`.
+(`Agent A is still working`). At the vote the pill reads `Choose A`, `Tie`, `Choose B`.
 `Tie` shows only when both results can be chosen. A failed side shows `Accept B` in its Choose's
-place when its result was saved, and nothing when it was not. So one failed side reads `Choose A`,
-`Discard`, `Accept B` under `Agent B failed · choosing either won't count as a vote`, and two read
-`Accept A`, `Discard`, `Accept B` under `Both agents failed · accepting either won't count as a
-vote`. With no saved result the hint falls back to `Agent B failed · choosing A won't count as a
-vote`, or `Both agents failed · retry or discard` and `Both agents failed`. The resolved battle's
+place when its result was saved, and nothing when it was not. Discard is not one of the vote's
+choices: two results that can be chosen get a vote, so it shows only after a failure, as an
+outline `Discard battle` button at the end of the line above the pill that names the failure. So one failed side
+reads `Choose A`, `Accept B` under `Agent B failed · choosing either won't count as a vote ·
+Discard battle`, and two read `Accept A`, `Accept B` under `Both agents failed · accepting either won't
+count as a vote · Discard battle`. With no saved result the line falls back to `Agent B failed ·
+choosing A won't count as a vote`, or `Both agents failed · retry or discard` and `Both agents
+failed`; with neither side to take, the pill is hidden and the line's `Discard battle` is the only choice. The resolved battle's
 header says `Vote not counted`, and names an accepted side `(failed, accepted)`. Accept confirms first, because the work can be partial. Choosing early stops the other side, so it confirms first. The confirmation belongs to that turn's
 running state; close it when the turn changes so it cannot cover the normal vote. Discarding a battle also requires
 confirmation, which offers an optional reason (`Both wrong`, `Changed my mind`, `Other`). Action failures remain on the battle until another attempt; the normal
@@ -960,6 +963,17 @@ reply takes the same attachments as a chat message, and both contestants get ide
   The composer holds a battle message to that count when images are attached and refuses a send
   over it: the engine's refusal comes only after New chat has created the chat.
   An image's own file name never reaches the models, transcripts, or judge.
+- Images a contestant reads with its tools are not resized, and they stay in history, so they
+  reach the 4.5 MB limit within one turn. Vercel refuses a larger body before Arena's code runs,
+  and the side fails on a bare 413. The measured cap is 4,494,157 bytes of body, and headers count
+  against it. The engine leaves the oldest images out of a request, only as many as it takes to fit
+  (`engine-runtime/request-size.ts`), with a note in each one's place. Each removal costs a
+  prompt-cache miss, so a chat at the limit misses the cache on every step that reads an image.
+  It never drops the newest step's images to fit older ones; what does not fit
+  of that step, or an image too large on its own, gets a note asking for a separate read or a
+  smaller file. Canonical history keeps every image. Reasoning is sealed between calls, so an
+  agent that keeps no written notes re-reads removed images in a loop; a third read of the same
+  file with the same bytes is not attached, which ends it.
 - Every model in both pools must read images. The control plane's catalog check refuses one that
   does not: excluding it from a draw only when a prompt carries an image would reveal the model.
 - The turn keeps labels and a text excerpt, never bytes (`TurnDocument.userAttachments`). The live
@@ -1308,14 +1322,20 @@ Keep complete small changes grouped by agent against the base. Do not collapse s
 or add a third A/B view when both base patches fit: extra directions can reverse attribution.
 For large changes, keep base-to-result changes alongside direct A/B differences. The base
 establishes who changed what and exposes shared mistakes; A/B differences keep a small divergence
-visible beside large generated files. Compare complete JSON before budgeting, preserving numeric
-tokens and duplicate keys. Match array records by id only when both arrays have unique scalar
-ids; otherwise retain positions. A missing excerpt is unknown. File equality and equal
-record counts do not prove correctness or preservation against the task. A complete computed
-comparison can establish file-specific facts without sending the raw contents. Summarization
-alone is not missing evidence: warn on live and archived summaries only when comparison details
-were omitted. Preservation claims must stay scoped to the file and side actually verified.
-Use one utility request; increase evidence quality before adding model passes.
+visible beside large generated files. The timelines never establish who changed what: from the
+second turn on, each contestant's history holds the earlier winners' work as its own, so its text
+can recap code it never touched, and a judge that read the recap as an edit credited that side
+with the previous winner's work. A later turn's request therefore names the files the chat
+changed before it and neither side touched in it, computed from the first turn's base, so a
+recap meets a fact about that file. It repeats the attribution rule after the timelines, because
+they come last and end on each side's own account of its work. Compare complete JSON before
+budgeting, preserving numeric tokens and duplicate keys. Match array records by id only when both
+arrays have unique scalar ids; otherwise retain positions. A missing excerpt is unknown. File
+equality and equal record counts do not prove correctness or preservation against the task. A
+complete computed comparison can establish file-specific facts without sending the raw contents.
+Summarization alone is not missing evidence: warn on live and archived summaries only when
+comparison details were omitted. Preservation claims must stay scoped to the file and side
+actually verified. Use one utility request; increase evidence quality before adding model passes.
 
 ## Resolving
 
@@ -1341,7 +1361,8 @@ Use one utility request; increase evidence quality before adding model passes.
 - **Tie** applies **A**, deterministically (`voteResolution` in `arena/domain.ts`), so it needs two
   results that can be chosen (`canTie`). Over a failed run it would record a vote for a failure
   and put that run's unfinished work in the checkout.
-- **Discard** is open at every vote and after a stop (`canDiscardBattle`). The control plane records
+- **Discard** is open at every vote and after a stop (`canDiscardBattle`); the app offers it at the
+  vote only once a side failed (`canDiscard` in `packages/app/src/arena/decision-state.ts`). The control plane records
   `discard`, not a vote, and the checkout is left as it was. A discarded battle reads the same in
   `resolution` wherever it happened, so the turn and its metrics row carry `discardStage` (`vote`,
   `stop`, `recovery`, `archive`) and, when the voter gave one, `discardReason`. The last two stages
@@ -1352,7 +1373,10 @@ Use one utility request; increase evidence quality before adding model passes.
   carries it, and the app shows it as a prompt row with the discarded card under it
   (`projectDiscardedArenaPrompts`). The next battle's agents do not see the discarded turn.
 - **Stop** moves to `awaiting_stop_resolution`, where the choice is discard, keep A, or keep B
-  (`stop` in `arena/service.ts`). Keeping a side when the other had already failed, rather than
+  (`stop` in `arena/service.ts`). A stopped battle gets no summary, so the move to `stopping` marks
+  it `skipped` in the same write (`transitionTurn` in `arena/mongo.ts`). Left `pending`, the decision
+  showed a summary on its way, and a restart failed it and offered Retry summary
+  (`interruptedComparisonState`). Keeping a side when the other had already failed, rather than
   merely stopped, carries the same `voteDiscardedReason`, so metrics do not file it as a win.
 
 **Applying** (`promoteImpl` in `arena/service.ts`) records the resolution and enters `applying`

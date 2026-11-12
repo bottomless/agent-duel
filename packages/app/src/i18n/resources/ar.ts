@@ -47,6 +47,8 @@ export const ar: TranslationResources = {
     lastRatedModel: "آخر نموذج قُيّم: {{model}}",
     battle: "معركة",
     battleMode: "وضع المعركة",
+    battleHint:
+      "تشغيل: يجيب وكيلان عن كل طلب وتحتفظ بالإجابة الأفضل. تبقى نماذجهما مخفية حتى تصوّت. إيقاف: يجيب وكيل واحد.",
     autoAccept: "قبول تلقائي",
     askBeforeTools: "السؤال قبل الأدوات",
     toolPermissions: "أذونات الأدوات",
@@ -1919,7 +1921,6 @@ export const ar: TranslationResources = {
     },
   },
   newWorkspace: {
-    create: "يخلق",
     isolation: {
       local: "محلي",
       worktree: "شجرة عمل جديدة",
@@ -1993,8 +1994,10 @@ export const ar: TranslationResources = {
   },
   battleRepository: {
     title: "يحتاج Agent Duel إلى commit",
-    notGitMessage: "هل تريد إنشاء مستودع Git مع commit أول فارغ؟",
-    noCommitMessage: "هل تريد إنشاء commit أول فارغ؟",
+    notGitMessage:
+      "يعمل كل وكيل في نسخته الخاصة من هذا المجلد، ويحتاج Git إلى commit لإنشاء هذه النسخ. سيضيف Agent Duel هنا مستودع Git (مجلد .git) مع commit واحد فارغ. تبقى ملفاتك كما هي ولا تُضاف إلى أي commit.",
+    noCommitMessage:
+      "يعمل كل وكيل في نسخته الخاصة من هذا المجلد، ويحتاج Git إلى commit لإنشاء هذه النسخ. لا يحتوي هذا المستودع على أي commit بعد، لذا سيضيف Agent Duel commit واحدًا فارغًا. تبقى ملفاتك كما هي ولا تُضاف إلى أي commit.",
     confirm: "إنشاء commit",
     declined: "تحتاج المعركة إلى commit في Git.",
     failed: "تعذّر إنشاء الـ commit الأول: {{error}}",

@@ -19,7 +19,7 @@ import {
   expectNewWorkspaceProjectSelected,
   openGlobalNewWorkspaceComposer,
   selectNewWorkspaceProject,
-  submitNewWorkspaceEmpty,
+  submitNewWorkspaceDraft,
 } from "../support/helpers/new-workspace";
 import { selectSidebarStatusGrouping } from "../support/helpers/sidebar";
 import { killProcessTree, spawnTsx } from "../support/helpers/spawn-node";
@@ -454,7 +454,7 @@ test.describe("Workspace model restart regressions", () => {
         projectDisplayName: seeded.projectDisplayName,
       });
       await expectNewWorkspaceProjectSelected(page, seeded.projectDisplayName);
-      await submitNewWorkspaceEmpty(page);
+      await submitNewWorkspaceDraft(page);
 
       await expect
         .poll(() => {

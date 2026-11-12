@@ -190,6 +190,21 @@ describe("arenaDecisionPhase", () => {
     });
   });
 
+  it("offers no Discard when both results can be chosen", () => {
+    expect(
+      arenaDecisionPhase(
+        snapshot({
+          state: "awaiting_vote",
+          turn: { canDiscardBattle: true, canTie: true },
+          runs: [
+            run({ id: "run-a", side: "a", runState: "complete", selectable: true }),
+            run({ id: "run-b", side: "b", runState: "complete", selectable: true }),
+          ],
+        }),
+      ),
+    ).toMatchObject({ kind: "awaiting_vote", canTie: true, canDiscard: false, failedSide: null });
+  });
+
   it("offers Discard without Tie when both sides failed", () => {
     expect(
       arenaDecisionPhase(

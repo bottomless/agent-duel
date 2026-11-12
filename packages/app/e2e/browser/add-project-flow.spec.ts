@@ -28,6 +28,7 @@ import {
   type IsolatedHostDaemon,
   startIsolatedHostDaemon,
 } from "../support/helpers/isolated-host-daemon";
+import { submitNewWorkspaceDraft } from "../support/helpers/new-workspace";
 import { expectOpenedProject } from "../support/helpers/project-picker-ui";
 import { connectSeedClient } from "../support/helpers/seed-client";
 import { getServerId } from "../support/helpers/server-id";
@@ -459,7 +460,7 @@ test.describe("Add Project command-center flow", () => {
       await expectProjectDirectory(directoryPath);
       await page.getByRole("button", { name: "Workspace isolation", exact: true }).click();
       await page.getByTestId("workspace-create-isolation-worktree").click();
-      await page.getByRole("button", { name: "Create", exact: true }).click();
+      await submitNewWorkspaceDraft(page);
       await expect(page).toHaveURL(/\/workspace\/wks_/u);
       const workspaces = await e2eWorkerClient.fetchWorkspaces({ filter: { projectId } });
       expect(workspaces.entries).toHaveLength(1);

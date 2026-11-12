@@ -15,6 +15,7 @@ import {
   earlyResolution,
   generationName,
   identitiesRevealed,
+  interruptedComparisonState,
   isFinalState,
   isVoteReady,
   operationID,
@@ -268,6 +269,29 @@ describe("canReopenInterruptedBattle", () => {
       false,
     )
     expect(canReopenInterruptedBattle({ state: "running" }, [working])).toBe(false)
+  })
+})
+
+describe("interruptedComparisonState", () => {
+  const stopped = { transitionTimestamps: { running: new Date(), stopping: new Date() } }
+  const voting = { transitionTimestamps: { running: new Date(), awaiting_vote: new Date() } }
+
+  test("leaves a battle the voter stopped without a summary, not with one to retry", () => {
+    expect(interruptedComparisonState(stopped)).toBe("skipped")
+    expect(interruptedComparisonState(stopped, { state: "pending" })).toBe("skipped")
+    expect(interruptedComparisonState(stopped, { state: "running" })).toBe("skipped")
+  })
+
+  test("fails a summary a restart cut off in a battle that was not stopped, so it can be retried", () => {
+    expect(interruptedComparisonState(voting)).toBe("failed")
+    expect(interruptedComparisonState(voting, { state: "running" })).toBe("failed")
+    expect(interruptedComparisonState({ transitionTimestamps: {} })).toBe("failed")
+  })
+
+  test("keeps a record that settled", () => {
+    expect(interruptedComparisonState(voting, { state: "complete" })).toBe("complete")
+    expect(interruptedComparisonState(voting, { state: "failed" })).toBe("failed")
+    expect(interruptedComparisonState(stopped, { state: "complete" })).toBe("complete")
   })
 })
 

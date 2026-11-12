@@ -466,6 +466,72 @@ describe("ArenaComparison", () => {
     expect(prompt).toContain(`## Git diff (base -> B)\n${gitPatch("BASE TO B")}`)
     expect(comparison?.omittedArtifacts).toEqual([])
   })
+
+  // A later turn's contestant sees the previous winner's work as its own history and can recap it.
+  // Read as an edit, that recap credited B with code the previous winner wrote and B never touched.
+  test("attributes changes by base patch, not by code a later turn's timeline describes", async () => {
+    setArenaCredentials({
+      mode: "hosted",
+      researchPartition: "test-research-partition",
+      researchAccountID: "test-account",
+      token: "test-key",
+      controlPlaneUrl: "https://control.test",
+      controlTokenHash: "0".repeat(64),
+    })
+    const removal =
+      'diff --git a/prompts.test.ts b/prompts.test.ts\ndeleted file mode 100644\n--- a/prompts.test.ts\n+++ /dev/null\n@@ -1 +0,0 @@\n-test("system prompt")\n'
+    const note =
+      "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1,2 @@\n # Fixture\n+Tests: none.\n"
+    const run = async (turnIndex: number) => {
+      let comparison: ComparisonDocument | undefined
+      let prompt = ""
+      await generate({
+        store: store({
+          saveComparison: async (input: ComparisonDocument) => (comparison = input),
+          updateComparison: async (_id: string, patch: Partial<ComparisonDocument>) =>
+            (comparison = { ...comparison!, ...patch }),
+          storeArtifact: async (input: { _id: string }) => input,
+        }),
+        turnID: `recap-${turnIndex}`,
+        turnIndex,
+        userPrompt: "Remove the prompts test, it is flaky.",
+        baseCommit: "base",
+        aCommit: "a",
+        bCommit: "b",
+        baseTree: "base-tree",
+        aTree: "a-tree",
+        bTree: "b-tree",
+        aToB: note,
+        aToBTruncated: false,
+        baseToA: `${note}${removal}`,
+        baseToATruncated: false,
+        baseToB: removal,
+        baseToBTruncated: false,
+        transcriptA: "Removed prompts.test.ts and noted it in the README.",
+        transcriptB: "Removed prompts.test.ts. prompts.ts: SYSTEM_PROMPT answers in Turkish.",
+        files: [],
+        artifactIDs: [],
+        execute: async (_input, init) => {
+          prompt = JSON.parse(String(init?.body)).messages[0].content
+          return Response.json({ choices: [{ message: { content: "Comparison\nTitle: Remove the prompts test" } }] })
+        },
+      })
+      return prompt
+    }
+
+    const later = await run(1)
+    const rules = later.slice(0, later.indexOf("## User prompt"))
+    expect(rules).toContain("Only an agent's own base patch shows what it changed.")
+    expect(rules).toContain("any other file is unchanged by both")
+    expect(rules).toContain("Never credit an agent with a change its base patch does not show.")
+    expect(rules).toContain("The base already holds the changes accepted in earlier turns")
+    expect(rules.indexOf("Never credit an agent")).toBeLessThan(rules.indexOf("Report exactly two sections"))
+    expect(later).not.toContain("+++ b/prompts.ts")
+
+    const first = await run(0)
+    expect(first).toContain("Never credit an agent with a change its base patch does not show.")
+    expect(first).not.toContain("earlier turns")
+  })
 })
 
 test.each([503, 429, 402])(
@@ -791,10 +857,189 @@ test("complete computed JSON evidence makes one call without a missing-evidence 
     },
   })
   expect(calls).toBe(1)
-  expect(result.promptVersion).toBe("arena-comparison-v12")
+  expect(result.promptVersion).toBe("arena-comparison-v15")
   expect(result.truncated).toBe(false)
   expect(result.omittedArtifacts).toEqual([])
   expect(result.utilityInputManifest.every((item) => !item.truncated)).toBe(true)
   expect(prompt).toContain("Base/A: record membership and values preserved; only order differs.")
   expect(prompt).not.toContain("Never claim all records")
+})
+
+async function summarize(input: {
+  userPrompt: string
+  baseToA: string
+  baseToB?: string
+  transcriptA: string
+  transcriptB: string
+  earlierFiles?: string[]
+  files?: Parameters<typeof generate>[0]["files"]
+}) {
+  setArenaCredentials({
+    mode: "hosted",
+    researchPartition: "test-research-partition",
+    researchAccountID: "test-account",
+    token: "test-key",
+    controlPlaneUrl: "https://control.test",
+    controlTokenHash: "0".repeat(64),
+  })
+  let comparison: ComparisonDocument | undefined
+  let prompt = ""
+  const result = await generate({
+    store: store({
+      saveComparison: async (value: ComparisonDocument) => (comparison = value),
+      updateComparison: async (_id: string, patch: Partial<ComparisonDocument>) =>
+        (comparison = { ...comparison!, ...patch }),
+      storeArtifact: async (value: { _id: string }) => value,
+    }),
+    turnID: "budget",
+    turnIndex: 1,
+    baseCommit: "base",
+    aCommit: "a",
+    bCommit: "b",
+    baseTree: "base-tree",
+    aTree: "a-tree",
+    bTree: "b-tree",
+    aToB: "",
+    aToBTruncated: false,
+    baseToB: gitPatch("after-b"),
+    baseToATruncated: false,
+    baseToBTruncated: false,
+    files: [],
+    artifactIDs: [],
+    ...input,
+    execute: async (_url, init) => {
+      prompt = JSON.parse(String(init?.body)).messages[0].content
+      return Response.json({ choices: [{ message: { content: "Compared" } }] })
+    },
+  })
+  return { result, prompt }
+}
+
+test("sends a long timeline whole and cuts a runaway one in the middle, keeping its final answer", async () => {
+  const long = `A-START${"a".repeat(25_000)}A-FINAL-ANSWER`
+  const runaway = `B-START${"b".repeat(100_000)}B-FINAL-ANSWER`
+  const { result, prompt } = await summarize({
+    userPrompt: "Fix the bug",
+    baseToA: gitPatch("after-a"),
+    transcriptA: long,
+    transcriptB: runaway,
+  })
+  expect(prompt).toContain(long)
+  expect(prompt).toContain("B-START")
+  expect(prompt).toContain("B-FINAL-ANSWER")
+  expect(prompt).toContain(`[${runaway.length - 40_000} characters omitted by Arena utility-input limit]`)
+  expect(result.omittedArtifacts).toEqual(["transcript_b_tail"])
+  expect(result.utilityInputManifest).toContainEqual(
+    expect.objectContaining({ kind: "transcript", side: "a", truncated: false }),
+  )
+  expect(result.utilityInputManifest).toContainEqual(
+    expect.objectContaining({ kind: "transcript", side: "b", truncated: true }),
+  )
+})
+
+test("keeps the whole input inside one budget when every part is oversized", async () => {
+  const { prompt } = await summarize({
+    userPrompt: `PROMPT-START${"p".repeat(200_000)}`,
+    baseToA: gitPatch("a".repeat(200_000)),
+    baseToB: gitPatch("b".repeat(200_000)),
+    transcriptA: "a".repeat(100_000),
+    transcriptB: "b".repeat(100_000),
+  })
+  expect(prompt).toContain("PROMPT-START")
+  expect(prompt).not.toContain("p".repeat(12_001))
+  expect(prompt.length).toBeLessThan(160_000)
+})
+
+test("keeps the ask that follows a long paste in an oversized prompt", async () => {
+  const userPrompt = `PASTE-START${"x".repeat(18_000)}ASK-AT-END: why does the build fail?`
+  const { prompt } = await summarize({
+    userPrompt,
+    baseToA: gitPatch("after-a"),
+    transcriptA: "Done",
+    transcriptB: "Done",
+  })
+  expect(prompt).toContain("PASTE-START")
+  expect(prompt).toContain("ASK-AT-END: why does the build fail?")
+  expect(prompt).toContain(`[${userPrompt.length - 12_000} characters omitted by Arena utility-input limit]`)
+  expect(prompt).not.toContain(userPrompt)
+})
+
+const changedBoth = (file: string) => ({
+  file,
+  changedA: true,
+  changedB: true,
+  sameResult: true,
+  additionsA: 0,
+  deletionsA: 1,
+  additionsB: 0,
+  deletionsB: 1,
+  binaryA: false,
+  binaryB: false,
+})
+const earlierSection = (prompt: string) => {
+  const start = prompt.indexOf("## Files changed earlier in this chat")
+  return start === -1 ? "" : prompt.slice(start, prompt.indexOf("## Visible current-turn timeline A"))
+}
+
+test("names the files the chat changed before the turn, apart from the ones this turn changed", async () => {
+  const { prompt } = await summarize({
+    userPrompt: "Keep the rule, drop its test",
+    baseToA: gitPatch("after-a"),
+    transcriptA: "Removed the test.",
+    transcriptB: "Removed the test. The rule added in prompts/system.md stays.",
+    earlierFiles: ["prompts/system.md", "code.ts", 'odd "name".md'],
+    files: [changedBoth("code.ts")],
+  })
+  const section = earlierSection(prompt)
+  expect(section).toContain("Neither agent changed them in this turn:")
+  expect(section).toContain('"prompts/system.md", "odd \\"name\\".md"')
+  expect(section).not.toContain("code.ts")
+  expect(prompt.indexOf("## File evidence")).toBeLessThan(prompt.indexOf(section))
+})
+
+test("leaves the earlier-files section out when it would name nothing", async () => {
+  const input = {
+    userPrompt: "Fix the bug",
+    baseToA: gitPatch("after-a"),
+    transcriptA: "Done",
+    transcriptB: "Done",
+  }
+  expect(earlierSection((await summarize(input)).prompt)).toBe("")
+  const sameFiles = await summarize({ ...input, earlierFiles: ["code.ts"], files: [changedBoth("code.ts")] })
+  expect(earlierSection(sameFiles.prompt)).toBe("")
+})
+
+test("stops a long chat's earlier-files list and says how many more there are", async () => {
+  const { prompt } = await summarize({
+    userPrompt: "Fix the bug",
+    baseToA: gitPatch("after-a"),
+    transcriptA: "Done",
+    transcriptB: "Done",
+    earlierFiles: Array.from({ length: 100 }, (_, index) => `src/file-${index}.ts`),
+  })
+  const section = earlierSection(prompt)
+  expect(section).toContain('"src/file-39.ts", and 60 more')
+  expect(section).not.toContain("src/file-40.ts")
+  const long = await summarize({
+    userPrompt: "Fix the bug",
+    baseToA: gitPatch("after-a"),
+    transcriptA: "Done",
+    transcriptB: "Done",
+    earlierFiles: Array.from({ length: 30 }, (_, index) => `${"deep/".repeat(40)}file-${index}.ts`),
+  })
+  expect(earlierSection(long.prompt).length).toBeLessThan(2_400)
+  expect(earlierSection(long.prompt)).toMatch(/, and \d+ more\n/)
+})
+
+test("says the attribution rule once more after the timelines", async () => {
+  const { prompt } = await summarize({
+    userPrompt: "Fix the bug",
+    baseToA: gitPatch("after-a"),
+    transcriptA: "A-FINAL-ANSWER",
+    transcriptB: "B-FINAL-ANSWER",
+  })
+  const reminder = prompt.slice(prompt.indexOf("B-FINAL-ANSWER"))
+  expect(reminder).toContain("## Reminder")
+  expect(reminder).toContain("never credit an agent with a change its base patch does not show.")
+  expect(prompt.endsWith("does not show.")).toBe(true)
 })

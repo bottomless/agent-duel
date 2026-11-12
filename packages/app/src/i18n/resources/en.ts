@@ -44,6 +44,8 @@ export const en = {
     lastRatedModel: "Last rated model: {{model}}",
     battle: "Battle",
     battleMode: "Battle mode",
+    battleHint:
+      "On: two agents answer each prompt and you keep the better one. Their models stay hidden until you vote. Off: one agent answers.",
     autoAccept: "Auto Accept",
     askBeforeTools: "Ask before tools",
     toolPermissions: "Tool permissions",
@@ -1937,7 +1939,6 @@ export const en = {
     },
   },
   newWorkspace: {
-    create: "Create",
     isolation: {
       local: "Local",
       worktree: "New worktree",
@@ -2011,8 +2012,10 @@ export const en = {
   },
   battleRepository: {
     title: "Agent Duel needs a commit",
-    notGitMessage: "Create a Git repository with an empty first commit?",
-    noCommitMessage: "Create an empty first commit?",
+    notGitMessage:
+      "Each agent works in its own copy of this folder, and Git needs a commit to make those copies. Agent Duel will add a Git repository here (a .git folder) with one empty commit. Your files stay as they are and aren't committed.",
+    noCommitMessage:
+      "Each agent works in its own copy of this folder, and Git needs a commit to make those copies. This repository has no commits yet, so Agent Duel will add one empty commit. Your files stay as they are and aren't committed.",
     confirm: "Create commit",
     declined: "A battle needs a Git commit.",
     failed: "Could not create the first commit: {{error}}",

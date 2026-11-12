@@ -3,7 +3,6 @@ import path from "node:path";
 import { test as base } from "../support/fixtures";
 import {
   beginWorkspaceFromProject,
-  createWorkspaceWithoutAgent,
   expectProjectContainsWorkspaces,
   expectProjectSettingsName,
   expectProjectWorkspaceCountForHost,
@@ -21,6 +20,7 @@ import {
   type IsolatedHostDaemon,
   startIsolatedHostDaemon,
 } from "../support/helpers/isolated-host-daemon";
+import { submitNewWorkspaceDraft } from "../support/helpers/new-workspace";
 import { connectSeedClient, type SeedDaemonClient } from "../support/helpers/seed-client";
 import { getServerId } from "../support/helpers/server-id";
 import { createTempGitRepo } from "../support/helpers/workspace";
@@ -413,7 +413,7 @@ test.describe("Sidebar project grouping", () => {
     await openScenario(page, crossHostProject);
     await beginWorkspaceFromProject(page, GROUPED_PROJECT_NAME);
     await selectWorkspaceHost(page, SECONDARY_HOST_LABEL);
-    await createWorkspaceWithoutAgent(page);
+    await submitNewWorkspaceDraft(page);
     await expectProjectWorkspaceCountForHost(page, {
       projectName: GROUPED_PROJECT_NAME,
       hostName: SECONDARY_HOST_LABEL,
@@ -428,7 +428,7 @@ test.describe("Sidebar project grouping", () => {
     await openGroupedProjectWorkspace(page, GROUPED_PROJECT_NAME, "Secondary workspace");
     await beginWorkspaceFromProject(page, GROUPED_PROJECT_NAME);
     await expectWorkspaceHost(page, SECONDARY_HOST_LABEL);
-    await createWorkspaceWithoutAgent(page);
+    await submitNewWorkspaceDraft(page);
     await expectProjectWorkspaceCountForHost(page, {
       projectName: GROUPED_PROJECT_NAME,
       hostName: SECONDARY_HOST_LABEL,
@@ -438,7 +438,7 @@ test.describe("Sidebar project grouping", () => {
     await openGroupedProjectWorkspace(page, GROUPED_PROJECT_NAME, "Primary workspace");
     await beginWorkspaceFromProject(page, GROUPED_PROJECT_NAME);
     await expectWorkspaceHost(page, PRIMARY_HOST_LABEL);
-    await createWorkspaceWithoutAgent(page);
+    await submitNewWorkspaceDraft(page);
     await expectProjectWorkspaceCountForHost(page, {
       projectName: GROUPED_PROJECT_NAME,
       hostName: PRIMARY_HOST_LABEL,

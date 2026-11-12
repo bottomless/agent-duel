@@ -40,6 +40,7 @@ import {
   SESSION_REJECTED_RETRY_MESSAGE,
 } from "@agent-duel/arena-service/request-error"
 import { withHeldToolCalls } from "./tool-stream"
+import { boundRequestSize } from "./request-size"
 import { MODEL_IDLE_TIMEOUT_MS } from "../model-idle"
 import { ArenaResponseRecovery } from "../response-recovery"
 import { idleBudgetFetch, idleExhausted, idleTimeout, resetIdleBudget } from "./idle"
@@ -303,11 +304,24 @@ function install(context: Context, options: InstalledOptions) {
         event.system.unshift({ type: "text", text: CONTESTANT_IDENTITY })
       }
     }
+    // Runs after every other message rewrite, so it measures what the request will carry.
+    const boundSize = (event: Parameters<typeof prepareContext>[0] & { tools: Record<string, unknown> }) =>
+      Effect.suspend(() => {
+        if (!arenaModel(event.model)) return Effect.void
+        const bounded = boundRequestSize(event)
+        if (!bounded.report) return Effect.void
+        event.messages = bounded.messages
+        return Effect.logInfo("Arena left images out of a request over the hosted size limit", {
+          sessionID: String(event.sessionID),
+          ...bounded.report,
+        })
+      })
     yield* context.session.hook(
       "context",
       (event) =>
         ensureAssignment(context, options, String(event.sessionID)).pipe(
           Effect.andThen(Effect.sync(() => prepareContext(event))),
+          Effect.andThen(boundSize(event)),
         ),
       {
         providerID: String(PROVIDER_ID),
@@ -318,6 +332,7 @@ function install(context: Context, options: InstalledOptions) {
       (event) =>
         ensureAssignment(context, options, String(event.sessionID)).pipe(
           Effect.andThen(Effect.sync(() => prepareContext(event))),
+          Effect.andThen(boundSize(event)),
         ),
       {
         providerID: String(PROVIDER_ID),
@@ -328,6 +343,7 @@ function install(context: Context, options: InstalledOptions) {
       (event) =>
         ensureAssignment(context, options, String(event.sessionID)).pipe(
           Effect.andThen(Effect.sync(() => prepareContext(event))),
+          Effect.andThen(boundSize(event)),
           Effect.andThen(Effect.sync(() => capOutput(event))),
         ),
       {

@@ -96,6 +96,7 @@ import {
   generationName,
   identitiesRevealed,
   INTERRUPTED_RUN_MESSAGE,
+  interruptedComparisonState,
   isFinalState,
   isParkedPromotion,
   isStopAbort,
@@ -118,6 +119,7 @@ import {
 import {
   acceptWinnerConflicts,
   battleRefs,
+  changedBetweenBases,
   compare,
   comparisonFiles,
   comparisonTrees,
@@ -5460,6 +5462,19 @@ export const layer: Layer.Layer<
           ),
         { concurrency: 3, discard: true },
       )
+      // What the chat changed before this turn. A contestant's text can recap that work as its own,
+      // so the report is told which files it covers. Best effort: the report never waits on it.
+      const earlierFiles =
+        turn.turnIndex > 0
+          ? yield* promise(() => store.turnsForChat(turn.chatID)).pipe(
+              Effect.flatMap(([first]) =>
+                first && first._id !== turn._id
+                  ? withGit(changedBetweenBases({ canonical, from: first.frozenBaseSHA, to: turn.frozenBaseSHA }))
+                  : Effect.succeed<string[]>([]),
+              ),
+              Effect.catch(() => Effect.succeed<string[]>([])),
+            )
+          : []
       const comparison = yield* promise(() =>
         generateComparison({
           store,
@@ -5467,6 +5482,7 @@ export const layer: Layer.Layer<
           turnIndex: turn.turnIndex,
           userPrompt: turn.userPrompt,
           userAttachments: ArenaAttachments.describeForJudge(turn.userAttachments),
+          earlierFiles,
           baseCommit: turn.frozenBaseSHA,
           aCommit: a.result.finalCommit,
           bCommit: b.result.finalCommit,
@@ -6278,7 +6294,10 @@ export const layer: Layer.Layer<
               ),
             )
           }
-          yield* promise(() => store.updateTurn(turn._id, { comparisonState: "failed" }))
+          // A stopped battle has no summary to fail.
+          if (current?.comparisonState !== "skipped") {
+            yield* promise(() => store.updateTurn(turn._id, { comparisonState: "failed" }))
+          }
           if (current?.state === "running") yield* promise(() => store.transitionTurn(turn._id, "finalizing"))
           yield* promise(() => store.transitionTurn(turn._id, "finalization_failed"))
           yield* promise(() => store.transitionTurn(turn._id, "awaiting_stop_resolution"))
@@ -9688,7 +9707,7 @@ export const layer: Layer.Layer<
           Effect.forkIn(scope),
         )
       } else if (!a || !b) {
-        yield* promise(() => store.updateTurn(turn._id, { comparisonState: "failed" }))
+        yield* promise(() => store.updateTurn(turn._id, { comparisonState: interruptedComparisonState(turn) }))
       }
     })
 
@@ -9781,10 +9800,11 @@ export const layer: Layer.Layer<
         (turn) =>
           Effect.gen(function* () {
             const comparison = yield* promise(() => store.comparisons.findOne({ turnID: turn._id }))
+            const comparisonState = interruptedComparisonState(turn, comparison ?? undefined)
             if (comparison?.state === "complete" || comparison?.state === "failed") {
               yield* promise(() =>
                 store.updateTurn(turn._id, {
-                  comparisonState: comparison.state,
+                  comparisonState,
                   comparisonID: comparison._id,
                 }),
               )
@@ -9800,7 +9820,7 @@ export const layer: Layer.Layer<
             }
             yield* promise(() =>
               store.updateTurn(turn._id, {
-                comparisonState: "failed",
+                comparisonState,
                 ...(comparison ? { comparisonID: comparison._id } : {}),
               }),
             )

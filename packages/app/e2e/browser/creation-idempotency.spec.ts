@@ -3,11 +3,15 @@ import { expect } from "../support/fixtures";
 import { test } from "../support/creation-fixtures";
 
 for (const isolation of ["local", "worktree"] as const) {
-  test(`repeated Create clicks before a render create only one ${isolation} workspace`, async ({
+  test(`repeated Send clicks before a render create only one ${isolation} workspace`, async ({
     creation,
   }) => {
     await creation.openWorkspaceForm(isolation);
-    await creation.submitRepeatedly("Create");
+    // A new chat cannot start empty, so the clicks carry a prompt.
+    await creation.submitRepeatedly(
+      "Send message",
+      `Start one agent in one ${isolation} workspace.`,
+    );
     await creation.expectOneCreatedWorkspace();
   });
 }
@@ -68,7 +72,7 @@ test("repeated new-workspace prompt submissions create one workspace and one age
   creation,
 }) => {
   await creation.openWorkspaceForm("local");
-  await creation.submitRepeatedly("Create", "Start one agent in one new workspace.");
+  await creation.submitRepeatedly("Send message", "Start one agent in one new workspace.");
   await creation.expectPromptVisible();
   await creation.expectOneCreatedWorkspace();
   await creation.expectAgentCount(1);
@@ -96,7 +100,7 @@ test("new workspace navigation and optimistic prompt precede agent initializatio
   delayedCreation,
 }) => {
   await creation.openWorkspaceForm("worktree");
-  await creation.submitPrompt("Show this prompt while the agent is starting.", "Create");
+  await creation.submitPrompt("Show this prompt while the agent is starting.");
   await creation.expectAgentStillStarting();
   delayedCreation.expectSingleWorkspaceIntent();
   delayedCreation.release();
@@ -118,7 +122,7 @@ for (const scenario of [
     startup,
   }) => {
     await creation.openWorkspaceForm("local");
-    await creation.submitPrompt("Retry this workspace and agent together.", "Create");
+    await creation.submitPrompt("Retry this workspace and agent together.");
     await creation.expectAgentStillStarting();
     await startup.fail();
     await creation.expectStartupFailure();
@@ -141,7 +145,7 @@ for (const entry of [
     name: "new workspace",
     open: (creation: Awaited<ReturnType<typeof createCreationScenario>>) =>
       creation.openWorkspaceForm("local"),
-    button: "Create",
+    button: "Send message",
     settled: (creation: Awaited<ReturnType<typeof createCreationScenario>>) =>
       creation.expectOneCreatedWorkspace(),
   },

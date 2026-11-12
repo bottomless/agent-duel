@@ -194,10 +194,17 @@ export function ResumeDecision({ actions }: { actions: ArenaBattleActions }) {
 }
 
 /**
- * The choice to apply neither side: at the vote, after a stop, or beside Resume after the engine's
- * restart cut the battle off.
+ * The choice to apply neither side: in the pill after a stop or beside Resume after the engine's
+ * restart cut the battle off, and at the vote only on the line that says a side failed
+ * (`placement="hint"`), as a row action rather than one of the vote's choices.
  */
-export function DiscardDecision({ actions }: { actions: ArenaBattleActions }) {
+export function DiscardDecision({
+  actions,
+  placement = "pill",
+}: {
+  actions: ArenaBattleActions;
+  placement?: "pill" | "hint";
+}) {
   const { t } = useTranslation();
   const { pending, pendingAction } = actions;
   const discard = useCallback(() => {
@@ -205,15 +212,16 @@ export function DiscardDecision({ actions }: { actions: ArenaBattleActions }) {
   }, [actions]);
   return (
     <Button
-      variant="ghost"
-      size="sm"
-      style={styles.pillChoice}
+      variant={placement === "pill" ? "ghost" : "outline"}
+      size={placement === "pill" ? "sm" : "xs"}
+      style={placement === "pill" ? styles.pillChoice : undefined}
       loading={pendingAction?.kind === "resolve_stop" && pendingAction.resolution === "discard"}
       disabled={pending}
       onPress={discard}
       testID="arena-stopped-discard"
     >
-      {t("arena.discard")}{" "}
+      {/* Alone on the failure line it names what it throws away; in the pill its neighbours do. */}
+      {placement === "pill" ? t("arena.discard") : t("arena.discardBattle")}{" "}
     </Button>
   );
 }

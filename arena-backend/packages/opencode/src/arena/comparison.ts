@@ -8,11 +8,24 @@ import { prepareEvidence, type ComparisonFileFact } from "./comparison-evidence"
 // first choice here and the model that answered in `resolvedModel`.
 export const model = utilityModels[0].id
 export const provider = utilityModels[0].provider
-export const promptVersion = "arena-comparison-v12"
+export const promptVersion = "arena-comparison-v15"
 
-// Timelines carry only visible text and tool calls, so a real one runs a few thousand characters.
-// The cap is a guard against a runaway contestant, not a working budget.
-const MAX_TRANSCRIPT_CHARS = 12_000
+// The caps add up to one budget. Qwen on Cerebras lists a 65,536-token window; it accepted a
+// 51,909-token prompt, and OpenRouter refused one of about 62,000 for its length. Summaries run
+// 3.3 to 3.9 characters a token. The prompt, the file evidence (64,000, `comparison-evidence.ts`),
+// two timelines, the instructions and the earlier-files list come to about 160,000 characters at
+// most, so at most about 48,000 tokens. The longest report with its reasoning has used under
+// 3,000. A denser input that still overflows is refused and falls back to DeepSeek on Baseten,
+// whose window is 1,048,576 tokens.
+const MAX_PROMPT_CHARS = 12_000
+// A prompt over the cap is cut like a timeline: a pasted log or file usually comes first and the
+// ask after it, so a head-only cut sent the summary a paste without its question.
+const PROMPT_HEAD_CHARS = 2_400
+// Timelines carry only visible text and tool calls, but a long or steered run still passes 12,000
+// characters, and its final answer is at the end.
+const MAX_TRANSCRIPT_CHARS = 40_000
+// A timeline over the cap keeps its start, which sets out the work, and gives the rest to its end.
+const TRANSCRIPT_HEAD_CHARS = 8_000
 // Waits between attempts at a transient failure. Each attempt already tries every utility model in
 // turn, but a shared upstream pool can refuse both with 429 for tens of seconds, which three
 // attempts a second or two apart never outlasted. A refused call costs nothing, and the vote never
@@ -22,6 +35,10 @@ const MAX_RETRY_AFTER_MS = 30_000
 // How often a wait between attempts checks whether the turn was decided meanwhile.
 const DECIDED_POLL_MS = 1_000
 const MAX_TITLE_CHARS = 80
+// The list of files a chat changed before the turn is a hint for reading recaps, not evidence to
+// weigh, so a long chat's list stops here and says how many more there are.
+const MAX_EARLIER_FILES = 40
+const MAX_EARLIER_FILES_CHARS = 2_000
 const encoder = new TextEncoder()
 
 /**
@@ -47,6 +64,8 @@ type Input = {
   readonly userPrompt: string
   /** What the prompt carried besides text, as `ArenaAttachments.describeForJudge` renders it. */
   readonly userAttachments?: string
+  /** Files that differ between the chat's first base and this turn's, from `ArenaGit.changedBetweenBases`. */
+  readonly earlierFiles?: readonly string[]
   readonly baseCommit: string
   readonly aCommit: string
   readonly bCommit: string
@@ -66,12 +85,50 @@ type Input = {
   readonly execute?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>
 }
 
-function bounded(value: string, limit: number) {
+/**
+ * Cuts the middle of a long text, never its end: a timeline's replies and final answer are there,
+ * and so is the ask that follows a long paste in a prompt.
+ */
+function bounded(value: string, limit: number, head: number) {
   if (value.length <= limit) return { value, truncated: false }
+  const omitted = value.length - limit
   return {
-    value: `${value.slice(0, limit)}\n\n[truncated by Arena utility-input limit]`,
+    value: `${value.slice(0, head)}\n\n[${omitted} characters omitted by Arena utility-input limit]\n\n${value.slice(value.length - (limit - head))}`,
     truncated: true,
   }
+}
+
+function boundedPrompt(value: string) {
+  return bounded(value, MAX_PROMPT_CHARS, PROMPT_HEAD_CHARS).value
+}
+
+function boundedTimeline(value: string) {
+  return bounded(value, MAX_TRANSCRIPT_CHARS, TRANSCRIPT_HEAD_CHARS)
+}
+
+/**
+ * The files the chat changed before this turn that neither side touched in it. A side's text often
+ * recaps that work as its own; naming the files lets the report match the recap to a computed fact.
+ */
+function earlierSection(input: Pick<Input, "earlierFiles" | "files">) {
+  const changedNow = new Set(input.files.map((fact) => fact.file))
+  const earlier = (input.earlierFiles ?? []).filter((file) => !changedNow.has(file))
+  const listed: string[] = []
+  let chars = 0
+  for (const file of earlier.slice(0, MAX_EARLIER_FILES)) {
+    const name = JSON.stringify(file)
+    if (chars + name.length > MAX_EARLIER_FILES_CHARS) break
+    listed.push(name)
+    chars += name.length + 2
+  }
+  if (!listed.length) return []
+  const more = earlier.length - listed.length
+  return [
+    "## Files changed earlier in this chat",
+    "Computed from git. These files were changed before this turn and are part of the base. Neither agent changed them in this turn:",
+    `${listed.join(", ")}${more > 0 ? `, and ${more} more` : ""}`,
+    "",
+  ]
 }
 
 function number(value: unknown) {
@@ -146,7 +203,7 @@ async function nameChat(input: Pick<Input, "turnID" | "userPrompt" | "userAttach
     "Reply with the name alone.",
     "",
     "## User prompt",
-    bounded(input.userPrompt, MAX_TRANSCRIPT_CHARS).value,
+    boundedPrompt(input.userPrompt),
     ...(input.userAttachments ? ["", "## Attached to the user prompt", input.userAttachments] : []),
   ].join("\n")
   const started = Date.now()
@@ -241,10 +298,11 @@ export async function skip(
 export async function generate(input: Input) {
   const comparisonID = documentID(input.turnID)
   const evidence = prepareEvidence(input)
-  const transcriptA = bounded(input.transcriptA, MAX_TRANSCRIPT_CHARS)
-  const transcriptB = bounded(input.transcriptB, MAX_TRANSCRIPT_CHARS)
+  const transcriptA = boundedTimeline(input.transcriptA)
+  const transcriptB = boundedTimeline(input.transcriptB)
   const omittedArtifacts = [
     ...(evidence.partial ? ["comparison_partial_files"] : []),
+    // A timeline is now cut in the middle, but the app and stored records name the cut by these ids.
     ...(transcriptA.truncated ? ["transcript_a_tail"] : []),
     ...(transcriptB.truncated ? ["transcript_b_tail"] : []),
   ]
@@ -264,8 +322,18 @@ export async function generate(input: Input) {
     "A computed comparison can cover complete contents without showing raw files. You may report preservation only for the specific file and side where the computed facts explicitly verify it. Equal counts or equal A/B results alone do not prove preservation against base. For omitted evidence, describe only shown changes and verified facts; never generalize them to other files.",
     "JSON locations with [id=...] match unique record ids; other array locations are positions. Array reordering does not imply that record payloads changed. Report a known A/B difference even when retained base excerpts look identical.",
     "Only report a concrete difference when the supplied evidence supports it; state uncertainty for unreviewed contents.",
+    // A contestant's text can recap code it never touched: from the second turn on, its history
+    // holds the earlier winners' work as its own. Read as edits, such a recap credited that side
+    // with the previous winner's changes.
+    "Only an agent's own base patch shows what it changed. Unless the evidence says files were omitted, it names every file either agent changed; any other file is unchanged by both.",
+    "A timeline shows what an agent said and which tools it ran, not what it changed: an agent may describe or recap code it never edited, including code already in the base. Never credit an agent with a change its base patch does not show.",
+    ...(input.turnIndex > 0
+      ? [
+          "This is a later turn of one chat. The base already holds the changes accepted in earlier turns, and both agents see that work as their own history, so their text may recap it. Neither agent made those changes in this turn.",
+        ]
+      : []),
     "Report exactly two sections and nothing else.",
-    "First, under the heading 'What each agent did': one or two sentences for Agent A, then one or two for Agent B, on what each changed against the base. Mention any shared implementation mistake supported by the code and the user's request in this section.",
+    "First, under the heading 'What each agent did': one or two sentences for Agent A, then one or two for Agent B, on what each changed against the base, as its base patch shows. Mention any shared implementation mistake supported by the code and the user's request in this section.",
     "Second, under the heading 'Where they differ': a markdown table with the columns Aspect, Agent A, Agent B, one row per difference that changes behavior, coverage, or scope. Leave out work both did identically.",
     "Keep the whole report under 180 words. No preamble, no closing remarks, no other sections.",
     "Do not infer model identity, recommend a winner, score either side, or discuss style unless it changes behavior.",
@@ -277,17 +345,24 @@ export async function generate(input: Input) {
       : []),
     "",
     "## User prompt",
-    input.userPrompt,
+    boundedPrompt(input.userPrompt),
     "",
     ...(input.userAttachments ? ["## Attached to the user prompt", input.userAttachments, ""] : []),
     "## File evidence",
     evidence.text,
     "",
+    ...earlierSection(input),
     "## Visible current-turn timeline A",
     transcriptA.value,
     "",
     "## Visible current-turn timeline B",
     transcriptB.value,
+    "",
+    // The rules above sit before as much as 150,000 characters of evidence and timelines. The
+    // timelines come last and end on each side's own account of its work, so the attribution rule
+    // is said once more after them.
+    "## Reminder",
+    "Only an agent's own base patch shows what it changed. The timelines above show what the agents said, not what they changed: never credit an agent with a change its base patch does not show.",
   ].join("\n")
   const requestBody = JSON.stringify({
     model,

@@ -597,6 +597,54 @@ describe("ArenaMongo claims", () => {
     expect(fields).not.toHaveProperty("endedEarly")
   })
 
+  test("skips a stopped battle's summary in the same write as the stop", async () => {
+    let current = turn("running")
+    const writes: Record<string, unknown>[] = []
+    const arena = store({
+      turns: {
+        findOne: async () => current,
+        findOneAndUpdate: async (filter: { state: string }, update: { $set: Record<string, unknown> }) => {
+          if (filter.state !== current.state) return null
+          writes.push(update.$set)
+          current = { ...current, ...(update.$set as Partial<TurnDocument>) }
+          return current
+        },
+      },
+      changed: () => undefined,
+    })
+
+    await arena.transitionTurn(current._id, "stopping", now)
+    await arena.transitionTurn(current._id, "awaiting_stop_resolution", now)
+
+    expect(writes).toHaveLength(2)
+    expect(writes[0]).toMatchObject({ state: "stopping", comparisonState: "skipped" })
+    expect(writes[1]).toMatchObject({ state: "awaiting_stop_resolution" })
+    expect(writes[1]).not.toHaveProperty("comparisonState")
+    expect(current.comparisonState).toBe("skipped")
+  })
+
+  test("leaves the summary of a battle that finishes on its own", async () => {
+    let current = turn("running")
+    const writes: Record<string, unknown>[] = []
+    const arena = store({
+      turns: {
+        findOne: async () => current,
+        findOneAndUpdate: async (_filter: unknown, update: { $set: Record<string, unknown> }) => {
+          writes.push(update.$set)
+          current = { ...current, ...(update.$set as Partial<TurnDocument>) }
+          return current
+        },
+      },
+      changed: () => undefined,
+    })
+
+    await arena.transitionTurn(current._id, "finalizing", now)
+    await arena.transitionTurn(current._id, "awaiting_vote", now)
+
+    expect(writes.every((fields) => !("comparisonState" in fields))).toBe(true)
+    expect(current.comparisonState).toBe("pending")
+  })
+
   test("does not mark stopped or aborted resolutions as early selections", async () => {
     const stopped = turn("awaiting_stop_resolution")
     const aborted = { ...turn("creation_failed"), _id: "aborted" }

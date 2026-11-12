@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import React from "react";
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, render, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ArenaRun, ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
 
@@ -93,10 +93,14 @@ const failed = (side: "a" | "b", canRetry: boolean) =>
     canRetry,
   });
 
+function choiceRowDiscard(view: ReturnType<typeof render>) {
+  return within(view.getByTestId("arena-battle-choice-row")).queryByTestId("arena-stopped-discard");
+}
+
 describe("ArenaDecisionPill", () => {
   afterEach(cleanup);
 
-  it("offers Discard alone when both agents failed with no saved work", () => {
+  it("offers Discard alone, on the failure line, when both agents failed with no saved work", () => {
     const view = render(
       <ArenaDecisionPill
         serverId="server"
@@ -110,6 +114,8 @@ describe("ArenaDecisionPill", () => {
     );
     expect(view.getByText("Both agents failed · retry or discard")).toBeTruthy();
     expect(view.queryByTestId("arena-stopped-discard")).not.toBeNull();
+    // Nothing is left to choose, so no empty pill sits under the line.
+    expect(view.queryByTestId("arena-battle-choice-row")).toBeNull();
     expect(view.queryByTestId("arena-choose-tie")).toBeNull();
     // Neither failure can be voted for, so neither Choose is offered at all.
     expect(view.queryByTestId("arena-choose-a")).toBeNull();
@@ -118,7 +124,7 @@ describe("ArenaDecisionPill", () => {
     expect(view.queryByTestId("arena-accept-failed-b")).toBeNull();
   });
 
-  it("offers Accept for each failed side with saved work, and Discard between them", () => {
+  it("offers Accept for each failed side with saved work, and Discard on the failure line", () => {
     const view = render(
       <ArenaDecisionPill
         serverId="server"
@@ -139,6 +145,7 @@ describe("ArenaDecisionPill", () => {
     expect(view.queryByTestId("arena-accept-failed-a")).not.toBeNull();
     expect(view.queryByTestId("arena-accept-failed-b")).not.toBeNull();
     expect(view.queryByTestId("arena-stopped-discard")).not.toBeNull();
+    expect(choiceRowDiscard(view)).toBeNull();
     expect(view.queryByTestId("arena-choose-tie")).toBeNull();
   });
 
@@ -158,7 +165,7 @@ describe("ArenaDecisionPill", () => {
     expect(view.queryByTestId("arena-stopped-discard")).not.toBeNull();
   });
 
-  it("offers Choose, Discard, and Accept while one result can be chosen", () => {
+  it("offers Choose and Accept while one result can be chosen, and Discard on the failure line", () => {
     const view = render(
       <ArenaDecisionPill
         serverId="server"
@@ -172,6 +179,7 @@ describe("ArenaDecisionPill", () => {
     );
     expect(view.queryByTestId("arena-choose-tie")).toBeNull();
     expect(view.queryByTestId("arena-stopped-discard")).not.toBeNull();
+    expect(choiceRowDiscard(view)).toBeNull();
     expect(view.queryByText(/Both agents failed/)).toBeNull();
     // The voter learns first that neither choice counts.
     expect(view.getByText("Agent A failed · choosing either won't count as a vote")).toBeTruthy();
@@ -193,12 +201,13 @@ describe("ArenaDecisionPill", () => {
       />,
     );
     expect(view.getByText("Agent A failed · choosing B won't count as a vote")).toBeTruthy();
+    expect(view.getByTestId("arena-stopped-discard").textContent).toContain("Discard battle");
     expect(view.queryByTestId("arena-accept-failed-a")).toBeNull();
     expect(view.queryByTestId("arena-choose-a")).toBeNull();
     expect(view.queryByTestId("arena-choose-b")).not.toBeNull();
   });
 
-  it("offers Tie and Discard together when both sides finished", () => {
+  it("offers Tie and no Discard when both sides finished", () => {
     const view = render(
       <ArenaDecisionPill
         serverId="server"
@@ -212,7 +221,7 @@ describe("ArenaDecisionPill", () => {
     );
     expect(view.queryByTestId("arena-choose-a")).not.toBeNull();
     expect(view.queryByTestId("arena-choose-tie")).not.toBeNull();
-    expect(view.queryByTestId("arena-stopped-discard")).not.toBeNull();
+    expect(view.queryByTestId("arena-stopped-discard")).toBeNull();
     expect(view.queryByTestId("arena-choose-b")).not.toBeNull();
   });
 
@@ -277,6 +286,9 @@ describe("ArenaDecisionPill", () => {
     );
     expect(view.getByText("Agent A failed · keeping either won't count as a vote")).toBeTruthy();
     expect(view.queryByTestId("arena-stopped-keep-b")).not.toBeNull();
+    // After a stop Discard is one of the pill's three choices, not a row action.
+    expect(choiceRowDiscard(view)).not.toBeNull();
+    expect(choiceRowDiscard(view)?.textContent).not.toContain("Discard battle");
   });
 });
 

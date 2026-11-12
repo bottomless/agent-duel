@@ -122,6 +122,8 @@ export interface MessageInputProps {
   hasExternalContent?: boolean;
   /** When true, the submit button stays visible and can submit even with no content. */
   allowEmptySubmit?: boolean;
+  /** When true, the submit button stays visible but disabled while there is nothing to send. */
+  keepSubmitWhenEmpty?: boolean;
   /** Optional accessibility label for the primary submit button. */
   submitButtonAccessibilityLabel?: string;
   /** Optional testID for the primary submit button. */
@@ -776,12 +778,13 @@ function hasSendableComposerContent(input: {
 function resolvePrimaryActionKind(input: {
   hasSendableContent: boolean;
   allowEmptySubmit: boolean;
+  keepSubmitWhenEmpty: boolean;
   isAgentRunning: boolean;
   isSubmitLoading: boolean;
 }): PrimaryActionKind {
   if (input.hasSendableContent || input.allowEmptySubmit) return "send";
   if (input.isAgentRunning) return "active";
-  if (input.isSubmitLoading) return "send";
+  if (input.isSubmitLoading || input.keepSubmitWhenEmpty) return "send";
   return "none";
 }
 
@@ -1041,6 +1044,7 @@ interface ResolvedMessageInputProps {
   onSubmit: (payload: MessagePayload) => void;
   hasExternalContent: boolean;
   allowEmptySubmit: boolean;
+  keepSubmitWhenEmpty: boolean;
   submitButtonAccessibilityLabel: string | undefined;
   submitButtonTestID: string | undefined;
   submitIcon: "arrow" | "return";
@@ -1088,6 +1092,7 @@ function resolveMessageInputProps(props: MessageInputProps): ResolvedMessageInpu
     onSubmit: props.onSubmit,
     hasExternalContent: props.hasExternalContent ?? false,
     allowEmptySubmit: props.allowEmptySubmit ?? false,
+    keepSubmitWhenEmpty: props.keepSubmitWhenEmpty ?? false,
     submitButtonAccessibilityLabel: props.submitButtonAccessibilityLabel,
     submitButtonTestID: props.submitButtonTestID,
     submitIcon: props.submitIcon ?? "arrow",
@@ -1131,15 +1136,15 @@ function resolveMessageInputProps(props: MessageInputProps): ResolvedMessageInpu
 
 function resolvePresentationSendDisabled(input: {
   fullscreen: boolean;
+  keepWhenEmpty: boolean;
   disabled: boolean;
   hasText: boolean;
   attachments: ComposerAttachment[];
   hasExternalContent: boolean;
   allowEmpty: boolean;
 }): boolean {
-  return (
-    input.disabled || (input.fullscreen && !input.allowEmpty && !hasSendableComposerContent(input))
-  );
+  const alwaysShown = input.fullscreen || input.keepWhenEmpty;
+  return input.disabled || (alwaysShown && !input.allowEmpty && !hasSendableComposerContent(input));
 }
 
 function shouldShowFullscreenControl(
@@ -1159,6 +1164,7 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
       onSubmit,
       hasExternalContent,
       allowEmptySubmit,
+      keepSubmitWhenEmpty,
       submitButtonAccessibilityLabel,
       submitButtonTestID,
       submitIcon,
@@ -1706,6 +1712,7 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
         hasExternalContent,
       }),
       allowEmptySubmit,
+      keepSubmitWhenEmpty,
       isAgentRunning,
       isSubmitLoading,
     });
@@ -1825,9 +1832,11 @@ export const MessageInput = forwardRef<MessageInputRef, MessageInputProps>(
       () => [styles.textInput, mode.isMonospace && styles.textInputMonospace, styles.readOnlyText],
       [mode.isMonospace],
     );
-    // Fullscreen always shows Send; without content it is disabled, and looks it.
+    // Fullscreen, and a composer that keeps its Send, always show Send; without content it is
+    // disabled, and looks it.
     const isPresentedSendDisabled = resolvePresentationSendDisabled({
       fullscreen: isFullscreen,
+      keepWhenEmpty: keepSubmitWhenEmpty,
       disabled: isSendButtonDisabled,
       hasText: hasLiveText,
       attachments,
