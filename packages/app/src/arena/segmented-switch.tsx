@@ -100,9 +100,10 @@ const styles = StyleSheet.create((theme) => ({
     borderRadius: theme.borderRadius.lg,
     backgroundColor: theme.colors.surface2,
   },
+  // 36px segments make a 40px switch, closer to the vote's 48px group below the review.
   segment: {
     justifyContent: "center",
-    minHeight: 28,
+    minHeight: 36,
     paddingHorizontal: theme.spacing[3],
     borderRadius: theme.borderRadius.base,
     borderWidth: 1,
