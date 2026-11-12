@@ -203,7 +203,7 @@ the prompt as a bold heading: across the battle's width it read as a document's 
 as something you said. The prompt, both answers, the review's columns and the decision row share
 two rails (`battle-layout.ts`).
 Each answer is headed by a rule in its side's colour, the colour of its Choose button, then the
-agent's name with its state and time. The size of each change is read in the Changes tab, beside the
+agent's name with its state and time. The size of each change is read in the Files changed tab, beside the
 other side's. The heading ends with the agent's tools (`pane-actions.tsx`): Preview when it runs an
 app, a terminal in its worktree, and a menu with the worktree path, Copy path, Expand, and its
 services. Side by side, both headings are one row that sticks to the top of the chat for the whole
@@ -212,12 +212,14 @@ the review on their columns. The row is a child of the battle, not of the panes:
 tall as its thread, so a heading inside it scrolled away before the review. Stacked panes keep their
 own headings.
 
-Review has two tabs: **Difference summary**, the generated comparison, and **Changes**, each
-changed file with what A and B did to it. It appears when the first side has a result
+Review has two tabs: **Difference summary**, the generated comparison, and **Files changed**, each
+changed file with what A and B did to it, its count as a badge. The two tabs share one width, so
+the seam between them sits on the centre line over Tie instead of leaning toward the longer label,
+and the selected label's heavier weight is reserved on both so switching tabs moves nothing. It appears when the first side has a result
 (`battleReviewPhase` in `comparison-visibility.ts`), before an early choice, if that side changed
 files; a finished side with no changes shows nothing until both are in, since both tabs would only
 say "nothing yet" and the decision row already names the side still working. The summary tab says
-the other side is working; Changes shows the finished side against a hatched placeholder sized to
+the other side is working; Files changed shows the finished side against a hatched placeholder sized to
 its diff, with no pair verdict yet. Only the finished side expands. The unfinished side stands in
 as the frozen base, as in a stopped battle.
 A side working again after a reply keeps its previous commit, so check its run state too.
@@ -232,7 +234,7 @@ List every changed file in path order, with contents fetched only when its row o
 stay open; open the first diverging file automatically and preserve that choice when the other
 result arrives. After eight rows, use Show more while keeping open rows visible.
 
-Open on Difference summary while a report is pending or available; otherwise open Changes, as for
+Open on Difference summary while a report is pending or available; otherwise open Files changed, as for
 a stopped battle or a failed side. Read the turn's `comparisonState` before the comparison record
 exists (`battleSummaryStatus`): the review keeps its initial tab, so relying on the record opens it
 on Changes too soon. The review has no fold: it sits in the chat and scrolls past like the answers.
