@@ -178,20 +178,22 @@ function ChangesTab({
 }
 
 /**
- * A small segmented switch on the left rail, one rank below the agents' headings: a pair of
- * underlined tabs over a rule across both answers read as a third heading at the agents' level.
- * Without a summary the switch holds Changes alone, so the review keeps the same head.
+ * The review's segmented switch: Difference summary and Files changed, the file count as a badge.
+ * The two tabs share one width, so the seam between them sits on the centre line over Tie rather
+ * than leaning toward the longer label. Without a summary the switch holds Files changed alone, so
+ * the review keeps the same head.
  */
 function ReviewTabs({
   tabs,
   tab,
-  changesLabel,
+  changesCount,
   onChange,
 }: {
-  /** Whether the summary has a tab; without one, Changes heads the review alone. */
+  /** Whether the summary has a tab; without one, Files changed heads the review alone. */
   tabs: boolean;
   tab: ArenaReviewTab;
-  changesLabel: string;
+  /** Files listed under Files changed; none shows no badge. */
+  changesCount: number;
   onChange: (tab: ArenaReviewTab) => void;
 }) {
   const { t } = useTranslation();
@@ -202,7 +204,8 @@ function ReviewTabs({
   };
   const changesOption = {
     value: "changes" as const,
-    label: changesLabel,
+    label: t("arena.changes"),
+    ...(changesCount > 0 ? { count: changesCount } : {}),
     testID: "arena-review-tab-changes",
   };
   return (
@@ -211,6 +214,7 @@ function ReviewTabs({
       value={tabs ? tab : "changes"}
       onChange={onChange}
       role="tablist"
+      equalWidths={tabs}
       testID="arena-review-tabs"
     />
   );
@@ -220,7 +224,7 @@ function ReviewTabs({
 function ReviewHeader({
   tabs,
   tab,
-  changesLabel,
+  changesCount,
   onTabChange,
   layoutControl,
   agentId,
@@ -229,7 +233,7 @@ function ReviewHeader({
   /** Whether there is a summary tab to show beside Changes; a stopped battle has only Changes. */
   tabs: boolean;
   tab: ArenaReviewTab;
-  changesLabel: string;
+  changesCount: number;
   onTabChange: (tab: ArenaReviewTab) => void;
   /** Whether the diff layout control belongs in the row; it has nothing to lay out otherwise. */
   layoutControl: boolean;
@@ -251,7 +255,7 @@ function ReviewHeader({
   const centred = width === null || width >= tabsWidth + 2 * sideNeeded;
   const tabsNode = (
     <View onLayout={onTabsLayout}>
-      <ReviewTabs tabs={tabs} tab={tab} changesLabel={changesLabel} onChange={onTabChange} />
+      <ReviewTabs tabs={tabs} tab={tab} changesCount={changesCount} onChange={onTabChange} />
     </View>
   );
   const control = layoutControl ? (
@@ -339,7 +343,7 @@ export function BattleReview({
   onRetryDiff: () => void;
   retryingDiff: boolean;
 }) {
-  const { t } = useTranslation();
+  useTranslation();
   // The reader's choices live in the review store so review telemetry can
   // observe them without this component knowing telemetry exists. Absent means
   // no choice yet and the default below stands.
@@ -419,8 +423,6 @@ export function BattleReview({
       );
     }
   }, [arrivalFile, rows, setShownFile, showChanges, turnId]);
-  const changesLabel =
-    rows.length > 0 ? t("arena.changesCount", { total: rows.length }) : t("arena.changes");
   let content;
   if (shownTab === "verdict" && waitingFor !== null) {
     content = <WaitingSummary waitingFor={waitingFor} />;
@@ -461,7 +463,7 @@ export function BattleReview({
       <ReviewHeader
         tabs={tabs}
         tab={tab}
-        changesLabel={changesLabel}
+        changesCount={rows.length}
         onTabChange={setTab}
         layoutControl={showLayoutControl && rows.length > 0}
         agentId={agentId}
