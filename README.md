@@ -14,7 +14,7 @@ Each contestant is a model drawn at random [from a pool](#current-models) and ru
 through the bundled engine. You only see which models they were after you vote.
 
 <p align="center">
-  <img src="docs/images/battle.png" alt="A battle: two agents' results side by side, with Choose A, Tie and Choose B below">
+  <img src="docs/images/battle.gif" alt="Agent Duel animated demo">
 </p>
 
 The shipped product is the Electron desktop app. `packages/app` can run in a
