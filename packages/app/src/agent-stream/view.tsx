@@ -1010,6 +1010,8 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
               onOpenFilePath={handleToolCallOpenFile}
               standalone={options.standalone}
               maxDetailHeight={options.maxDetailHeight}
+              flushRow={arenaChat}
+              labelSizedIcon={arenaChat}
             />
           );
         }
@@ -1027,6 +1029,8 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
             onOpenFilePath={handleToolCallOpenFile}
             standalone={options.standalone}
             maxDetailHeight={options.maxDetailHeight}
+            flushRow={arenaChat}
+            labelSizedIcon={arenaChat}
           />
         );
       },
@@ -1059,6 +1063,11 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
           return item.kind === "thought"
             ? renderThoughtItem(layoutItem, item)
             : renderSingleToolCallItem(item, layoutItem.isLastInToolSequence);
+        }
+        // In a battle chat one call is drawn as itself, as the battle's panes draw it; a group of
+        // one would name the call and hold the same call again inside.
+        if (arenaChat && group.run.calls.length === 1 && item.kind === "tool_call") {
+          return renderSingleToolCallItem(item, layoutItem.isLastInToolSequence);
         }
         const expanded = expandedToolCallGroups.has(group.run.id);
         return (

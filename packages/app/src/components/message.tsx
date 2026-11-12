@@ -2517,6 +2517,10 @@ interface ToolCallProps {
   itemId: string;
   /** Shown as its own row rather than inside a tool call group. */
   standalone?: boolean;
+  /** A battle's row: no vertical padding, so the thread's gaps alone space it; see `ExpandableBadge`. */
+  flushRow?: boolean;
+  /** A full-size label's icon at the label's tier; see `ExpandableBadge`. */
+  labelSizedIcon?: boolean;
 }
 
 export const ToolCall = memo(function ToolCall({
@@ -2541,6 +2545,8 @@ export const ToolCall = memo(function ToolCall({
   compactLabel = false,
   itemId,
   standalone = true,
+  flushRow,
+  labelSizedIcon,
 }: ToolCallProps) {
   const { openToolCall } = useToolCallSheet();
   const { expanded: isExpanded, toggle: toggleExpanded } = useToolCallExpanded({
@@ -2696,6 +2702,8 @@ export const ToolCall = memo(function ToolCall({
       disableOuterSpacing={disableOuterSpacing}
       onDetailHoverChange={onInlineDetailsHoverChange}
       compactLabel={compactLabel}
+      flushRow={flushRow}
+      labelSizedIcon={labelSizedIcon}
     />
   );
 }, areToolCallPropsEqual);
@@ -2720,5 +2728,7 @@ function areToolCallPropsEqual(previous: ToolCallProps, next: ToolCallProps) {
   if (previous.compactLabel !== next.compactLabel) return false;
   if (previous.itemId !== next.itemId) return false;
   if (previous.standalone !== next.standalone) return false;
+  if (previous.flushRow !== next.flushRow) return false;
+  if (previous.labelSizedIcon !== next.labelSizedIcon) return false;
   return true;
 }
