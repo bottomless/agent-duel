@@ -12,7 +12,7 @@ vi.stubGlobal("React", React);
 // Named icons, so a row can say which one it drew.
 vi.mock("lucide-react-native", async (importOriginal) => {
   const named = (displayName: string) => Object.assign(() => null, { displayName });
-  return { ...(await importOriginal()), Brain: named("Brain"), Wrench: named("Wrench") };
+  return { ...(await importOriginal()), Brain: named("Brain"), Layers2: named("Layers2") };
 });
 
 vi.mock("@/components/thinking-block", () => ({
@@ -417,6 +417,10 @@ describe("ArenaRunThread", () => {
     expect(view.getByText("First update")).toBeTruthy();
     expect(view.getByText("Second update")).toBeTruthy();
     expect(view.queryByTestId("arena-earlier-activity")).toBeNull();
+    // A group of tools takes the stack, as the regular chat's tool groups do.
+    expect(view.getAllByTestId("arena-activity-group")[0]!.getAttribute("data-icon")).toBe(
+      "Layers2",
+    );
 
     view.rerender(thread(completedRun));
     expect(view.queryByText("First update")).toBeNull();
