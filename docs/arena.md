@@ -440,7 +440,8 @@ edit to vendored core). Unresolved paths that look that wide are refused too. A 
 savable offers only Allow once and Deny. One false match must not end every later ask for the project.
 
 The vote lives in a centered sticky pill above the composer: `Choose A`, `Tie`, and `Choose B`.
-Anchor it over the transcript above the composer, with a gray surface inside the pill and a
+They are one control (`ArenaChoiceGroup`): the sides' tinted buttons at its ends and `Tie` a plain
+label between them, because as three separate buttons Tie read as a third answer. Anchor it over the transcript above the composer, with a gray surface inside the pill and a
 transparent, click-through area around it. It stays reachable while reviewing either thread or
 the diff. A stopped battle uses the same pill for `Keep A`, `Discard`, and `Keep B`; an early
 choice while the battle runs sits there too. While neither result is selectable, show one `Stop`
