@@ -9,6 +9,12 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 vi.stubGlobal("React", React);
 
+// Named icons, so a row can say which one it drew.
+vi.mock("lucide-react-native", async (importOriginal) => {
+  const named = (displayName: string) => Object.assign(() => null, { displayName });
+  return { ...(await importOriginal()), Brain: named("Brain"), Wrench: named("Wrench") };
+});
+
 vi.mock("@/components/thinking-block", () => ({
   ThinkingBlock: () => <div data-testid="paseo-thinking" />,
 }));
@@ -27,9 +33,11 @@ vi.mock("@/components/message", () => ({
     isError?: boolean;
     onToggle?: () => void;
     renderDetails?: () => React.ReactNode;
+    icon?: { displayName?: string };
   }) => (
     <div
       data-testid={props.testID}
+      data-icon={props.icon?.displayName}
       data-loading={props.isLoading}
       data-error={props.isError}
       data-label-style={props.labelTextStyle ? "custom" : undefined}
@@ -370,6 +378,8 @@ describe("ArenaRunThread", () => {
 
     expect(view.queryByText("Check `grid-template-columns`.")).toBeNull();
     expect(view.getByTestId("arena-activity-group").getAttribute("data-loading")).toBe("true");
+    // Thinking takes the regular chat's brain, not the wrench of a group of tools.
+    expect(view.getByTestId("arena-activity-group").getAttribute("data-icon")).toBe("Brain");
     expect(view.queryByTestId("paseo-thinking")).toBeNull();
     expect(view.queryByTestId("paseo-turn-footer")).toBeNull();
 
