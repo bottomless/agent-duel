@@ -42,6 +42,30 @@ describe("presentArenaWork", () => {
     },
   );
 
+  it("names a settled step's single tool instead of counting it as a group", () => {
+    const step = {
+      parts: [
+        { type: "reasoning", text: "Plan the read", time: { start: 1, end: 2 } },
+        toolPart("read", { filePath: "index.html" }),
+      ],
+      runState: "complete" as const,
+      isLatest: false,
+      awaitingResponse: false,
+    };
+    expect(presentArenaWork(step)).toMatchObject({
+      kind: "tool",
+      label: "Read",
+      secondaryLabel: "index.html",
+      active: false,
+    });
+    expect(
+      presentArenaWork({
+        ...step,
+        parts: [...step.parts, toolPart("read", { filePath: "style.css" })],
+      }),
+    ).toMatchObject({ kind: "summary", label: "Read 2 files" });
+  });
+
   it("does not promote earlier unfinished reasoning over the latest tool", () => {
     expect(
       presentArenaWork({

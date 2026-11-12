@@ -211,6 +211,9 @@ export function presentArenaWork({
   cwd,
 }: ArenaWorkPresentationInput): ArenaWorkPresentation {
   if (!isLatest) {
+    // One tool is named as itself, with its own icon; only several make a group.
+    const tools = parts.filter((part) => asRecord(part)?.type === "tool");
+    if (tools.length === 1) return presentArenaTool(tools[0], runState, cwd);
     return {
       kind: "summary",
       label: arenaWorkSummaryLabel(summarizeArenaWork(parts), false),
@@ -227,14 +230,23 @@ export function presentArenaWork({
   // Completion can arrive out of order. It controls animation, never recency.
   const current = parts.at(-1);
   const active = arenaWorkPartIsActive(current, runState);
-  const record = asRecord(current);
-  if (record?.type !== "tool") {
+  if (asRecord(current)?.type !== "tool") {
     return {
       kind: "reasoning",
       label: active ? i18n.t("arena.reasoning") : i18n.t("arena.reasoned"),
       active,
     };
   }
+  return presentArenaTool(current, runState, cwd);
+}
+
+function presentArenaTool(
+  part: unknown,
+  runState: ArenaRun["runState"],
+  cwd: string | undefined,
+): ArenaWorkPresentation {
+  const record = asRecord(part) ?? {};
+  const active = arenaWorkPartIsActive(part, runState);
   const state = asRecord(record.state) ?? {};
   const toolName = typeof record.tool === "string" ? record.tool : "tool";
   const detail = deriveArenaToolCallDetail(toolName, state.input, state.output);
