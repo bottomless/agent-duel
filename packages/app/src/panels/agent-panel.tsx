@@ -1781,11 +1781,7 @@ const AgentStreamSection = memo(function AgentStreamSection({
     };
   }, [battleHistory, presentedStream, shownTurnId]);
   const chatHasRows = shownStream.tail.length + shownStream.head.length > 0;
-  const { battlePromptRowIds, ruledRowIds } = useBattlePromptRows(
-    battleHistory,
-    presentedStream,
-    shownStream,
-  );
+  const ruledRowIds = useRuledRows(battleHistory, presentedStream, shownStream);
   const { turnHeads, userRowIds } = useTurnHeads(agent.id, battleHistory, shownStream);
   // The feedback prompt stays at the end of the chat even after the summary moves up.
   const feedbackBattle = arenaBattleOnScreen ? null : latestSummary;
@@ -1995,7 +1991,6 @@ const AgentStreamSection = memo(function AgentStreamSection({
         turnPresentation={turnPresentation}
         onOpenWorkspaceFile={onOpenWorkspaceFile}
         afterItems={arenaAfterItems}
-        battlePromptIds={battlePromptRowIds}
         ruledItemIds={ruledRowIds}
         turnHeads={turnHeads}
         userRowIds={userRowIds}
@@ -2115,11 +2110,10 @@ const AgentComposerSection = memo(function AgentComposerSection({
 });
 
 /**
- * Battle prompts read as headings, as the live battle shows its prompt above both answers, and each
- * one after the chat's first row starts a new turn with a rule above it. Keyed by the ids, so a
- * streaming head does not hand the stream new sets on every event.
+ * Each battle prompt after the chat's first row starts a new turn with a rule above it. Keyed by the
+ * ids, so a streaming head does not hand the stream a new set on every event.
  */
-function useBattlePromptRows(
+function useRuledRows(
   history: ArenaSnapshot["history"] | undefined,
   presentedStream: ArenaPresentedStream,
   shownStream: ArenaPresentedStream,
@@ -2139,7 +2133,7 @@ function useBattlePromptRows(
     ruled.delete(firstRowId);
     return ruled;
   }, [battlePromptRowIds, firstRowId]);
-  return { battlePromptRowIds, ruledRowIds };
+  return ruledRowIds;
 }
 
 /**

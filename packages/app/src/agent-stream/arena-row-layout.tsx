@@ -7,15 +7,15 @@ import { ArenaAnswerColumn } from "@/arena/turn-head";
 
 /**
  * An Agent Duel chat lays its rows on the battle's rails, so the conversation after a battle starts
- * where the battle's answers did. Rows keep the chat's reading width from that left edge; a battle's
- * prompt is the chat's bubble at the battle's right edge, where the live battle shows it. Answers
- * sit after an avatar column, each opened by its author's avatar and name (`ArenaTurnHead`).
+ * where the battle's answers did. Rows keep the chat's reading width from that left edge; every
+ * prompt, a steer or a plain turn's included, is a bubble at the battle's right edge, where the live
+ * battle shows its prompt. Answers sit after an avatar column, each opened by its author's avatar
+ * and name (`ArenaTurnHead`).
  */
 interface ArenaRowLayout {
-  promptIds: ReadonlySet<string> | undefined;
   /** Rows that start a new turn: a rule above them closes the turn before. */
   ruledIds: ReadonlySet<string> | undefined;
-  /** Every prompt row: the rest of the chat is answers, set after the avatar column. */
+  /** Every prompt row, at the right edge: the rest of the chat is answers, after the avatar column. */
   userRowIds: ReadonlySet<string> | undefined;
   /** The head that opens each answer, keyed by the answer's first row. */
   heads: ReadonlyMap<string, ReactNode> | undefined;
@@ -25,15 +25,14 @@ const ArenaRowLayoutContext = createContext<ArenaRowLayout | null>(null);
 
 export function ArenaRowLayoutProvider({
   enabled,
-  promptIds,
   ruledIds,
   userRowIds,
   heads,
   children,
 }: ArenaRowLayout & { enabled: boolean; children: ReactNode }) {
   const value = useMemo(
-    () => (enabled ? { promptIds, ruledIds, userRowIds, heads } : null),
-    [enabled, heads, promptIds, ruledIds, userRowIds],
+    () => (enabled ? { ruledIds, userRowIds, heads } : null),
+    [enabled, heads, ruledIds, userRowIds],
   );
   return <ArenaRowLayoutContext.Provider value={value}>{children}</ArenaRowLayoutContext.Provider>;
 }
@@ -57,7 +56,7 @@ export function ArenaRow({
   children,
 }: {
   fullWidth?: boolean;
-  /** A battle's prompt: its bubble, at the reading width, ends at the battle's right edge. */
+  /** A prompt: its bubble, at the reading width, ends at the battle's right edge. */
   prompt?: boolean;
   ruled?: boolean;
   /** Part of an answer: set after the avatar column. */

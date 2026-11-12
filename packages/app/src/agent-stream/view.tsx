@@ -280,14 +280,11 @@ export interface AgentStreamViewProps {
   onOpenWorkspaceFile?: (request: WorkspaceFileOpenRequest) => void;
   /** Content inserted immediately after a canonical stream item (for durable in-stream markers). */
   afterItems?: ReadonlyMap<string, ReactNode>;
-  /** Battles' own prompts: in an Agent Duel chat their bubbles end at the battle's right edge. */
-  battlePromptIds?: ReadonlySet<string>;
   /** Rows that start a new turn in an Agent Duel chat, with a rule above them. */
   ruledItemIds?: ReadonlySet<string>;
-  /** What ends a turn's footer in an Agent Duel chat, keyed by the row the footer closes. */
   /** Each answer's head in an Agent Duel chat, keyed by the answer's first row. */
   turnHeads?: ReadonlyMap<string, ReactNode>;
-  /** Every prompt row in an Agent Duel chat; the other rows are answers. */
+  /** Every prompt row in an Agent Duel chat, steers included; the other rows are answers. */
   userRowIds?: ReadonlySet<string>;
   /** Canonical stream item after which inherited fork history ends. */
   forkBoundaryAfterItemId?: string;
@@ -451,7 +448,6 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       toast,
       onOpenWorkspaceFile,
       afterItems,
-      battlePromptIds,
       ruledItemIds,
       turnHeads,
       userRowIds,
@@ -1412,7 +1408,6 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
             <MessageOuterSpacingProvider disableOuterSpacing>
               <ArenaRowLayoutProvider
                 enabled={arenaChat === true}
-                promptIds={battlePromptIds}
                 ruledIds={ruledItemIds}
                 heads={turnHeads}
                 userRowIds={userRowIds}
@@ -1565,9 +1560,6 @@ function collectArenaStreamViewPropDiffs(
 ): string[] {
   const reasons: string[] = [];
   if (left.afterItems !== right.afterItems) reasons.push("afterItems");
-  if (left.battlePromptIds !== right.battlePromptIds) {
-    reasons.push("battlePromptIds");
-  }
   if (left.ruledItemIds !== right.ruledItemIds) reasons.push("ruledItemIds");
   if (left.turnHeads !== right.turnHeads) reasons.push("turnHeads");
   if (left.userRowIds !== right.userRowIds) reasons.push("userRowIds");
@@ -2188,7 +2180,7 @@ function StreamItemWrapper({ itemId, gapBelow, children }: StreamItemWrapperProp
   if (arenaLayout) {
     return (
       <ArenaRow
-        prompt={arenaLayout.promptIds?.has(itemId) === true}
+        prompt={arenaLayout.userRowIds?.has(itemId) === true}
         ruled={arenaLayout.ruledIds?.has(itemId) === true}
         answer={arenaLayout.userRowIds?.has(itemId) === false}
         head={arenaLayout.heads?.get(itemId)}

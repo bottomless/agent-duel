@@ -1452,7 +1452,8 @@ at the vote, after Stop, after a restart or from the archive) takes a head of it
 answer's place, with the agent glyph: **Battle discarded**, both models and Show battle
 (`ArenaUnkeptHead`); a battle that could not start says so the same way with **Try again**.
 Neither is a card: the boxed summary main drew read as an object dropped between turns. The chat after a battle sits on the battle's rails (`agent-stream/arena-row-layout.tsx`):
-a battle's prompt keeps its bubble at the battle's right edge (`ArenaRow` `prompt`), and the rest
+every prompt, a plain turn's and a steer's as well as a battle's, keeps its bubble at the battle's
+right edge (`ArenaRow` `prompt`), and the rest
 keeps the reading width from the same left edge, so nothing moves sideways when a battle closes. A rule goes above each turn's
 prompt after the chat's first row, live battles' included, never between a prompt and its answer:
 under the prompt it read as the previous answer belonging to the next prompt. Show battle opens the
