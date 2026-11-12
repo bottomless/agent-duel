@@ -276,6 +276,34 @@ describe("BattleReview", () => {
     expect(byTestId("arena-summary-columns")).not.toBeNull();
   });
 
+  it("lays each compared aspect out across both sides, so a longer cell keeps the row level", () => {
+    const columnsReport = [
+      "What each agent did",
+      "Agent A added a footer. Agent B added a footer with a link.",
+      "",
+      "Where they differ",
+      "| Aspect | Agent A | Agent B |",
+      "| --- | --- | --- |",
+      "| Footer text | A much longer value that wraps onto a second line | Short |",
+      "| Markup | Plain | Link |",
+    ].join("\n");
+    render({
+      summaryAvailable: true,
+      comparison: { state: "completed", output: columnsReport } as never,
+    });
+    const cellsOf = (aspect: string) =>
+      Array.from(container.querySelectorAll("div")).filter(
+        (cell) => cell.childElementCount === 2 && cell.firstElementChild?.textContent === aspect,
+      );
+    for (const aspect of ["Footer text", "Markup"]) {
+      const [a, b] = cellsOf(aspect);
+      // Both sides' cells sit in one row, which takes the taller one's height.
+      expect(a?.parentElement).toBe(b?.parentElement);
+    }
+    const sentenceA = byTestId("arena-summary-column-a");
+    expect(sentenceA?.parentElement).toBe(byTestId("arena-summary-column-b")?.parentElement);
+  });
+
   it("folds only above the height a short report stays under", () => {
     expect(verdictFolds(null)).toBe(false);
     expect(verdictFolds(0)).toBe(false);
