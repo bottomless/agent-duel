@@ -106,7 +106,6 @@ export const ko: TranslationResources = {
     tryAgain: "다시 시도",
     preparing: "준비 중",
     restoreSplit: "분할 보기 복원",
-    askFollowUp: "후속 질문하기",
     openTerminalIn: "에이전트 {{side}}의 worktree에서 터미널 열기",
     keptOver: "({{model}} 대신)",
     keptTied: "({{model}}와 무승부)",

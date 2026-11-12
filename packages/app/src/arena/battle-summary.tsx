@@ -430,7 +430,7 @@ function pastChoice(item: ArenaHistoryItem): ArenaPastChoice | null {
 
 /**
  * The end of a shown battle, in the chat under its review: the decision row as it was left, the
- * button taken marked, and Hide battle where Ask a follow-up was.
+ * button taken marked, and Hide battle at the row's end.
  */
 function ShownBattleEnd({ agentId, item }: { agentId: string; item: ArenaHistoryItem }) {
   const { t } = useTranslation();

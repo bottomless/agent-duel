@@ -102,7 +102,6 @@ export const zhCN: TranslationResources = {
     tryAgain: "重试",
     preparing: "准备中",
     restoreSplit: "恢复分栏视图",
-    askFollowUp: "追问",
     openTerminalIn: "在智能体 {{side}} 的 worktree 中打开终端",
     keptOver: "（而非 {{model}}）",
     keptTied: "（与 {{model}} 平局）",

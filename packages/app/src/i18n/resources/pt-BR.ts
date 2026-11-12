@@ -110,7 +110,6 @@ export const ptBR: TranslationResources = {
     tryAgain: "Tentar novamente",
     preparing: "Preparando",
     restoreSplit: "Restaurar visualização dividida",
-    askFollowUp: "Fazer uma pergunta de acompanhamento",
     openTerminalIn: "Abrir um terminal no worktree do agente {{side}}",
     keptOver: "em vez de {{model}}",
     keptTied: "empate com {{model}}",

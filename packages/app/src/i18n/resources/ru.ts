@@ -105,7 +105,6 @@ export const ru: TranslationResources = {
     tryAgain: "Повторить",
     preparing: "Подготовка",
     restoreSplit: "Вернуть разделённый вид",
-    askFollowUp: "Задать уточняющий вопрос",
     openTerminalIn: "Открыть терминал в worktree агента {{side}}",
     keptOver: "вместо {{model}}",
     keptTied: "вничью с {{model}}",
