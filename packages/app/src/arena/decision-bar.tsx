@@ -97,17 +97,9 @@ const UNSELECTED = { selected: false };
  * The vote's choices as one control: the two sides' buttons at its ends and the middle choice, Tie
  * or Discard, a quiet label between them. Separate buttons read Tie as a third answer to pick.
  */
-export function ArenaChoiceGroup({
-  onLayout,
-  testID,
-  children,
-}: {
-  onLayout?: (event: LayoutChangeEvent) => void;
-  testID: string;
-  children: ReactNode;
-}) {
+export function ArenaChoiceGroup({ testID, children }: { testID: string; children: ReactNode }) {
   return (
-    <View style={styles.choiceGroup} onLayout={onLayout} testID={testID}>
+    <View style={styles.choiceGroup} testID={testID}>
       {children}
     </View>
   );
@@ -504,8 +496,7 @@ function onSideSolid(theme: Theme): string {
 }
 
 const styles = StyleSheet.create((theme) => ({
-  // The buttons' corners plus the group's padding, so the two curves run parallel. Its buttons
-  // are the compact size, so the group stands about as tall as Ask a follow-up beside it.
+  // The buttons' corners plus the group's padding, so the two curves run parallel.
   choiceGroup: {
     flexDirection: "row",
     alignItems: "center",

@@ -361,11 +361,9 @@ text. Changing the view keeps both panes mounted, preserving reading position an
 the active battle open and its threads height-limited so the prompt and composer remain
 reachable. The card has no link back to the history: the conversation is right above it.
 
-While both results wait for a decision (a vote, or what to keep after a stop), the composer is put
-away behind Ask a follow-up at the end of the decision row, so the decision is the bottom of the
-battle (`useBattleComposerPutAway` in `agent-panel.tsx`). A draft keeps it out, and asking brings it
-back for the rest of that turn. Otherwise the composer stays available while a running or completed
-contestant can accept a reply. Who it
+The composer stays available while a running or completed contestant can accept a reply, the vote
+included: the decision floats above it rather than replacing it. Putting it away behind an Ask a
+follow-up button at the vote hid the way to reply to a contestant before choosing. Who it
 goes to is a `Both | Agent A | Agent B` segmented control (`Both | A | B` on a compact composer)
 at the composer's leading edge (`reply-target-control.tsx`), replacing the disabled Battle
 toggle during an active battle, so the target is visible before typing rather than hidden in
@@ -440,7 +438,7 @@ edit to vendored core). Unresolved paths that look that wide are refused too. A 
 savable offers only Allow once and Deny. One false match must not end every later ask for the project.
 
 The vote lives in a centered sticky pill above the composer: `Choose A`, `Tie`, and `Choose B`.
-They are one control (`ArenaChoiceGroup`): the sides' tinted buttons at its ends and `Tie` a plain
+They are one control (`ArenaChoiceGroup`): the sides' solid buttons at its ends and `Tie` a plain
 label between them, because as three separate buttons Tie read as a third answer. Anchor it over the transcript above the composer, with a gray surface inside the pill and a
 transparent, click-through area around it. It stays reachable while reviewing either thread or
 the diff. A stopped battle uses the same pill for `Keep A`, `Discard`, and `Keep B`; an early
@@ -1451,7 +1449,7 @@ under the prompt it read as the previous answer belonging to the next prompt. Sh
 battle in place of its kept answer (`shown-battle.ts`, `arenaKeptAnswerRowIds`), with the vote's
 names in place of Agent A and B and its review under them. It ends with the decision row as it was
 left (`ArenaPastDecision` in `decision-bar.tsx`): the same three buttons, the one taken marked and
-the others quiet, with Hide battle where Ask a follow-up was. It also retains the transition report.
+the others quiet, with Hide battle at the row's end. It also retains the transition report.
 
 A battle chat's header names the project only, with no rule under it: the battle's prompt heads the
 page. Commit shows once a battle is decided, and the editor, environment, scripts and changes sit in

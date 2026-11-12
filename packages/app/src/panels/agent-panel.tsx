@@ -148,7 +148,6 @@ import {
 import { ArenaDecisionBar } from "@/arena/decision-bar";
 import { arenaSetupStatus } from "@/arena/transition-progress";
 import { ArenaDecisionPill } from "@/arena/decision-pill";
-import { arenaDecisionPhase } from "@/arena/decision-state";
 import { useArenaBattleActions } from "@/arena/use-battle-actions";
 import { showsArenaDecisionBar } from "@/arena/decision-state";
 import { ArenaBattleSummary, ArenaKeptByline } from "@/arena/battle-summary";
@@ -2065,12 +2064,6 @@ const AgentComposerSection = memo(function AgentComposerSection({
     onComposerHeightChange(0);
     onDecisionPillHeightChange(0);
   }, [onComposerHeightChange, onDecisionPillHeightChange, startingBattle]);
-  const { composerPutAway, askFollowUp } = useBattleComposerPutAway({
-    snapshot: arenaSession.data,
-    battleReplyAvailable,
-    agentInputDraft,
-    onDecisionPillHeightChange,
-  });
   if (!agentId) {
     return null;
   }
@@ -2109,20 +2102,6 @@ const AgentComposerSection = memo(function AgentComposerSection({
         onMessageSent={onMessageSent}
       />
     );
-  if (composerPutAway && arenaSession.data) {
-    return (
-      <View style={styles.composerSlot}>
-        <ArenaDecisionPill
-          serverId={serverId}
-          agentId={agentId}
-          snapshot={arenaSession.data}
-          onHeightChange={onComposerHeightChange}
-          onAskFollowUp={askFollowUp}
-          docked
-        />
-      </View>
-    );
-  }
   return (
     <View style={styles.composerSlot}>
       {arenaSession.data ? (
@@ -2200,40 +2179,6 @@ function useKeptAnswerBylines({
     }
     return ends;
   }, [agentId, history, key]);
-}
-
-/**
- * While both results wait for a decision, the composer is put away behind "Ask a follow-up", so
- * the decision row is the bottom of the battle. A draft keeps it out; so does asking.
- */
-function useBattleComposerPutAway({
-  snapshot,
-  battleReplyAvailable,
-  agentInputDraft,
-  onDecisionPillHeightChange,
-}: {
-  snapshot: ArenaSnapshot | undefined;
-  battleReplyAvailable: boolean;
-  agentInputDraft: AgentInputDraft;
-  onDecisionPillHeightChange: (height: number) => void;
-}) {
-  const draftText = useSyncExternalStore(
-    agentInputDraft.textSource.subscribe,
-    agentInputDraft.textSource.getSnapshot,
-  );
-  const [followUpTurnId, setFollowUpTurnId] = useState<string | null>(null);
-  const decisionTurnId = snapshot?.turn?.id ?? null;
-  const decisionKind = snapshot ? arenaDecisionPhase(snapshot).kind : null;
-  const composerPutAway =
-    battleReplyAvailable &&
-    (decisionKind === "awaiting_vote" || decisionKind === "awaiting_stop_resolution") &&
-    followUpTurnId !== decisionTurnId &&
-    draftText.trim().length === 0;
-  const askFollowUp = useCallback(() => setFollowUpTurnId(decisionTurnId), [decisionTurnId]);
-  useEffect(() => {
-    if (composerPutAway) onDecisionPillHeightChange(0);
-  }, [composerPutAway, onDecisionPillHeightChange]);
-  return { composerPutAway, askFollowUp };
 }
 
 function useSingleAgentRatingDialog({

@@ -110,7 +110,6 @@ export const es: TranslationResources = {
     tryAgain: "Intentar de nuevo",
     preparing: "Preparando",
     restoreSplit: "Restaurar vista dividida",
-    askFollowUp: "Hacer una pregunta de seguimiento",
     openTerminalIn: "Abrir una terminal en el worktree del agente {{side}}",
     keptOver: "en lugar de {{model}}",
     keptTied: "empate con {{model}}",

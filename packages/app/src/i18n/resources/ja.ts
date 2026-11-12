@@ -106,7 +106,6 @@ export const ja: TranslationResources = {
     tryAgain: "再試行",
     preparing: "準備中",
     restoreSplit: "分割表示に戻す",
-    askFollowUp: "フォローアップを送る",
     openTerminalIn: "エージェント{{side}}のworktreeでターミナルを開く",
     keptOver: "（{{model}} ではなく）",
     keptTied: "（{{model}} と引き分け）",
