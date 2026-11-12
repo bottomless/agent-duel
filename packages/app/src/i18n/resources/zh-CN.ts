@@ -83,6 +83,7 @@ export const zhCN: TranslationResources = {
     changes: "更改的文件",
     winningDiscarded: "已放弃获胜更改",
     battleDiscarded: "已放弃对战",
+    versus: "对",
     battleResolved: "对战已解决",
     sameChanges: "两个智能体进行了相同更改。正在显示相对于原始内容的更改。",
     identicalFiles: "文件结果相同",

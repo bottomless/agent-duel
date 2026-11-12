@@ -89,6 +89,7 @@ export const fr: TranslationResources = {
     changes: "Fichiers modifiés",
     winningDiscarded: "Modifications gagnantes abandonnées",
     battleDiscarded: "Bataille abandonnée",
+    versus: "contre",
     battleResolved: "Bataille résolue",
     sameChanges:
       "Les deux agents ont effectué les mêmes modifications. Affichage des modifications par rapport à l’original.",
