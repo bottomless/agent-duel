@@ -113,10 +113,12 @@ function ArenaToolPart({
   part: shown,
   cwd,
   runId,
+  pending,
 }: {
   part: UnknownRecord;
   cwd?: string;
   runId?: string;
+  pending: boolean;
 }) {
   const [opened, setOpened] = useState(false);
   const part = useFullToolPart(shown, runId, opened);
@@ -125,10 +127,11 @@ function ArenaToolPart({
   const input = state?.input;
   const output = arenaToolOutput(state);
   const error = state?.error;
-  const status = useMemo(
-    () => normalizeArenaToolCallStatus(state?.status, error, output),
-    [error, output, state?.status],
-  );
+  // A call the run left unfinished settles once the run is over, rather than working forever.
+  const status = useMemo(() => {
+    const normalized = normalizeArenaToolCallStatus(state?.status, error, output);
+    return !pending && normalized === "running" ? "canceled" : normalized;
+  }, [error, output, pending, state?.status]);
   const detail = useMemo(
     () => deriveArenaToolCallDetail(tool, input, output, cwd),
     [tool, input, output, cwd],
@@ -241,7 +244,7 @@ function ArenaPart({
     if (questionResult) return <ArenaQuestionResultView result={questionResult} />;
     const tasks = arenaTodoWriteTasks(part);
     if (tasks !== null) return <ArenaTaskProgressCard tasks={tasks} state="snapshot" />;
-    return <ArenaToolPart part={part} cwd={cwd} runId={runId} />;
+    return <ArenaToolPart part={part} cwd={cwd} runId={runId} pending={pending} />;
   }
   return null;
 }
@@ -475,6 +478,13 @@ function ArenaActivitySegmentView({
   const detailEntries = workEntries.filter((entry) => stringField(entry.part, "type") === "tool");
   const hasWork = workEntries.length > 0;
   const hasDetails = detailEntries.length > 0;
+  // One tool is drawn as itself, opening onto its own output, not as a group that holds it. A
+  // subagent keeps its folded row: drawn as itself it would open its whole transcript in place.
+  const onlyTool = detailEntries.length === 1 ? detailEntries[0] : undefined;
+  const singleTool =
+    presentation.kind === "tool" && onlyTool && !context.subagents.has(onlyTool.part)
+      ? onlyTool
+      : undefined;
   const renderDetails = useCallback(
     () => (
       <View style={styles.workDetails}>
@@ -488,7 +498,8 @@ function ArenaActivitySegmentView({
   return (
     <View style={styles.activitySegment}>
       {segment.content ? <ArenaActivityPartView entry={segment.content} context={context} /> : null}
-      {hasWork || awaitingResponse ? (
+      {singleTool ? <ArenaActivityPartView entry={singleTool} context={context} /> : null}
+      {!singleTool && (hasWork || awaitingResponse) ? (
         <ExpandableBadge
           testID="arena-activity-group"
           label={presentation.label}
