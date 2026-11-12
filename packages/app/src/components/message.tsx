@@ -2466,6 +2466,10 @@ interface ToolCallProps {
   forceInline?: boolean;
   maxDetailHeight?: number;
   compactLabel?: boolean;
+  /** A battle's row: no vertical padding, so the thread's gaps alone space it; see `ExpandableBadge`. */
+  flushRow?: boolean;
+  /** A full-size label's icon at the label's tier; see `ExpandableBadge`. */
+  labelSizedIcon?: boolean;
 }
 
 export const ToolCall = memo(function ToolCall({
@@ -2488,6 +2492,8 @@ export const ToolCall = memo(function ToolCall({
   forceInline = false,
   maxDetailHeight = 400,
   compactLabel = false,
+  flushRow,
+  labelSizedIcon,
 }: ToolCallProps) {
   const { openToolCall } = useToolCallSheet();
   const [isExpanded, setIsExpanded] = useState(defaultExpanded ?? false);
@@ -2636,6 +2642,8 @@ export const ToolCall = memo(function ToolCall({
       disableOuterSpacing={disableOuterSpacing}
       onDetailHoverChange={onInlineDetailsHoverChange}
       compactLabel={compactLabel}
+      flushRow={flushRow}
+      labelSizedIcon={labelSizedIcon}
     />
   );
 }, areToolCallPropsEqual);
@@ -2658,5 +2666,7 @@ function areToolCallPropsEqual(previous: ToolCallProps, next: ToolCallProps) {
   if (previous.forceInline !== next.forceInline) return false;
   if (previous.maxDetailHeight !== next.maxDetailHeight) return false;
   if (previous.compactLabel !== next.compactLabel) return false;
+  if (previous.flushRow !== next.flushRow) return false;
+  if (previous.labelSizedIcon !== next.labelSizedIcon) return false;
   return true;
 }
