@@ -353,8 +353,8 @@ function BylineNotes({ item }: { item: ArenaHistoryItem }) {
 
 /**
  * A decided battle that kept no answer, discarded at the vote, after Stop, after a restart or from
- * the archive, in a line where its answer would be: the result, both models and the way into the
- * battle. In the kept byline's type, so the two read as one family.
+ * the archive, in one line at the battle's right edge: the result, both models and the way into
+ * the battle. In the kept byline's type and place, so the two read as one family.
  */
 function ArenaUnkeptLine({ agentId, item }: { agentId: string; item: ArenaHistoryItem }) {
   const { t } = useTranslation();
@@ -1104,11 +1104,13 @@ const styles = StyleSheet.create((theme) => ({
     paddingLeft: theme.spacing[3],
     lineHeight: 24,
   },
-  // A battle that kept no answer: one line where the answer would be, in the kept byline's type.
+  // A battle that kept no answer: one line in the kept byline's type and place, the battle's right
+  // edge, where a battle's result always reads.
   unkeptLine: {
     flexDirection: "row",
     alignItems: "center",
     flexWrap: "wrap",
+    justifyContent: "flex-end",
     columnGap: theme.spacing[1.5],
     minHeight: 24,
     paddingHorizontal: theme.spacing[3],

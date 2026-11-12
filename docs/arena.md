@@ -1444,8 +1444,8 @@ answer's footer at the battle's right edge (`ArenaKeptByline`, keyed by
 `arenaKeptAnswerFooterRowId`), in place of the footer's own duration. Name both: with only the
 winner the reveal was half a reveal, and the other contestant left no trace in the chat. Every kept side gets this footer (`battleKeptSide`): the winner, and the side a tie, an early
 pick or Stop then Keep applied. A battle that kept no answer (discarded at the vote, after Stop,
-after a restart or from the archive) says so in one line where the answer would be, in the
-byline's type: **Battle discarded**, both models and Show battle (`ArenaUnkeptLine`); a battle that
+after a restart or from the archive) says so in one line at the battle's right edge, in the
+byline's type and place: **Battle discarded**, both models and Show battle (`ArenaUnkeptLine`); a battle that
 could not start says so the same way with **Try again**. Neither is a card: the boxed summary main
 drew read as an object dropped between turns. They are
 small on purpose: in a long chat a large name above each answer drew the eye from the answers. The chat after a battle sits on the battle's rails (`agent-stream/arena-row-layout.tsx`):
