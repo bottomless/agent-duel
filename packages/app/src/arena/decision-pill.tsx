@@ -9,6 +9,7 @@ import type { ArenaSide, ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-sche
 import {
   ArenaRunningPillButton,
   ArenaSideChoiceButton,
+  ArenaChoiceGroup,
   DiscardDecision,
   ResumeDecision,
   VoteDecision,
@@ -221,28 +222,36 @@ function DecisionChoices({
   actions: ArenaBattleActions;
   onLayout: (event: LayoutChangeEvent) => void;
 }) {
+  if (phase.kind === "running") {
+    // Stop alone is an action, not a choice between the sides, so it stays a plain button.
+    return (
+      <View style={styles.choices} onLayout={onLayout} testID="arena-battle-choice-row">
+        <BattleStopDecision phase={phase} actions={actions} />
+      </View>
+    );
+  }
   const stopped = phase.kind === "awaiting_stop_resolution";
   const interrupted = phase.kind === "awaiting_vote" && phase.canResume;
   return (
-    <View style={styles.choices} onLayout={onLayout} testID="arena-battle-choice-row">
-      {phase.kind === "running" ? <BattleStopDecision phase={phase} actions={actions} /> : null}
+    <ArenaChoiceGroup onLayout={onLayout} testID="arena-battle-choice-row">
       {interrupted ? (
         <>
           <ResumeDecision actions={actions} />
           <DiscardDecision actions={actions} />
         </>
-      ) : null}
-      {/* A failed side shows Accept in its Choose's place, or nothing if its result was not saved,
-          and each failed pane keeps its Retry. */}
-      {phase.kind !== "running" && !interrupted ? (
+      ) : (
         <>
+          {/* A failed side shows Accept in its Choose's place, or nothing if its result was not
+              saved, and each failed pane keeps its Retry. */}
           <BattlePaneDecision side="a" phase={phase} actions={actions} />
-          {phase.kind === "awaiting_vote" && phase.canTie ? <VoteDecision actions={actions} /> : null}
+          {phase.kind === "awaiting_vote" && phase.canTie ? (
+            <VoteDecision actions={actions} />
+          ) : null}
           {stopped ? <DiscardDecision actions={actions} /> : null}
           <BattlePaneDecision side="b" phase={phase} actions={actions} />
         </>
-      ) : null}
-    </View>
+      )}
+    </ArenaChoiceGroup>
   );
 }
 
