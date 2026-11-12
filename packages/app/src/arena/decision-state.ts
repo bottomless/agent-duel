@@ -36,13 +36,17 @@ export type ArenaDecisionPhase =
       canChooseB: boolean;
       /** Only between two results that can be chosen; a tie applies A whatever A is. */
       canTie: boolean;
+      /**
+       * Only once a side failed or the restart cut the battle off. Two results that can be chosen
+       * are voted on, so the pill offers no way around the vote.
+       */
       canDiscard: boolean;
       /** Neither result can be chosen, so Tie leaves the pill. */
       bothFailed: boolean;
       /** A failed side whose work can be taken anyway, in place of its Choose. */
       canAcceptA: boolean;
       canAcceptB: boolean;
-      /** A failed side can still be retried, which the hint beside Discard offers. */
+      /** A failed side can still be retried, which the failure line above the pill offers. */
       canRetry: boolean;
       /**
        * The one side that failed while the other can be chosen. Choosing the other still applies
@@ -128,18 +132,20 @@ function awaitingVotePhase(
 ): Extract<ArenaDecisionPhase, { kind: "awaiting_vote" }> {
   const canChooseA = !turn.canResumeBattle && canChooseArenaRun(turn.state, runA);
   const canChooseB = !turn.canResumeBattle && canChooseArenaRun(turn.state, runB);
+  const bothFailed = !turn.canResumeBattle && !canChooseA && !canChooseB;
+  const failed = failedSide(canChooseA, canChooseB);
   return {
     kind: "awaiting_vote",
     canChooseA,
     canChooseB,
     canTie: turn.canTie,
-    canDiscard: turn.canDiscardBattle,
-    bothFailed: !turn.canResumeBattle && !canChooseA && !canChooseB,
+    canDiscard: turn.canDiscardBattle && (turn.canResumeBattle || bothFailed || failed !== null),
+    bothFailed,
     canAcceptA: runA?.canAcceptFailed === true,
     canAcceptB: runB?.canAcceptFailed === true,
     canRetry: runA?.canRetry === true || runB?.canRetry === true,
     canResume: turn.canResumeBattle,
-    failedSide: failedSide(canChooseA, canChooseB),
+    failedSide: failed,
   };
 }
 
