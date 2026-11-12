@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import React from "react";
-import { cleanup, fireEvent, render, within } from "@testing-library/react";
+import { cleanup, fireEvent, render as renderInDom, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ArenaRun } from "@getpaseo/protocol/arena/rpc-schemas";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -50,7 +50,11 @@ vi.mock("@/components/message", () => ({
       {props.isExpanded ? props.renderDetails?.() : null}
     </div>
   ),
-  ToolCall: () => null,
+  ToolCall: (props: { toolName: string; status: string }) => (
+    <div data-testid="tool-call" data-status={props.status}>
+      {props.toolName}
+    </div>
+  ),
   UserMessage: ({ message }: { message: string }) => <p data-testid="user-message">{message}</p>,
 }));
 
@@ -83,6 +87,11 @@ afterEach(cleanup);
 function TestQueryProvider({ children }: { children: React.ReactNode }) {
   const [client] = React.useState(() => new QueryClient());
   return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+}
+
+// A tool drawn as itself loads its full output through the query client.
+function render(ui: React.ReactElement, options?: Parameters<typeof renderInDom>[1]) {
+  return renderInDom(ui, { wrapper: TestQueryProvider, ...options });
 }
 
 const PENDING_REASONING_RUN = {
@@ -384,7 +393,6 @@ describe("ArenaRunThread", () => {
     expect(view.queryByTestId("paseo-turn-footer")).toBeNull();
 
     view.rerender(<ArenaRunThread run={MIXED_REASONING_RUN} />);
-    fireEvent.click(view.getByRole("button", { name: "Read" }));
     expect(view.queryByText("Check `grid-template-columns`.")).toBeNull();
     expect(view.queryByText("Private thought")).toBeNull();
     expect(view.getByText("The file is ready.").textContent).toBe("The file is ready.");
@@ -417,11 +425,12 @@ describe("ArenaRunThread", () => {
     expect(view.getByText("First update")).toBeTruthy();
     expect(view.getByText("Second update")).toBeTruthy();
     expect(view.queryByTestId("arena-earlier-activity")).toBeNull();
-    // A step with one tool names that tool rather than counting it as a group.
-    const firstStep = view.getAllByTestId("arena-activity-group")[0]!;
-    expect(firstStep.getAttribute("data-icon")).not.toBe("Layers2");
-    expect(firstStep.textContent).toContain("Read");
-    expect(firstStep.textContent).not.toContain("1 file");
+    // A step with one tool is that tool, not a group that holds it.
+    expect(view.queryByTestId("arena-activity-group")).toBeNull();
+    expect(view.getAllByTestId("tool-call").map((call) => call.textContent)).toEqual([
+      "read",
+      "edit",
+    ]);
 
     view.rerender(thread(completedRun));
     expect(view.queryByText("First update")).toBeNull();
@@ -456,14 +465,14 @@ describe("ArenaRunThread", () => {
     expect(within(activity).getByTestId("arena-subagent-latest").getAttribute("data-loading")).toBe(
       "true",
     );
-    expect(view.getByTestId("arena-activity-group").textContent).toContain("Read");
-    expect(view.getByTestId("arena-activity-group").getAttribute("data-loading")).toBe("false");
+    const parentRead = view.getAllByTestId("tool-call").find((call) => call.textContent === "read");
+    expect(parentRead?.getAttribute("data-status")).not.toBe("running");
     expect(view.queryByText("Child finding")).toBeNull();
     expect(view.queryByTestId("paseo-turn-footer")).toBeNull();
 
     fireEvent.click(within(heading).getByRole("button"));
     expect(within(child).getByText("Child finding").textContent).toBe("Child finding");
-    expect(within(child).getByTestId("arena-activity-group").textContent).toContain("Shell");
+    expect(within(child).getByTestId("tool-call").textContent).toBe("bash");
 
     const completedRun = subagentRun("completed");
     view.rerender(<ArenaRunThread run={completedRun} />);
@@ -475,8 +484,8 @@ describe("ArenaRunThread", () => {
     expect(
       within(completed).getByTestId("arena-subagent-latest").getAttribute("data-loading"),
     ).toBe("false");
-    expect(within(completed).getByTestId("arena-activity-group").getAttribute("data-loading")).toBe(
-      "false",
+    expect(within(completed).getByTestId("tool-call").getAttribute("data-status")).not.toBe(
+      "running",
     );
   });
 
