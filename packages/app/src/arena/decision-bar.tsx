@@ -70,9 +70,9 @@ export function ArenaSideChoiceButton({
   return (
     <Button
       variant="secondary"
-      size="md"
+      size="sm"
       style={[styles.sideChoice, side === "a" ? styles.sideA : styles.sideB]}
-      textStyle={[styles.choiceText, side === "a" ? styles.sideAText : styles.sideBText]}
+      textStyle={[styles.choiceText, styles.sideSolidText]}
       loading={loading}
       disabled={disabled}
       onPress={onPress}
@@ -84,13 +84,9 @@ export function ArenaSideChoiceButton({
 }
 
 const ThemedCheck = withUnistyles(Check);
-const sideAColor = (theme: Theme) =>
-  `color-mix(in srgb, ${theme.colors.statusDotRunning} 55%, ${theme.colors.foreground})`;
-const sideBColor = (theme: Theme) =>
-  `color-mix(in srgb, ${theme.colors.statusDotWarning} 55%, ${theme.colors.foreground})`;
 const checkColorMapping = {
-  a: (theme: Theme) => ({ color: sideAColor(theme) }),
-  b: (theme: Theme) => ({ color: sideBColor(theme) }),
+  a: (theme: Theme) => ({ color: onSideSolid(theme) }),
+  b: (theme: Theme) => ({ color: onSideSolid(theme) }),
   middle: (theme: Theme) => ({ color: theme.colors.foreground }),
 };
 
@@ -180,14 +176,12 @@ function pastSelectedStyle(choice: ArenaSide | "middle") {
 }
 
 function pastSelectedTextStyle(choice: ArenaSide | "middle") {
-  if (choice === "a") return styles.sideAText;
-  if (choice === "b") return styles.sideBText;
-  return null;
+  return choice === "middle" ? null : styles.sideSolidText;
 }
 
 function runningHoverStyle(side: ArenaSide | null) {
-  if (side === "a") return styles.sideA;
-  if (side === "b") return styles.sideB;
+  if (side === "a") return styles.sideTintA;
+  if (side === "b") return styles.sideTintB;
   return styles.runningHovered;
 }
 
@@ -260,7 +254,7 @@ export function VoteDecision({
   return (
     <Button
       variant="ghost"
-      size="md"
+      size="sm"
       style={styles.pillChoice}
       textStyle={styles.choiceText}
       loading={pendingAction?.kind === "vote" && pendingAction.vote === "tie"}
@@ -288,7 +282,7 @@ export function ResumeDecision({ actions }: { actions: ArenaBattleActions }) {
   return (
     <Button
       variant="default"
-      size="md"
+      size="sm"
       style={styles.pillChoice}
       textStyle={styles.choiceText}
       loading={pendingAction?.kind === "resume_battle"}
@@ -322,7 +316,7 @@ export function DiscardDecision({
   return (
     <Button
       variant={placement === "pill" ? "ghost" : "outline"}
-      size={placement === "pill" ? "md" : "xs"}
+      size={placement === "pill" ? "sm" : "xs"}
       style={placement === "pill" ? styles.pillChoice : undefined}
       textStyle={placement === "pill" ? styles.choiceText : undefined}
       loading={pendingAction?.kind === "resolve_stop" && pendingAction.resolution === "discard"}
@@ -493,8 +487,25 @@ export const ArenaDecisionBar = memo(function ArenaDecisionBar({
 // plain number here.
 const BAR_PADDING = 12;
 
+const CHOICE_HEIGHT = 38;
+
+/**
+ * A side's solid fill: its colour deepened toward the theme's dark end, the text colour on light
+ * and the page on dark, so the light label on it reads in both schemes.
+ */
+function sideSolid(theme: Theme, color: string): string {
+  const dark = theme.colorScheme === "dark" ? theme.colors.surface0 : theme.colors.foreground;
+  return `color-mix(in srgb, ${color} 55%, ${dark})`;
+}
+
+/** The label on a side's solid fill: the theme's light end, the page on light and the text on dark. */
+function onSideSolid(theme: Theme): string {
+  return theme.colorScheme === "dark" ? theme.colors.foreground : theme.colors.surface0;
+}
+
 const styles = StyleSheet.create((theme) => ({
-  // The buttons' corners plus the group's padding, so the two curves run parallel.
+  // The buttons' corners plus the group's padding, so the two curves run parallel. Its buttons
+  // are the compact size, so the group stands about as tall as Ask a follow-up beside it.
   choiceGroup: {
     flexDirection: "row",
     alignItems: "center",
@@ -506,7 +517,7 @@ const styles = StyleSheet.create((theme) => ({
     backgroundColor: theme.colors.surface2,
   },
   past: {
-    ...createControlGeometry(theme).buttonMd,
+    ...createControlGeometry(theme).buttonSm,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
@@ -525,12 +536,12 @@ const styles = StyleSheet.create((theme) => ({
     backgroundColor: "transparent",
   },
   pastChosenA: {
-    backgroundColor: tint(theme.colors.statusDotRunning, 22),
-    borderColor: theme.colors.statusDotRunning,
+    backgroundColor: sideSolid(theme, theme.colors.statusDotRunning),
+    borderColor: sideSolid(theme, theme.colors.statusDotRunning),
   },
   pastChosenB: {
-    backgroundColor: tint(theme.colors.statusDotWarning, 24),
-    borderColor: theme.colors.statusDotWarning,
+    backgroundColor: sideSolid(theme, theme.colors.statusDotWarning),
+    borderColor: sideSolid(theme, theme.colors.statusDotWarning),
   },
   pastChosenMiddle: {
     backgroundColor: theme.colors.surface3,
@@ -560,12 +571,15 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.foregroundMuted,
     fontSize: theme.fontSize.base,
   },
-  // The decision's buttons: the landing page's shape, rectangular with semibold labels.
+  // The decision's buttons: the landing page's shape, rectangular with semibold labels, between
+  // the compact and field heights so the group sits lighter than a field-height row.
   sideChoice: {
+    minHeight: CHOICE_HEIGHT,
     minWidth: 112,
     borderRadius: theme.borderRadius.lg,
   },
   pillChoice: {
+    minHeight: CHOICE_HEIGHT,
     minWidth: 72,
     borderRadius: theme.borderRadius.lg,
   },
@@ -573,19 +587,24 @@ const styles = StyleSheet.create((theme) => ({
     fontWeight: theme.fontWeight.semibold,
   },
   sideA: {
+    backgroundColor: sideSolid(theme, theme.colors.statusDotRunning),
+    borderColor: sideSolid(theme, theme.colors.statusDotRunning),
+  },
+  sideB: {
+    backgroundColor: sideSolid(theme, theme.colors.statusDotWarning),
+    borderColor: sideSolid(theme, theme.colors.statusDotWarning),
+  },
+  sideSolidText: {
+    color: onSideSolid(theme),
+  },
+  // The early pick's hover: a light wash of its side's colour on the neutral outline.
+  sideTintA: {
     backgroundColor: tint(theme.colors.statusDotRunning, 22),
     borderColor: tint(theme.colors.statusDotRunning, 22),
   },
-  sideB: {
+  sideTintB: {
     backgroundColor: tint(theme.colors.statusDotWarning, 24),
     borderColor: tint(theme.colors.statusDotWarning, 24),
-  },
-  // The side's colour toward the text colour: deep on light, pale on dark.
-  sideAText: {
-    color: `color-mix(in srgb, ${theme.colors.statusDotRunning} 55%, ${theme.colors.foreground})`,
-  },
-  sideBText: {
-    color: `color-mix(in srgb, ${theme.colors.statusDotWarning} 55%, ${theme.colors.foreground})`,
   },
   hoverTarget: {
     position: "relative",
