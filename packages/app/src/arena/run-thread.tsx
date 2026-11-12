@@ -10,7 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import { Text, View } from "react-native";
-import { Brain, Check, CircleStop, FileText, Users, Wrench } from "lucide-react-native";
+import { Brain, Check, CircleStop, FileText, Layers2, Users } from "lucide-react-native";
 import { StyleSheet } from "react-native-unistyles";
 import type { ArenaRun } from "@getpaseo/protocol/arena/rpc-schemas";
 import type { AgentPermissionResponse } from "@getpaseo/protocol/agent-types";
@@ -69,13 +69,13 @@ type UnknownRecord = Record<string, unknown>;
 
 /**
  * A work row's icon, as the regular chat draws the same rows: the tool's own icon for one tool,
- * the wrench for a group of tools, the brain for thinking.
+ * the stack for a group of tools, the brain for thinking.
  */
 function arenaWorkIcon(presentation: ArenaWorkPresentation) {
   if (presentation.kind === "tool") {
     return resolveToolCallIcon(presentation.toolName, presentation.detail);
   }
-  return presentation.kind === "reasoning" ? Brain : Wrench;
+  return presentation.kind === "reasoning" ? Brain : Layers2;
 }
 
 function asRecord(value: unknown): UnknownRecord | null {

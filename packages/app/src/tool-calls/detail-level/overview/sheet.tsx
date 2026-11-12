@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, type ReactNode } from "react";
 import { Pressable, Text, View } from "react-native";
 import { BottomSheetScrollView, type BottomSheetScrollViewMethods } from "@gorhom/bottom-sheet";
-import { Wrench, X } from "lucide-react-native";
+import { Layers2, X } from "lucide-react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
 import { useIsolatedBottomSheetVisibility } from "@/components/ui/isolated-bottom-sheet-modal";
@@ -16,7 +16,7 @@ interface OverviewToolCallGroupSheetProps {
 }
 
 const SNAP_POINTS = ["60%", "95%"];
-const ThemedWrench = withUnistyles(Wrench);
+const ThemedLayers = withUnistyles(Layers2);
 const ThemedX = withUnistyles(X);
 const foregroundMapping = (theme: Theme) => ({ color: theme.colors.foreground });
 const foregroundMutedMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
@@ -61,7 +61,7 @@ export function OverviewToolCallGroupSheet({
       <View style={styles.container} testID="tool-call-group-sheet">
         <View style={styles.header}>
           <View style={styles.headerLeft}>
-            <ThemedWrench size={20} uniProps={foregroundMapping} />
+            <ThemedLayers size={20} uniProps={foregroundMapping} />
             <Text
               style={styles.headerTitle}
               numberOfLines={2}
