@@ -97,6 +97,26 @@ const checkColorMapping = {
 const SELECTED = { selected: true };
 const UNSELECTED = { selected: false };
 
+/**
+ * The vote's choices as one control: the two sides' buttons at its ends and the middle choice, Tie
+ * or Discard, a quiet label between them. Separate buttons read Tie as a third answer to pick.
+ */
+export function ArenaChoiceGroup({
+  onLayout,
+  testID,
+  children,
+}: {
+  onLayout?: (event: LayoutChangeEvent) => void;
+  testID: string;
+  children: ReactNode;
+}) {
+  return (
+    <View style={styles.choiceGroup} onLayout={onLayout} testID={testID}>
+      {children}
+    </View>
+  );
+}
+
 /** What a decided battle's row offered, and which of its three it took. */
 export interface ArenaPastChoice {
   kind: "vote" | "keep";
@@ -122,7 +142,7 @@ export function ArenaPastDecision({ kind, chosen }: ArenaPastChoice) {
           b: t("arena.keepSide", { side: "B" }),
         };
   return (
-    <View style={styles.pastRow} testID="arena-past-decision">
+    <ArenaChoiceGroup testID="arena-past-decision">
       {(["a", "middle", "b"] as const).map((choice) => {
         const selected = choice === chosen;
         return (
@@ -149,7 +169,7 @@ export function ArenaPastDecision({ kind, chosen }: ArenaPastChoice) {
           </View>
         );
       })}
-    </View>
+    </ArenaChoiceGroup>
   );
 }
 
@@ -239,7 +259,7 @@ export function VoteDecision({
   }, [actions]);
   return (
     <Button
-      variant="secondary"
+      variant="ghost"
       size="md"
       style={styles.pillChoice}
       textStyle={styles.choiceText}
@@ -301,7 +321,7 @@ export function DiscardDecision({
   }, [actions]);
   return (
     <Button
-      variant={placement === "pill" ? "secondary" : "outline"}
+      variant={placement === "pill" ? "ghost" : "outline"}
       size={placement === "pill" ? "md" : "xs"}
       style={placement === "pill" ? styles.pillChoice : undefined}
       textStyle={placement === "pill" ? styles.choiceText : undefined}
@@ -474,10 +494,16 @@ export const ArenaDecisionBar = memo(function ArenaDecisionBar({
 const BAR_PADDING = 12;
 
 const styles = StyleSheet.create((theme) => ({
-  pastRow: {
+  // The buttons' corners plus the group's padding, so the two curves run parallel.
+  choiceGroup: {
     flexDirection: "row",
     alignItems: "center",
-    gap: theme.spacing[2],
+    gap: theme.spacing[1],
+    padding: theme.spacing[1],
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    borderRadius: theme.borderRadius.lg + theme.spacing[1],
+    backgroundColor: theme.colors.surface2,
   },
   past: {
     ...createControlGeometry(theme).buttonMd,
@@ -496,7 +522,7 @@ const styles = StyleSheet.create((theme) => ({
     minWidth: 72,
   },
   pastQuiet: {
-    backgroundColor: theme.colors.surface2,
+    backgroundColor: "transparent",
   },
   pastChosenA: {
     backgroundColor: tint(theme.colors.statusDotRunning, 22),
