@@ -47,11 +47,11 @@ import { arenaChangesCountLabel, arenaChangesRows } from "./changes-rows";
 import { arenaDiffQueryKey, hasBattleDiff } from "./comparison-visibility";
 import { arenaModelDisplayName } from "./side-label";
 import { ArenaModelVendorIcon } from "./model-vendor-icon";
+import { ArenaAgentAvatar, ArenaAnswerColumn, ArenaUnkeptHead } from "./turn-head";
 import { describeSummaryOmissions } from "./summary-omissions";
 import { ArenaRunThread } from "./run-thread";
 import { arenaSessionQueryKey, useArenaStartMutation } from "./use-arena-session";
 import { ArenaTransitionRow } from "./transition-row";
-import { PressHighlight } from "@/components/ui/press-highlight";
 import { formatDuration } from "@/utils/time";
 import { BattleReview } from "./battle-review";
 import { BATTLE_GUTTER, BATTLE_RAIL } from "./battle-layout";
@@ -278,139 +278,16 @@ export function ArenaBattleOutcome({ item }: { item: ArenaHistoryItem }) {
 }
 
 /**
- * The end of a kept answer's footer, at the battle's right edge: the model that wrote it, the time
- * it took, and the way back into the battle. The answer is the chat's history now, so only this
- * line says which of the two it was.
- */
-export function ArenaKeptByline({ agentId, item }: { agentId: string; item: ArenaHistoryItem }) {
-  const { t } = useTranslation();
-  const show = useArenaShownBattleStore((state) => state.show);
-  const handleShow = useCallback(() => show(agentId, item.id), [agentId, item.id, show]);
-  const model = keptModel(item);
-  if (!model) return null;
-  const opponent = opponentModel(item);
-  return (
-    <View style={styles.byline} testID={`arena-winner-${item.id}`}>
-      <Text style={styles.bylineName} numberOfLines={1}>
-        {arenaModelDisplayName(model)}
-      </Text>
-      {opponent ? (
-        <Text style={styles.bylineMeta} numberOfLines={1} testID={`arena-opponent-${item.id}`}>
-          {t(item.vote === "tie" ? "arena.keptTied" : "arena.keptOver", {
-            model: arenaModelDisplayName(opponent),
-          })}
-        </Text>
-      ) : null}
-      <BylineNotes item={item} />
-      <PressHighlight
-        accessibilityRole="button"
-        accessibilityLabel={t("arena.showBattle")}
-        onPress={handleShow}
-        style={showBattleStyle}
-        testID={`arena-show-battle-${item.id}`}
-      >
-        {({ hovered, pressed }) => (
-          <>
-            {/* Text, not an icon, so the chevron takes the theme with its label. */}
-            <Text style={[styles.showBattleText, (hovered || pressed) && styles.showBattleActive]}>
-              {t("arena.showBattle")}
-            </Text>
-            <Text
-              style={[styles.showBattleChevron, (hovered || pressed) && styles.showBattleActive]}
-            >
-              ›
-            </Text>
-          </>
-        )}
-      </PressHighlight>
-    </View>
-  );
-}
-
-/** The time, then anything that sets this result apart, each after a dot. */
-function BylineNotes({ item }: { item: ArenaHistoryItem }) {
-  const { t } = useTranslation();
-  const gitNotice = gitApplicationNotice(item);
-  const notes = [
-    item.appliedDurationMs !== undefined ? formatDuration(item.appliedDurationMs) : null,
-    item.selectedEarly ? t("arena.earlyDecision") : null,
-    item.voteDiscardedReason ? t("arena.voteNotCounted") : null,
-  ].filter((note): note is string => note !== null);
-  return (
-    <>
-      {notes.map((note) => (
-        <Text key={note} style={styles.bylineMeta}>
-          · {note}
-        </Text>
-      ))}
-      {gitNotice && gitNotice.tone !== "info" ? (
-        <Text style={styles.conflictBadge}>{gitNotice.title}</Text>
-      ) : null}
-      <Text style={styles.bylineMeta}>·</Text>
-    </>
-  );
-}
-
-/**
  * A decided battle that kept no answer, discarded at the vote, after Stop, after a restart or from
- * the archive, in one line at the battle's right edge: the result, both models and the way into
- * the battle. In the kept byline's type and place, so the two read as one family.
+ * the archive: a head where its answer would be, in the avatar column, with the plain agent avatar
+ * since no model's answer is kept (`ArenaUnkeptHead`).
  */
 function ArenaUnkeptLine({ agentId, item }: { agentId: string; item: ArenaHistoryItem }) {
-  const { t } = useTranslation();
-  const show = useArenaShownBattleStore((state) => state.show);
-  const handleShow = useCallback(() => show(agentId, item.id), [agentId, item.id, show]);
-  const identities = item.identities;
   return (
-    <View style={styles.unkeptLine} testID={`arena-unkept-${item.id}`}>
-      <Text style={styles.unkeptResult}>{chosenLabel(item)}</Text>
-      {identities ? (
-        <>
-          <Text style={styles.bylineMeta}>·</Text>
-          <UnkeptModel model={identities.a.name} />
-          <Text style={styles.bylineMeta}>{t("arena.versus")}</Text>
-          <UnkeptModel model={identities.b.name} />
-        </>
-      ) : null}
-      {identities ? (
-        <>
-          <Text style={styles.bylineMeta}>·</Text>
-          <PressHighlight
-            accessibilityRole="button"
-            accessibilityLabel={t("arena.showBattle")}
-            onPress={handleShow}
-            style={showBattleStyle}
-            testID={`arena-show-battle-${item.id}`}
-          >
-            {({ hovered, pressed }) => (
-              <>
-                <Text
-                  style={[styles.showBattleText, (hovered || pressed) && styles.showBattleActive]}
-                >
-                  {t("arena.showBattle")}
-                </Text>
-                <Text
-                  style={[
-                    styles.showBattleChevron,
-                    (hovered || pressed) && styles.showBattleActive,
-                  ]}
-                >
-                  ›
-                </Text>
-              </>
-            )}
-          </PressHighlight>
-        </>
-      ) : null}
-    </View>
-  );
-}
-
-function UnkeptModel({ model }: { model: string }) {
-  return (
-    <View style={styles.unkeptModel}>
-      <ArenaModelVendorIcon model={model} size={ICON_SIZE.sm} tone="muted" />
-      <Text style={styles.bylineMeta}>{arenaModelDisplayName(model)}</Text>
+    <View style={[styles.answerInset, styles.unkeptSpacing]}>
+      <ArenaAnswerColumn>
+        <ArenaUnkeptHead agentId={agentId} item={item} label={chosenLabel(item)} />
+      </ArenaAnswerColumn>
     </View>
   );
 }
@@ -419,20 +296,6 @@ function UnkeptModel({ model }: { model: string }) {
 function keptModel(item: ArenaHistoryItem): string | undefined {
   const kept = battleKeptSide(item);
   return kept ? item.identities?.[kept].name : undefined;
-}
-
-/**
- * The model the kept one was chosen over. The kept answer becomes the chat's history, so without it
- * the reveal named only the winner and the other contestant left no trace in the chat.
- */
-function opponentModel(item: ArenaHistoryItem): string | undefined {
-  const kept = battleKeptSide(item);
-  if (!kept) return undefined;
-  return item.identities?.[kept === "a" ? "b" : "a"].name;
-}
-
-function showBattleStyle() {
-  return styles.showBattle;
 }
 
 /** The row a decided battle's choice was made in, and which button it took. */
@@ -923,22 +786,29 @@ function FailedBattleStart({
       });
   }, [agentId, client, item.id, startArena, toast, t]);
   return (
-    <View style={[styles.keptNotice, styles.failedStart]} testID={`arena-summary-${item.id}`}>
-      <Text style={styles.failedStartText}>
-        <Text style={styles.unkeptResult}>{t("arena.couldntStart")}</Text>
-        <Text style={styles.bylineMeta}> · {t("arena.neitherRan")}</Text>
-      </Text>
-      {canStartAgain ? (
-        <Button
-          size="xs"
-          variant="outline"
-          loading={starting}
-          onPress={handleStartAgain}
-          testID="arena-failed-start-retry"
-        >
-          {t("arena.tryAgain")}{" "}
-        </Button>
-      ) : null}
+    <View style={styles.keptNotice} testID={`arena-summary-${item.id}`}>
+      <View style={styles.answerInset}>
+        <ArenaAnswerColumn>
+          <View style={styles.failedStart}>
+            <ArenaAgentAvatar />
+            <Text style={styles.failedStartText}>
+              <Text style={styles.unkeptResult}>{t("arena.couldntStart")}</Text>
+              <Text style={styles.bylineMeta}> · {t("arena.neitherRan")}</Text>
+            </Text>
+            {canStartAgain ? (
+              <Button
+                size="xs"
+                variant="outline"
+                loading={starting}
+                onPress={handleStartAgain}
+                testID="arena-failed-start-retry"
+              >
+                {t("arena.tryAgain")}{" "}
+              </Button>
+            ) : null}
+          </View>
+        </ArenaAnswerColumn>
+      </View>
     </View>
   );
 }
@@ -1002,8 +872,8 @@ function DecidedBattleSummary({
       </View>
     );
   }
-  // A kept answer names its model in its own footer (`ArenaKeptByline`); a battle that kept none
-  // says so in a line of its own where that answer would be. Only what the chat must still be told
+  // A kept answer's own head names its model (`ArenaTurnHead`); a battle that kept none says so
+  // in a head of its own where that answer would be. Only what the chat must still be told
   // follows, such as a merge conflict.
   return (
     <View style={styles.keptNotice} testID={`arena-summary-${item.id}`}>
@@ -1020,42 +890,17 @@ const styles = StyleSheet.create((theme) => ({
     maxWidth: ARENA_MAX_CONTENT_WIDTH,
     alignSelf: "center",
   },
-  // The kept model and Show battle, at the battle's right edge in the answer's footer.
-  byline: {
-    flexDirection: "row",
-    alignItems: "center",
-    flexWrap: "wrap",
-    justifyContent: "flex-end",
-    columnGap: theme.spacing[1.5],
-    minHeight: 24,
-  },
-  bylineName: {
-    color: theme.colors.foreground,
-    fontSize: theme.fontSize.base,
-    fontWeight: theme.fontWeight.semibold,
-  },
   bylineMeta: {
     color: theme.colors.foregroundMuted,
     fontSize: theme.fontSize.base,
   },
-  showBattle: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: theme.spacing[1.5],
-    minHeight: 24,
+  // The chat's rows sit a step further in than this container: the answers' own left edge.
+  answerInset: {
+    paddingLeft: theme.spacing[3],
   },
-  showBattleText: {
-    color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.base,
-  },
-  showBattleChevron: {
-    color: theme.colors.foregroundMuted,
-    fontSize: theme.fontSize.lg,
-    lineHeight: theme.fontSize.lg,
-    marginTop: -2,
-  },
-  showBattleActive: {
-    color: theme.colors.foreground,
+  // A battle that kept no answer is a whole turn in one line: the next prompt starts a gap below.
+  unkeptSpacing: {
+    marginBottom: theme.spacing[6],
   },
   keptNotice: {
     width: "100%",
@@ -1101,29 +946,12 @@ const styles = StyleSheet.create((theme) => ({
   failedStartText: {
     flex: 1,
     minWidth: 0,
-    paddingLeft: theme.spacing[3],
     lineHeight: 24,
-  },
-  // A battle that kept no answer: one line in the kept byline's type and place, the battle's right
-  // edge, where a battle's result always reads.
-  unkeptLine: {
-    flexDirection: "row",
-    alignItems: "center",
-    flexWrap: "wrap",
-    justifyContent: "flex-end",
-    columnGap: theme.spacing[1.5],
-    minHeight: 24,
-    paddingHorizontal: theme.spacing[3],
   },
   unkeptResult: {
     color: theme.colors.foreground,
     fontSize: theme.fontSize.base,
     fontWeight: theme.fontWeight.medium,
-  },
-  unkeptModel: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: theme.spacing[1],
   },
   cardHeader: {
     minHeight: 58,

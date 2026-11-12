@@ -1437,18 +1437,21 @@ in one compare-and-set. Acknowledge votes, kept sides, and review answers after 
 (`applyInBackground`); Git work can exceed the client's wait. The feed carries progress and failures,
 including `application_failed` and `canonicalization_failed`.
 
-Keep the battle open during application, then collapse it to the kept answer. The model that wrote
-it, the model it was chosen over (`over Qwen 3.8 Max`, muted; `tied with …` after a tie), its time,
-and Show battle end that
-answer's footer at the battle's right edge (`ArenaKeptByline`, keyed by
-`arenaKeptAnswerFooterRowId`), in place of the footer's own duration. Name both: with only the
-winner the reveal was half a reveal, and the other contestant left no trace in the chat. Every kept side gets this footer (`battleKeptSide`): the winner, and the side a tie, an early
-pick or Stop then Keep applied. A battle that kept no answer (discarded at the vote, after Stop,
-after a restart or from the archive) says so in one line at the battle's right edge, in the
-byline's type and place: **Battle discarded**, both models and Show battle (`ArenaUnkeptLine`); a battle that
-could not start says so the same way with **Try again**. Neither is a card: the boxed summary main
-drew read as an object dropped between turns. They are
-small on purpose: in a long chat a large name above each answer drew the eye from the answers. The chat after a battle sits on the battle's rails (`agent-stream/arena-row-layout.tsx`):
+Keep the battle open during application, then collapse it to the kept answer. Every answer in an
+Agent Duel chat sits after an avatar column and opens with a head (`ArenaTurnHead`, placed by
+`arenaTurnHeads`): its author's avatar in the column and the name beside it, 16px above the answer.
+A kept answer's avatar is the winning model's vendor mark, alone; its line reads `Claude Opus 5.5
+[Won] vs GPT-6.1 Sol · Show battle`, the tag tinted in the kept side's colour, or `Tie`, `Chosen
+early`, or `Kept` with `Vote not counted` after a failure. Every kept side gets it
+(`battleKeptSide`). A plain turn shows the agent glyph and `Agent`, so a battle turn is told apart by
+its logo before a word is read. Name both models: with only the winner the reveal was half a
+reveal, and the other contestant left no trace in the chat. Two stacked avatars, and the wording
+`X over Y`, both read worse in review. Rows before the first loaded prompt get no head until their
+page loads, since nothing yet says whose answer they are. A battle that kept no answer (discarded
+at the vote, after Stop, after a restart or from the archive) takes a head of its own in the
+answer's place, with the agent glyph: **Battle discarded**, both models and Show battle
+(`ArenaUnkeptHead`); a battle that could not start says so the same way with **Try again**.
+Neither is a card: the boxed summary main drew read as an object dropped between turns. The chat after a battle sits on the battle's rails (`agent-stream/arena-row-layout.tsx`):
 a battle's prompt keeps its bubble at the battle's right edge (`ArenaRow` `prompt`), and the rest
 keeps the reading width from the same left edge, so nothing moves sideways when a battle closes. A rule goes above each turn's
 prompt after the chat's first row, live battles' included, never between a prompt and its answer:
