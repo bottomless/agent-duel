@@ -6,6 +6,8 @@ interface ComposerHeightArgs {
   getText: () => string;
   textareaRef: RefObject<unknown>;
   minHeight: number;
+  /** Web only; native keeps `minHeight`. */
+  minLines?: number;
   maxHeight: number;
   onRenderedLinesChange?: (lines: number) => void;
   presentationKey?: boolean;
