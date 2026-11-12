@@ -7,14 +7,8 @@ import { useArenaStream } from "./use-arena-stream";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { Text, View } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
-import Animated, {
-  Easing,
-  useAnimatedStyle,
-  useSharedValue,
-  withTiming,
-} from "react-native-reanimated";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, GitBranch, GitCompareArrows, Info } from "lucide-react-native";
+import { GitBranch, GitCompareArrows, Info } from "lucide-react-native";
 import type {
   ArenaComparisonDiff,
   ArenaHistoryItem,
@@ -28,7 +22,6 @@ import { useToast } from "@/contexts/toast-context";
 import { useSessionStore } from "@/stores/session-store";
 import { useWorkspaceDirectory } from "@/stores/session-store-hooks";
 import { WorkspaceOpenInEditorButton } from "@/workspace/open-in-editor/button";
-import { resolveContentMaxWidth, useAppSettings } from "@/hooks/use-settings";
 import { toErrorMessage } from "@/utils/error-messages";
 import { useFetchQuery } from "@/data/query";
 import { ARENA_MAX_CONTENT_WIDTH, ARENA_PANE_BASIS_WIDTH } from "@/constants/layout";
@@ -59,15 +52,12 @@ import { ArenaRunThread } from "./run-thread";
 import { arenaSessionQueryKey, useArenaStartMutation } from "./use-arena-session";
 import { ArenaTransitionRow } from "./transition-row";
 import { PressHighlight } from "@/components/ui/press-highlight";
-import { useArenaCardBleed } from "./content-column";
 import { formatDuration } from "@/utils/time";
 import { BattleReview } from "./battle-review";
 import { BATTLE_GUTTER, BATTLE_RAIL } from "./battle-layout";
 import { useArenaShownBattle, useArenaShownBattleStore } from "./shown-battle";
 
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
-const ThemedChevronDown = withUnistyles(ChevronDown);
-const ThemedChevronRight = withUnistyles(ChevronRight);
 const ThemedGitCompareArrows = withUnistyles(GitCompareArrows);
 const ThemedGitBranch = withUnistyles(GitBranch);
 const ThemedInfo = withUnistyles(Info);
@@ -287,38 +277,6 @@ export function ArenaBattleOutcome({ item }: { item: ArenaHistoryItem }) {
   );
 }
 
-function BattleSummaryHeader({
-  expanded,
-  item,
-  onToggle,
-}: {
-  expanded: boolean;
-  item: ArenaHistoryItem;
-  onToggle: () => void;
-}) {
-  const { t } = useTranslation();
-  const accessibilityState = useMemo(() => ({ expanded }), [expanded]);
-  return (
-    <PressHighlight
-      onPress={onToggle}
-      style={styles.cardHeader}
-      accessibilityRole="button"
-      accessibilityState={accessibilityState}
-      accessibilityLabel={t(expanded ? "arena.collapseSummary" : "arena.expandSummary", {
-        outcome: chosenLabel(item),
-        reason: item.voteDiscardedReason ? t("arena.voteFailedReason") : "",
-      })}
-    >
-      {expanded ? (
-        <ThemedChevronDown size={17} uniProps={mutedColorMapping} />
-      ) : (
-        <ThemedChevronRight size={17} uniProps={mutedColorMapping} />
-      )}
-      <BattleOutcome item={item} />
-    </PressHighlight>
-  );
-}
-
 /**
  * The end of a kept answer's footer, at the battle's right edge: the model that wrote it, the time
  * it took, and the way back into the battle. The answer is the chat's history now, so only this
@@ -390,6 +348,70 @@ function BylineNotes({ item }: { item: ArenaHistoryItem }) {
       ) : null}
       <Text style={styles.bylineMeta}>·</Text>
     </>
+  );
+}
+
+/**
+ * A decided battle that kept no answer, discarded at the vote, after Stop, after a restart or from
+ * the archive, in a line where its answer would be: the result, both models and the way into the
+ * battle. In the kept byline's type, so the two read as one family.
+ */
+function ArenaUnkeptLine({ agentId, item }: { agentId: string; item: ArenaHistoryItem }) {
+  const { t } = useTranslation();
+  const show = useArenaShownBattleStore((state) => state.show);
+  const handleShow = useCallback(() => show(agentId, item.id), [agentId, item.id, show]);
+  const identities = item.identities;
+  return (
+    <View style={styles.unkeptLine} testID={`arena-unkept-${item.id}`}>
+      <Text style={styles.unkeptResult}>{chosenLabel(item)}</Text>
+      {identities ? (
+        <>
+          <Text style={styles.bylineMeta}>·</Text>
+          <UnkeptModel model={identities.a.name} />
+          <Text style={styles.bylineMeta}>{t("arena.versus")}</Text>
+          <UnkeptModel model={identities.b.name} />
+        </>
+      ) : null}
+      {identities ? (
+        <>
+          <Text style={styles.bylineMeta}>·</Text>
+          <PressHighlight
+            accessibilityRole="button"
+            accessibilityLabel={t("arena.showBattle")}
+            onPress={handleShow}
+            style={showBattleStyle}
+            testID={`arena-show-battle-${item.id}`}
+          >
+            {({ hovered, pressed }) => (
+              <>
+                <Text
+                  style={[styles.showBattleText, (hovered || pressed) && styles.showBattleActive]}
+                >
+                  {t("arena.showBattle")}
+                </Text>
+                <Text
+                  style={[
+                    styles.showBattleChevron,
+                    (hovered || pressed) && styles.showBattleActive,
+                  ]}
+                >
+                  ›
+                </Text>
+              </>
+            )}
+          </PressHighlight>
+        </>
+      ) : null}
+    </View>
+  );
+}
+
+function UnkeptModel({ model }: { model: string }) {
+  return (
+    <View style={styles.unkeptModel}>
+      <ArenaModelVendorIcon model={model} size={ICON_SIZE.sm} tone="muted" />
+      <Text style={styles.bylineMeta}>{arenaModelDisplayName(model)}</Text>
+    </View>
   );
 }
 
@@ -901,11 +923,11 @@ function FailedBattleStart({
       });
   }, [agentId, client, item.id, startArena, toast, t]);
   return (
-    <View style={[styles.card, styles.failedStart]} testID={`arena-summary-${item.id}`}>
-      <View style={styles.headerText}>
-        <Text style={styles.gitNoticeTitle}>{t("arena.couldntStart")}</Text>
-        <Text style={styles.gitNoticeDetail}>{t("arena.neitherRan")} </Text>
-      </View>
+    <View style={[styles.keptNotice, styles.failedStart]} testID={`arena-summary-${item.id}`}>
+      <Text style={styles.failedStartText}>
+        <Text style={styles.unkeptResult}>{t("arena.couldntStart")}</Text>
+        <Text style={styles.bylineMeta}> · {t("arena.neitherRan")}</Text>
+      </Text>
       {canStartAgain ? (
         <Button
           size="xs"
@@ -967,81 +989,36 @@ function DecidedBattleSummary({
   item: ArenaHistoryItem;
 }) {
   const shownTurnId = useArenaShownBattle(agentId);
-  const showBattle = useArenaShownBattleStore((state) => state.show);
-  const hideBattle = useArenaShownBattleStore((state) => state.hide);
-  const expanded = shownTurnId === item.id;
-  const contentMaxWidth = resolveContentMaxWidth(useAppSettings().settings);
-  const cardMaxWidth = useSharedValue(contentMaxWidth);
-  const bleed = useArenaCardBleed(expanded ? ARENA_MAX_CONTENT_WIDTH : contentMaxWidth);
-  const handleToggle = useCallback(() => {
-    const next = !expanded;
-    cardMaxWidth.value = withTiming(next ? ARENA_MAX_CONTENT_WIDTH : contentMaxWidth, {
-      duration: 260,
-      easing: Easing.bezier(0.2, 0.7, 0.3, 1),
-    });
-    if (next) showBattle(agentId, item.id);
-    else hideBattle(agentId);
-  }, [agentId, cardMaxWidth, contentMaxWidth, expanded, hideBattle, item.id, showBattle]);
-  const cardAnimatedStyle = useAnimatedStyle(() => ({ maxWidth: cardMaxWidth.value }));
-
-  // A kept answer names its model in its own footer (`ArenaKeptByline`), so here it leaves only
-  // what the chat must still be told, or the battle while it is shown.
-  if (keptModel(item) && !expanded) {
+  // Shown, the battle stands in for its result unframed, as the live battle does.
+  if (shownTurnId === item.id) {
     return (
-      <View style={styles.keptNotice} testID={`arena-summary-${item.id}`}>
-        <CollapsedGitConflicts serverId={serverId} workspaceId={workspaceId} item={item} />
-      </View>
-    );
-  }
-  const kept = keptModel(item) !== undefined;
-  return (
-    <Animated.View
-      style={[styles.card, bleed && styles.cardBleed, kept ? styles.cardOpen : cardAnimatedStyle]}
-      testID={`arena-summary-${item.id}`}
-    >
-      {kept ? null : (
-        <BattleSummaryHeader expanded={expanded} item={item} onToggle={handleToggle} />
-      )}
-      {expanded ? (
+      <View style={styles.shownBattle} testID={`arena-summary-${item.id}`}>
         <ExpandedBattleSummary
           serverId={serverId}
           workspaceId={workspaceId}
           agentId={agentId}
           item={item}
         />
-      ) : (
-        <CollapsedGitConflicts serverId={serverId} workspaceId={workspaceId} item={item} />
-      )}
-    </Animated.View>
+      </View>
+    );
+  }
+  // A kept answer names its model in its own footer (`ArenaKeptByline`); a battle that kept none
+  // says so in a line of its own where that answer would be. Only what the chat must still be told
+  // follows, such as a merge conflict.
+  return (
+    <View style={styles.keptNotice} testID={`arena-summary-${item.id}`}>
+      {keptModel(item) ? null : <ArenaUnkeptLine agentId={agentId} item={item} />}
+      <CollapsedGitConflicts serverId={serverId} workspaceId={workspaceId} item={item} />
+    </View>
   );
 }
 
 const styles = StyleSheet.create((theme) => ({
-  card: {
+  // A shown battle: on the battle's rails at the battle's width, unframed, as the live battle is.
+  shownBattle: {
     width: "100%",
-    maxWidth: theme.contentMaxWidth,
-    alignSelf: "center",
-    marginVertical: theme.spacing[2],
-    borderWidth: 1,
-    borderColor: theme.colors.borderAccent,
-    borderRadius: theme.borderRadius.lg,
-    backgroundColor: theme.colors.surface1,
-    overflow: "hidden",
-  },
-  cardBleed: {
-    borderLeftWidth: 0,
-    borderRightWidth: 0,
-    borderRadius: 0,
-  },
-  // A decided battle with a kept answer has no frame: its heading and, when shown, the battle.
-  // On the battle's rails at the battle's width, as the chat after a battle is.
-  cardOpen: {
     maxWidth: ARENA_MAX_CONTENT_WIDTH,
-    marginVertical: 0,
-    borderWidth: 0,
-    borderRadius: 0,
-    backgroundColor: "transparent",
-    overflow: "visible",
+    alignSelf: "center",
   },
   // The kept model and Show battle, at the battle's right edge in the answer's footer.
   byline: {
@@ -1120,8 +1097,31 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: "row",
     alignItems: "center",
     gap: theme.spacing[3],
+  },
+  failedStartText: {
+    flex: 1,
+    minWidth: 0,
+    paddingLeft: theme.spacing[3],
+    lineHeight: 24,
+  },
+  // A battle that kept no answer: one line where the answer would be, in the kept byline's type.
+  unkeptLine: {
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
+    columnGap: theme.spacing[1.5],
+    minHeight: 24,
     paddingHorizontal: theme.spacing[3],
-    paddingVertical: theme.spacing[3],
+  },
+  unkeptResult: {
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.base,
+    fontWeight: theme.fontWeight.medium,
+  },
+  unkeptModel: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[1],
   },
   cardHeader: {
     minHeight: 58,

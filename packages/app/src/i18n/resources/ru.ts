@@ -85,6 +85,7 @@ export const ru: TranslationResources = {
     changes: "Изменённые файлы",
     winningDiscarded: "Изменения победителя отклонены",
     battleDiscarded: "Битва отменена",
+    versus: "против",
     battleResolved: "Битва завершена",
     sameChanges:
       "Оба агента внесли одинаковые изменения. Показаны изменения относительно оригинала.",

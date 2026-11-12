@@ -84,6 +84,7 @@ export const ar: TranslationResources = {
     changes: "الملفات المعدّلة",
     winningDiscarded: "أُهملت التغييرات الفائزة",
     battleDiscarded: "أُهملت المعركة",
+    versus: "ضد",
     battleResolved: "حُسمت المعركة",
     sameChanges: "أجرى كلا الوكيلين التغييرات نفسها. تُعرض التغييرات عن الأصل.",
     identicalFiles: "نتائج الملفات متطابقة",

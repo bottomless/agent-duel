@@ -89,6 +89,7 @@ export const ptBR: TranslationResources = {
     changes: "Arquivos alterados",
     winningDiscarded: "Alterações vencedoras descartadas",
     battleDiscarded: "Batalha descartada",
+    versus: "vs.",
     battleResolved: "Batalha resolvida",
     sameChanges:
       "Ambos os agentes fizeram as mesmas alterações. Mostrando alterações em relação ao original.",
