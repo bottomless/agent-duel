@@ -953,6 +953,8 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
               isLastInSequence={isLastInSequence}
               onOpenFilePath={handleToolCallOpenFile}
               maxDetailHeight={maxDetailHeight}
+              flushRow={arenaChat}
+              labelSizedIcon={arenaChat}
             />
           );
         }
@@ -969,6 +971,8 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
             isLastInSequence={isLastInSequence}
             onOpenFilePath={handleToolCallOpenFile}
             maxDetailHeight={maxDetailHeight}
+            flushRow={arenaChat}
+            labelSizedIcon={arenaChat}
           />
         );
       },
@@ -997,7 +1001,9 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
         groups?: ToolCallGroupLookup<OverviewToolCallGroup>,
       ) => {
         const group = groups ? groups.get(item.id) : getToolCallGroup(item.id);
-        if (!group) {
+        // In a battle chat one call is drawn as itself, as the battle's panes draw it; a group of
+        // one would name the call and hold the same call again inside.
+        if (!group || (arenaChat && group.run.calls.length === 1)) {
           return renderSingleToolCallItem(item, layoutItem.isLastInToolSequence);
         }
         const expanded = expandedToolCallGroupIds.has(group.run.id);

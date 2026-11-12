@@ -356,8 +356,10 @@ to the split. Both are
 pane chrome at the ghost `xs` tier, borderless and the same height. Headings have no status
 indicators; the status text below each heading reports progress. In the thread, the work summary
 rows (`Read 3 files · Ran 4 commands`) match the 14px prose they follow and hug their icon, so a
-muted summary never outranks the text. Keep one 12px gap between text, its summary, and the next
-text. Changing the view keeps both panes mounted, preserving reading position and permission UI. Keep
+muted summary never outranks the text. A work row sits as far below its text as the next text
+sits below the row, measured between glyphs (13.5px in the pane); with nothing between them it read
+as glued to the text. One tool is a row of its own, opening onto its output; only two or more make
+a group, drawn with the stack icon. Changing the view keeps both panes mounted, preserving reading position and permission UI. Keep
 the active battle open and its threads height-limited so the prompt and composer remain
 reachable. The card has no link back to the history: the conversation is right above it.
 
@@ -502,8 +504,8 @@ Product decisions that are settled, so they do not get relitigated per feature:
   beneath, that opens its transcript in place, inline at full height as in the pane (`ArenaChatSubagent`). Rows carry the pane's words
   (`arenaChatWorkLabel`, `Reasoned`) and its proportions at the chat's 16px: rows take the prose's
   size, their icons too (`labelSizedIcon`), and sit flush, so one rhythm runs down the turn
-  (`getArenaGapBetweenStreamItems`): a text sits against the work it led into and every other
-  block starts one gap down. Measure a change against the pane; every gap between blocks there is
+  (`getArenaGapBetweenStreamItems`): a work row sits evenly between the text that led into it and
+  the next text, and every other block starts one gap down. Measure a change against the pane; every gap between blocks there is
   the same. Task checklists stay inline, where they were written. Other providers' chats keep
   Paseo's order and spacing.
 - Show automatic context compaction as an inline status, including inside subagents. Keep its

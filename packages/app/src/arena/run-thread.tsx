@@ -141,6 +141,7 @@ function ArenaToolPart({
       cwd={cwd}
       disableOuterSpacing
       compactLabel
+      flushRow
       // A narrow window opens a call in a sheet that keeps the detail it opened with, so a shortened
       // call expands in place, where it loads whole.
       forceInline={arenaToolPartPreviewed(shown)}
@@ -922,10 +923,9 @@ export function ArenaRunThread({
 }
 
 const styles = StyleSheet.create((theme) => ({
-  // One 12px rhythm down the thread: text, its work summary, the next text. The text's own
-  // trailing paragraph margin plus the summary row's slack is that distance, so the segment
-  // adds none, and the gap between steps is set so the summary sits the same distance from
-  // the text below it as from the text above. Uneven spacing here read as lopsided.
+  // One rhythm down the thread: a work row sits 13.5px between glyphs below its text and the
+  // next text 13.5px below the row. The segment's step sets the first, this gap the second.
+  // Uneven spacing here read as lopsided, and a row with no step above it read as glued on.
   thread: {
     gap: theme.spacing[3],
     padding: theme.spacing[3],
@@ -944,7 +944,7 @@ const styles = StyleSheet.create((theme) => ({
     gap: theme.spacing[3],
   },
   activitySegment: {
-    gap: 0,
+    gap: theme.spacing[2],
   },
   subagentActivity: {
     paddingLeft: theme.spacing[6],
