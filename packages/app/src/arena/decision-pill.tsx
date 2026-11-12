@@ -1,10 +1,9 @@
 import { i18n } from "@/i18n/i18next";
 import { useTranslation } from "react-i18next";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect } from "react";
 import { Text, View, type LayoutChangeEvent } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { ARENA_MAX_CONTENT_WIDTH } from "@/constants/layout";
-import { Button } from "@/components/ui/button";
 import type { ArenaSide, ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
 import {
   ArenaRunningPillButton,
@@ -216,16 +215,14 @@ export function arenaDecisionRowVisible(snapshot: ArenaSnapshot): boolean {
 function DecisionChoices({
   phase,
   actions,
-  onLayout,
 }: {
   phase: ArenaDecisionPhase;
   actions: ArenaBattleActions;
-  onLayout: (event: LayoutChangeEvent) => void;
 }) {
   if (phase.kind === "running") {
     // Stop alone is an action, not a choice between the sides, so it stays a plain button.
     return (
-      <View style={styles.choices} onLayout={onLayout} testID="arena-battle-choice-row">
+      <View style={styles.choices} testID="arena-battle-choice-row">
         <BattleStopDecision phase={phase} actions={actions} />
       </View>
     );
@@ -233,7 +230,7 @@ function DecisionChoices({
   const stopped = phase.kind === "awaiting_stop_resolution";
   const interrupted = phase.kind === "awaiting_vote" && phase.canResume;
   return (
-    <ArenaChoiceGroup onLayout={onLayout} testID="arena-battle-choice-row">
+    <ArenaChoiceGroup testID="arena-battle-choice-row">
       {interrupted ? (
         <>
           <ResumeDecision actions={actions} />
@@ -303,29 +300,38 @@ function RunningSides({
   );
 }
 
+/** The running sides once one has finished, otherwise the choices if there are any to make. */
+function DecisionRow({
+  phase,
+  actions,
+}: {
+  phase: ArenaDecisionPhase;
+  actions: ArenaBattleActions;
+}) {
+  if (phase.kind === "running" && (phase.canPickA || phase.canPickB)) {
+    return <RunningSides phase={phase} actions={actions} />;
+  }
+  if (!pillHasChoice(phase)) return null;
+  return <DecisionChoices phase={phase} actions={actions} />;
+}
+
 /**
- * The battle's bottom row, outside the transcript scroller so the decision stays in view: a folded
- * review's tabs at the start, the choices centred between the two answers, and the way to reply
- * at the end while the composer is put away.
+ * The battle's decision, fixed above the composer over the end of the transcript, which scrolls
+ * behind it: the choices centred between the two answers. The area around them is transparent and
+ * click-through, so the answers stay readable and reachable under it.
  */
 export function ArenaDecisionPill({
   serverId,
   agentId,
   snapshot,
   onHeightChange,
-  onAskFollowUp,
-  docked = false,
 }: {
   serverId: string;
   agentId: string;
   snapshot: ArenaSnapshot;
   onHeightChange: (height: number) => void;
-  /** Shown while the composer is put away; brings it back. */
-  onAskFollowUp?: () => void;
-  /** In the composer's place rather than floating above it. */
-  docked?: boolean;
 }) {
-  const { t } = useTranslation();
+  useTranslation();
   const actions = useArenaBattleActions(serverId, agentId, snapshot.turn);
   const phase = arenaDecisionPhase(snapshot);
   const visible = arenaDecisionRowVisible(snapshot);
@@ -333,10 +339,6 @@ export function ArenaDecisionPill({
     (event: LayoutChangeEvent) => onHeightChange(event.nativeEvent.layout.height),
     [onHeightChange],
   );
-  const fit = useRowFit();
-  // Ask a follow-up sits beside the choices only while an equal space on the other side still
-  // keeps them centred; otherwise it drops under them instead of covering Choose B.
-  const besideChoices = !onAskFollowUp || fit.fits;
   useEffect(() => {
     if (!visible) onHeightChange(0);
     return () => onHeightChange(0);
@@ -345,90 +347,29 @@ export function ArenaDecisionPill({
 
   return (
     <View
-      style={docked ? styles.dock : styles.container}
+      style={styles.container}
       onLayout={handleLayout}
       pointerEvents="box-none"
       testID="arena-decision-pill"
     >
       <DecisionHintRow phase={phase} actions={actions} />
-      {phase.kind === "running" && (phase.canPickA || phase.canPickB) ? (
-        <RunningSides phase={phase} actions={actions} />
-      ) : (
-        <View
-          style={[styles.row, !besideChoices && styles.stacked]}
-          onLayout={fit.onRowLayout}
-          pointerEvents="box-none"
-        >
-          {besideChoices ? <View style={styles.start} pointerEvents="box-none" /> : null}
-          {pillHasChoice(phase) ? (
-            <DecisionChoices phase={phase} actions={actions} onLayout={fit.onChoicesLayout} />
-          ) : null}
-          <View style={besideChoices ? [styles.start, styles.end] : null} pointerEvents="box-none">
-            {onAskFollowUp ? (
-              <View onLayout={fit.onFollowUpLayout}>
-                <Button
-                  variant="outline"
-                  size="md"
-                  style={styles.followUp}
-                  textStyle={styles.followUpText}
-                  onPress={onAskFollowUp}
-                  testID="arena-ask-follow-up"
-                >
-                  {t("arena.askFollowUp")}
-                </Button>
-              </View>
-            ) : null}
-          </View>
-        </View>
-      )}
+      <DecisionRow phase={phase} actions={actions} />
     </View>
   );
 }
 
-const ROW_GAP = 16;
-
-/**
- * Measures the row, the choices and Ask a follow-up. The choices fit centred with the button
- * beside them when the row holds the choices plus the button's width (and the gap) on both sides.
- */
-function useRowFit() {
-  const [row, setRow] = useState(0);
-  const [choices, setChoices] = useState(0);
-  const [followUp, setFollowUp] = useState(0);
-  const onRowLayout = useCallback((event: LayoutChangeEvent) => {
-    setRow(event.nativeEvent.layout.width - 2 * BATTLE_RAIL);
-  }, []);
-  const onChoicesLayout = useCallback((event: LayoutChangeEvent) => {
-    setChoices(event.nativeEvent.layout.width);
-  }, []);
-  const onFollowUpLayout = useCallback((event: LayoutChangeEvent) => {
-    setFollowUp(event.nativeEvent.layout.width);
-  }, []);
-  const measured = row > 0 && choices > 0 && followUp > 0;
-  const fits = !measured || row >= choices + 2 * (followUp + ROW_GAP);
-  return { fits, onRowLayout, onChoicesLayout, onFollowUpLayout };
-}
-
 const styles = StyleSheet.create((theme) => ({
-  // Above the composer, over the end of the transcript. Opaque, so the transcript scrolls under it.
+  // Above the composer, over the end of the transcript, which scrolls behind it.
   container: {
     position: "absolute",
     bottom: "100%",
     left: 0,
     right: 0,
-    backgroundColor: theme.colors.surface0,
+    backgroundColor: "transparent",
     alignItems: "center",
-    paddingTop: theme.spacing[3],
-    paddingBottom: theme.spacing[3],
-    gap: theme.spacing[2],
-  },
-  // In the composer's place while the composer is put away.
-  dock: {
-    width: "100%",
-    backgroundColor: theme.colors.surface0,
-    alignItems: "center",
-    paddingTop: theme.spacing[4],
-    paddingBottom: theme.spacing[4] + theme.spacing[1],
+    paddingHorizontal: theme.spacing[2],
+    paddingTop: theme.spacing[2],
+    paddingBottom: theme.spacing[2],
     gap: theme.spacing[2],
   },
   row: {
@@ -437,12 +378,6 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: BATTLE_RAIL,
-    gap: ROW_GAP,
-  },
-  // Too narrow for the button beside the choices: it goes under them, both centred.
-  stacked: {
-    flexDirection: "column",
-    gap: theme.spacing[2],
   },
   // The two ends share the space evenly, so the choices stay centred between the answers.
   start: {
@@ -459,13 +394,6 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: "row",
     alignItems: "center",
     gap: theme.spacing[2],
-  },
-  followUp: {
-    height: 40,
-    borderRadius: theme.borderRadius.lg,
-  },
-  followUpText: {
-    fontWeight: theme.fontWeight.semibold,
   },
   hintRow: {
     maxWidth: "100%",

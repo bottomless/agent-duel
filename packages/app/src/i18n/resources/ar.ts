@@ -108,7 +108,6 @@ export const ar: TranslationResources = {
     tryAgain: "حاول مجدداً",
     preparing: "جارٍ التحضير",
     restoreSplit: "استعادة العرض المقسم",
-    askFollowUp: "اطرح سؤال متابعة",
     openTerminalIn: "افتح طرفية في worktree الخاص بالوكيل {{side}}",
     keptOver: "بدلاً من {{model}}",
     keptTied: "تعادل مع {{model}}",
