@@ -427,8 +427,11 @@ describe("ArenaRunThread", () => {
     expect(view.queryByText("Second update")).toBeNull();
     expect(view.getByText("Final answer")).toBeTruthy();
     const earlier = view.getByTestId("arena-earlier-activity");
-    expect(earlier.getAttribute("data-label-style")).toBe("custom");
-    expect(earlier.getAttribute("data-chevron")).toBe("always");
+    // The fold of a finished answer's history is drawn like a group of tool calls: the stack,
+    // with the chevron only on hover or while open.
+    expect(earlier.getAttribute("data-icon")).toBe("Layers2");
+    expect(earlier.getAttribute("data-label-style")).toBeNull();
+    expect(earlier.getAttribute("data-chevron")).toBeNull();
     expect(earlier.textContent).not.toContain("Earlier activity");
     expect(earlier.textContent).toContain("Read 1 file · Edited 1 file");
 

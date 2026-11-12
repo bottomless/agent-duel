@@ -555,6 +555,7 @@ function ArenaEarlierActivity({
       <ExpandableBadge
         testID="arena-earlier-activity"
         label={label}
+        icon={Layers2}
         isExpanded={expanded}
         onToggle={toggle}
         renderDetails={renderDetails}
@@ -562,8 +563,6 @@ function ArenaEarlierActivity({
         borderlessWhenExpanded
         bandWhenExpanded
         compactLabel
-        labelTextStyle={styles.earlierActivityLabel}
-        alwaysShowChevron
         flushRow
       />
     </View>
@@ -932,9 +931,6 @@ const styles = StyleSheet.create((theme) => ({
     paddingTop: theme.spacing[2],
     paddingHorizontal: EXPANDABLE_BADGE_DETAIL_INSET,
     gap: theme.spacing[3],
-  },
-  earlierActivityLabel: {
-    color: theme.colors.foreground,
   },
   activitySegment: {
     gap: 0,
