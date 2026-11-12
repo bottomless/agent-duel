@@ -73,7 +73,6 @@ export const TurnFooter = memo(function TurnFooter({
   }
   return (
     <CompletedTurnFooterRow
-      hostItemId={host.itemId}
       strategy={strategy}
       items={host.items}
       timing={host.timing}
@@ -85,7 +84,6 @@ export const TurnFooter = memo(function TurnFooter({
 });
 
 export const CompletedTurnFooterRow = memo(function CompletedTurnFooterRow({
-  hostItemId,
   strategy,
   items,
   timing,
@@ -93,8 +91,6 @@ export const CompletedTurnFooterRow = memo(function CompletedTurnFooterRow({
   supportsTimelineCursor,
   onForkAssistantTurn,
 }: {
-  /** The row the footer closes; an Agent Duel chat can end it with that turn's own line. */
-  hostItemId: string;
   strategy: TurnContentStrategy;
   items: StreamItem[];
   timing?: TurnTiming;
@@ -102,14 +98,12 @@ export const CompletedTurnFooterRow = memo(function CompletedTurnFooterRow({
   supportsTimelineCursor: boolean;
   onForkAssistantTurn?: AssistantTurnForkHandler;
 }) {
-  const end = useArenaRowLayout()?.footerEnds?.get(hostItemId);
   return (
-    <TurnFooterRow end={end}>
+    <TurnFooterRow>
       <CompletedTurnFooter
         strategy={strategy}
         items={items}
-        // A battle's kept answer names its model and time at the end of the row instead.
-        timing={end ? undefined : timing}
+        timing={timing}
         startIndex={startIndex}
         supportsTimelineCursor={supportsTimelineCursor}
         onForkAssistantTurn={onForkAssistantTurn}
@@ -212,22 +206,13 @@ function CompletedTurnFooter({
   );
 }
 
-function TurnFooterRow({ end, children }: { end?: ReactNode; children: ReactNode }) {
+/** An Agent Duel chat sets a footer after the avatar column, as the answer it closes. */
+function TurnFooterRow({ children }: { children: ReactNode }) {
   const arenaLayout = useArenaRowLayout();
   const rowStyle = useMemo(() => [stylesheet.streamItemWrapper, stylesheet.turnFooterRow], []);
-  if (arenaLayout && end) {
-    return (
-      <ArenaRow fullWidth style={stylesheet.turnFooterRow}>
-        <View style={stylesheet.turnFooterWithEnd}>
-          {children}
-          <View style={stylesheet.turnFooterEnd}>{end}</View>
-        </View>
-      </ArenaRow>
-    );
-  }
   if (arenaLayout) {
     return (
-      <ArenaRow fullWidth={false} style={stylesheet.turnFooterRow}>
+      <ArenaRow answer style={stylesheet.turnFooterRow}>
         {children}
       </ArenaRow>
     );
@@ -252,18 +237,6 @@ const stylesheet = StyleSheet.create((theme) => ({
   // 1px taller row.
   turnFooterRow: {
     marginTop: theme.spacing[4] + theme.spacing[1],
-  },
-  turnFooterWithEnd: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    justifyContent: "space-between",
-    gap: theme.spacing[4],
-  },
-  turnFooterEnd: {
-    minHeight: 24,
-    flexShrink: 1,
-    flexDirection: "row",
-    alignItems: "center",
   },
   turnFooterSlot: {
     flexDirection: "row",

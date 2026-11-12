@@ -1,0 +1,58 @@
+import type { ArenaHistoryItem } from "@getpaseo/protocol/arena/rpc-schemas";
+import type { StreamItem } from "@/types/stream";
+import { battleKeptSide } from "./battle-result";
+import { orderArenaChat } from "./chat-order";
+import { arenaKeptAnswerRowIds, type ArenaPresentedStream } from "./summary-anchor";
+
+/** Who answered a turn: a battle's kept side, or the chat's single agent. */
+export type ArenaTurnAuthor = { kind: "battle"; item: ArenaHistoryItem } | { kind: "agent" };
+
+export interface ArenaTurnHeads {
+  /** The row that opens each answer, with who wrote it; the avatar and its name line go above it. */
+  heads: ReadonlyMap<string, ArenaTurnAuthor>;
+  /** Every row an answer is made of, which the avatar column indents. Prompts are not in it. */
+  answerRowIds: ReadonlySet<string>;
+}
+
+/**
+ * Each answer in an Agent Duel chat, opened by its author. An answer is the run of rows after a
+ * prompt up to the next prompt. A battle's kept answer, which can hold replies sent inside the
+ * battle, is the battle's (`arenaKeptAnswerRowIds`); any other run is the single agent's. Hidden
+ * rows, such as a kept answer a shown battle stands in for, are simply absent from `stream`.
+ * Rows before the first loaded prompt get no head: the chat loads its history a page at a time,
+ * and until the page with their prompt arrives nothing says whose answer they are.
+ */
+export function arenaTurnHeads(
+  history: readonly ArenaHistoryItem[],
+  stream: ArenaPresentedStream,
+): ArenaTurnHeads {
+  const rows = orderArenaChat([...stream.tail, ...stream.head]);
+  const battleOf = new Map<string, ArenaHistoryItem>();
+  for (const item of history) {
+    if (!battleKeptSide(item)) continue;
+    for (const id of arenaKeptAnswerRowIds(item, stream)) battleOf.set(id, item);
+  }
+  const heads = new Map<string, ArenaTurnAuthor>();
+  const answerRowIds = new Set<string>();
+  // "unknown" until a prompt is seen: an answer cut off from its prompt by paging has no author yet.
+  let opened: ArenaHistoryItem | "agent" | "unknown" | null = "unknown";
+  for (const row of rows) {
+    if (isPrompt(row)) {
+      // A reply inside a battle continues that battle's answer rather than opening a new one.
+      if (!battleOf.has(row.id)) opened = null;
+      continue;
+    }
+    answerRowIds.add(row.id);
+    if (opened === "unknown") continue;
+    const battle = battleOf.get(row.id);
+    const author = battle ?? "agent";
+    if (opened === author) continue;
+    opened = author;
+    heads.set(row.id, battle ? { kind: "battle", item: battle } : { kind: "agent" });
+  }
+  return { heads, answerRowIds };
+}
+
+function isPrompt(row: StreamItem): boolean {
+  return row.kind === "user_message";
+}

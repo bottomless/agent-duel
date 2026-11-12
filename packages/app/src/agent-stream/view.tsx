@@ -220,7 +220,6 @@ function renderStreamItemWithTurnFooter(input: {
   const footerHost = input.layoutItem.completedFooter;
   const footer = footerHost ? (
     <CompletedTurnFooterRow
-      hostItemId={footerHost.itemId}
       strategy={input.strategy}
       items={footerHost.items}
       timing={footerHost.timing}
@@ -311,7 +310,10 @@ export interface AgentStreamViewProps {
   /** Rows that start a new turn in an Agent Duel chat, with a rule above them. */
   ruledItemIds?: ReadonlySet<string>;
   /** What ends a turn's footer in an Agent Duel chat, keyed by the row the footer closes. */
-  turnFooterEnds?: ReadonlyMap<string, ReactNode>;
+  /** Each answer's head in an Agent Duel chat, keyed by the answer's first row. */
+  turnHeads?: ReadonlyMap<string, ReactNode>;
+  /** Every prompt row in an Agent Duel chat; the other rows are answers. */
+  userRowIds?: ReadonlySet<string>;
   /** Canonical stream item after which inherited fork history ends. */
   forkBoundaryAfterItemId?: string;
   /** Transient content rendered at the live end of the transcript. */
@@ -504,7 +506,8 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       afterItems,
       battlePromptIds,
       ruledItemIds,
-      turnFooterEnds,
+      turnHeads,
+      userRowIds,
       forkBoundaryAfterItemId,
       liveContent,
       bottomOverlayHeight,
@@ -1487,7 +1490,8 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
                     enabled={arenaChat === true}
                     promptIds={battlePromptIds}
                     ruledIds={ruledItemIds}
-                    footerEnds={turnFooterEnds}
+                    heads={turnHeads}
+                    userRowIds={userRowIds}
                   >
                     {streamRenderStrategy.render({
                       readingRowReplacements: presentation.readingRowReplacements,
@@ -1637,7 +1641,8 @@ function collectArenaStreamViewPropDiffs(
     reasons.push("battlePromptIds");
   }
   if (left.ruledItemIds !== right.ruledItemIds) reasons.push("ruledItemIds");
-  if (left.turnFooterEnds !== right.turnFooterEnds) reasons.push("turnFooterEnds");
+  if (left.turnHeads !== right.turnHeads) reasons.push("turnHeads");
+  if (left.userRowIds !== right.userRowIds) reasons.push("userRowIds");
   if (left.forkBoundaryAfterItemId !== right.forkBoundaryAfterItemId) {
     reasons.push("forkBoundaryAfterItemId");
   }
@@ -2274,6 +2279,8 @@ function StreamItemWrapper({ itemId, gapBelow, turnIndent, children }: StreamIte
       <ArenaRow
         prompt={arenaLayout.promptIds?.has(itemId) === true}
         ruled={arenaLayout.ruledIds?.has(itemId) === true}
+        answer={arenaLayout.userRowIds?.has(itemId) === false}
+        head={arenaLayout.heads?.get(itemId)}
         style={arenaRowStyle}
       >
         <TurnIndentContent turnIndent={turnIndent} gapStyle={gapStyle}>
