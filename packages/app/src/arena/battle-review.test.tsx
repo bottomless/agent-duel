@@ -388,7 +388,11 @@ describe("BattleReview", () => {
 
   it("counts every file the battle changed, past the rows it shows", () => {
     render({ summaryAvailable: false, diff: manyFiles(30) });
-    expect(container.textContent).toContain("Changes (30)");
+    // The tab's count is a badge after its label.
+    const changesTab = (byTestId("arena-review-tab-changes") as HTMLElement).textContent;
+    expect(changesTab).toContain("Files changed");
+    expect(changesTab?.endsWith("30")).toBe(true);
+    expect(changesTab).not.toContain("(30)");
     expect((byTestId("arena-changes-more") as HTMLElement).textContent).toContain(
       "Show 22 more files",
     );
