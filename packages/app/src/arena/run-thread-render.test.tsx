@@ -417,10 +417,11 @@ describe("ArenaRunThread", () => {
     expect(view.getByText("First update")).toBeTruthy();
     expect(view.getByText("Second update")).toBeTruthy();
     expect(view.queryByTestId("arena-earlier-activity")).toBeNull();
-    // A group of tools takes the stack, as the regular chat's tool groups do.
-    expect(view.getAllByTestId("arena-activity-group")[0]!.getAttribute("data-icon")).toBe(
-      "Layers2",
-    );
+    // A step with one tool names that tool rather than counting it as a group.
+    const firstStep = view.getAllByTestId("arena-activity-group")[0]!;
+    expect(firstStep.getAttribute("data-icon")).not.toBe("Layers2");
+    expect(firstStep.textContent).toContain("Read");
+    expect(firstStep.textContent).not.toContain("1 file");
 
     view.rerender(thread(completedRun));
     expect(view.queryByText("First update")).toBeNull();
