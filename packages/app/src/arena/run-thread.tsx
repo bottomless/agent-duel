@@ -10,7 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import { Text, View } from "react-native";
-import { Check, CircleStop, FileText, Users, Wrench } from "lucide-react-native";
+import { Brain, Check, CircleStop, FileText, Users, Wrench } from "lucide-react-native";
 import { StyleSheet } from "react-native-unistyles";
 import type { ArenaRun } from "@getpaseo/protocol/arena/rpc-schemas";
 import type { AgentPermissionResponse } from "@getpaseo/protocol/agent-types";
@@ -62,9 +62,21 @@ import {
   summarizeArenaWork,
   type ArenaActivityPart,
   type ArenaActivitySegment,
+  type ArenaWorkPresentation,
 } from "./work-summary";
 
 type UnknownRecord = Record<string, unknown>;
+
+/**
+ * A work row's icon, as the regular chat draws the same rows: the tool's own icon for one tool,
+ * the wrench for a group of tools, the brain for thinking.
+ */
+function arenaWorkIcon(presentation: ArenaWorkPresentation) {
+  if (presentation.kind === "tool") {
+    return resolveToolCallIcon(presentation.toolName, presentation.detail);
+  }
+  return presentation.kind === "reasoning" ? Brain : Wrench;
+}
 
 function asRecord(value: unknown): UnknownRecord | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -460,11 +472,7 @@ function ArenaActivitySegmentView({
           testID="arena-activity-group"
           label={presentation.label}
           secondaryLabel={presentation.kind === "tool" ? presentation.secondaryLabel : undefined}
-          icon={
-            presentation.kind === "tool"
-              ? resolveToolCallIcon(presentation.toolName, presentation.detail)
-              : Wrench
-          }
+          icon={arenaWorkIcon(presentation)}
           isLoading={presentation.active}
           isError={presentation.kind === "tool" && presentation.failed}
           isExpanded={hasDetails && expanded}
@@ -665,8 +673,7 @@ function ArenaSubagent({
     pending && (work.length > 0 || awaitingResponse || responding || latest.active);
   const activityLabel = hasActivity ? latest.label : status;
   const showTool = hasActivity && latest.kind === "tool";
-  let activityIcon =
-    latest.kind === "tool" ? resolveToolCallIcon(latest.toolName, latest.detail) : Wrench;
+  let activityIcon = arenaWorkIcon(latest);
   if (!pending) activityIcon = childContext.run.runState === "complete" ? Check : CircleStop;
   return (
     <View testID="arena-subagent">
