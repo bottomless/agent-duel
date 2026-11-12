@@ -166,6 +166,38 @@ function decisionHint(phase: ArenaDecisionPhase): string | null {
   return phase.canRetry ? i18n.t("arena.bothFailedRetry") : i18n.t("arena.bothFailed");
 }
 
+/**
+ * The pill is empty only at a vote with no side to take, a Choose or an Accept in a failed side's
+ * place; then the failure line's Discard is the only choice and an empty pill would sit under it.
+ */
+function pillHasChoice(phase: ArenaDecisionPhase): boolean {
+  if (phase.kind !== "awaiting_vote" || phase.canResume) return true;
+  return phase.canChooseA || phase.canChooseB || phase.canAcceptA || phase.canAcceptB;
+}
+
+/**
+ * At the vote Discard sits at the end of the line that says a side failed rather than among the
+ * vote's choices, so it shows only when that line explains why the battle can be thrown away.
+ * After a stop or a restart it stays in the pill.
+ */
+function DecisionHintRow({
+  phase,
+  actions,
+}: {
+  phase: ArenaDecisionPhase;
+  actions: ArenaBattleActions;
+}) {
+  const hint = decisionHint(phase);
+  if (!hint) return null;
+  const discard = phase.kind === "awaiting_vote" && !phase.canResume && phase.canDiscard;
+  return (
+    <View style={styles.hintRow}>
+      <Text style={styles.hint}>{hint}</Text>
+      {discard ? <DiscardDecision actions={actions} placement="hint" /> : null}
+    </View>
+  );
+}
+
 /** Lives outside the transcript scroller so the decision stays above the composer. */
 export function ArenaDecisionPill({
   serverId,
@@ -184,7 +216,6 @@ export function ArenaDecisionPill({
   const stopped = phase.kind === "awaiting_stop_resolution";
   const interrupted = phase.kind === "awaiting_vote" && phase.canResume;
   const showChoices = phase.kind === "running" || phase.kind === "awaiting_vote" || stopped;
-  const hint = decisionHint(phase);
   const visible = isArenaBattleOnScreen(snapshot) && showChoices;
   const handleLayout = useCallback(
     (event: LayoutChangeEvent) => onHeightChange(event.nativeEvent.layout.height),
@@ -203,38 +234,38 @@ export function ArenaDecisionPill({
       pointerEvents="box-none"
       testID="arena-decision-pill"
     >
-      {hint ? <Text style={styles.hint}>{hint}</Text> : null}
-      <View style={styles.pill} testID="arena-battle-choice-row">
-        {phase.kind === "running"
-          ? arenaRunningDecisionOrder(phase).map((choice) =>
-              choice === "stop" ? (
-                <BattleStopDecision key="stop" phase={phase} actions={actions} />
-              ) : (
-                <BattlePaneDecision key={choice} side={choice} phase={phase} actions={actions} />
-              ),
-            )
-          : null}
-        {interrupted ? (
-          <>
-            <ResumeDecision actions={actions} />
-            <DiscardDecision actions={actions} />
-          </>
-        ) : null}
-        {/* A failed side shows Accept in its Choose's place, or nothing if its result was not saved,
-            and each failed pane keeps its Retry. */}
-        {phase.kind !== "running" && !interrupted ? (
-          <>
-            <BattlePaneDecision side="a" phase={phase} actions={actions} />
-            {phase.kind === "awaiting_vote" && phase.canTie ? (
-              <VoteDecision actions={actions} />
-            ) : null}
-            {stopped || (phase.kind === "awaiting_vote" && phase.canDiscard) ? (
+      <DecisionHintRow phase={phase} actions={actions} />
+      {pillHasChoice(phase) ? (
+        <View style={styles.pill} testID="arena-battle-choice-row">
+          {phase.kind === "running"
+            ? arenaRunningDecisionOrder(phase).map((choice) =>
+                choice === "stop" ? (
+                  <BattleStopDecision key="stop" phase={phase} actions={actions} />
+                ) : (
+                  <BattlePaneDecision key={choice} side={choice} phase={phase} actions={actions} />
+                ),
+              )
+            : null}
+          {interrupted ? (
+            <>
+              <ResumeDecision actions={actions} />
               <DiscardDecision actions={actions} />
-            ) : null}
-            <BattlePaneDecision side="b" phase={phase} actions={actions} />
-          </>
-        ) : null}
-      </View>
+            </>
+          ) : null}
+          {/* A failed side shows Accept in its Choose's place, or nothing if its result was not
+              saved, and each failed pane keeps its Retry. */}
+          {phase.kind !== "running" && !interrupted ? (
+            <>
+              <BattlePaneDecision side="a" phase={phase} actions={actions} />
+              {phase.kind === "awaiting_vote" && phase.canTie ? (
+                <VoteDecision actions={actions} />
+              ) : null}
+              {stopped ? <DiscardDecision actions={actions} /> : null}
+              <BattlePaneDecision side="b" phase={phase} actions={actions} />
+            </>
+          ) : null}
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -262,6 +293,14 @@ const styles = StyleSheet.create((theme) => ({
     borderColor: theme.colors.border,
     borderRadius: theme.borderRadius.full,
     backgroundColor: theme.colors.surface2,
+  },
+  hintRow: {
+    maxWidth: "100%",
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    justifyContent: "center",
+    columnGap: theme.spacing[2],
   },
   hint: {
     color: theme.colors.foregroundMuted,
