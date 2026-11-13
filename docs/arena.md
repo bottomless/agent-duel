@@ -1160,6 +1160,10 @@ from the session's: a chat migrated from 1.x has no model on its session, since 
 prompt. Resume then keeps the session's value and the chat opens for the vote; the daemon session
 holds the refused selection and applies it before its next agent, model, or prompt action, which
 the guard lets through once the battle is resolved (`DeferredSelection` in `v2/configuration.ts`).
+A chat saved before chats became Arena-only stores the OpenRouter model it first ran on, and
+`arenaModelRef` refuses any model but the two sizes. Resume skips that model and its variant and
+keeps the session's own, or gives a session with no model Arena Medium, so the chat still opens
+(`applyResumeOverrides`).
 An explicit agent or model choice drops the matching deferred part when it is called, and selection
 writes run in call order ([Battle off](#battle-off)), so a deferred value never lands after the
 user's choice. The dropped part comes back when the newest choice for it fails, also when several

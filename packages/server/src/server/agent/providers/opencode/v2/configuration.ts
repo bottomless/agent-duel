@@ -11,10 +11,13 @@ import { OpenCodeProviderOptionsSchema, buildOpenCodePermissionRules } from "../
 
 import { modelRef } from "./mapping.js";
 
+function isArenaModel(model: ModelRef) {
+  return model.providerID === "arena" && ["medium", "contestant"].includes(model.id);
+}
+
 export function arenaModelRef(id?: string | null): ModelRef {
   const model = modelRef(id ?? "arena/medium");
-  if (model.providerID !== "arena" || !["medium", "contestant"].includes(model.id))
-    throw new Error("Choose an Arena Medium or frontier model");
+  if (!isArenaModel(model)) throw new Error("Choose an Arena Medium or frontier model");
   return { ...model, variant: model.id === "medium" ? "xhigh" : "high" };
 }
 
@@ -111,6 +114,15 @@ export async function applyResumeOverrides(
   overrides?: Partial<AgentSessionConfig>,
   arenaMode = false,
 ): Promise<DeferredSelection> {
+  // A chat saved before chats became Arena-only still stores the OpenRouter model it first ran on,
+  // which Arena no longer offers. Keep the session's own model then, or give a session with none
+  // the default size, because the chat has to open.
+  if (arenaMode && overrides?.model && !isArenaModel(modelRef(overrides.model)))
+    overrides = {
+      ...overrides,
+      model: info.model ? undefined : "arena/medium",
+      thinkingOptionId: undefined,
+    };
   let model: ModelRef | undefined;
   if (overrides?.model || overrides?.thinkingOptionId !== undefined) {
     model = info.model && { ...info.model, variant: overrides.thinkingOptionId };
