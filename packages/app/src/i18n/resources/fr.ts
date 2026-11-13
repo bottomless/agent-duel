@@ -95,7 +95,6 @@ export const fr: TranslationResources = {
     winningDiscarded: "Modifications gagnantes abandonnées",
     battleDiscarded: "Bataille abandonnée",
     versus: "contre",
-    versusModel: "contre {{model}}",
     resultWon: "Gagnant",
     resultEarly: "Choisi tôt",
     battleResolved: "Bataille résolue",

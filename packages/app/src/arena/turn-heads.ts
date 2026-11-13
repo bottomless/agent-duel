@@ -12,6 +12,11 @@ export interface ArenaTurnHeads {
   heads: ReadonlyMap<string, ArenaTurnAuthor>;
   /** Every row an answer is made of, which the avatar column indents. Prompts are not in it. */
   answerRowIds: ReadonlySet<string>;
+  /**
+   * The last text of each battle's kept answer, with its battle: the footer that closes that row
+   * ends with the battle's result (`ArenaBattleResult`).
+   */
+  ends: ReadonlyMap<string, ArenaHistoryItem>;
 }
 
 /**
@@ -34,6 +39,7 @@ export function arenaTurnHeads(
   }
   const heads = new Map<string, ArenaTurnAuthor>();
   const answerRowIds = new Set<string>();
+  const lastText = new Map<ArenaHistoryItem, string>();
   // "unknown" until a prompt is seen: an answer cut off from its prompt by paging has no author yet.
   let opened: ArenaHistoryItem | "agent" | "unknown" | null = "unknown";
   for (const row of rows) {
@@ -43,14 +49,16 @@ export function arenaTurnHeads(
       continue;
     }
     answerRowIds.add(row.id);
-    if (opened === "unknown") continue;
     const battle = battleOf.get(row.id);
+    if (battle && row.kind === "assistant_message") lastText.set(battle, row.id);
+    if (opened === "unknown") continue;
     const author = battle ?? "agent";
     if (opened === author) continue;
     opened = author;
     heads.set(row.id, battle ? { kind: "battle", item: battle } : { kind: "agent" });
   }
-  return { heads, answerRowIds };
+  const ends = new Map([...lastText].map(([battle, row]) => [row, battle]));
+  return { heads, answerRowIds, ends };
 }
 
 function isPrompt(row: StreamItem): boolean {

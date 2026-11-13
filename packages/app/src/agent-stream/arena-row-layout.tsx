@@ -19,6 +19,8 @@ interface ArenaRowLayout {
   userRowIds: ReadonlySet<string> | undefined;
   /** The head that opens each answer, keyed by the answer's first row. */
   heads: ReadonlyMap<string, ReactNode> | undefined;
+  /** What ends a footer, a battle's result, keyed by the row the footer closes. */
+  footerEnds: ReadonlyMap<string, ReactNode> | undefined;
 }
 
 const ArenaRowLayoutContext = createContext<ArenaRowLayout | null>(null);
@@ -28,11 +30,12 @@ export function ArenaRowLayoutProvider({
   ruledIds,
   userRowIds,
   heads,
+  footerEnds,
   children,
 }: ArenaRowLayout & { enabled: boolean; children: ReactNode }) {
   const value = useMemo(
-    () => (enabled ? { ruledIds, userRowIds, heads } : null),
-    [enabled, heads, ruledIds, userRowIds],
+    () => (enabled ? { ruledIds, userRowIds, heads, footerEnds } : null),
+    [enabled, footerEnds, heads, ruledIds, userRowIds],
   );
   return <ArenaRowLayoutContext.Provider value={value}>{children}</ArenaRowLayoutContext.Provider>;
 }
