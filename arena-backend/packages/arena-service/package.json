@@ -15,6 +15,7 @@
     "test": "bun test --timeout 30000"
   },
   "dependencies": {
+    "js-tiktoken": "1.0.21",
     "mongodb": "6.20.0",
     "zod": "4.1.8"
   },
