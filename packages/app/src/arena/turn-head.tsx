@@ -223,10 +223,12 @@ const styles = StyleSheet.create((theme) => ({
   column: {
     paddingLeft: COLUMN,
   },
-  // The name line. Its avatar hangs in the column to its left, centred on the line.
+  // The name line. Its avatar hangs in the column to its left, centred on the line. A wrapping row
+  // packs its lines at the top, so `alignContent` centres the line on the avatar.
   head: {
     flexDirection: "row",
     alignItems: "center",
+    alignContent: "center",
     flexWrap: "wrap",
     columnGap: theme.spacing[1.5],
     minHeight: 24,
@@ -236,6 +238,7 @@ const styles = StyleSheet.create((theme) => ({
   result: {
     flexDirection: "row",
     alignItems: "center",
+    alignContent: "center",
     flexWrap: "wrap",
     justifyContent: "flex-end",
     columnGap: theme.spacing[1.5],
