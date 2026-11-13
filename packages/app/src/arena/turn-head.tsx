@@ -241,6 +241,9 @@ const styles = StyleSheet.create((theme) => ({
     alignContent: "center",
     flexWrap: "wrap",
     justifyContent: "flex-end",
+    // Narrower than its line, it wraps inside its slot rather than running past the chat's edge.
+    flexShrink: 1,
+    minWidth: 0,
     columnGap: theme.spacing[1.5],
     minHeight: 24,
   },

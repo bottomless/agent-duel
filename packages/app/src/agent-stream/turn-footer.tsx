@@ -264,6 +264,7 @@ const stylesheet = StyleSheet.create((theme) => ({
   // Pushed to the right end, and kept there when it wraps under the footer.
   turnFooterEnd: {
     marginLeft: "auto",
+    maxWidth: "100%",
     minHeight: 24,
     flexShrink: 1,
     flexDirection: "row",
