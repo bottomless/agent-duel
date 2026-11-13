@@ -15,6 +15,7 @@ import {
 import { COMPACTION_HEADER, COMPACTION_OFFER } from "@agent-duel/arena-service/request-budget"
 import { HEARTBEAT_HEADER, REPLAY_PATH, REPLAY_UNAVAILABLE_LINE } from "@agent-duel/arena-service/stream-recovery"
 import { KEEP_ALIVE_HEADER } from "@agent-duel/arena-service/keep-alive"
+import { COMPACTION_POLICY_PATH } from "@agent-duel/arena-service/compaction-policy-contract"
 import type { KeepAlive, Ping, PingResult } from "./keep-alive"
 
 export type Assignment = {
@@ -662,6 +663,29 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
     telemetry = assignment.telemetry ? options.telemetry : undefined
     const parsed = (await request.json()) as unknown
     const rewritten = rewriteBody(parsed, assignment)
+    // Measurement is authenticated like a generation, but must not create telemetry, a cache ping,
+    // or a model request. Only its boolean decision crosses back to the engine.
+    if (new URL(request.url).pathname.endsWith(COMPACTION_POLICY_PATH)) {
+      const response = await (options.fetch ?? fetch)(
+        `${options.upstream.replace(/\/$/, "")}${COMPACTION_POLICY_PATH}`,
+        {
+          method: "POST",
+          headers: {
+            "X-Arena-Assignment-ID": assignment.assignmentID,
+            "X-Arena-Scope-ID": assignment.scopeID,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(rewritten),
+          signal: request.signal,
+        },
+      )
+      if (!response.ok) {
+        await response.body?.cancel()
+        return Response.json({ compact: false })
+      }
+      const decision: unknown = await response.json()
+      return Response.json({ compact: record(decision) && decision.compact === true })
+    }
     const kind = requestKind(request.headers.get("x-arena-generation-classification"))
     metadata = {
       assignment,
