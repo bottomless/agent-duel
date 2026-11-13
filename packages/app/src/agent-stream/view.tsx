@@ -148,12 +148,15 @@ function renderLiveAuxiliaryNode(input: {
   liveContent: ReactNode;
   pendingPermissions: ReactNode;
   turnFooter: ReactNode;
+  /** The fork's boundary when it closes the turn this footer ends: it goes below the footer. */
+  forkBoundary: ReactNode;
   bottomOverlayInset: number;
 }): ReactNode {
   if (
     !input.liveContent &&
     !input.pendingPermissions &&
     !input.turnFooter &&
+    !input.forkBoundary &&
     input.bottomOverlayInset === 0
   ) {
     return null;
@@ -161,6 +164,7 @@ function renderLiveAuxiliaryNode(input: {
   return (
     <>
       {input.turnFooter}
+      {input.forkBoundary}
       {input.liveContent ? (
         <ArenaContentColumn fullBleed>
           <View style={stylesheet.listHeaderContent}>{input.liveContent}</View>
@@ -175,6 +179,22 @@ function renderLiveAuxiliaryNode(input: {
         <BottomOverlayInset height={input.bottomOverlayInset} />
       ) : null}
     </>
+  );
+}
+
+/** Where a forked chat's copied history ends and its own begins. */
+function ForkedChatBoundary() {
+  const { t } = useTranslation();
+  return (
+    <View
+      accessibilityLabel={t("message.actions.forkedFromChat")}
+      style={stylesheet.forkedChatBoundary}
+      testID="forked-chat-boundary"
+    >
+      <View style={stylesheet.forkedChatBoundaryLine} />
+      <Text style={stylesheet.forkedChatBoundaryText}>{t("message.actions.forkedFromChat")}</Text>
+      <View style={stylesheet.forkedChatBoundaryLine} />
+    </View>
   );
 }
 
@@ -1218,6 +1238,14 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
     subagentTranscriptRef.current = renderSubagentTranscript;
 
     const bottomTurnFooterHost = streamLayout.auxiliaryTurnFooter;
+    // The last turn's footer is drawn after every row, so a fork boundary in that turn goes after
+    // the footer rather than between the turn's last row and its footer.
+    const forkBoundaryAfterFooter = useMemo(() => {
+      if (!forkBoundaryAfterItemId || !bottomTurnFooterHost) return false;
+      const rows = [...presentation.tail, ...presentation.head];
+      const index = rows.findIndex((row) => row.id === forkBoundaryAfterItemId);
+      return index >= 0 && !rows.slice(index + 1).some((row) => row.kind === "user_message");
+    }, [bottomTurnFooterHost, forkBoundaryAfterItemId, presentation.head, presentation.tail]);
 
     // A summary anchored to an item that a work row holds draws after that row.
     const rowAfterItems = useMemo(
@@ -1242,30 +1270,19 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
           onForkAssistantTurn: readOnly ? undefined : handleForkAssistantTurn,
         });
         const after = rowAfterItems?.get(item.id);
-        const showForkBoundary = forkBoundaryAfterItemId === item.id;
+        const showForkBoundary = !forkBoundaryAfterFooter && forkBoundaryAfterItemId === item.id;
         if (!after && !showForkBoundary) return streamItem;
         return (
           <>
             {streamItem}
             {after ? <ArenaContentColumn fullBleed>{after}</ArenaContentColumn> : null}
-            {showForkBoundary ? (
-              <View
-                accessibilityLabel={t("message.actions.forkedFromChat")}
-                style={stylesheet.forkedChatBoundary}
-                testID="forked-chat-boundary"
-              >
-                <View style={stylesheet.forkedChatBoundaryLine} />
-                <Text style={stylesheet.forkedChatBoundaryText}>
-                  {t("message.actions.forkedFromChat")}
-                </Text>
-                <View style={stylesheet.forkedChatBoundaryLine} />
-              </View>
-            ) : null}
+            {showForkBoundary ? <ForkedChatBoundary /> : null}
           </>
         );
       },
       [
         rowAfterItems,
+        forkBoundaryAfterFooter,
         forkBoundaryAfterItemId,
         getTurnIndent,
         handleForkAssistantTurn,
@@ -1273,7 +1290,6 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
         renderStreamItemContent,
         streamRenderStrategy,
         supportsAgentForkContextCursor,
-        t,
       ],
     );
 
@@ -1412,11 +1428,13 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
         liveContent,
         pendingPermissions: auxiliary.pendingPermissions,
         turnFooter: auxiliary.turnFooter,
+        forkBoundary: forkBoundaryAfterFooter ? <ForkedChatBoundary /> : null,
         bottomOverlayInset,
       });
     }, [
       auxiliary.pendingPermissions,
       auxiliary.turnFooter,
+      forkBoundaryAfterFooter,
       bottomOverlayTailClearance,
       liveContent,
     ]);
