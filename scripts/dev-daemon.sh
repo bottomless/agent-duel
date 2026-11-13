@@ -23,6 +23,10 @@ echo "  Listen:  ${PASEO_LISTEN}"
 echo "  Arena:   ${PASEO_ARENA_BACKEND_ROOT:-not configured}"
 echo "══════════════════════════════════════════════════════"
 
+# The engine runs from this checkout's arena-backend, and this script never runs the server build
+# that installs it.
+node "$SCRIPT_DIR/install-arena-backend.mjs"
+
 export PASEO_CORS_ORIGINS="${PASEO_CORS_ORIGINS:-*}"
 export PASEO_NODE_INSPECT="${PASEO_NODE_INSPECT:---inspect=0}"
 

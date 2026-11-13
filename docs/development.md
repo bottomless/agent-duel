@@ -6,15 +6,16 @@ These requirements are for contributors running the stack from source. A package
 does not install Bun or provide an OpenRouter key.
 
 - Node.js 22 with npm
-- Bun 1.4.2 for `arena-backend`
+- Bun 1.4.4 for `arena-backend`, the version its `package.json` names in `packageManager`
 - An OpenRouter API key for battles
 
-Install both package graphs after cloning:
-
-```bash
-npm install
-cd arena-backend && bun install
-```
+Run `npm install` after cloning and after each pull. Every daemon build (`npm run build:server`,
+which `npm run dev:desktop` and the desktop build run) and `npm run dev` also run
+`bun install --frozen-lockfile` in `arena-backend` and stop if it fails
+(`scripts/install-arena-backend.mjs`). A daemon built from a checkout runs the engine from
+`arena-backend`, and a stale install exits at startup on a missing module. Set
+`AGENT_DUEL_SKIP_ARENA_INSTALL=1` only for a build that never runs that engine, like the Nix
+packages.
 
 ### Windows
 
