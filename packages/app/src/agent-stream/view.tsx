@@ -170,9 +170,30 @@ function renderLiveAuxiliaryNode(input: {
   );
 }
 
-/** Where a forked chat's copied history ends and its own begins. */
+/**
+ * Where a forked chat's copied history ends and its own begins. A battle chat draws it as the rule
+ * that starts its next turn, the label on the line, so the turn after it draws none of its own.
+ */
 function ForkedChatBoundary() {
   const { t } = useTranslation();
+  const arenaLayout = useArenaRowLayout();
+  if (arenaLayout) {
+    return (
+      <ArenaRow fullWidth style={stylesheet.forkedArenaBoundaryRow}>
+        <View
+          accessibilityLabel={t("message.actions.forkedFromChat")}
+          style={stylesheet.forkedArenaBoundary}
+          testID="forked-chat-boundary"
+        >
+          <View style={stylesheet.forkedChatBoundaryLine} />
+          <Text style={stylesheet.forkedArenaBoundaryText}>
+            {t("message.actions.forkedFromChat")}
+          </Text>
+          <View style={stylesheet.forkedChatBoundaryLine} />
+        </View>
+      </ArenaRow>
+    );
+  }
   return (
     <View
       accessibilityLabel={t("message.actions.forkedFromChat")}
@@ -418,6 +439,7 @@ function useRetainedValue<T>(value: T, active: boolean): T {
   }
   return active ? value : retainedRef.current;
 }
+const FORK_BOUNDARY_LABEL_HEIGHT = 20;
 const EMPTY_PENDING_MESSAGE_SUBMISSIONS: readonly PendingMessageSubmission[] = [];
 const GROUPED_TOOL_CALL_DETAIL_MAX_HEIGHT = 200;
 
@@ -1170,6 +1192,17 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
     const bottomTurnFooterHost = streamLayout.auxiliaryTurnFooter;
     // The last turn's footer is drawn after every row, so a fork boundary in that turn goes after
     // the footer rather than between the turn's last row and its footer.
+    // A battle chat's fork boundary is the rule of the turn after it (`ForkedChatBoundary`).
+    const arenaRuledIds = useMemo(() => {
+      if (!forkBoundaryAfterItemId || !ruledItemIds) return ruledItemIds;
+      const rows = [...presentation.tail, ...presentation.head];
+      const index = rows.findIndex((row) => row.id === forkBoundaryAfterItemId);
+      const next = rows.slice(index + 1).find((row) => row.kind === "user_message");
+      if (index < 0 || !next || !ruledItemIds.has(next.id)) return ruledItemIds;
+      const ruled = new Set(ruledItemIds);
+      ruled.delete(next.id);
+      return ruled;
+    }, [forkBoundaryAfterItemId, presentation.head, presentation.tail, ruledItemIds]);
     const forkBoundaryAfterFooter = useMemo(() => {
       if (!forkBoundaryAfterItemId || !bottomTurnFooterHost) return false;
       const rows = [...presentation.tail, ...presentation.head];
@@ -1439,7 +1472,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
             <MessageOuterSpacingProvider disableOuterSpacing>
               <ArenaRowLayoutProvider
                 enabled={arenaChat === true}
-                ruledIds={ruledItemIds}
+                ruledIds={arenaRuledIds}
                 heads={turnHeads}
                 footerEnds={turnFooterEnds}
                 userRowIds={userRowIds}
@@ -2065,6 +2098,24 @@ const stylesheet = StyleSheet.create((theme) => ({
     flex: 1,
     height: 1,
     backgroundColor: theme.colors.border,
+  },
+  // A battle chat's boundary is its next turn's rule (`ArenaRow` `ruled`): the line sits where that
+  // rule would, the label centred on it, and the prompt starts the rule's gap below the line.
+  forkedArenaBoundaryRow: {
+    marginTop: theme.spacing[1] - FORK_BOUNDARY_LABEL_HEIGHT / 2,
+    paddingBottom: theme.spacing[8] - FORK_BOUNDARY_LABEL_HEIGHT / 2,
+  },
+  forkedArenaBoundary: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[3],
+    height: FORK_BOUNDARY_LABEL_HEIGHT,
+  },
+  forkedArenaBoundaryText: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.sm,
+    fontWeight: theme.fontWeight.medium,
+    lineHeight: FORK_BOUNDARY_LABEL_HEIGHT,
   },
   forkedChatBoundaryText: {
     color: theme.colors.foregroundMuted,

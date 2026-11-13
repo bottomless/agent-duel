@@ -1781,6 +1781,14 @@ const AgentStreamSection = memo(function AgentStreamSection({
     };
   }, [battleHistory, presentedStream, shownTurnId]);
   const chatHasRows = shownStream.tail.length + shownStream.head.length > 0;
+  // A fork's boundary that nothing follows yet is the rule a live battle starts under, so the
+  // battle draws none of its own (`ForkedChatBoundary`).
+  const forkBoundaryEndsChat = useMemo(() => {
+    if (!forkBoundaryAfterItemId) return false;
+    const rows = [...shownStream.tail, ...shownStream.head];
+    const index = rows.findIndex((row) => row.id === forkBoundaryAfterItemId);
+    return index >= 0 && !rows.slice(index + 1).some((row) => row.kind === "user_message");
+  }, [forkBoundaryAfterItemId, shownStream]);
   const ruledRowIds = useRuledRows(battleHistory, presentedStream, shownStream);
   const { turnHeads, turnFooterEnds, userRowIds } = useTurnHeads(
     agent.id,
@@ -1838,7 +1846,7 @@ const AgentStreamSection = memo(function AgentStreamSection({
           agentId={agent.id}
           snapshot={snapshot}
           {...(startingBattle ? { startingPrompt: startingBattle } : {})}
-          ruled={chatHasRows}
+          ruled={chatHasRows && !forkBoundaryEndsChat}
         />
       </View>
     );
@@ -1847,6 +1855,7 @@ const AgentStreamSection = memo(function AgentStreamSection({
     arenaBattleOnScreen,
     arenaSession.data,
     chatHasRows,
+    forkBoundaryEndsChat,
     serverId,
     startingBattle,
     workspaceId,
