@@ -1,4 +1,6 @@
 import { app, type BrowserWindow, powerMonitor } from "electron";
+import log from "electron-log/main";
+import { noteGpuRestart } from "./gpu-restart.js";
 
 // COMPAT(darwinCompositorWatchdog): added in v0.1.78, target removal after
 // 2026-11-19. Workaround for Electron/Chromium macOS display-sleep compositor
@@ -89,15 +91,18 @@ export function setupDarwinCompositorWatchdog(win: BrowserWindow): void {
     consecutiveRecoveries += 1;
     stalledChecks = 0;
     const gpuPid = findGpuProcessPid();
-    console.warn(
+    log.warn(
       `[compositor-watchdog] Desktop window stopped producing frames; restarting GPU process ` +
         `(pid=${gpuPid ?? "unknown"}, attempt ${consecutiveRecoveries}) to recover`,
     );
     if (gpuPid !== null) {
+      // Announced before the kill, so the crash reporter does not file this recovery as a process
+      // something outside the app ended.
+      noteGpuRestart();
       try {
         process.kill(gpuPid, "SIGKILL");
       } catch (error) {
-        console.warn("[compositor-watchdog] Could not restart GPU process", error);
+        log.warn("[compositor-watchdog] Could not restart GPU process", error);
       }
     }
     await new Promise((resolve) => setTimeout(resolve, GPU_RELAUNCH_GRACE_MS));

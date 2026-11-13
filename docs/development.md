@@ -361,6 +361,11 @@ GPU process so Chromium rebuilds the display link. The probe is skipped while
 the screen is locked or the window is hidden or minimized, since a window
 legitimately stops producing frames then.
 
+Each restart goes through `log.warn`, not `console.warn`: `log.initialize`
+forwards only the renderer's console, so a main-process `console` call never
+reaches the log file, and a later crash report's tail would not show that the
+watchdog had been restarting the GPU process.
+
 The watchdog deliberately leaves background throttling **enabled**. Calling
 `webContents.setBackgroundThrottling(false)` would keep the compositor producing
 frames non-stop, pinning ProMotion displays at 120Hz forever and draining the
