@@ -14,6 +14,7 @@ import {
   recordCrashReport,
   recordMarkerExit,
   recordMarkerStopping,
+  recordSessionEnding,
   releaseRunningMarker,
   releaseStoppedMarker,
   removeCrashReport,
@@ -310,5 +311,46 @@ describe("running marker", () => {
     releaseRunningMarker(home, "app");
 
     expect(readdirSync(crashReportsDirectory(home))).toContain("app.running");
+  });
+
+  it("does not report the runs a session end took down, the app's and the daemon's", () => {
+    const directory = crashReportsDirectory(home);
+    claimRunningMarker({ home, name: "app", version: "1" });
+    // Both runs the system is about to end; the app hears of it, the daemon does not.
+    for (const [name, pid] of [
+      ["app", 999_998],
+      ["daemon", 999_999],
+    ] as const) {
+      writeFileSync(
+        path.join(directory, `${name}.running`),
+        JSON.stringify({ pid, version: "1", startedAt: "2026-10-25T01:00:00.000Z" }),
+      );
+    }
+
+    recordSessionEnding(home);
+
+    // The machine kept its uptime (a Windows shut down with Fast Startup), so the boot time does
+    // not explain either marker.
+    for (const name of ["app", "daemon"]) {
+      expect(
+        claimRunningMarker({ home, name, version: "2", isAlive: () => false, bootedAt: 0 }),
+      ).toBeNull();
+    }
+  });
+
+  it("keeps a stop already under way as it was when the session ends", () => {
+    const file = path.join(crashReportsDirectory(home), "daemon.running");
+    claimRunningMarker({ home, name: "daemon", version: "1" });
+    recordMarkerStopping(home, "daemon");
+    const before = readFileSync(file, "utf8");
+
+    recordSessionEnding(home);
+
+    expect(readFileSync(file, "utf8")).toBe(before);
+  });
+
+  it("does nothing when no run left a marker", () => {
+    expect(() => recordSessionEnding(home)).not.toThrow();
+    expect(readdirSync(home)).toEqual([]);
   });
 });

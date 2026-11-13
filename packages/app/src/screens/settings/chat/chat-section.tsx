@@ -7,7 +7,6 @@ import {
   SettingsSelect,
   SettingsSwitch,
 } from "@/components/settings";
-import { isNative } from "@/constants/platform";
 import { useAppSettings, type ChatDisplay } from "@/hooks/use-settings";
 
 const CHAT_DISPLAYS: readonly ChatDisplay[] = ["full", "collapseToolCalls", "collapseTurns"];
@@ -33,10 +32,6 @@ export function ChatSection() {
     (autoExpandReasoning: boolean) => void updateSettings({ autoExpandReasoning }),
     [updateSettings],
   );
-  const changeChatOutline = useCallback(
-    (chatOutlineEnabled: boolean) => void updateSettings({ chatOutlineEnabled }),
-    [updateSettings],
-  );
 
   return (
     <View>
@@ -55,14 +50,6 @@ export function ChatSection() {
             options={chatDisplayOptions}
             onValueChange={changeChatDisplay}
           />
-          {isNative ? null : (
-            <SettingsSwitch
-              label={t("settings.appearance.chatOutline.title")}
-              hint={t("settings.appearance.chatOutline.description")}
-              value={settings.chatOutlineEnabled}
-              onValueChange={changeChatOutline}
-            />
-          )}
         </SettingsCard>
       </SettingsSection>
     </View>

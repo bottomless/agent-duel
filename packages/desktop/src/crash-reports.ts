@@ -5,9 +5,11 @@ import {
   describeError,
   describeUncleanShutdown,
   recordCrashReport,
+  recordSessionEnding,
   releaseRunningMarker,
   resolvePaseoHome,
 } from "@getpaseo/server";
+import { isExpectedGpuRestart } from "./window/compositor-watchdog/gpu-restart.js";
 
 type CrashInput = Parameters<typeof recordCrashReport>[0]["crash"];
 
@@ -23,7 +25,8 @@ function desktopLogPath(): string | undefined {
  * Records the desktop app's crashes in the daemon's crash folder. The daemon sends them as
  * feedback (`packages/server/src/server/crash-reports/sender.ts`), so a build without any
  * reporting key reports too. Call once, after the single-instance lock: a second instance must not
- * take the running marker of the first.
+ * take the running marker of the first. Call it before the first window opens, so every window
+ * passes on the end of the session.
  */
 export function startCrashReporting(): void {
   const home = resolvePaseoHome(process.env);
@@ -55,6 +58,15 @@ export function startCrashReporting(): void {
   });
   process.on("exit", () => releaseRunningMarker(home, "app"));
 
+  // Windows skips `before-quit` when the user shuts down, restarts or signs out, and tells only the
+  // windows. It then ends the app and the daemon without a signal, so their markers must say so now.
+  app.on("browser-window-created", (_event, window) => {
+    window.on("session-end", () => {
+      quitting = true;
+      recordSessionEnding(home);
+    });
+  });
+
   // A monitor records the exception and leaves Electron's own handling of it unchanged.
   process.on("uncaughtExceptionMonitor", (error) => {
     record({ process: "app", kind: "exception", message: describeError(error) });
@@ -72,6 +84,9 @@ export function startCrashReporting(): void {
   });
   app.on("child-process-gone", (_event, details) => {
     if (details.reason === "clean-exit" || quitting) return;
+    // The macOS compositor watchdog SIGKILLs the GPU process to unfreeze a window. That is the
+    // app's own recovery, not something outside it ending a process.
+    if (isExpectedGpuRestart(details.type)) return;
     record({
       process: "app",
       kind: "exit",

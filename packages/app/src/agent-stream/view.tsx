@@ -90,8 +90,6 @@ import {
 import { renderStreamRow, type RenderStreamItem } from "./stream-row";
 import { renderArenaStreamRow } from "./arena-stream-row";
 import { type NearBottom, useIsNearBottom, useNearBottom } from "./near-bottom";
-import { ChatOutlineRail } from "@/agent-stream/chat-outline/rail";
-import { useChatOutline } from "@/agent-stream/chat-outline/use-chat-outline";
 import { getHostRuntimeStore } from "@/runtime/host-runtime";
 import { planTimelineTailFetch } from "@/timeline/timeline-sync-plan";
 import {
@@ -506,7 +504,6 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
     const { t } = useTranslation();
     const autoExpandReasoning = useSettings((settings) => settings.autoExpandReasoning);
     const chatDisplay = useSettings((settings) => settings.chatDisplay);
-    const chatOutlineEnabled = useSettings((settings) => settings.chatOutlineEnabled);
     const contentMaxWidth = useSettings(resolveContentMaxWidth);
     const viewportRef = useRef<StreamViewportHandle | null>(null);
     const pendingClientMessageIds = useMemo(
@@ -544,10 +541,6 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
     const supportsAgentForkContextCursor = useSessionStore(
       (state) =>
         state.sessions[resolvedServerId]?.serverInfo?.features?.agentForkContextCursor === true,
-    );
-    const supportsChatOutline = useSessionStore(
-      (state) =>
-        state.sessions[resolvedServerId]?.serverInfo?.features?.agentTimelinePromptIndex === true,
     );
     const timelineEpoch = useSessionStore(
       (state) => state.sessions[resolvedServerId]?.agentTimelineCursor.get(agentId)?.epoch ?? null,
@@ -764,18 +757,6 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
           mountedHistoryMessageIds.has(messageId) || liveHeadMessageIds.has(messageId),
       };
     }, [baseRenderModel.segments.liveHead, mountedHistoryMessageIds]);
-    const chatOutline = useChatOutline({
-      agentId,
-      serverId: resolvedServerId,
-      timelineEpoch,
-      tail: effectiveStreamItems,
-      head: effectiveStreamHead,
-      enabled: supportsChatOutline && chatOutlineEnabled,
-      viewportRef,
-      onJumpError: handleTimelineHistoryLoadError,
-      mountedHistoryMessageIds,
-      revealLoadedMessage: revealLoadedHistory,
-    });
 
     useImperativeHandle(
       ref,
@@ -1342,14 +1323,6 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       return itemById;
     }, [streamLayout.liveHead]);
 
-    const handleReadingPositionChange = useStableEvent((rowId: string | null) => {
-      const row =
-        rowId === null
-          ? undefined
-          : (layoutHistoryItemById.get(rowId) ?? layoutLiveHeadItemById.get(rowId));
-      chatOutline.reportReadingPosition(row?.item.timelineCursor?.seq ?? null);
-    });
-
     const renderHistoryRow = useCallback(
       (item: StreamItem) =>
         (arenaChat ? renderArenaStreamRow : renderStreamRow)({
@@ -1501,7 +1474,6 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
                     isInitialHistoryLoading,
                     revealInitialHistory,
                     onNearBottomChange: nearBottom.set,
-                    onReadingPositionChange: handleReadingPositionChange,
                     onNearHistoryStart: loadOlder,
                     isLoadingOlderHistory: isLoadingOlder,
                     hasOlderHistory: hasOlder,
@@ -1515,11 +1487,6 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
                 </UserMessageExpansionContext.Provider>
               </ToolCallExpansionContext.Provider>
             </MessageOuterSpacingProvider>
-            <ChatOutlineRail
-              prompts={chatOutline.prompts}
-              activePrompt={chatOutline.activePrompt}
-              onJumpToPrompt={chatOutline.jumpToPrompt}
-            />
             <ScrollToBottomButton
               nearBottom={nearBottom}
               isTimelineDetached={isTimelineDetached}

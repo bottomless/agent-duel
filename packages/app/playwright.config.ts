@@ -34,7 +34,8 @@ export default defineConfig({
   projects: [
     {
       name: "browser",
-      testIgnore: ["**/*.real.spec.ts"],
+      // The chat outline is declined; see docs/upstream-sync.md.
+      testIgnore: ["**/*.real.spec.ts", "**/chat-outline.spec.ts"],
       use: { ...devices["Desktop Chrome"] },
     },
     {
