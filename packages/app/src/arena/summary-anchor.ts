@@ -220,16 +220,20 @@ export function arenaKeptAnswerRowIds(
   return new Set(items.slice(promptIndex + 1, endIndex + 1).map((streamItem) => streamItem.id));
 }
 
-/** The rows that show battles' own prompts, which the chat sets as headings. */
-export function arenaBattlePromptRowIds(
+/**
+ * The prompts that start a turn: every prompt in the chat, battles' and plain turns' alike, except
+ * the replies sent inside a battle, which belong to that battle's turn (`arenaKeptAnswerRowIds`).
+ * The chat draws its turn rule above each of them after its first row.
+ */
+export function arenaTurnStartRowIds(
   history: readonly ArenaHistoryItem[],
   stream: ArenaPresentedStream,
 ): Set<string> {
-  const items = [...stream.tail, ...stream.head];
+  const inside = new Set<string>();
+  for (const item of history) for (const id of arenaKeptAnswerRowIds(item, stream)) inside.add(id);
   const ids = new Set<string>();
-  for (const item of history) {
-    const prompt = items.find((streamItem) => isCanonicalPrompt(item, streamItem));
-    if (prompt) ids.add(prompt.id);
+  for (const row of [...stream.tail, ...stream.head]) {
+    if (row.kind === "user_message" && !inside.has(row.id)) ids.add(row.id);
   }
   return ids;
 }
