@@ -7,10 +7,14 @@
 <p align="center">A desktop app for head-to-head coding agent battles, with single-agent mode and free inference. Pick the winning agent and continue from its work.</p>
 
 <p align="center">
-  <a href="https://github.com/bottomless/agent-duel/releases/download/v0.4.0-beta.20/Agent-Duel-0.4.0-beta.20-arm64.dmg"><img src="docs/images/download-macos.svg" width="292" height="40" alt="Download for macOS · Apple silicon"></a>
-  <a href="https://github.com/bottomless/agent-duel/releases/download/v0.4.0-beta.20/Agent-Duel-Setup-0.4.0-beta.20-x64.exe"><img src="docs/images/download-windows.svg" width="292" height="40" alt="Download for Windows · x64"></a>
+  <a href="https://github.com/bottomless/agent-duel/releases/download/v0.4.0-beta.20/Agent-Duel-0.4.0-beta.20-arm64.dmg"><img src="docs/images/download-macos.svg" width="268" height="84" alt="Download for macOS · Apple silicon"></a>
+  <a href="https://github.com/bottomless/agent-duel/releases/download/v0.4.0-beta.20/Agent-Duel-Setup-0.4.0-beta.20-x64.exe"><img src="docs/images/download-windows.svg" width="268" height="84" alt="Download for Windows · 64-bit"></a>
+</p>
+
+<p align="center">
+  Free to use. Inference included.
   <br>
-  <sub>v0.4.0-beta.20 · <a href="https://github.com/bottomless/agent-duel/releases/tag/v0.4.0-beta.20">Release notes</a><br>Free to use. Inference included.</sub>
+  <sub>v0.4.0-beta.20 · <a href="https://github.com/bottomless/agent-duel/releases/tag/v0.4.0-beta.20">Release notes</a></sub>
 </p>
 
 ## Demo
