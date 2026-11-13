@@ -4,14 +4,20 @@
 
 <h1 align="center">Agent Duel</h1>
 
-<p align="center">A desktop coding-agent battle interface built on Paseo.</p>
+<p align="center">A desktop app for head-to-head coding agent battles, with single-agent mode and free inference. Pick the winning agent and continue from its work.</p>
 
-Agent Duel runs two blinded coding agents against one prompt in isolated local
-worktrees. You compare their results, choose A, B, or Tie, and continue from the
-selected result as ordinary chat history.
+<p align="center">
+  <a href="https://github.com/bottomless/agent-duel/releases/download/v0.4.0-beta.20/Agent-Duel-0.4.0-beta.20-arm64.dmg"><img src="docs/images/download-macos.svg" width="268" height="84" alt="Download for macOS · Apple silicon"></a>
+  <a href="https://github.com/bottomless/agent-duel/releases/download/v0.4.0-beta.20/Agent-Duel-Setup-0.4.0-beta.20-x64.exe"><img src="docs/images/download-windows.svg" width="268" height="84" alt="Download for Windows · 64-bit"></a>
+</p>
 
-Each contestant is a model drawn at random [from a pool](#current-models) and run
-through the bundled engine. You only see which models they were after you vote.
+<p align="center">
+  Free to use. Inference included.
+  <br>
+  <sub>v0.4.0-beta.20 · <a href="https://github.com/bottomless/agent-duel/releases/tag/v0.4.0-beta.20">Release notes</a></sub>
+</p>
+
+## Demo
 
 <p align="center">
   <img src="docs/images/battle.png" alt="A battle: two agents' results side by side, with Choose A, Tie and Choose B below">
@@ -21,27 +27,21 @@ The shipped product is the Electron desktop app. `packages/app` can run in a
 browser during development and automated QA, but there is no hosted browser
 product.
 
-## Download
-
-[Download for macOS (Apple silicon)](https://github.com/bottomless/agent-duel/releases)
-
-E-mail signup required for use. No cost for unlimited inference with frontier models.
-
 ## Current models
 
 The hosted version draws from:
 
-- Claude Fable 5.2
-- Claude Opus 5.5
-- GPT-6 Astra
-- GPT-6.1 Sol
-- Kimi K3.1 Pro
-- Muse Wonder
-- Grok 4.7
-- Qwen 3.8 Max
-- Gemini Carbon
-- DeepSeek V4.1 Flash 1017
-- MiMo-V2.6 Flash
+- <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/models/anthropic-dark.svg"><img src="docs/images/models/anthropic.svg" width="18" height="18" alt=""></picture> [Claude Fable 5.2](https://agentduel.com/leaderboard/models/anthropic/claude-fable-5.2)
+- <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/models/anthropic-dark.svg"><img src="docs/images/models/anthropic.svg" width="18" height="18" alt=""></picture> [Claude Opus 5.5](https://agentduel.com/leaderboard/models/anthropic/claude-opus-5.5)
+- <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/models/openai-dark.svg"><img src="docs/images/models/openai.svg" width="18" height="18" alt=""></picture> [GPT-6 Astra](https://agentduel.com/leaderboard/models/openai/gpt-6-astra)
+- <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/models/openai-dark.svg"><img src="docs/images/models/openai.svg" width="18" height="18" alt=""></picture> [GPT-6.1 Sol](https://agentduel.com/leaderboard/models/openai/gpt-6.1-sol)
+- <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/models/moonshot-dark.svg"><img src="docs/images/models/moonshot.svg" width="18" height="18" alt=""></picture> [Kimi K3.1 Pro](https://agentduel.com/leaderboard/models/moonshotai/kimi-k3.1-pro)
+- <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/models/meta-dark.svg"><img src="docs/images/models/meta.svg" width="18" height="18" alt=""></picture> [Muse Wonder](https://agentduel.com/leaderboard/models/meta/muse-wonder)
+- <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/models/xai-dark.svg"><img src="docs/images/models/xai.svg" width="18" height="18" alt=""></picture> [Grok 4.7](https://agentduel.com/leaderboard/models/x-ai/grok-4.7)
+- <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/models/qwen-dark.svg"><img src="docs/images/models/qwen.svg" width="18" height="18" alt=""></picture> [Qwen 3.8 Max](https://agentduel.com/leaderboard/models/qwen/qwen3.8-max-0902)
+- <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/models/google-dark.svg"><img src="docs/images/models/google.svg" width="18" height="18" alt=""></picture> [Gemini Carbon](https://agentduel.com/leaderboard/models/google/gemini-4-carbon)
+- <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/models/deepseek-dark.svg"><img src="docs/images/models/deepseek.svg" width="18" height="18" alt=""></picture> [DeepSeek V4.1 Flash 1017](https://agentduel.com/leaderboard/models/deepseek/deepseek-v4.1-flash-1017)
+- <picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/models/xiaomi-dark.svg"><img src="docs/images/models/xiaomi.svg" width="18" height="18" alt=""></picture> [MiMo-V2.6 Flash](https://agentduel.com/leaderboard/models/xiaomi/mimo-v2.6-flash)
 
 ## Architecture
 

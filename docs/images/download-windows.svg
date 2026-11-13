@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="268" height="84" viewBox="0 0 268 84" role="img" aria-labelledby="title">
+  <title id="title">Download for Windows · 64-bit</title>
+  <!-- Windows mark: Font Awesome Free 6.7.2, copyright 2024 Fonticons, Inc., CC BY 4.0. Shape unchanged, recolored white. See download-buttons-LICENSE.txt. Source: https://fontawesome.com/license/free -->
+  <!-- Transparent padding keeps adjacent or wrapped download buttons separated on GitHub. -->
+  <rect x="8" y="8" width="252" height="68" rx="4" fill="#0067b8" />
+  <g transform="translate(28.875 27) scale(0.05859375)" fill="#ffffff"><path d="M0 93.7l183.6-25.3v177.4H0V93.7zm0 324.6l183.6 25.3V268.4H0v149.9zm203.8 28L448 480V268.4H203.8v177.9zm0-380.6v180.1H448V32L203.8 65.7z" /></g>
+  <text x="70" y="35" fill="#ffffff" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="14" font-weight="600">Download for Windows</text>
+  <text x="70" y="55" fill="#ffffff" fill-opacity="0.85" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif" font-size="12">64-bit</text>
+</svg>
