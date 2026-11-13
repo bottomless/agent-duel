@@ -290,6 +290,22 @@ export type CheckoutEvictionDocument = {
   updatedAt: Date
 }
 
+/**
+ * Where a forked chat's canonical session came from. A fork copies the transcript under new message
+ * IDs, while the battles that wrote it stay recorded in the source chat; this keeps the way back,
+ * so the fork still names who answered each copied turn (`inheritTurns`).
+ */
+export type ForkLineageDocument = {
+  /** The fork's canonical session. */
+  readonly _id: Identifier
+  readonly sourceSessionID: string
+  /** Each copied source message ID, to the ID of its copy. */
+  readonly messages: Readonly<Record<string, string>>
+  /** When the last copied source message was written: a battle that copied none came before it. */
+  readonly throughTime?: number
+  readonly createdAt: Date
+}
+
 /** Where the next search for contestant ports starts; one document per store. */
 export type PortCursorDocument = {
   readonly _id: string

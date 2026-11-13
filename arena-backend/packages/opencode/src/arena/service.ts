@@ -1290,6 +1290,15 @@ export interface Interface {
     userID?: string,
   ) => Effect.Effect<Stream.Stream<ArenaStreamFrame, Error>, Error>
   readonly session: (sessionID: string, userID?: string) => Effect.Effect<ReturnType<typeof project>, Error>
+  /**
+   * Remember that `sessionID` is a fork of `sourceSessionID`, with each copied source message
+   * mapped to its copy, so the fork keeps naming the battles that wrote what it copied.
+   */
+  readonly recordFork: (input: {
+    readonly sessionID: string
+    readonly sourceSessionID: string
+    readonly messages: ReadonlyMap<string, string>
+  }) => Effect.Effect<void, Error>
   readonly archiveSession: (sessionID: string) => Effect.Effect<ReturnType<typeof project> | null, Error>
   readonly unarchiveSession: (sessionID: string) => Effect.Effect<ReturnType<typeof project> | null, Error>
   readonly inspectCheckout: (worktreeRoot: string) => Effect.Effect<ArenaCheckoutInspection, Error>
@@ -11910,7 +11919,13 @@ export const layer: Layer.Layer<
                 ? store.snapshotTurn(turnID, Number.MAX_SAFE_INTEGER)
                 : store.snapshot(chat._id, Number.MAX_SAFE_INTEGER),
             )
-            if (current.chat._id !== chat._id)
+            // A fork shows the battles it copied from the chat it was forked from (`inheritTurns`).
+            if (
+              current.chat._id !== chat._id &&
+              !(yield* promise(() => store.inheritedHistory(chat.canonicalSessionID))).some(
+                (turn) => turn._id === turnID,
+              )
+            )
               return yield* Effect.fail(new Error("Arena turn does not belong to this session"))
             return yield* projectSnapshot(current, full ? -1 : 0, { controlsOnly: !full, discoverServices: false })
           })
@@ -11964,10 +11979,35 @@ export const layer: Layer.Layer<
         return frames.pipe(Stream.onStart(watchChat(observedChat._id)), Stream.ensuring(unwatchChat(observedChat._id)))
       })
 
+    const recordFork = Effect.fn("Arena.recordFork")(function* (input: {
+      readonly sessionID: string
+      readonly sourceSessionID: string
+      readonly messages: ReadonlyMap<string, string>
+    }) {
+      if (input.messages.size === 0) return
+      const store = yield* available()
+      const source = yield* sessions
+        .messages({ sessionID: SessionID.make(input.sourceSessionID) })
+        .pipe(Effect.mapError(error))
+      const copied = source.filter((message) => input.messages.has(message.info.id))
+      yield* promise(() =>
+        store.recordForkLineage({
+          _id: input.sessionID,
+          sourceSessionID: input.sourceSessionID,
+          messages: Object.fromEntries(input.messages),
+          ...(copied.length > 0
+            ? { throughTime: Math.max(...copied.map((message) => message.info.time.created)) }
+            : {}),
+          createdAt: new Date(),
+        }),
+      )
+    })
+
     return Service.of({
       activity,
       stream,
       session: (sessionID, userID) => ensureChat(sessionID, userID).pipe(Effect.mapError(error)),
+      recordFork: (input) => recordFork(input).pipe(Effect.mapError(error)),
       archiveSession: (sessionID) => archiveSession(sessionID).pipe(Effect.mapError(error)),
       unarchiveSession,
       inspectCheckout,
