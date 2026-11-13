@@ -412,11 +412,17 @@ const styles = StyleSheet.create((theme) => ({
   runningRow: {
     gap: theme.spacing[2],
   },
+  // A chip as solid as the buttons beside it, since the answers scroll behind the row.
   working: {
     flexDirection: "row",
     alignItems: "center",
     gap: theme.spacing[2],
-    paddingHorizontal: theme.spacing[1.5],
+    minHeight: 32,
+    paddingHorizontal: theme.spacing[3],
+    borderRadius: theme.borderRadius.full,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface0,
   },
   // The side's colour, as on its pane's rule and its Choose button.
   workingDot: {

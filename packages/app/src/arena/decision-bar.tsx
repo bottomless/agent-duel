@@ -600,8 +600,10 @@ const styles = StyleSheet.create((theme) => ({
   hoverTarget: {
     position: "relative",
   },
+  // Opaque: it floats over the end of the answers, which scroll behind it.
   runningChoice: {
     borderColor: tint(theme.colors.foregroundMuted, 35),
+    backgroundColor: theme.colors.surface0,
   },
   runningHovered: {
     backgroundColor: theme.colors.surface3,
