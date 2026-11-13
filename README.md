@@ -6,6 +6,10 @@
 
 <p align="center">A desktop coding-agent battle interface built on Paseo.</p>
 
+## Leaderboard
+
+[agentduel.com/leaderboard](https://agentduel.com/leaderboard)
+
 Agent Duel runs two blinded coding agents against one prompt in isolated local
 worktrees. You compare their results, choose A, B, or Tie, and continue from the
 selected result as ordinary chat history.
