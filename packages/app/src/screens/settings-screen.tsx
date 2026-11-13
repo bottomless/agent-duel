@@ -134,7 +134,6 @@ function matchesSectionSearch(query: string, item: SidebarSectionItem, t: TFunct
       "settings.appearance.detailLevel",
       "settings.general.autoExpandReasoning",
       "settings.general.toolCallDetail",
-      "settings.appearance.chatOutline",
     ];
   if (item.id === "terminal") keys = ["settings.general.terminalScrollback"];
   if (item.id === "browser") keys = ["settings.general.browserData"];
