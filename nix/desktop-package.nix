@@ -100,8 +100,9 @@ buildNpmPackage {
     # Native deps (terminal emulation; libuv-linked on Linux)
     npm rebuild node-pty
 
-    # Server workspaces (highlight + relay + protocol + client + server + cli)
-    npm run build:server
+    # Server workspaces (highlight + relay + protocol + client + server + cli). The package ships no
+    # Arena engine, and the sandbox has no network for its install.
+    AGENT_DUEL_SKIP_ARENA_INSTALL=1 npm run build:server
 
     # App workspace deps not covered by build:server
     npm run build --workspace=@getpaseo/expo-two-way-audio
