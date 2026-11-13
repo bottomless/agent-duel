@@ -162,6 +162,26 @@ describe("OpenCode v2 resume overrides", () => {
     expect(info.model).toEqual({ providerID: "arena", id: "contestant", variant: "high" });
   });
 
+  test("opens a chat saved with a pre-Arena OpenRouter model on the session's own model", async () => {
+    const legacy = {
+      modeId: "build",
+      model: "openrouter/deepseek/deepseek-v4-flash",
+      thinkingOptionId: "high",
+    };
+    const kept = fakeClient(() => undefined);
+    const info = sessionInfo();
+    expect(await applyResumeOverrides(kept.client, info, legacy, true)).toEqual({});
+    expect(kept.calls).toEqual(["agent:build"]);
+    expect(info.model).toEqual({ providerID: "arena", id: "contestant", variant: "high" });
+
+    // A session that holds no model gets the default size instead.
+    const filled = fakeClient(() => undefined);
+    const empty = { id: "ses_migrated" } as unknown as SessionInfo;
+    expect(await applyResumeOverrides(filled.client, empty, legacy, true)).toEqual({});
+    expect(filled.calls).toEqual(["agent:build", "model:medium"]);
+    expect(empty.model).toEqual({ providerID: "arena", id: "medium", variant: "xhigh" });
+  });
+
   test("applies accepted switches and still fails on any other error", async () => {
     const accepted = fakeClient(() => undefined);
     const info = sessionInfo();
