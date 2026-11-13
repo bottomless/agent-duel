@@ -11,9 +11,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
-  type MenuPageDefinition,
 } from "@/components/ui/dropdown-menu";
-import type { MenuTriggerState } from "@/components/ui/menu";
+import type { MenuListPageDefinition, MenuTriggerState } from "@/components/ui/menu";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { ArenaEnvironmentDetails, arenaEnvironmentLabel } from "@/arena/readiness-strip";
 import { WorkspaceActionsMenuItems } from "@/git/workspace-actions";
@@ -38,6 +37,7 @@ const hitSlop = { top: 8, bottom: 8 };
 interface WorkspaceHeaderOverflowProps {
   serverId: string;
   workspaceId: string;
+  projectId: string | null;
   cwd: string | null;
   activeFile: WorkspaceFileLocation | null;
   snapshot: ArenaSnapshot | undefined;
@@ -71,7 +71,7 @@ export function WorkspaceHeaderOverflow(props: WorkspaceHeaderOverflowProps) {
   const environmentLabel = props.snapshot
     ? arenaEnvironmentLabel(props.snapshot, props.isWorktree)
     : undefined;
-  const pages: MenuPageDefinition[] = [];
+  const pages: MenuListPageDefinition[] = [];
   if (props.collapsed) {
     if (props.snapshot && props.agentId) {
       pages.push({
@@ -94,6 +94,7 @@ export function WorkspaceHeaderOverflow(props: WorkspaceHeaderOverflowProps) {
         content: (
           <WorkspaceOpenInEditorMenuItems
             serverId={props.serverId}
+            projectId={props.projectId}
             cwd={props.cwd}
             activeFile={props.activeFile}
           />
@@ -150,6 +151,7 @@ export function WorkspaceHeaderOverflow(props: WorkspaceHeaderOverflowProps) {
               id={page.id}
               testID="workspace-header-overflow-editor"
               serverId={props.serverId}
+              projectId={props.projectId}
               cwd={props.cwd}
               activeFile={props.activeFile}
             />

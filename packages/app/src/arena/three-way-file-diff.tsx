@@ -694,7 +694,7 @@ function ThreeWayFileSection({
               </View>
               {truncated || full ? (
                 <View style={styles.filePad}>
-                  <Button size="xs" variant="ghost" onPress={handleFullToggle}>
+                  <Button size="sm" variant="ghost" onPress={handleFullToggle}>
                     {full
                       ? t("arena.boundedPreview")
                       : t("arena.showAllRows", { total: rows.length })}

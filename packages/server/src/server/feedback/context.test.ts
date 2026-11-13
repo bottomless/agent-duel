@@ -55,7 +55,7 @@ const notGit = {
 };
 
 describe("feedback context", () => {
-  it("uploads cut-output sizes without changing retained content or the capture source", async () => {
+  it("uploads cut output with its size marker, without changing retained content or the capture source", async () => {
     const output = "x".repeat(5_000_024);
     const rows: AgentTimelineRow[] = [
       {
@@ -101,34 +101,15 @@ describe("feedback context", () => {
     });
 
     expect(uploadedRows).toEqual(rows);
+    // The daemon cuts long fields where it stores them and ends each with the size it removed, so
+    // a feedback reader can tell output is missing.
+    const cutMarker = expect.stringMatching(/^x+…\[truncated \d+(\.\d)? (KB|MB)\]$/);
     expect(uploadedRows[0].item).toMatchObject({
-      detail: { output: output.slice(0, 65_536) },
-      error: { content: output.slice(0, 65_536), exitCode: 1 },
-      metadata: {
-        existing: "kept",
-        outputTruncation: {
-          originalLength: output.length,
-          retainedLength: 65_536,
-          unit: "utf16_code_units",
-        },
-        errorContentTruncation: {
-          originalLength: output.length,
-          retainedLength: 65_536,
-          unit: "utf16_code_units",
-        },
-      },
+      detail: { output: cutMarker },
+      error: { content: cutMarker, exitCode: 1 },
+      metadata: { existing: "kept" },
     });
-    const notice = "\n\n[Content truncated]";
-    expect(uploadedRows[1].item).toMatchObject({
-      detail: { text: output.slice(0, 65_536 - notice.length) + notice },
-      metadata: {
-        textTruncation: {
-          originalLength: output.length,
-          retainedLength: 65_536 - notice.length,
-          unit: "utf16_code_units",
-        },
-      },
-    });
+    expect(uploadedRows[1].item).toMatchObject({ detail: { text: cutMarker } });
     expect(uploadedRows[2]).toEqual({ ...userMessage, seq: 3 });
     expect(JSON.stringify(rows)).toBe(beforeCapture);
     expect(prepared.transfer).toMatchObject({

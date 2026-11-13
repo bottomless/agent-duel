@@ -28,6 +28,8 @@ import { resolveToolCallIcon } from "@/utils/tool-call-icon";
 import { isWeb } from "@/constants/platform";
 import { useHoldStreamPosition } from "@/agent-stream/hold-position";
 import { arenaThreadMessages } from "./run-thread-selection";
+import { ToolCallExpansionContext } from "@/tool-calls/expansion-context";
+import { createToolCallExpansion } from "@/tool-calls/expansion";
 import {
   arenaPendingQuestions,
   arenaQuestionResult,
@@ -115,22 +117,37 @@ function ArenaToolPart({
     () => deriveArenaToolCallDetail(tool, input, output),
     [tool, input, output],
   );
+  const itemId = `${runId ?? "run"}:${stringField(part, "callID") ?? stringField(part, "id") ?? tool}`;
   return (
-    <ToolCall
-      toolName={tool}
-      args={input}
-      result={output}
-      error={error}
-      status={status}
-      detail={detail}
-      cwd={cwd}
-      disableOuterSpacing
-      compactLabel
-      // A narrow window opens a call in a sheet that keeps the detail it opened with, so a shortened
-      // call expands in place, where it loads whole.
-      forceInline={arenaToolPartPreviewed(shown)}
-      onInlineDetailsExpandedChange={arenaToolPartPreviewed(shown) ? setOpened : undefined}
-    />
+    <ToolCallExpansionBoundary>
+      <ToolCall
+        itemId={itemId}
+        toolName={tool}
+        args={input}
+        result={output}
+        error={error}
+        status={status}
+        detail={detail}
+        cwd={cwd}
+        disableOuterSpacing
+        compactLabel
+        // A narrow window opens a call in a sheet that keeps the detail it opened with, so a shortened
+        // call expands in place, where it loads whole.
+        forceInline={arenaToolPartPreviewed(shown)}
+        onInlineDetailsExpandedChange={arenaToolPartPreviewed(shown) ? setOpened : undefined}
+      />
+    </ToolCallExpansionBoundary>
+  );
+}
+
+// Upstream keeps a tool call's open state in the chat's ToolCallExpansionContext. A battle pane
+// inside the chat uses the chat's; one rendered on its own (a draft battle, a test) gets its own.
+function ToolCallExpansionBoundary({ children }: { children: ReactNode }) {
+  const inherited = useContext(ToolCallExpansionContext);
+  const [own] = useState(createToolCallExpansion);
+  if (inherited) return children;
+  return (
+    <ToolCallExpansionContext.Provider value={own}>{children}</ToolCallExpansionContext.Provider>
   );
 }
 

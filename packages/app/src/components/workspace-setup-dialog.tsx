@@ -482,7 +482,7 @@ export function WorkspaceSetupDialog() {
       desktopMaxWidth={640}
     >
       <FileDropZone style={styles.section}>
-        <KeyboardTranslateView>
+        <KeyboardTranslateView style={styles.composerSlot}>
           <Composer
             agentId={`workspace-setup:${serverId}:${sourceDirectory}`}
             serverId={serverId}
@@ -533,6 +533,9 @@ const styles = StyleSheet.create((theme) => ({
     fontSize: theme.fontSize.base,
     color: theme.colors.destructive,
     lineHeight: 20,
+  },
+  composerSlot: {
+    paddingBottom: theme.spacing[4],
   },
   composerInputWrapper: {
     backgroundColor: theme.colors.surface2,

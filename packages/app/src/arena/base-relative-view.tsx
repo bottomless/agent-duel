@@ -631,7 +631,7 @@ function ReadyDiff({
       ) : null}
       {previewLimited ? (
         <View style={styles.pad}>
-          <Button size="xs" variant="ghost" onPress={showAll}>
+          <Button size="sm" variant="ghost" onPress={showAll}>
             {t("arena.fullDiff")}{" "}
           </Button>
         </View>

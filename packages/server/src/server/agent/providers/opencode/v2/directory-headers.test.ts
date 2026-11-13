@@ -65,7 +65,7 @@ test.each(directories)("all manual V2 requests preserve directory %s", async (di
     config: { provider: "opencode", cwd: directory },
   });
   try {
-    await session.setFeature!("auto_accept", false);
+    await session.applyOptions!({ auto_accept: false });
     expect(session.describePersistence().metadata?.cwd).toBe(directory);
   } finally {
     await session.close();

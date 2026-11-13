@@ -321,7 +321,7 @@ export function CombinedFileView({
       </View>
       {truncated ? (
         <View style={styles.pad}>
-          <Button size="xs" variant="ghost" onPress={showAll}>
+          <Button size="sm" variant="ghost" onPress={showAll}>
             {t("arena.showAllRows", { total: diff.rows.length })}
           </Button>
         </View>

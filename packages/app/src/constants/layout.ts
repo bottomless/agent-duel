@@ -1,23 +1,29 @@
 import { useUnistyles } from "react-native-unistyles";
+import { bySizing, TOUCH_TARGET } from "@/components/ui/control-sizing";
 import { getIsElectron, isWeb } from "@/constants/platform";
 import { DEFAULT_CONTENT_MAX_WIDTH } from "@/styles/theme";
 
 export const FOOTER_HEIGHT = 75;
 
-// Shared header inner height (excluding safe area insets and border)
+// A bar of icon buttons: touch-sized it is one touch target tall, like an iOS navigation bar.
+const BAR_HEIGHT = { touch: TOUCH_TARGET, pointer: 36 };
+
+// Shared header inner height from `md` up (excluding safe area insets and border).
 // Used by both agent header (ScreenHeader) and explorer sidebar header
 // This ensures both headers have the same visual height
-export const HEADER_INNER_HEIGHT = 36;
+export const HEADER_INNER_HEIGHT = bySizing(BAR_HEIGHT).md;
 export const HEADER_INNER_HEIGHT_MOBILE = 56;
-export const WORKSPACE_SECONDARY_HEADER_HEIGHT = 36;
+/** The tab rail and pane toolbars under the header. A breakpoint value for stylesheets. */
+export const WORKSPACE_SECONDARY_HEADER_HEIGHT = bySizing(BAR_HEIGHT);
 export const HEADER_TOP_PADDING_MOBILE = 8;
 
-export const COMPACT_FORM_FACTOR_WIDTH = 500;
+// Measured composer width; independent of the window's compact/wide breakpoint.
+export const COMPACT_CONTENT_WIDTH = 500;
 
 // Floors for the workspace chat and its side panel, in the shape of the Codex app's panels. The
 // split is stored as a fraction, so without them a wide window let a dragged panel squeeze the
 // chat until the composer's controls overlapped, or squeeze the panel until its tabs read "T..".
-// The chat floor, the 1px split handle and the panel floor fill the `md` breakpoint (720) exactly;
+// The chat floor, the 1px split handle and the panel floor fill 720px exactly;
 // below it the workspace shows one pane at a time, so both always fit. A panel that needs more
 // room has focus mode.
 const TWO_PANE_MIN_WORKSPACE_WIDTH = 720;
@@ -57,8 +63,8 @@ const ARENA_PANE_ROW_CHROME_WIDTH = 74;
 export const ARENA_TWO_PANE_MIN_CONTENT_WIDTH =
   2 * ARENA_PANE_BASIS_WIDTH + ARENA_PANE_ROW_GAP + ARENA_PANE_ROW_CHROME_WIDTH;
 
-// Settings uses the canonical desktop list + detail layout. Its sidebar and
-// detail target must fit together before it can share width with app navigation.
+// Settings navigation can shrink below its preferred width to preserve the detail
+// minimum. Both targets must fit before Settings shares width with app navigation.
 export const SETTINGS_DESKTOP_SIDEBAR_WIDTH = 320;
 export const SETTINGS_DESKTOP_DETAIL_MIN_WIDTH = 400;
 export const SETTINGS_DESKTOP_SPLIT_MIN_WIDTH =
@@ -77,7 +83,7 @@ export {
   getIsElectronMac as getIsElectronRuntimeMac,
 } from "./platform";
 
-/** Below 600 points, sidebars overlay the workspace. Medium and wider layouts dock them. */
+/** Below md (600 points), sidebars overlay the workspace; wider layouts can dock them. */
 export function isCompactBreakpoint(breakpoint: string | undefined): boolean {
   return breakpoint === "xs" || breakpoint === "sm";
 }

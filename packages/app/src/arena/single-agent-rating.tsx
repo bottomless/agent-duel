@@ -58,7 +58,7 @@ export function SingleAgentRatingDialog({
         <View style={styles.actions}>
           <Button
             variant="secondary"
-            size="sm"
+            size="md"
             leftIcon={ThumbsUp}
             disabled={disabled}
             loading={rating.isPending && selectedVote === "up"}
@@ -69,7 +69,7 @@ export function SingleAgentRatingDialog({
           </Button>
           <Button
             variant="secondary"
-            size="sm"
+            size="md"
             leftIcon={ThumbsDown}
             disabled={disabled}
             loading={rating.isPending && selectedVote === "down"}
@@ -81,7 +81,7 @@ export function SingleAgentRatingDialog({
           {onSkip ? (
             <Button
               variant="ghost"
-              size="sm"
+              size="md"
               disabled={rating.isPending}
               onPress={onSkip}
               testID="arena-single-agent-rating-skip"

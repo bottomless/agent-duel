@@ -385,16 +385,10 @@ describe("RenameModal", () => {
     expect(errorNode?.textContent).toContain("Invalid name");
   });
 
-  // One size for all fields, from control-geometry.ts: sm on desktop, md compact
-  // (docs/forms.md). The modal used to declare its own 48px field instead.
-  it("asks the form kit for the desktop field size", () => {
-    layoutState.isCompact = false;
-    renderModal({ initialValue: "main" });
-    expect(adaptiveInputState.latestProps?.size).toBe("sm");
-  });
-
-  it("asks the form kit for the compact field size on a compact form factor", () => {
-    layoutState.isCompact = true;
+  // One size for all fields, from control-geometry.ts: `md`, which is pointer-sized on desktop and
+  // a touch target on touch screens (docs/forms.md). The modal used to declare its own 48px field.
+  it.each([false, true])("asks the form kit for the md field size (compact: %s)", (compact) => {
+    layoutState.isCompact = compact;
     renderModal({ initialValue: "main" });
     expect(adaptiveInputState.latestProps?.size).toBe("md");
   });

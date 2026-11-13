@@ -80,7 +80,7 @@ function OpenLink({ url, label }: { url: string; label: string }) {
   }, [openUrl, url]);
   return (
     <Button
-      size="xs"
+      size="sm"
       variant="outline"
       onPress={handlePress}
       textStyle={styles.openText}
@@ -187,6 +187,7 @@ export function hasArenaChatCallouts(snapshot: ArenaSnapshot): boolean {
  */
 export function ArenaChatCallouts({
   serverId,
+  projectId,
   cwd,
   snapshot,
   onResolveConflicts,
@@ -195,6 +196,7 @@ export function ArenaChatCallouts({
   pendingPrompt,
 }: {
   serverId: string;
+  projectId: string | null;
   cwd: string;
   snapshot: ArenaSnapshot;
   onResolveConflicts?: () => void;
@@ -226,12 +228,13 @@ export function ArenaChatCallouts({
         <WorkspaceOpenInEditorButton
           serverId={serverId}
           cwd={cwd}
+          projectId={projectId}
           activeFile={conflictFiles[0]}
           additionalFiles={additionalConflictFiles}
           buttonLabel={t("arena.openEditor")}
         />
       ) : null,
-    [serverId, cwd, conflictFiles, additionalConflictFiles, t],
+    [serverId, cwd, projectId, conflictFiles, additionalConflictFiles, t],
   );
   const resolveAction = onResolveConflicts
     ? {
@@ -520,7 +523,7 @@ export function ArenaEnvironmentDetails({
           </Text>
           {previewUrl ? (
             <Button
-              size="xs"
+              size="sm"
               variant="ghost"
               onPress={handleOpenPreview}
               accessibilityLabel={t("arena.retainedPreview")}

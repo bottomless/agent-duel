@@ -16,7 +16,7 @@ import {
 } from "@getpaseo/protocol/workspace-labels";
 import { AdaptiveModalSheet, type SheetHeader } from "@/components/adaptive-modal-sheet";
 import { Button } from "@/components/ui/button";
-import type { FieldControlSize } from "@/components/ui/control-geometry";
+import type { ControlSize } from "@/components/ui/control-geometry";
 import { Field, FormTextInput } from "@/components/ui/form-field";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { isNative } from "@/constants/platform";
@@ -144,7 +144,6 @@ export function WorkspaceLabelManagerModal({
           <Button
             // Red belongs to the confirm dialog, not to the surface that opens it — docs/design.md.
             variant="outline"
-            size="md"
             disabled={disabled}
             onPress={remove}
             testID="workspace-label-manager-delete"
@@ -152,7 +151,6 @@ export function WorkspaceLabelManagerModal({
             {t("workspaceLabels.manage.delete")}
           </Button>
           <Button
-            size="md"
             style={styles.saveButton}
             disabled={disabled || !state.dirty}
             loading={state.pending}
@@ -296,7 +294,7 @@ function WorkspaceLabelEditView({
   onSubmit: () => void;
 }): ReactElement {
   const { t } = useTranslation();
-  const size: FieldControlSize = useIsCompactFormFactor() ? "md" : "sm";
+  const size: ControlSize = "md";
   return (
     <>
       <Field label={t("workspaceLabels.manage.name")}>

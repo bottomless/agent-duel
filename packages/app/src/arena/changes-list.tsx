@@ -92,7 +92,7 @@ export const ArenaChangesList = memo(function ArenaChangesList({
       {footer ? (
         <Button
           variant="ghost"
-          size="xs"
+          size="sm"
           leftIcon={hidden > 0 ? ChevronDown : ChevronUp}
           onPress={toggleShowAll}
           style={styles.more}

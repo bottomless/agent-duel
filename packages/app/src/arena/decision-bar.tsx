@@ -67,7 +67,7 @@ export function ArenaSideChoiceButton({
   return (
     <Button
       variant="secondary"
-      size="sm"
+      size="md"
       style={[styles.sideChoice, side === "a" ? styles.sideA : styles.sideB]}
       loading={loading}
       disabled={disabled}
@@ -120,7 +120,7 @@ export function ArenaRunningPillButton({
     >
       <Button
         variant="outline"
-        size="sm"
+        size="md"
         style={[
           styles.sideChoice,
           styles.runningChoice,
@@ -153,7 +153,7 @@ export function VoteDecision({
   return (
     <Button
       variant="ghost"
-      size="sm"
+      size="md"
       style={styles.pillChoice}
       loading={pendingAction?.kind === "vote" && pendingAction.vote === "tie"}
       disabled={pending || disabled}
@@ -180,7 +180,7 @@ export function ResumeDecision({ actions }: { actions: ArenaBattleActions }) {
   return (
     <Button
       variant="default"
-      size="sm"
+      size="md"
       style={styles.pillChoice}
       loading={pendingAction?.kind === "resume_battle"}
       disabled={pending}
@@ -213,7 +213,7 @@ export function DiscardDecision({
   return (
     <Button
       variant={placement === "pill" ? "ghost" : "outline"}
-      size={placement === "pill" ? "sm" : "xs"}
+      size={placement === "pill" ? "md" : "sm"}
       style={placement === "pill" ? styles.pillChoice : undefined}
       loading={pendingAction?.kind === "resolve_stop" && pendingAction.resolution === "discard"}
       disabled={pending}
@@ -258,7 +258,7 @@ function RetryResolutionDecision({
       </Text>
       <Button
         variant="outline"
-        size="sm"
+        size="md"
         loading={pendingAction?.kind === "retry_resolution"}
         disabled={pending}
         onPress={actions.retryResolution}

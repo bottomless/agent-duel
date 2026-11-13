@@ -81,7 +81,7 @@ export function ArenaQueuedSteers({
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
-              size="xs"
+              size="sm"
               variant="outline"
               onPress={interrupt}
               disabled={pending}
@@ -128,7 +128,7 @@ function QueuedSteer({
   return (
     <View style={styles.entry} testID="arena-queued-steer">
       <Button
-        size="xs"
+        size="sm"
         variant="ghost"
         leftIcon={X}
         accessibilityLabel={t("arena.deleteQueued")}

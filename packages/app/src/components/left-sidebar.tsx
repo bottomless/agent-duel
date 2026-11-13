@@ -1,3 +1,4 @@
+import { SidebarViewSlot } from "@/plugins/sidebar-view";
 import { router, usePathname } from "expo-router";
 import {
   Archive,
@@ -15,6 +16,7 @@ import { useTranslation } from "react-i18next";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import {
   Pressable,
+  ScrollView,
   StyleSheet as RNStyleSheet,
   Text,
   useWindowDimensions,
@@ -29,7 +31,11 @@ import { StyleSheet, useUnistyles, withUnistyles } from "react-native-unistyles"
 import { useShallow } from "zustand/shallow";
 import { TitlebarDragRegion } from "@/components/desktop/titlebar-drag-region";
 import { SidebarCloseButton } from "@/components/headers/sidebar-close-button";
-import { resolveDesktopSidebarWidth } from "@/components/desktop-sidebar-layout";
+import {
+  resolveDesktopSidebarInsetLeft,
+  resolveDesktopSidebarWidth,
+} from "@/components/desktop-sidebar-layout";
+import { useWindowLayout, resolveDesktopDivisionLayout } from "@/window-layout";
 import {
   SIDEBAR_RESIZE_ACTIVATION_OFFSET,
   SIDEBAR_RESIZE_FAIL_OFFSET,
@@ -38,6 +44,7 @@ import { SidebarArchivedChats } from "@/components/sidebar/archived-chats";
 import { SidebarDisplayPreferencesMenu } from "@/components/sidebar/display-preferences/menu";
 import { SidebarHeaderRow } from "@/components/sidebar/sidebar-header-row";
 import { SidebarSeparator } from "@/components/sidebar/sidebar-separator";
+import { SidebarToastRegion } from "@/components/sidebar/sidebar-toast-region";
 import { SidebarNavRows } from "@/components/sidebar/sidebar-nav-rows";
 import { SidebarFooterIconHighlight } from "@/components/sidebar/sidebar-footer-icon-highlight";
 import { SidebarResizeHandle } from "@/components/sidebar-resize-handle";
@@ -77,6 +84,7 @@ import {
   WindowChromeSafeArea,
 } from "@/utils/desktop-window";
 import { useCloseAgentListGesture } from "@/mobile-panels/gestures";
+import { useLeftPanelWidth } from "@/mobile-panels/provider";
 import { MobilePanelOverlay } from "@/mobile-panels/presentation";
 import { buildOpenProjectRoute, buildSettingsRoute } from "@/utils/host-routes";
 import { SidebarAgentListSkeleton } from "./sidebar-agent-list-skeleton";
@@ -141,9 +149,16 @@ interface MobileSidebarProps extends SidebarSharedProps {
 interface DesktopSidebarProps extends SidebarSharedProps {
   insetsTop: number;
   active: boolean;
+  overlay: boolean;
 }
 
-export const LeftSidebar = memo(function LeftSidebar({ active }: { active: boolean }) {
+export const LeftSidebar = memo(function LeftSidebar({
+  active,
+  desktopOverlay,
+}: {
+  active: boolean;
+  desktopOverlay: boolean;
+}) {
   const { theme } = useUnistyles();
   const { t } = useTranslation();
   const insets = useSafeAreaInsets();
@@ -194,22 +209,16 @@ export const LeftSidebar = memo(function LeftSidebar({ active }: { active: boole
 
   const openProjectPicker = useOpenAddProject();
 
-  const handleOpenProjectMobile = useCallback(() => {
+  // Each destination closes the navigation overlay first. Closing is idempotent, so a docked
+  // sidebar runs the same handler.
+  const handleOpenProject = useCallback(() => {
     void openProjectPicker();
   }, [openProjectPicker]);
 
-  const handleOpenProjectDesktop = useCallback(() => {
-    void openProjectPicker();
-  }, [openProjectPicker]);
-
-  const handleSettingsMobile = useCallback(() => {
+  const handleSettings = useCallback(() => {
     showMobileAgent();
     router.push(buildSettingsRoute());
   }, [showMobileAgent]);
-
-  const handleSettingsDesktop = useCallback(() => {
-    router.push(buildSettingsRoute());
-  }, []);
 
   const handleFeedback = useCallback(() => {
     setFeedbackChat(currentFeedbackChat);
@@ -220,14 +229,10 @@ export const LeftSidebar = memo(function LeftSidebar({ active }: { active: boole
     if (pathname !== "/leaderboard") router.push("/leaderboard");
   }, [pathname, showMobileAgent]);
   const handleFeedbackClose = useCallback(() => setFeedbackVisible(false), []);
-  const handleHomeMobile = useCallback(() => {
+  const handleHome = useCallback(() => {
     showMobileAgent();
     router.push(buildOpenProjectRoute());
   }, [showMobileAgent]);
-
-  const handleHomeDesktop = useCallback(() => {
-    router.push(buildOpenProjectRoute());
-  }, []);
 
   const labels = useMemo(
     (): SidebarLabels => ({
@@ -264,35 +269,34 @@ export const LeftSidebar = memo(function LeftSidebar({ active }: { active: boole
     labels,
   };
 
-  const sidebar = isCompactLayout ? (
-    <RetainedPanelActivity active={active}>
-      <MobileSidebar
-        {...sharedProps}
-        active={active}
-        insetsTop={insets.top}
-        insetsBottom={insets.bottom}
-        closeSidebar={showMobileAgent}
-        handleOpenProject={handleOpenProjectMobile}
-        handleHome={handleHomeMobile}
-        handleSettings={handleSettingsMobile}
-      />
-    </RetainedPanelActivity>
-  ) : (
-    <RetainedPanelActivity active={active}>
-      <DesktopSidebar
-        {...sharedProps}
-        insetsTop={insets.top}
-        active={active}
-        handleOpenProject={handleOpenProjectDesktop}
-        handleHome={handleHomeDesktop}
-        handleSettings={handleSettingsDesktop}
-      />
-    </RetainedPanelActivity>
-  );
+  const handlers = {
+    handleOpenProject,
+    handleHome,
+    handleSettings,
+  };
 
   return (
     <>
-      {sidebar}
+      <RetainedPanelActivity active={active}>
+        {isCompactLayout ? (
+          <MobileSidebar
+            {...sharedProps}
+            {...handlers}
+            active={active}
+            insetsTop={insets.top}
+            insetsBottom={insets.bottom}
+            closeSidebar={showMobileAgent}
+          />
+        ) : (
+          <DesktopSidebar
+            {...sharedProps}
+            {...handlers}
+            insetsTop={insets.top}
+            active={active}
+            overlay={desktopOverlay}
+          />
+        )}
+      </RetainedPanelActivity>
       {feedbackAvailable ? (
         <FeedbackSheet
           visible={feedbackVisible}
@@ -521,6 +525,7 @@ function MobileSidebar({
   insetsBottom,
   closeSidebar,
 }: MobileSidebarProps) {
+  const insets = useSafeAreaInsets();
   const hasActiveHostFilter = useSidebarViewStore((state) => state.hostFilters.length > 0);
   const listView = useSidebarViewStore((state) => state.listView);
   const { gesture: closeGesture, gestureRef: closeGestureRef } = useCloseAgentListGesture();
@@ -563,44 +568,55 @@ function MobileSidebar({
             <View style={styles.mobileCloseButtonSlot} />
           </View>
         )}
-        <SidebarNavRows onBeforeNavigate={closeSidebar} />
+        <ScrollView
+          style={styles.mobileNavScroll}
+          showsVerticalScrollIndicator={false}
+          alwaysBounceVertical={false}
+          testID="sidebar-nav-scroll"
+        >
+          <SidebarNavRows onBeforeNavigate={closeSidebar} />
+        </ScrollView>
         <WindowChromeSafeArea placement="inline" style={closeButtonRowStyle}>
           <SidebarCloseButton
             label={labels.closeSidebar}
             onPress={closeSidebar}
             testID="sidebar-close"
             nativeID="sidebar-close"
-            style={styles.mobileCloseButton}
+            style={styles.mobileCloseButton(insets.right)}
           />
         </WindowChromeSafeArea>
 
-        {listView === "archived" ? <SidebarArchivedView onChatPress={closeSidebar} /> : null}
-        {listView === "chats" && isInitialLoad && !hasActiveHostFilter ? (
-          <SidebarAgentListSkeleton />
-        ) : null}
-        {listView === "chats" && !(isInitialLoad && !hasActiveHostFilter) ? (
-          <SidebarWorkspaceList
-            collapsedProjectKeys={collapsedProjectKeys}
-            onToggleProjectCollapsed={toggleProjectCollapsed}
-            shortcutIndexByWorkspaceKey={shortcutIndexByWorkspaceKey}
-            groupMode={groupMode}
-            workspaceGroups={workspaceGroups}
-            flatWorkspaces={flatWorkspaces}
-            projectIconTargets={projectIconTargets}
-            pinnedGroups={pinnedGroups}
-            projects={projects}
-            hasProjectsBeforeFilter={hasProjectsBeforeFilter}
-            hasActiveProjectFilter={hasActiveProjectFilter}
-            workspaceEntriesByKey={workspaceEntriesByKey}
-            isRefreshing={isManualRefresh && isRevalidating}
-            onRefresh={handleRefresh}
-            onWorkspacePress={handleWorkspacePress}
-            onAddProject={handleOpenProject}
-            parentGestureRef={closeGestureRef}
-            dragGestureHostActive={active}
-            listHeaderComponent={workspaceListActionsElement}
-          />
-        ) : null}
+        <SidebarViewSlot dismiss={handleWorkspacePress}>
+          <SidebarToastRegion active={active}>
+            {listView === "archived" ? <SidebarArchivedView onChatPress={closeSidebar} /> : null}
+            {listView === "chats" && isInitialLoad && !hasActiveHostFilter ? (
+              <SidebarAgentListSkeleton />
+            ) : null}
+            {listView === "chats" && !(isInitialLoad && !hasActiveHostFilter) ? (
+              <SidebarWorkspaceList
+                collapsedProjectKeys={collapsedProjectKeys}
+                onToggleProjectCollapsed={toggleProjectCollapsed}
+                shortcutIndexByWorkspaceKey={shortcutIndexByWorkspaceKey}
+                groupMode={groupMode}
+                workspaceGroups={workspaceGroups}
+                flatWorkspaces={flatWorkspaces}
+                projectIconTargets={projectIconTargets}
+                pinnedGroups={pinnedGroups}
+                projects={projects}
+                hasProjectsBeforeFilter={hasProjectsBeforeFilter}
+                hasActiveProjectFilter={hasActiveProjectFilter}
+                workspaceEntriesByKey={workspaceEntriesByKey}
+                isRefreshing={isManualRefresh && isRevalidating}
+                onRefresh={handleRefresh}
+                onWorkspacePress={handleWorkspacePress}
+                onAddProject={handleOpenProject}
+                parentGestureRef={closeGestureRef}
+                dragGestureHostActive={active}
+                listHeaderComponent={workspaceListActionsElement}
+              />
+            ) : null}
+          </SidebarToastRegion>
+        </SidebarViewSlot>
 
         <SidebarFooter
           handleOpenProject={handleOpenProject}
@@ -642,19 +658,26 @@ function DesktopSidebar({
   labels,
   insetsTop,
   active,
+  overlay,
 }: DesktopSidebarProps) {
   const ownsTopLeft = useOwnsWindowChromeCorner("top-left");
   const hasActiveHostFilter = useSidebarViewStore((state) => state.hostFilters.length > 0);
   const listView = useSidebarViewStore((state) => state.listView);
-  const sidebarWidth = usePanelStore((state) => state.sidebarWidth);
   const setSidebarWidth = usePanelStore((state) => state.setSidebarWidth);
-  const { width: windowWidth } = useWindowDimensions();
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const viewportWidth = windowWidth - insets.left - insets.right;
-  const visibleSidebarWidth = resolveDesktopSidebarWidth({
-    requestedWidth: sidebarWidth,
-    viewportWidth,
+  const divisionLayout = resolveDesktopDivisionLayout({
+    geometry: useWindowLayout(),
+    windowWidth,
+    windowHeight,
+    leftInset: insets.left,
+    rightInset: insets.right,
   });
+  const visibleSidebarWidth = useLeftPanelWidth();
+
+  const closeSidebar = usePanelStore((state) => state.showMobileAgent);
+  const { gesture: closeGesture, gestureRef: closeGestureRef } = useCloseAgentListGesture(overlay);
 
   const resizeSidebarWithKeyboard = useCallback(
     (width: number) => {
@@ -662,7 +685,7 @@ function DesktopSidebar({
     },
     [setSidebarWidth, viewportWidth],
   );
-  const startWidthRef = useRef(visibleSidebarWidth);
+  const startWidth = useSharedValue(visibleSidebarWidth);
   const resizeWidth = useSharedValue(visibleSidebarWidth);
   const [resizePressed, setResizePressed] = useState(false);
   const showResizeGrip = useCallback(() => setResizePressed(true), []);
@@ -675,6 +698,7 @@ function DesktopSidebar({
   const resizeGesture = useMemo(
     () =>
       Gesture.Pan()
+        .enabled(divisionLayout === null)
         .hitSlop({ left: 8, right: 8, top: 0, bottom: 0 })
         .onBegin(() => {
           scheduleOnRN(showResizeGrip);
@@ -685,132 +709,149 @@ function DesktopSidebar({
         .activeOffsetX([-SIDEBAR_RESIZE_ACTIVATION_OFFSET, SIDEBAR_RESIZE_ACTIVATION_OFFSET])
         .failOffsetY([-SIDEBAR_RESIZE_FAIL_OFFSET, SIDEBAR_RESIZE_FAIL_OFFSET])
         .onStart((event) => {
-          startWidthRef.current = visibleSidebarWidth - event.translationX;
+          startWidth.value = visibleSidebarWidth - event.translationX;
           resizeWidth.value = visibleSidebarWidth;
         })
         .onUpdate((event) => {
           // Dragging right (positive translationX) increases width
-          const newWidth = startWidthRef.current + event.translationX;
+          const newWidth = startWidth.value + event.translationX;
           resizeWidth.value = resolveDesktopSidebarWidth({
             requestedWidth: newWidth,
             viewportWidth,
           });
         })
-        .onEnd(() => {
-          runOnJS(setSidebarWidth)(resizeWidth.value);
+        .onEnd((_event, success) => {
+          if (success) runOnJS(setSidebarWidth)(resizeWidth.value);
         })
         .onFinalize(() => {
           scheduleOnRN(hideResizeGrip);
         }),
     [
+      divisionLayout,
       hideResizeGrip,
       resizeWidth,
       setSidebarWidth,
       showResizeGrip,
+      startWidth,
       viewportWidth,
       visibleSidebarWidth,
     ],
   );
 
   const resizeAnimatedStyle = useAnimatedStyle(() => ({
-    width: resizeWidth.value,
+    width: divisionLayout?.sidebarWidth ?? resizeWidth.value,
   }));
-
+  // The panel host gets no width of its own: the dock sizes to this view and the overlay fills the
+  // window. A Reanimated width on the host reached Android after React had switched presentation,
+  // and a lost update left the workspace at the dock width after the dock collapsed.
   const desktopSidebarStyle = useMemo(
-    () => [
-      staticStyles.desktopSidebar,
-      !active && staticStyles.desktopSidebarHidden,
-      resizeAnimatedStyle,
-    ],
-    [active, resizeAnimatedStyle],
+    () => [staticStyles.desktopSidebar, resizeAnimatedStyle],
+    [resizeAnimatedStyle],
   );
   const desktopSidebarBorderStyle = useMemo(
     () => [
-      styles.desktopSidebarBorder,
-      { flex: 1, paddingTop: insetsTop, paddingBottom: insets.bottom },
+      styles.desktopSidebarBorder(divisionLayout !== null),
+      {
+        flex: 1,
+        paddingTop: insetsTop,
+        paddingBottom: insets.bottom,
+        paddingLeft: resolveDesktopSidebarInsetLeft({ overlay, safeAreaLeft: insets.left }),
+      },
     ],
-    [insetsTop, insets.bottom],
+    [insetsTop, insets.bottom, insets.left, overlay, divisionLayout],
   );
   return (
-    <Animated.View
-      accessibilityElementsHidden={!active}
-      importantForAccessibility={active ? "auto" : "no-hide-descendants"}
-      pointerEvents={active ? "auto" : "none"}
-      style={desktopSidebarStyle}
+    <MobilePanelOverlay
+      panel="agent-list"
+      presentation={overlay ? "overlay" : "dock"}
+      dockVisible={active}
+      closeGesture={closeGesture}
     >
-      <View style={desktopSidebarBorderStyle} testID="left-sidebar">
-        <View style={styles.sidebarDragArea}>
-          {ownsTopLeft || DEV_BUILD_LABEL ? (
-            <View style={styles.desktopChromeRow}>
-              <TitlebarDragRegion />
-              {DEV_BUILD_LABEL ? (
-                <View
-                  pointerEvents="none"
-                  style={styles.devBuildBadge}
-                  testID="dev-build-label"
-                  accessibilityLabel={`Development build: ${DEV_BUILD_LABEL}`}
-                >
-                  <GitBranch size={12} color={theme.colors.accentForeground} />
-                  <Text numberOfLines={1} ellipsizeMode="tail" style={styles.devBuildBadgeText}>
-                    {DEV_BUILD_LABEL}
-                  </Text>
-                </View>
+      <Animated.View style={desktopSidebarStyle}>
+        <View style={desktopSidebarBorderStyle} testID="left-sidebar">
+          <View style={styles.sidebarDragArea}>
+            {ownsTopLeft || DEV_BUILD_LABEL ? (
+              <View style={styles.desktopChromeRow}>
+                <TitlebarDragRegion />
+                {DEV_BUILD_LABEL ? (
+                  <View
+                    pointerEvents="none"
+                    style={styles.devBuildBadge}
+                    testID="dev-build-label"
+                    accessibilityLabel={`Development build: ${DEV_BUILD_LABEL}`}
+                  >
+                    <GitBranch size={12} color={theme.colors.accentForeground} />
+                    <Text numberOfLines={1} ellipsizeMode="tail" style={styles.devBuildBadgeText}>
+                      {DEV_BUILD_LABEL}
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
+            ) : (
+              <View style={styles.sidebarTopInset}>
+                <TitlebarDragRegion />
+              </View>
+            )}
+            <SidebarNavRows style={styles.desktopNavRows} onBeforeNavigate={closeSidebar} />
+          </View>
+
+          <SidebarViewSlot dismiss={closeSidebar}>
+            <SidebarToastRegion active={active}>
+              {listView === "archived" ? <SidebarArchivedView onChatPress={closeSidebar} /> : null}
+              {listView === "chats" && isInitialLoad && !hasActiveHostFilter ? (
+                <SidebarAgentListSkeleton />
               ) : null}
-            </View>
-          ) : (
-            <View style={styles.sidebarTopInset}>
-              <TitlebarDragRegion />
-            </View>
-          )}
-          <SidebarNavRows style={styles.desktopNavRows} />
-        </View>
+              {listView === "chats" && !(isInitialLoad && !hasActiveHostFilter) ? (
+                <SidebarWorkspaceList
+                  collapsedProjectKeys={collapsedProjectKeys}
+                  onToggleProjectCollapsed={toggleProjectCollapsed}
+                  shortcutIndexByWorkspaceKey={shortcutIndexByWorkspaceKey}
+                  groupMode={groupMode}
+                  workspaceGroups={workspaceGroups}
+                  flatWorkspaces={flatWorkspaces}
+                  projectIconTargets={projectIconTargets}
+                  pinnedGroups={pinnedGroups}
+                  projects={projects}
+                  hasProjectsBeforeFilter={hasProjectsBeforeFilter}
+                  hasActiveProjectFilter={hasActiveProjectFilter}
+                  workspaceEntriesByKey={workspaceEntriesByKey}
+                  isRefreshing={isManualRefresh && isRevalidating}
+                  onRefresh={handleRefresh}
+                  onAddProject={handleOpenProject}
+                  onWorkspacePress={closeSidebar}
+                  parentGestureRef={closeGestureRef}
+                  dragGestureHostActive={active}
+                  listHeaderComponent={workspaceListActionsElement}
+                />
+              ) : null}
+            </SidebarToastRegion>
+          </SidebarViewSlot>
 
-        {listView === "archived" ? <SidebarArchivedView /> : null}
-        {listView === "chats" && isInitialLoad && !hasActiveHostFilter ? (
-          <SidebarAgentListSkeleton />
-        ) : null}
-        {listView === "chats" && !(isInitialLoad && !hasActiveHostFilter) ? (
-          <SidebarWorkspaceList
-            collapsedProjectKeys={collapsedProjectKeys}
-            onToggleProjectCollapsed={toggleProjectCollapsed}
-            shortcutIndexByWorkspaceKey={shortcutIndexByWorkspaceKey}
-            groupMode={groupMode}
-            workspaceGroups={workspaceGroups}
-            flatWorkspaces={flatWorkspaces}
-            projectIconTargets={projectIconTargets}
-            pinnedGroups={pinnedGroups}
-            projects={projects}
-            hasProjectsBeforeFilter={hasProjectsBeforeFilter}
-            hasActiveProjectFilter={hasActiveProjectFilter}
-            workspaceEntriesByKey={workspaceEntriesByKey}
-            isRefreshing={isManualRefresh && isRevalidating}
-            onRefresh={handleRefresh}
-            onAddProject={handleOpenProject}
-            listHeaderComponent={workspaceListActionsElement}
+          <SidebarCalloutSlot />
+
+          <SidebarFooter
+            handleOpenProject={handleOpenProject}
+            handleHome={handleHome}
+            handleSettings={handleSettings}
+            handleFeedback={handleFeedback}
+            handleLeaderboard={handleLeaderboard}
+            labels={labels}
+            onBeforeNavigate={closeSidebar}
           />
-        ) : null}
 
-        <SidebarCalloutSlot />
-
-        <SidebarFooter
-          handleOpenProject={handleOpenProject}
-          handleHome={handleHome}
-          handleSettings={handleSettings}
-          handleFeedback={handleFeedback}
-          handleLeaderboard={handleLeaderboard}
-          labels={labels}
-        />
-
-        <SidebarResizeHandle
-          edge="right"
-          gesture={resizeGesture}
-          pressed={resizePressed}
-          testID="left-sidebar-resize-handle"
-          width={visibleSidebarWidth}
-          onResize={resizeSidebarWithKeyboard}
-        />
-      </View>
-    </Animated.View>
+          {!overlay && divisionLayout === null ? (
+            <SidebarResizeHandle
+              edge="right"
+              gesture={resizeGesture}
+              pressed={resizePressed}
+              testID="left-sidebar-resize-handle"
+              width={visibleSidebarWidth}
+              onResize={resizeSidebarWithKeyboard}
+            />
+          ) : null}
+        </View>
+      </Animated.View>
+    </MobilePanelOverlay>
   );
 }
 
@@ -949,9 +990,7 @@ const workspaceListActionsElement = <WorkspaceListActions />;
 const staticStyles = RNStyleSheet.create({
   desktopSidebar: {
     position: "relative" as const,
-  },
-  desktopSidebarHidden: {
-    display: "none",
+    flex: 1,
   },
 });
 
@@ -1014,6 +1053,13 @@ const styles = StyleSheet.create((theme) => ({
   workspacesHeaderIconButtonHovered: {
     backgroundColor: theme.colors.surfaceSidebarHover,
   },
+  // The nav block caps at half the sidebar; a long item list scrolls inside the
+  // cap instead of crowding the workspace list off a short screen.
+  mobileNavScroll: {
+    flexGrow: 0,
+    flexShrink: 1,
+    maxHeight: "50%",
+  },
   sidebarContent: {
     flex: 1,
     minHeight: 0,
@@ -1032,14 +1078,14 @@ const styles = StyleSheet.create((theme) => ({
   mobileCloseButtonRowElectron: {
     top: 7.5,
   },
-  mobileCloseButton: {
-    marginRight: theme.spacing[2],
-  },
-  desktopSidebarBorder: {
-    borderRightWidth: 1,
+  mobileCloseButton: (rightInset: number) => ({
+    marginRight: theme.spacing[2] + rightInset,
+  }),
+  desktopSidebarBorder: (hasDivision: boolean) => ({
+    borderRightWidth: hasDivision ? 0 : 1,
     borderRightColor: theme.colors.border,
     backgroundColor: theme.colors.surfaceSidebar,
-  },
+  }),
   sidebarDragArea: {
     position: "relative",
   },

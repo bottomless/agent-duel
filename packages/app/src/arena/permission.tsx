@@ -85,7 +85,7 @@ export function ArenaPermissionCard({
       ))}
       <View style={styles.actions}>
         <Button
-          size="xs"
+          size="sm"
           variant="outline"
           disabled={responding}
           loading={responding && submitted === "reject"}
@@ -94,7 +94,7 @@ export function ArenaPermissionCard({
           {t("arena.deny")}{" "}
         </Button>
         <Button
-          size="xs"
+          size="sm"
           variant="outline"
           disabled={responding}
           loading={responding && submitted === "once"}
@@ -103,7 +103,7 @@ export function ArenaPermissionCard({
           {t("arena.allowOnce")}{" "}
         </Button>
         <Button
-          size="xs"
+          size="sm"
           disabled={responding}
           loading={responding && submitted === "always"}
           onPress={allowAlways}

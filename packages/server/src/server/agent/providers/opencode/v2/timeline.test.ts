@@ -1,3 +1,4 @@
+import { collectTimelineSnapshot } from "../test-utils/v2-timeline.js";
 import type { SessionMessageAssistant } from "@opencode/client";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -17,7 +18,7 @@ function assistant(content: SessionMessageAssistant["content"]): SessionMessageA
 
 test.each(["running", "completed"] as const)(
   "a native %s subagent opens its saved child transcript",
-  (status) => {
+  async (status) => {
     const input = {
       agent: "general",
       description: "Create quick.txt",
@@ -26,7 +27,7 @@ test.each(["running", "completed"] as const)(
     };
     const metadata = { sessionID: "ses_canonical_child", status };
     const output = '<subagent sessionID="ses_canonical_child" state="completed">done</subagent>';
-    const events = new V2Timeline().messages([
+    const events = await collectTimelineSnapshot(new V2Timeline(), [
       assistant([
         {
           type: "tool",
@@ -52,7 +53,7 @@ test.each(["running", "completed"] as const)(
             subAgentType: "general",
             description: "Create quick.txt",
             childSessionId: "ses_canonical_child",
-            log: status === "running" ? "" : output,
+            log: "",
             actions: [],
           },
         },
@@ -63,7 +64,7 @@ test.each(["running", "completed"] as const)(
   },
 );
 
-test("a completed edit carries the replaced and replacement text", () => {
+test("a completed edit carries the replaced and replacement text", async () => {
   // Captured from OpenCode 2.0.18, whose edit tool takes `path` instead of `filePath`.
   const edit = assistant([
     {
@@ -93,7 +94,7 @@ test("a completed edit carries the replaced and replacement text", () => {
     },
   ]);
 
-  expect(new V2Timeline().messages([edit])).toMatchObject([
+  expect(await collectTimelineSnapshot(new V2Timeline(), [edit])).toMatchObject([
     {
       item: {
         type: "tool_call",
@@ -105,7 +106,7 @@ test("a completed edit carries the replaced and replacement text", () => {
   ]);
 });
 
-test("a tool's image output is shown as an image, not as base64 in the tool output", () => {
+test("a tool's image output is shown as an image, not as base64 in the tool output", async () => {
   const png =
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==";
   const screenshot = assistant([
@@ -128,7 +129,7 @@ test("a tool's image output is shown as an image, not as base64 in the tool outp
   ]);
   const timeline = new V2Timeline();
 
-  const events = timeline.messages([screenshot]);
+  const events = await collectTimelineSnapshot(timeline, [screenshot]);
 
   expect(JSON.stringify(events)).not.toContain(png);
   expect(events.map((event) => event.type === "timeline" && event.item)).toMatchObject([
@@ -143,7 +144,7 @@ test("a tool's image output is shown as an image, not as base64 in the tool outp
       text: expect.stringMatching(/^\n\n!\[Image\]\(file:\/\/.*paseo-attachments.*\.png\)\n\n$/),
     },
   ]);
-  expect(timeline.messages([screenshot])).toEqual([]);
+  expect(await collectTimelineSnapshot(timeline, [screenshot])).toEqual([]);
 });
 
 test("a surrogate pair split across deltas streams back intact", () => {
@@ -181,10 +182,10 @@ test.each(["delta", "snapshot"] as const)(
   },
 );
 
-test("a battle steer is dated when the user sent it, not when the runner delivered it", () => {
+test("a battle steer is dated when the user sent it, not when the runner delivered it", async () => {
   const sent = Date.UTC(2026, 9, 30, 14, 10, 1, 174);
   const delivered = Date.UTC(2026, 9, 30, 14, 10, 50, 522);
-  const events = new V2Timeline().messages([
+  const events = await collectTimelineSnapshot(new V2Timeline(), [
     {
       id: "steer",
       type: "user",

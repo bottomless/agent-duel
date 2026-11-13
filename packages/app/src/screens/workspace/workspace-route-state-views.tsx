@@ -144,7 +144,7 @@ export function WorkspaceFilesRecoveryBanner({
     >
       {details.action ? (
         <Button
-          size="sm"
+          size="md"
           // The alert's outline border is borderAccent on a transparent
           // surface, which is ~1.4:1 on dark and cannot be seen. A filled
           // low-emphasis surface stays quiet beside the accent and is visible.
@@ -272,12 +272,11 @@ function ArchivedWorkspaceRecovery({
       </View>
       <View style={styles.actions}>
         {archivedChat ? (
-          <Button size="sm" variant="outline" onPress={readTranscript}>
+          <Button variant="outline" onPress={readTranscript}>
             Read transcript
           </Button>
         ) : null}
         <Button
-          size="sm"
           variant="default"
           leftIcon={isRestoring ? undefined : RotateCw}
           onPress={onRecover}
@@ -308,10 +307,10 @@ function WorkspaceRecoveryInspectionFailed({
         <Text style={styles.error}>{state.error}</Text>
       </View>
       <View style={styles.actions}>
-        <Button size="sm" variant="default" leftIcon={RotateCw} onPress={onRetry}>
+        <Button variant="default" leftIcon={RotateCw} onPress={onRetry}>
           {t("common.actions.retry")}
         </Button>
-        <Button size="sm" variant="outline" leftIcon={ArrowLeftToLine} onPress={onDismiss}>
+        <Button variant="outline" leftIcon={ArrowLeftToLine} onPress={onDismiss}>
           {t("common.actions.back")}
         </Button>
       </View>
@@ -360,10 +359,10 @@ function WorkspaceUnreachable({
       </View>
       {canRetry ? (
         <View style={styles.actions}>
-          <Button size="sm" variant="default" leftIcon={RotateCw} onPress={onRetry}>
+          <Button variant="default" leftIcon={RotateCw} onPress={onRetry}>
             {t("common.actions.retry")}
           </Button>
-          <Button size="sm" variant="outline" leftIcon={Settings} onPress={onManageHost}>
+          <Button variant="outline" leftIcon={Settings} onPress={onManageHost}>
             {t("workspace.route.manageHost")}
           </Button>
         </View>
@@ -395,11 +394,11 @@ function WorkspaceEmptyState({
       </View>
       <View style={styles.actions}>
         {onRetry ? (
-          <Button size="sm" variant="outline" onPress={onRetry}>
+          <Button variant="outline" onPress={onRetry}>
             Check again
           </Button>
         ) : null}
-        <Button size="sm" variant="default" leftIcon={ArrowLeftToLine} onPress={onDismiss}>
+        <Button variant="default" leftIcon={ArrowLeftToLine} onPress={onDismiss}>
           {t("common.actions.back")}
         </Button>
       </View>

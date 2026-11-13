@@ -295,10 +295,17 @@ test("creates, renames, copies, and deletes entries through the file explorer", 
 
   await entry("renamed.txt").click({ button: "right" });
   const deleteAction = page.getByTestId(/file-explorer-row-\d+-delete$/);
-  const deleteLabelColor = await deleteAction
-    .getByText("Delete", { exact: true })
-    .evaluate((element) => getComputedStyle(element).color);
-  await expect(deleteAction.locator("svg")).toHaveCSS("stroke", deleteLabelColor);
+  await expect
+    .poll(async () => {
+      const labelColor = await deleteAction
+        .getByText("Delete", { exact: true })
+        .evaluate((element) => getComputedStyle(element).color);
+      const iconColor = await deleteAction
+        .locator("svg")
+        .evaluate((element) => getComputedStyle(element).stroke);
+      return labelColor !== "" && iconColor === labelColor;
+    })
+    .toBe(true);
   await page.getByText("Delete", { exact: true }).click();
   const cancelledConfirmation = await answerConfirmDialog(page, "cancel");
   expect(cancelledConfirmation.message).toContain("renamed.txt");

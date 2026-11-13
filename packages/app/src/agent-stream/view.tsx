@@ -1,4 +1,3 @@
-import { renderStreamRow } from "./row";
 import { ChatFind, ChatFindExpansion } from "@/agent-stream/chat-find";
 import type { ChatFindHistory } from "@/agent-stream/chat-find/types";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
@@ -46,7 +45,7 @@ import {
 } from "@/components/message";
 import { ThinkingBlock } from "@/components/thinking-block";
 import { PlanCard } from "@/components/plan-card";
-import type { StreamItem } from "@/types/stream";
+import { getStreamItemMessageId, type StreamItem } from "@/types/stream";
 import type { PendingMessageSubmission } from "@/composer/submission/model";
 import type { TurnPresentation } from "@/timeline/turn-liveness";
 import type { ArenaHistoryItem } from "@getpaseo/protocol/arena/rpc-schemas";
@@ -67,9 +66,20 @@ import { returnToTimelineTail } from "./timeline-tail-navigation";
 import type { DaemonClient } from "@getpaseo/client/internal/daemon-client";
 import { ToolCallDetailsContent } from "@/components/tool-call-details";
 import { QuestionFormCard } from "@/components/question-form-card";
+import {
+  ToolCallExpansionContext,
+  useAgentToolCallExpansion,
+  useExpandedToolCallGroups,
+} from "@/tool-calls/expansion-context";
+import {
+  UserMessageExpansionContext,
+  useAgentUserMessageExpansion,
+} from "@/components/user-message/expansion-context";
 import { ToolCallSheetProvider } from "@/components/tool-call-sheet";
-import { createStreamPresentation, getStreamItemMessageId } from "./presentation";
+import { createStreamPresentation } from "./presentation";
 import { OverviewToolCallGroupView } from "@/tool-calls/detail-level/overview/view";
+import { IndentRail } from "@/components/indent-rail";
+import { TurnSummaryLine } from "./turn-collapse/summary-line";
 import { type AgentStreamRenderModel, buildAgentStreamRenderModel } from "./model";
 import { resolveStreamRenderStrategy } from "./strategy-resolver";
 import {
@@ -77,6 +87,9 @@ import {
   type StreamSegmentRenderers,
   type StreamViewportHandle,
 } from "./strategy";
+import { renderStreamRow, type RenderStreamItem } from "./stream-row";
+import { renderArenaStreamRow } from "./arena-stream-row";
+import { type NearBottom, useIsNearBottom, useNearBottom } from "./near-bottom";
 import { ChatOutlineRail } from "@/agent-stream/chat-outline/rail";
 import { useChatOutline } from "@/agent-stream/chat-outline/use-chat-outline";
 import { getHostRuntimeStore } from "@/runtime/host-runtime";
@@ -98,6 +111,7 @@ import {
 import { createAssistantImageOccurrenceKey } from "@/assistant-image/acquisition-cache";
 import { AssistantSelectionCopySurface } from "@/assistant-selection-copy/surface";
 import { AssistantFileLinkResolverProvider, createInlinePathOpener } from "@/assistant-file-links";
+import { useOpenOutsideWorkspaceFolder } from "@/workspace/open-in-file-manager/outside-folder";
 import {
   createWorkspaceFileTabTarget,
   type WorkspaceFileLocation,
@@ -186,9 +200,16 @@ function renderPendingPermissionsNode(input: {
   );
 }
 
+/**
+ * Where a row sits in an opened turn: its summary line's row, a row inside the turn, or the
+ * turn's last row. The rail runs through the gaps between them so the turn reads as one block.
+ */
+type TurnIndent = "none" | "openedHost" | "nested" | "lastNested";
+
 function renderStreamItemWithTurnFooter(input: {
   content: ReactNode;
   layoutItem: StreamLayoutItem;
+  turnIndent: TurnIndent;
   strategy: TurnContentStrategy;
   supportsTimelineCursor: boolean;
   onForkAssistantTurn?: AssistantTurnForkHandler;
@@ -209,7 +230,7 @@ function renderStreamItemWithTurnFooter(input: {
     />
   ) : null;
   const content = (
-    <StreamItemWrapper itemId={input.layoutItem.item.id} gapBelow={input.layoutItem.gapBelow}>
+    <StreamItemWrapper gapBelow={input.layoutItem.gapBelow} turnIndent={input.turnIndent}>
       {input.content}
     </StreamItemWrapper>
   );
@@ -271,6 +292,8 @@ export interface AgentStreamViewProps {
   turnPresentation: TurnPresentation;
   routeBottomAnchorRequest?: BottomAnchorRouteRequest | null;
   isAuthoritativeHistoryReady?: boolean;
+  isInitialHistoryLoading?: boolean;
+  revealInitialHistory?: boolean;
   /** Tail space required by a transparent overlay rendered at the bottom edge. */
   bottomOverlayTailClearance?: number;
   /** Bottom offset required for controls floating above that overlay. */
@@ -329,7 +352,7 @@ function afterItemsByRow(
     const hostId = row.id;
     const group = groupsByHostId.get(hostId);
     if (!group) continue;
-    for (const item of group.run.items) {
+    for (const item of group.run.calls) {
       const after = item.id === hostId ? undefined : afterItems.get(item.id);
       if (after === undefined) continue;
       byRow ??= new Map(afterItems);
@@ -397,29 +420,55 @@ function resolveBottomOverlayControlOffset(input: {
   return Math.max(16, input.clearance ?? 0);
 }
 
-interface ScrollToBottomButtonProps {
+// Keep entry/exit animations off on Android due to RN dispatchDraw crashes
+// tracked in react-native-reanimated#8422.
+const shouldDisableEntryExitAnimations = Platform.OS === "android";
+const scrollIndicatorFadeIn = shouldDisableEntryExitAnimations ? undefined : FadeIn.duration(200);
+const scrollIndicatorFadeOut = shouldDisableEntryExitAnimations ? undefined : FadeOut.duration(200);
+
+function ScrollToBottomButton({
+  nearBottom,
+  isTimelineDetached,
+  bottomOffset,
+  overlayHeight = 0,
+  onPress,
+}: {
+  nearBottom: NearBottom;
+  isTimelineDetached: boolean;
+  bottomOffset: number;
   /** Height of floating composer controls; the button shrinks while it sits above them. */
   overlayHeight?: number;
   onPress: () => void;
-  accessibilityLabel: string;
-}
-
-function ScrollToBottomButton({
-  overlayHeight = 0,
-  onPress,
-  accessibilityLabel,
-}: ScrollToBottomButtonProps) {
+}) {
+  const { t } = useTranslation();
+  const isNearBottom = useIsNearBottom(nearBottom);
+  const containerStyle = useMemo(
+    () => [stylesheet.scrollToBottomContainer, { bottom: bottomOffset }],
+    [bottomOffset],
+  );
   const compact = overlayHeight > 0;
+  const buttonStyle = useMemo(
+    () => [stylesheet.scrollToBottomButton, compact && stylesheet.scrollToBottomButtonCompact],
+    [compact],
+  );
+  if (isNearBottom && !isTimelineDetached) return null;
   return (
-    <Pressable
-      style={[stylesheet.scrollToBottomButton, compact && stylesheet.scrollToBottomButtonCompact]}
-      onPress={onPress}
-      accessibilityRole="button"
-      accessibilityLabel={accessibilityLabel}
-      testID="scroll-to-bottom-button"
-    >
-      <ChevronDown size={compact ? ICON_SIZE.sm : 24} color={stylesheet.scrollToBottomIcon.color} />
-    </Pressable>
+    <View style={containerStyle} pointerEvents="box-none">
+      <Animated.View entering={scrollIndicatorFadeIn} exiting={scrollIndicatorFadeOut}>
+        <Pressable
+          style={buttonStyle}
+          onPress={onPress}
+          accessibilityRole="button"
+          accessibilityLabel={t("agentStream.scrollToBottom")}
+          testID="scroll-to-bottom-button"
+        >
+          <ChevronDown
+            size={compact ? ICON_SIZE.sm : 24}
+            color={stylesheet.scrollToBottomIcon.color}
+          />
+        </Pressable>
+      </Animated.View>
+    </View>
   );
 }
 
@@ -436,6 +485,8 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       turnPresentation,
       routeBottomAnchorRequest = null,
       isAuthoritativeHistoryReady = true,
+      isInitialHistoryLoading,
+      revealInitialHistory,
       bottomOverlayTailClearance = 0,
       bottomOverlayControlClearance,
       toast,
@@ -454,7 +505,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
   ) {
     const { t } = useTranslation();
     const autoExpandReasoning = useSettings((settings) => settings.autoExpandReasoning);
-    const toolCallDetailLevel = useSettings((settings) => settings.toolCallDetailLevel);
+    const chatDisplay = useSettings((settings) => settings.chatDisplay);
     const chatOutlineEnabled = useSettings((settings) => settings.chatOutlineEnabled);
     const contentMaxWidth = useSettings(resolveContentMaxWidth);
     const viewportRef = useRef<StreamViewportHandle | null>(null);
@@ -471,13 +522,14 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
         }),
       [isMobile],
     );
-    const [isNearBottom, setIsNearBottom] = useState(true);
+    const nearBottom = useNearBottom(agentId);
     const [expandedInlineToolCallIds, setExpandedInlineToolCallIds] = useState<Set<string>>(
       new Set(),
     );
-    const [expandedToolCallGroupIds, setExpandedToolCallGroupIds] = useState<Set<string>>(
-      new Set(),
-    );
+    const toolCallExpansion = useAgentToolCallExpansion(agentId);
+    const userMessageExpansion = useAgentUserMessageExpansion(agentId);
+    const expandedToolCallGroups = useExpandedToolCallGroups(toolCallExpansion);
+    const [expandedTurnHostIds, setExpandedTurnHostIds] = useState<ReadonlySet<string>>(new Set());
 
     // Get serverId (fallback to agent's serverId if not provided)
     const resolvedServerId = serverId ?? context.serverId ?? "";
@@ -528,21 +580,6 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
           loadOlder: historyPagination.onLoadOlder,
         }
       : agentHistoryPagination;
-    // Keep entry/exit animations off on Android due to RN dispatchDraw crashes
-    // tracked in react-native-reanimated#8422.
-    const shouldDisableEntryExitAnimations = Platform.OS === "android";
-    const scrollIndicatorFadeIn = shouldDisableEntryExitAnimations
-      ? undefined
-      : FadeIn.duration(200);
-    const scrollIndicatorFadeOut = shouldDisableEntryExitAnimations
-      ? undefined
-      : FadeOut.duration(200);
-
-    useEffect(() => {
-      setIsNearBottom(true);
-      setExpandedInlineToolCallIds(new Set());
-      setExpandedToolCallGroupIds(new Set());
-    }, [agentId]);
 
     const isActive = useRetainedPanelActive();
     const openInlineFile = useStableEvent(
@@ -566,20 +603,23 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
         target: { kind: "files" },
       });
     });
+    const openInlineOutsideDirectory = useOpenOutsideWorkspaceFolder(resolvedServerId);
     const inlinePathOpener = useMemo(
       () =>
         createInlinePathOpener({
           workspaceRoot,
+          resolveRelativeFiles: true,
           client,
           openFile: openInlineFile,
           openDirectory: openInlineDirectory,
+          openOutsideDirectory: openInlineOutsideDirectory,
         }),
-      [workspaceRoot, client, openInlineFile, openInlineDirectory],
+      [workspaceRoot, client, openInlineFile, openInlineDirectory, openInlineOutsideDirectory],
     );
     useEffect(() => {
       if (!isActive) inlinePathOpener.cancel();
       return () => inlinePathOpener.cancel();
-    }, [inlinePathOpener, isActive, agentId]);
+    }, [inlinePathOpener, isActive]);
     const handleInlinePathPress = useStableEvent(
       (target: InlinePathTarget, disposition: OpenFileDisposition) => {
         if (isActive) void inlinePathOpener.open(target, disposition);
@@ -633,8 +673,11 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
           tail: effectiveStreamItems,
           head: effectiveStreamHead ?? EMPTY_STREAM_HEAD,
           transform: transformTimelineItem,
-          level: toolCallDetailLevel,
+          display: chatDisplay,
+          autoExpandReasoning,
+          expandedTurnHostIds,
           isTurnActive,
+          activeTurnId: effectiveTurnPresentation.turnId,
           arena: arenaChat,
         }),
       [
@@ -643,8 +686,11 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
         effectiveStreamItems,
         effectiveStreamHead,
         transformTimelineItem,
-        toolCallDetailLevel,
+        chatDisplay,
+        autoExpandReasoning,
+        expandedTurnHostIds,
         isTurnActive,
+        effectiveTurnPresentation.turnId,
       ],
     );
     const {
@@ -653,7 +699,6 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       revealLoadedHistory,
       loadOlder,
     } = useStreamHistoryWindow({
-      agentId,
       items: presentation.tail,
       loadRemoteOlder,
     });
@@ -688,14 +733,14 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
           isTurnActive,
           history: baseRenderModel.history,
           liveHead: baseRenderModel.segments.liveHead,
-          timingByAssistantId: baseRenderModel.turnTiming.byAssistantId,
+          timingByItemId: baseRenderModel.turnTiming.byItemId,
           arena: arenaChat,
         }),
       [
         arenaChat,
         baseRenderModel.history,
         baseRenderModel.segments.liveHead,
-        baseRenderModel.turnTiming.byAssistantId,
+        baseRenderModel.turnTiming.byItemId,
         isTurnActive,
         streamRenderStrategy,
       ],
@@ -781,26 +826,52 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       [streamRenderStrategy],
     );
 
-    const setToolCallGroupExpanded = useCallback((groupId: string, expanded: boolean) => {
-      setExpandedToolCallGroupIds((previous) => {
+    // The summary line holds its row around this; chat find opens a turn without a hold.
+    const setTurnExpanded = useCallback((hostId: string, expanded: boolean) => {
+      setExpandedTurnHostIds((previous) => {
+        if (previous.has(hostId) === expanded) return previous;
         const next = new Set(previous);
         if (expanded) {
-          next.add(groupId);
+          next.add(hostId);
         } else {
-          next.delete(groupId);
+          next.delete(hostId);
         }
         return next;
       });
     }, []);
+    // Chat find reveals a match inside a collapsed turn by opening the turn first.
+    const revealLoadedMessage = useStableEvent((messageId: string): boolean => {
+      const hostId = presentation.turns.hostIdByFoldedMessageId.get(messageId);
+      if (hostId && !expandedTurnHostIds.has(hostId)) {
+        setTurnExpanded(hostId, true);
+        return true;
+      }
+      return revealLoadedHistory(messageId);
+    });
+    // Read through a stable event so a collapse rerun does not change the renderer identity;
+    // nested rows are revised through `historyRowRevision`.
+    const getTurnIndent = useStableEvent((layoutItem: StreamLayoutItem): TurnIndent => {
+      const { nestedItemIds } = presentation.turns;
+      const { item } = layoutItem;
+      if (nestedItemIds.has(item.id)) {
+        const below = layoutItem.belowItem;
+        return below && nestedItemIds.has(below.id) ? "nested" : "lastNested";
+      }
+      return item.kind === "turn_summary" && item.expanded ? "openedHost" : "none";
+    });
+
+    const setToolCallGroupExpanded = toolCallExpansion.setGroupExpanded;
 
     const renderUserMessageItem = useCallback(
       (layoutItem: StreamLayoutItem, item: Extract<StreamItem, { kind: "user_message" }>) => {
         return (
           <UserMessage
+            itemId={item.id}
             serverId={resolvedServerId}
             agentId={agentId}
             messageId={item.messageId}
             message={item.text}
+            sender={item.sender}
             images={item.images}
             attachments={item.attachments}
             timestamp={item.timestamp.getTime()}
@@ -857,7 +928,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
               itemId={item.id}
               text={item.text}
               active={item.status !== "ready"}
-              expanded={expandedToolCallGroupIds.has(item.id)}
+              expanded={expandedToolCallGroups.has(item.id)}
               onExpandedChange={setToolCallGroupExpanded}
             />
           );
@@ -871,7 +942,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
           />
         );
       },
-      [arenaChat, autoExpandReasoning, expandedToolCallGroupIds, setToolCallGroupExpanded],
+      [arenaChat, autoExpandReasoning, expandedToolCallGroups, setToolCallGroupExpanded],
     );
 
     // A subagent row draws its transcript with the renderers below, which draw subagent rows in turn.
@@ -888,7 +959,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       (
         item: Extract<StreamItem, { kind: "tool_call" }>,
         isLastInSequence: boolean,
-        maxDetailHeight?: number,
+        options: { maxDetailHeight?: number; standalone?: boolean } = {},
       ) => {
         const questionResult = arenaTimelineQuestionResult(item);
         if (questionResult) return <ArenaQuestionResultView result={questionResult} />;
@@ -901,7 +972,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
             return (
               <ArenaChatSubagent
                 callId={item.id}
-                expanded={expandedToolCallGroupIds.has(item.id)}
+                expanded={expandedToolCallGroups.has(item.id)}
                 onExpandedChange={setToolCallGroupExpanded}
                 serverId={resolvedServerId}
                 parentAgentId={agentId}
@@ -911,7 +982,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
                 }
                 status={data.status}
                 renderTranscript={renderSubagentTranscriptFromRef}
-                transcriptRevision={expandedToolCallGroupIds}
+                transcriptRevision={expandedToolCallGroups}
               />
             );
           }
@@ -941,7 +1012,8 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
               agentMessage={data.agentMessage}
               isLastInSequence={isLastInSequence}
               onOpenFilePath={handleToolCallOpenFile}
-              maxDetailHeight={maxDetailHeight}
+              standalone={options.standalone}
+              maxDetailHeight={options.maxDetailHeight}
             />
           );
         }
@@ -957,7 +1029,8 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
             status={data.status}
             isLastInSequence={isLastInSequence}
             onOpenFilePath={handleToolCallOpenFile}
-            maxDetailHeight={maxDetailHeight}
+            standalone={options.standalone}
+            maxDetailHeight={options.maxDetailHeight}
           />
         );
       },
@@ -965,7 +1038,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
         agentId,
         arenaChat,
         context.cwd,
-        expandedToolCallGroupIds,
+        expandedToolCallGroups,
         handleToolCallOpenFile,
         renderSubagentTranscriptFromRef,
         resolvedServerId,
@@ -982,14 +1055,16 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
     const renderToolCallItem = useCallback(
       (
         layoutItem: StreamLayoutItem,
-        item: Extract<StreamItem, { kind: "tool_call" }>,
+        item: Extract<StreamItem, { kind: "tool_call" | "thought" }>,
         groups?: ToolCallGroupLookup<OverviewToolCallGroup>,
       ) => {
         const group = groups ? groups.get(item.id) : getToolCallGroup(item.id);
         if (!group) {
-          return renderSingleToolCallItem(item, layoutItem.isLastInToolSequence);
+          return item.kind === "thought"
+            ? renderThoughtItem(layoutItem, item)
+            : renderSingleToolCallItem(item, layoutItem.isLastInToolSequence);
         }
-        const expanded = expandedToolCallGroupIds.has(group.run.id);
+        const expanded = expandedToolCallGroups.has(group.run.id);
         return (
           <OverviewToolCallGroupView
             arena={arenaChat}
@@ -999,21 +1074,22 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
             onExpandedChange={setToolCallGroupExpanded}
           >
             {expanded
-              ? group.run.items.map((runItem, index) => (
-                  <React.Fragment key={runItem.id}>
-                    {runItem.kind === "thought" ? (
+              ? group.run.calls.map((call, index) => (
+                  <React.Fragment key={call.id}>
+                    {call.kind === "thought" ? (
+                      // Outside a battle chat reasoning is grouped only while Expand thinking is
+                      // off; a battle chat groups it either way, so it opens as the setting says.
                       <ThoughtSlot
-                        text={runItem.text}
-                        status={runItem.status}
-                        isLastInSequence={index === group.run.items.length - 1}
+                        text={call.text}
+                        status={call.status}
+                        isLastInSequence={index === group.run.calls.length - 1}
                         defaultExpanded={autoExpandReasoning}
                       />
                     ) : (
-                      renderSingleToolCallItem(
-                        runItem,
-                        index === group.run.items.length - 1,
-                        GROUPED_TOOL_CALL_DETAIL_MAX_HEIGHT,
-                      )
+                      renderSingleToolCallItem(call, index === group.run.calls.length - 1, {
+                        maxDetailHeight: GROUPED_TOOL_CALL_DETAIL_MAX_HEIGHT,
+                        standalone: false,
+                      })
                     )}
                   </React.Fragment>
                 ))
@@ -1024,7 +1100,8 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       [
         arenaChat,
         autoExpandReasoning,
-        expandedToolCallGroupIds,
+        expandedToolCallGroups,
+        renderThoughtItem,
         getToolCallGroup,
         renderSingleToolCallItem,
         setToolCallGroupExpanded,
@@ -1032,8 +1109,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
     );
 
     const renderStreamItemContent = useCallback(
-      (layoutItem: StreamLayoutItem) => {
-        const item = layoutItem.item;
+      (item: StreamItem, layoutItem: StreamLayoutItem) => {
         switch (item.kind) {
           case "user_message":
             return renderUserMessageItem(layoutItem, item);
@@ -1042,10 +1118,13 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
             return renderAssistantMessageItem(layoutItem, item);
 
           case "thought":
-            return renderThoughtItem(layoutItem, item);
+            return renderToolCallItem(layoutItem, item);
 
           case "tool_call":
             return renderToolCallItem(layoutItem, item);
+
+          case "turn_summary":
+            return <TurnSummaryLine item={item} onExpandedChange={setTurnExpanded} />;
 
           case "notification":
             return <Notification level={item.level} message={item.message} />;
@@ -1075,8 +1154,8 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
         agentId,
         renderUserMessageItem,
         renderAssistantMessageItem,
-        renderThoughtItem,
         renderToolCallItem,
+        setTurnExpanded,
         resolvedServerId,
       ],
     );
@@ -1091,16 +1170,19 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
             <ArenaChatTaskPrompt
               itemId={item.id}
               text={item.text}
-              expanded={expandedToolCallGroupIds.has(item.id)}
+              expanded={expandedToolCallGroups.has(item.id)}
               onExpandedChange={setToolCallGroupExpanded}
             />
           );
         }
-        if (item.kind === "tool_call") return renderToolCallItem(layoutItem, item, groups);
-        return renderStreamItemContent(layoutItem);
+        // A work row is hosted by a call or a thought; look both up in the transcript's own groups.
+        if (item.kind === "tool_call" || item.kind === "thought") {
+          return renderToolCallItem(layoutItem, item, groups);
+        }
+        return renderStreamItemContent(item, layoutItem);
       },
       [
-        expandedToolCallGroupIds,
+        expandedToolCallGroups,
         renderStreamItemContent,
         renderToolCallItem,
         setToolCallGroupExpanded,
@@ -1132,18 +1214,19 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       [afterItems, presentation.groupsByHostId, presentation.head, presentation.tail],
     );
 
-    const renderStreamItem = useCallback(
-      (layoutItem: StreamLayoutItem) => {
-        const content = renderStreamItemContent(layoutItem);
+    const renderStreamItem = useCallback<RenderStreamItem>(
+      (item, layoutItem) => {
+        const content = renderStreamItemContent(item, layoutItem);
         const streamItem = renderStreamItemWithTurnFooter({
           content,
           layoutItem,
+          turnIndent: getTurnIndent(layoutItem),
           strategy: streamRenderStrategy,
           supportsTimelineCursor: supportsAgentForkContextCursor,
           onForkAssistantTurn: readOnly ? undefined : handleForkAssistantTurn,
         });
-        const after = rowAfterItems?.get(layoutItem.item.id);
-        const showForkBoundary = forkBoundaryAfterItemId === layoutItem.item.id;
+        const after = rowAfterItems?.get(item.id);
+        const showForkBoundary = forkBoundaryAfterItemId === item.id;
         if (!after && !showForkBoundary) return streamItem;
         return (
           <>
@@ -1168,6 +1251,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       [
         rowAfterItems,
         forkBoundaryAfterItemId,
+        getTurnIndent,
         handleForkAssistantTurn,
         readOnly,
         renderStreamItemContent,
@@ -1226,18 +1310,10 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
     }, [baseRenderModel, pendingPermissionsNode, turnFooterNode]);
 
     const emptyStateStyle = useMemo(() => [stylesheet.emptyState, stylesheet.contentWrapper], []);
-    const scrollToBottomContainerStyle = useMemo(
-      () => [
-        stylesheet.scrollToBottomContainer,
-        {
-          bottom: resolveBottomOverlayControlOffset({
-            clearance: bottomOverlayControlClearance,
-            overlayHeight: bottomOverlayHeight,
-          }),
-        },
-      ],
-      [bottomOverlayControlClearance, bottomOverlayHeight],
-    );
+    const scrollToBottomOffset = resolveBottomOverlayControlOffset({
+      clearance: bottomOverlayControlClearance,
+      overlayHeight: bottomOverlayHeight,
+    });
     const listEmptyComponent = useMemo(
       () =>
         renderListEmptyComponent({
@@ -1276,11 +1352,11 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
 
     const renderHistoryRow = useCallback(
       (item: StreamItem) =>
-        renderStreamRow({
+        (arenaChat ? renderArenaStreamRow : renderStreamRow)({
           item,
-          arenaChat,
           layoutItemById: layoutHistoryItemById,
           renderStreamItem,
+          viewportRef,
         }),
       [arenaChat, layoutHistoryItemById, renderStreamItem],
     );
@@ -1300,20 +1376,20 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       (item: StreamItem) =>
         renderStreamRow({
           item,
-          arenaChat,
           layoutItemById: layoutLiveHeadItemById,
           renderStreamItem,
+          viewportRef,
         }),
     );
     // Arena expansions must reach the viewport as a changed renderer as well as a revision.
     // A stable live render port can otherwise retain a collapsed winner row after a vote.
     const renderArenaLiveHeadRow = useCallback<StreamSegmentRenderers["renderLiveHeadRow"]>(
       (item) =>
-        renderStreamRow({
+        renderArenaStreamRow({
           item,
-          arenaChat: true,
           layoutItemById: layoutLiveHeadItemById,
           renderStreamItem,
+          viewportRef,
         }),
       [layoutLiveHeadItemById, renderStreamItem],
     );
@@ -1357,19 +1433,37 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
     const streamScrollEnabled =
       !streamRenderStrategy.shouldDisableParentScrollOnInlineDetailsExpansion() ||
       expandedInlineToolCallIds.size === 0;
+    const { nestedItemIds } = presentation.turns;
     const historyRowRevision = useMemo(
       () => ({
-        contentById: presentation.historyGroupUpdatesByHostId,
-        displayStateById: expandedToolCallGroupIds,
+        contentById: {
+          has: (id: string) => presentation.historyGroupUpdatesByHostId.has(id),
+        },
+        displayStateById: {
+          // An opened lone call also marks its future group open; that row stays unrevised
+          // until a group actually forms there. A battle chat's reasoning, subagent and task
+          // prompt rows open through the same store without being groups, so any of them counts.
+          has: (id: string) =>
+            (expandedToolCallGroups.has(id) &&
+              (arenaChat === true || getToolCallGroup(id) !== undefined)) ||
+            nestedItemIds.has(id),
+        },
         globalDisplayState: isMobile,
       }),
-      [expandedToolCallGroupIds, isMobile, presentation.historyGroupUpdatesByHostId],
+      [
+        arenaChat,
+        expandedToolCallGroups,
+        getToolCallGroup,
+        isMobile,
+        nestedItemIds,
+        presentation.historyGroupUpdatesByHostId,
+      ],
     );
     // `renderLiveHeadRow` is stable, so head rows redraw only on this revision. Arena summaries
     // attach after a head item without changing it; without them here the summary never drew.
     const liveHeadRowRevision = useMemo(
-      () => ({ expandedToolCallGroupIds, afterItems: rowAfterItems }),
-      [rowAfterItems, expandedToolCallGroupIds],
+      () => ({ expandedToolCallGroups, afterItems: rowAfterItems }),
+      [rowAfterItems, expandedToolCallGroups],
     );
 
     const findItems = useMemo(
@@ -1384,52 +1478,55 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
         history={findHistory}
         items={findItems}
         viewportRef={viewportRef}
-        revealLoadedMessage={revealLoadedHistory}
+        revealLoadedMessage={revealLoadedMessage}
         visibleMessageIds={mountedMessageIds}
       >
         <ToolCallSheetProvider>
           <AssistantSelectionCopySurface style={stylesheet.container}>
             <MessageOuterSpacingProvider disableOuterSpacing>
-              {streamRenderStrategy.render({
-                agentId,
-                segments: renderModel.segments,
-                historyRowRevision,
-                liveHeadRowRevision,
-                boundary,
-                renderers,
-                listEmptyComponent,
-                viewportRef,
-                routeBottomAnchorRequest,
-                isAuthoritativeHistoryReady,
-                onNearBottomChange: setIsNearBottom,
-                onReadingPositionChange: handleReadingPositionChange,
-                onNearHistoryStart: loadOlder,
-                isLoadingOlderHistory: isLoadingOlder,
-                hasOlderHistory: hasOlder,
-                olderHistoryProgressKey: progressKey,
-                scrollEnabled: streamScrollEnabled,
-                listStyle: stylesheet.list,
-                baseListContentContainerStyle: stylesheet.listContentContainer,
-                forwardListContentContainerStyle: stylesheet.forwardListContentContainer,
-                contentMaxWidth,
-              })}
+              <ToolCallExpansionContext.Provider value={toolCallExpansion}>
+                <UserMessageExpansionContext.Provider value={userMessageExpansion}>
+                  {streamRenderStrategy.render({
+                    readingRowReplacements: presentation.readingRowReplacements,
+                    agentId,
+                    segments: renderModel.segments,
+                    historyRowRevision,
+                    liveHeadRowRevision,
+                    boundary,
+                    renderers,
+                    listEmptyComponent,
+                    viewportRef,
+                    routeBottomAnchorRequest,
+                    isAuthoritativeHistoryReady,
+                    isInitialHistoryLoading,
+                    revealInitialHistory,
+                    onNearBottomChange: nearBottom.set,
+                    onReadingPositionChange: handleReadingPositionChange,
+                    onNearHistoryStart: loadOlder,
+                    isLoadingOlderHistory: isLoadingOlder,
+                    hasOlderHistory: hasOlder,
+                    olderHistoryProgressKey: progressKey,
+                    scrollEnabled: streamScrollEnabled,
+                    listStyle: stylesheet.list,
+                    baseListContentContainerStyle: stylesheet.listContentContainer,
+                    forwardListContentContainerStyle: stylesheet.forwardListContentContainer,
+                    contentMaxWidth,
+                  })}
+                </UserMessageExpansionContext.Provider>
+              </ToolCallExpansionContext.Provider>
             </MessageOuterSpacingProvider>
             <ChatOutlineRail
               prompts={chatOutline.prompts}
               activePrompt={chatOutline.activePrompt}
               onJumpToPrompt={chatOutline.jumpToPrompt}
             />
-            {(!isNearBottom || isTimelineDetached) && (
-              <View style={scrollToBottomContainerStyle} pointerEvents="box-none">
-                <Animated.View entering={scrollIndicatorFadeIn} exiting={scrollIndicatorFadeOut}>
-                  <ScrollToBottomButton
-                    overlayHeight={bottomOverlayHeight}
-                    onPress={scrollToBottom}
-                    accessibilityLabel={t("agentStream.scrollToBottom")}
-                  />
-                </Animated.View>
-              </View>
-            )}
+            <ScrollToBottomButton
+              nearBottom={nearBottom}
+              isTimelineDetached={isTimelineDetached}
+              bottomOffset={scrollToBottomOffset}
+              overlayHeight={bottomOverlayHeight}
+              onPress={scrollToBottom}
+            />
           </AssistantSelectionCopySurface>
         </ToolCallSheetProvider>
       </ChatFind>
@@ -1486,7 +1583,8 @@ function collectAgentSetupDiffs(left: AgentScreenAgent, right: AgentScreenAgent)
   if (left.runtimeInfo?.thinkingOptionId !== right.runtimeInfo?.thinkingOptionId) {
     reasons.push("agent.runtimeInfo.thinkingOptionId");
   }
-  if (left.features !== right.features) reasons.push("agent.features");
+  if (left.options !== right.options) reasons.push("agent.options");
+  if (left.controls !== right.controls) reasons.push("agent.controls");
   return reasons;
 }
 
@@ -1570,6 +1668,12 @@ function agentStreamViewPropsEqual(
   }
   if (left.isAuthoritativeHistoryReady !== right.isAuthoritativeHistoryReady) {
     reasons.push("isAuthoritativeHistoryReady");
+  }
+  if (left.isInitialHistoryLoading !== right.isInitialHistoryLoading) {
+    reasons.push("isInitialHistoryLoading");
+  }
+  if (left.revealInitialHistory !== right.revealInitialHistory) {
+    reasons.push("revealInitialHistory");
   }
   if (left.bottomOverlayTailClearance !== right.bottomOverlayTailClearance) {
     reasons.push("bottomOverlayTailClearance");
@@ -1687,7 +1791,9 @@ function ToolCallSlot({
     (expanded: boolean) => onInlineDetailsExpandedChangeByItemId(itemId, expanded),
     [onInlineDetailsExpandedChangeByItemId, itemId],
   );
-  return <ToolCall {...rest} onInlineDetailsExpandedChange={handleExpandedChange} />;
+  return (
+    <ToolCall {...rest} itemId={itemId} onInlineDetailsExpandedChange={handleExpandedChange} />
+  );
 }
 
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
@@ -2035,10 +2141,6 @@ const stylesheet = StyleSheet.create((theme) => ({
     color: theme.colors.foregroundMuted,
     fontSize: theme.fontSize.base,
   },
-  invertedWrapper: {
-    transform: [{ scaleY: -1 }],
-    width: "100%",
-  },
   emptyStateText: {
     color: theme.colors.foregroundMuted,
     fontSize: theme.fontSize.base,
@@ -2142,15 +2244,40 @@ const permissionStyles = StyleSheet.create((theme) => ({
 }));
 
 interface StreamItemWrapperProps {
-  itemId: string;
   gapBelow: number;
+  turnIndent: TurnIndent;
   children: ReactNode;
 }
 
-function StreamItemWrapper({ gapBelow, children }: StreamItemWrapperProps) {
+function StreamItemWrapper({ gapBelow, turnIndent, children }: StreamItemWrapperProps) {
   const wrapperStyle = useMemo(
-    () => [stylesheet.streamItemWrapper, { marginBottom: gapBelow }],
-    [gapBelow],
+    () => [
+      stylesheet.streamItemWrapper,
+      { marginBottom: turnIndent === "nested" || turnIndent === "openedHost" ? 0 : gapBelow },
+    ],
+    [gapBelow, turnIndent],
   );
-  return <View style={wrapperStyle}>{children}</View>;
+  const gapStyle = useMemo(() => ({ paddingBottom: gapBelow }), [gapBelow]);
+  switch (turnIndent) {
+    case "none":
+    case "openedHost":
+      return (
+        <View style={wrapperStyle}>
+          {children}
+          {turnIndent === "openedHost" ? <IndentRail style={gapStyle} /> : null}
+        </View>
+      );
+    case "nested":
+      return (
+        <View style={wrapperStyle}>
+          <IndentRail style={gapStyle}>{children}</IndentRail>
+        </View>
+      );
+    case "lastNested":
+      return (
+        <View style={wrapperStyle}>
+          <IndentRail>{children}</IndentRail>
+        </View>
+      );
+  }
 }

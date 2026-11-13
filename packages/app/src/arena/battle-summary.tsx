@@ -34,7 +34,7 @@ import { Alert } from "@/components/ui/alert";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { useToast } from "@/contexts/toast-context";
 import { useSessionStore } from "@/stores/session-store";
-import { useWorkspaceDirectory } from "@/stores/session-store-hooks";
+import { useWorkspaceDirectory, useWorkspaceFields } from "@/stores/session-store-hooks";
 import { WorkspaceOpenInEditorButton } from "@/workspace/open-in-editor/button";
 import { resolveContentMaxWidth, useAppSettings } from "@/hooks/use-settings";
 import { toErrorMessage } from "@/utils/error-messages";
@@ -375,6 +375,7 @@ function GitApplicationCallout({
 }) {
   const { t } = useTranslation();
   const cwd = useWorkspaceDirectory(serverId, workspaceId);
+  const projectId = useWorkspaceFields(serverId, workspaceId, (workspace) => workspace.projectId);
   const notice = gitApplicationNotice(item);
   const description = useMemo(
     () =>
@@ -419,6 +420,7 @@ function GitApplicationCallout({
         <WorkspaceOpenInEditorButton
           serverId={serverId}
           cwd={cwd}
+          projectId={projectId}
           activeFile={conflictFile}
           buttonLabel={t("arena.openEditor")}
         />
@@ -565,7 +567,7 @@ function ArchivedBattleComparison({
       {comparison?.state === "failed" && !decided ? (
         <View style={styles.loadingRow}>
           <Text style={styles.warning}>{t("arena.summaryFailed")}</Text>
-          <Button size="xs" variant="outline" loading={retrying} onPress={onRetry}>
+          <Button size="sm" variant="outline" loading={retrying} onPress={onRetry}>
             {t("arena.retrySummary")}{" "}
           </Button>
         </View>
@@ -735,7 +737,7 @@ function FailedBattleStart({
       </View>
       {canStartAgain ? (
         <Button
-          size="xs"
+          size="sm"
           variant="outline"
           loading={starting}
           onPress={handleStartAgain}

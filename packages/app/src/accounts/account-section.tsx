@@ -75,7 +75,7 @@ export function AccountSection() {
             {error ? <Text style={styles.error}>{error}</Text> : null}
           </View>
           <Button
-            size="sm"
+            size="md"
             variant="outline"
             loading={isSigningOut}
             onPress={handleSignOut}

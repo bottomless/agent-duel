@@ -12,7 +12,7 @@ export function FailedFirstSendNotice() {
   if (message === null) return null;
   return (
     <View style={styles.notice} testID="failed-first-send-notice">
-      <Button variant="ghost" size="sm" onPress={dismiss} testID="failed-first-send-dismiss">
+      <Button variant="ghost" size="md" onPress={dismiss} testID="failed-first-send-dismiss">
         {t("common.actions.dismiss")}
       </Button>
       <Text accessibilityRole="alert" style={styles.message}>

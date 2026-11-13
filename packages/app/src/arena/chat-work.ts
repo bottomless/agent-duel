@@ -16,7 +16,7 @@ export function arenaChatWorkLabel(run: ToolCallRun, active: boolean): string {
     otherToolCount: 0,
     reasoningCount: 0,
   };
-  for (const item of run.items) {
+  for (const item of run.calls) {
     if (item.kind === "thought") {
       summary.reasoningCount += 1;
       continue;

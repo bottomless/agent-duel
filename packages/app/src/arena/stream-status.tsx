@@ -12,7 +12,7 @@ export function ArenaStreamStatus({ error, retry }: { error: Error | null; retry
       <Text style={styles.text}>
         {error instanceof ArenaChatTooLargeError ? error.message : t("arena.streamDisconnected")}
       </Text>
-      <Button size="xs" variant="outline" onPress={retry}>
+      <Button size="sm" variant="outline" onPress={retry}>
         {t("arena.retry")}{" "}
       </Button>
     </View>

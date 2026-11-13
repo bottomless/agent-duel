@@ -2,6 +2,11 @@ import { en, type TranslationResources } from "./en";
 import { pluginSettings } from "./plugin-settings";
 
 export const ptBR: TranslationResources = {
+  pluginCombobox: {
+    searching: "Pesquisando…",
+    empty: "Nenhum resultado",
+    failed: "Falha na pesquisa: {{message}}",
+  },
   time: {
     now: "agora",
     justNow: "agora mesmo",
@@ -655,6 +660,7 @@ export const ptBR: TranslationResources = {
       daemonClientUnavailable: "Cliente do daemon indisponível",
       daemonClientDisconnected: "O cliente do daemon está desconectado",
       noFileFound: "Nenhum arquivo encontrado para {{token}}",
+      folderOutsideWorkspace: "{{path}} está fora deste workspace",
       unexpectedDictationError: "Ocorreu um erro inesperado ao processar o ditado.",
     },
     connectionStatus: {
@@ -721,6 +727,8 @@ export const ptBR: TranslationResources = {
       sendAndInterrupt: "Enviar e interromper",
       sendAndSteer: "Enviar e orientar",
       sendMessage: "Enviar mensagem",
+      longPressToQueue: "Mantenha pressionado para enfileirar",
+      longPressToSendNow: "Mantenha pressionado para enviar agora",
       queue: "Fila",
       send: "Enviar",
     },
@@ -943,6 +951,24 @@ export const ptBR: TranslationResources = {
       answerPlaceholder: "Digite sua resposta...",
       otherPlaceholder: "Outro...",
     },
+    backgroundWork: {
+      pillOne: "1 tarefa em segundo plano",
+      pillMany: "{{count}} tarefas em segundo plano",
+      notRunning: "Não está mais em execução",
+      dismiss: "Dispensar",
+      stop: "Parar",
+      stopping: "Parando…",
+      stopError: "Não foi possível confirmar a parada.",
+      label: "Segundo plano",
+      title: "Trabalho em segundo plano",
+      waiting: "Aguardando os detalhes",
+      error: "Não foi possível carregar o trabalho em segundo plano",
+      retry: "Tentar novamente",
+      running: "Trabalho em segundo plano em andamento",
+      shell: "Shell",
+      monitor: "Monitor",
+      other: "Outro trabalho",
+    },
     todo: {
       title: "Tarefas",
       empty: "Nenhuma tarefa ainda.",
@@ -1147,6 +1173,7 @@ export const ptBR: TranslationResources = {
     terminal: {
       hostDisconnected: "Host não está conectado",
       updateHost: "Atualize o host para usar o renderizador de terminal nativo.",
+      restoreRequiresUpdate: "Atualize o host para visualizar os terminais.",
       unableToSubscribe: "Não foi possível assinar o terminal",
       fileUploaded: "Arquivo enviado",
       pasteFileFailed: "Falha ao colar o arquivo: {{reason}}",
@@ -1520,6 +1547,9 @@ export const ptBR: TranslationResources = {
         },
       },
       diff: {
+        baseBranch: {
+          title: "Branch base",
+        },
         openChangesTab: "Abrir a aba Alterações",
         openDiffTab: "Abrir a aba Diff",
         closeChangesTab: "Fechar a aba Alterações",
@@ -1752,6 +1782,8 @@ export const ptBR: TranslationResources = {
     title: "Novidades",
     installed: "Instalada",
     showMore: "Mostrar mais",
+    showAllChanges: "Mostrar todas as mudanças",
+    hideAllChanges: "Ocultar todas as mudanças",
     openWebsite: "Changelog completo",
     error: {
       title: "Não foi possível carregar o changelog",
@@ -1759,6 +1791,14 @@ export const ptBR: TranslationResources = {
     },
   },
   sidebar: {
+    view: {
+      failed: "Não foi possível carregar a visualização da barra lateral.",
+      useDefault: "Usar visualização padrão",
+      readFailed: "Não foi possível carregar sua preferência de visualização da barra lateral.",
+      agentUnavailable: "O agente não está mais disponível",
+      terminalUnavailable: "O terminal não está mais disponível",
+      projectUnavailable: "O projeto não está mais disponível",
+    },
     statusGroupAccessibility: "Grupo {{label}}",
     statusBucket: {
       needsInput: "Precisa de resposta",
@@ -1835,6 +1875,7 @@ export const ptBR: TranslationResources = {
       home: "Início",
       settings: "Configurações",
       closeSidebar: "Fechar barra lateral",
+      moreActions: "Mais ações",
     },
     footer: {
       usage: "Uso",
@@ -1954,6 +1995,9 @@ export const ptBR: TranslationResources = {
         hostDisconnected: "Host não está conectado",
         hideFailed: "Falha ao ocultar workspace",
         archiveFailed: "Falha ao arquivar workspace",
+        archived: "Chat arquivado",
+        undoArchive: "Desfazer",
+        undoArchiveFailed: "Não foi possível desfazer o arquivamento",
         archiveKeptFiles:
           "Arquivado, mas o trabalho deste chat não pôde ser salvo, então os arquivos continuam no disco. Desarquive o chat para abri-los. {{reason}}",
         archiveKeptReasons: {
@@ -2221,6 +2265,9 @@ export const ptBR: TranslationResources = {
       cli: {
         statusFailed: "Não foi possível verificar o status de instalação da CLI.",
         installFailed: "Não foi possível instalar a CLI do Agent Duel.",
+        uninstallFailed: "Não foi possível desinstalar a CLI do Agent Duel.",
+        keptForeign:
+          "Um comando paseo que o Agent Duel não instalou foi mantido. Remova-o manualmente para desinstalar.",
       },
 
       skills: {
@@ -2276,6 +2323,7 @@ export const ptBR: TranslationResources = {
     openPath: "Abrir caminho",
   },
   branchSwitcher: {
+    failedToLoad: "Não foi possível carregar as branches. Reabra o seletor para tentar novamente.",
     triggerTooltip: "Trocar branch do workspace",
     currentBranch: "Branch atual: {{branchName}}. Pressione para trocar de branch.",
     placeholder: "Trocar branch...",
@@ -2299,7 +2347,11 @@ export const ptBR: TranslationResources = {
     loadingCommands: "Carregando comandos...",
     noFiles: "Nenhum arquivo ou diretório encontrado",
     noCommands: "Nenhum comando encontrado",
-    failedToLoad: "Falha ao carregar",
+    loadingProviderCommands: "Carregando comandos do {{provider}}...",
+    commandsFailed: "Não foi possível carregar os comandos",
+    providerCommandsFailed: "Não foi possível carregar os comandos do {{provider}}",
+    filesFailed: "Não foi possível buscar arquivos",
+    skillTag: "Skill",
     chooseProjectForCommands: "Escolha um projeto para ver os comandos",
     chooseModelForCommands: "Selecione um modelo para ver os comandos",
   },
@@ -2326,6 +2378,60 @@ export const ptBR: TranslationResources = {
     },
   },
   onboarding: {
+    setup: {
+      title: "Agent Duel",
+      stepCounter: "Etapa {{current}} de {{total}}",
+      skip: "Pular configuração",
+      continue: "Continuar",
+      finish: "Concluir",
+      steps: {
+        appearance: {
+          label: "Aparência",
+          title: "Boas-vindas ao Agent Duel",
+          description: "Vamos começar escolhendo uma aparência",
+        },
+        providers: {
+          label: "Provedores",
+          title: "Seus agentes",
+          description: "O Agent Duel usa as CLIs de agentes já instaladas neste computador",
+        },
+        projects: {
+          label: "Projetos",
+          title: "Adicione seus projetos",
+          description: "Onde você quer que seus agentes trabalhem",
+          addProject: "Adicionar projeto",
+          added: "Adicionado",
+          suggestions: {
+            loading: "Procurando pastas em que você trabalhou",
+            empty: "Nenhum projeto recente encontrado",
+            lastUsed: "Último uso {{time}}",
+            addSelected_one: "Adicionar {{count}} projeto",
+            addSelected_other: "Adicionar {{count}} projetos",
+            adding: "Adicionando…",
+            addFailed: "Não foi possível adicionar esta pasta",
+          },
+        },
+        orchestration: {
+          label: "Orquestração",
+          title: "Deixe os agentes usarem o Agent Duel",
+          description: "Deixe seus agentes criarem workspaces e conversarem com outros agentes",
+        },
+        phone: {
+          label: "Celular",
+          title: "Leve seus agentes com você",
+          description:
+            "O app móvel nativo completo permite controlar qualquer computador com Agent Duel pelo seu celular",
+          appStore: "App Store",
+          googlePlay: "Google Play",
+          connectTitle: "Escolha como se conectar",
+          connectDocs: "Docs",
+          openConnectDocs: "Abrir documentação de conectividade",
+          recommended: "Recomendado",
+          relay: { title: "Relay", hint: "Criptografia de ponta a ponta, escaneie um código QR" },
+          tailscale: { title: "Tailscale", hint: "Requer alguma configuração" },
+        },
+      },
+    },
     title: "Bem-vindo ao Agent Duel",
     subtitle: "Conecte seu computador para começar",
     actions: {
@@ -2424,6 +2530,12 @@ export const ptBR: TranslationResources = {
     backdrop: "Fundo do menu",
   },
   subagents: {
+    parent: {
+      backToParent: "Voltar ao pai",
+      backTo: "Voltar para {{label}}",
+      parentAgent: "Agente pai",
+      openParent: "Abrir pai",
+    },
     title: "Subagentes",
     pillLabelOne: "1 subagente",
     pillLabelMany: "{{count}} subagentes",
@@ -2530,11 +2642,17 @@ export const ptBR: TranslationResources = {
   toolCallDetails: {
     error: "Erro",
     empty: "Nenhum detalhe adicional disponível",
-    subAgentActivity: "Atividade do subagente",
     input: "Entrada",
     output: "Saída",
   },
+  turnSummary: {
+    details: "Ver detalhes do turno",
+    sentBy: "Enviado por {{name}}",
+    showMore: "Mostrar mais",
+    showLess: "Mostrar menos",
+  },
   toolCallGroup: {
+    thought: "Pensou",
     editedFiles: {
       one: "editou {{count}} arquivo",
       other: "editou {{count}} arquivos",
@@ -2679,6 +2797,11 @@ export const ptBR: TranslationResources = {
     },
   },
   providerUsage: {
+    checkUsage: "Consultar uso",
+    checkUsageHint: "Aplica-se a {{host}} em todos os dispositivos",
+    off: "O uso está desativado em {{host}}.",
+    turnOn: "Ativar",
+
     options: "Configurações",
     refreshFailed: "Não foi possível atualizar o uso",
     noHosts: "Nenhum host conectado",
@@ -2726,6 +2849,7 @@ export const ptBR: TranslationResources = {
       days: "{{value}} d",
       hours: "{{value}} h",
       minutes: "{{value}} min",
+      pair: "{{first}} {{second}}",
     },
     timing: {
       lastUpdated: "Última atualização {{relativeTime}}",
@@ -2733,6 +2857,8 @@ export const ptBR: TranslationResources = {
       resetTimePassed: "O horário de redefinição passou",
       resettingNow: "redefinindo agora",
       resetsIn: "redefine em {{duration}}",
+      resetsAtWeekday: "{{weekday}} {{time}}",
+      resetsAtDate: "{{date}}, {{time}}",
       runsOutNow: "esgota agora",
       runsOutIn: "esgota em {{duration}}",
       justNow: "agora mesmo",
@@ -2833,6 +2959,7 @@ export const ptBR: TranslationResources = {
       projects: "Projetos",
       agents: "Agentes",
       metadata: "Metadados",
+      voice: "Voz",
       workspaces: "Workspaces",
       providers: "Provedores",
       usage: "Uso",
@@ -2893,6 +3020,69 @@ export const ptBR: TranslationResources = {
           "Restam menos de {{size}} livres, então só o chat mais recente neste disco mantém os ambientes de batalha.",
       },
     },
+    voice: {
+      offline: "Conecte-se a este host para configurar a voz.",
+      updateHost: "Atualize o host para configurar a voz.",
+      saveError: "Não foi possível atualizar as configurações de voz",
+      provider: "Provedor",
+      providers: {
+        local: "Local",
+        openai: "OpenAI",
+      },
+      voice: "Voz",
+      save: "Salvar",
+      retry: "Tentar novamente",
+      cancel: "Cancelar",
+      model: "Modelo",
+      language: "Idioma",
+      languagePlaceholder: "Detecção automática",
+      setBy: "Definido por {{name}}",
+      unknownProvider: "Atualize o app para configurar {{provider}}",
+      sites: {
+        dictationStt: "Fala para texto",
+        voiceModeStt: "Escuta",
+        voiceModeTts: "Fala",
+      },
+      dictation: {
+        title: "Ditado",
+        enabled: "Ditado",
+        enabledHint: "Fale na caixa de mensagem em vez de digitar",
+      },
+      voiceMode: {
+        title: "Modo de voz",
+        info: "O modo de voz transcreve o que você diz e lê em voz alta as respostas do agente.",
+        enabled: "Modo de voz",
+        enabledHint: "Converse com seus agentes sem usar as mãos",
+      },
+      openai: {
+        apiKey: "Chave de API",
+        apiKeyHint: "Salva no host e nunca mostrada novamente.",
+        keyPlaceholder: "sk-...",
+        savedKeyPlaceholder: "Salva",
+        missingKey: "Chave de API ausente",
+        baseUrl: "URL base",
+        baseUrlHint: "Para servidores compatíveis com a OpenAI. Deixe vazio para usar a OpenAI.",
+      },
+      models: {
+        loading: "Carregando modelos...",
+        loadError: "Não foi possível carregar os modelos locais",
+        none: "Nenhum modelo disponível",
+        downloaded: "Baixado",
+        inUse: "Em uso",
+        recommended: "Recomendado",
+        download: "Baixar",
+        downloadAction: "Baixar {{label}}",
+        downloading: "Baixando...",
+        downloadingPercent: "Baixando {{percent}}%",
+        extracting: "Extraindo...",
+        delete: "Excluir",
+        deleteAction: "Excluir {{label}}",
+        deleteTitle: "Excluir {{label}}?",
+        deleteMessage: "Isso libera {{size}}. Você pode baixá-lo de novo depois.",
+        languages: "Idiomas do {{label}}",
+        moreLanguages: "{{languages}} e mais {{count}}",
+      },
+    },
     general: {
       title: "Geral",
       openRouterKey: {
@@ -2915,6 +3105,11 @@ export const ptBR: TranslationResources = {
         removeFailed: "Não foi possível remover a chave. Tente novamente.",
       },
       sending: "Envio",
+      setup: {
+        label: "Configuração inicial",
+        description: "Rever aparência, provedores, projetos e pareamento do celular",
+        action: "Mostrar configuração novamente",
+      },
       browserData: {
         title: "Dados do navegador",
         siteData: "Cookies e dados de sites",
@@ -2927,6 +3122,13 @@ export const ptBR: TranslationResources = {
         success: "Dados do navegador limpos.",
         error: "Não foi possível limpar os dados do navegador.",
       },
+      sendShortcut: {
+        label: "Atalho de envio",
+        options: {
+          enter: "Enter",
+          "mod-enter": "{{modifier}}+Enter",
+        },
+      },
       terminalScrollback: {
         label: "Scrollback do terminal",
         description: "Linhas mantidas no buffer do terminal integrado",
@@ -2937,12 +3139,13 @@ export const ptBR: TranslationResources = {
         description:
           "Mostrar os blocos de pensamento e raciocínio do agente totalmente expandidos por padrão",
       },
-      toolCallDetail: {
-        label: "Exibição de chamadas de ferramentas",
-        description: "Como as chamadas de ferramentas aparecem na linha do tempo",
+      chatDisplay: {
+        label: "Exibição do chat",
+        description: "Quanto do trabalho do agente o chat mostra",
         options: {
-          overview: "Resumo",
-          detailed: "Detalhes completos",
+          full: "Completo",
+          collapseToolCalls: "Recolher chamadas de ferramentas",
+          collapseTurns: "Recolher turnos",
         },
 
         accessibilityLabel: "Selecionar exibição de chamadas de ferramentas ({{value}})",
@@ -3025,6 +3228,13 @@ export const ptBR: TranslationResources = {
         description: "Mostrar uma estrutura para navegar entre prompts",
       },
       sidebar: {
+        view: {
+          title: "Visualização da barra lateral",
+          label: "Visualização",
+          default: "Visualização padrão",
+          unavailable:
+            "A visualização selecionada está indisponível ou desativada. Exibindo a visualização padrão.",
+        },
         header: {
           title: "Cabeçalho",
           description: "Escolha quais itens aparecem no topo da barra lateral e em que ordem",
@@ -3145,6 +3355,7 @@ export const ptBR: TranslationResources = {
       commandLine: {
         title: "Linha de comando",
         description: "Controle agentes e execute scripts pelo terminal",
+        accessibilityLabel: "Instalar a CLI do Agent Duel",
       },
       actions: {
         install: "Instalar",
@@ -3214,10 +3425,9 @@ export const ptBR: TranslationResources = {
         ...en.settings.host.skills,
         sectionTitle: "Skills de orquestração",
         title: "Skills de orquestração",
-        description: "Ensine seus agentes a orquestrar pela CLI",
+        description: "Ensine seus agentes a usar as ferramentas do Agent Duel",
         updateAvailable: "Atualização disponível",
         updateTitle: "Atualizar Agent Duel skills?",
-        updateFallback: "Sincronize as skills incluídas com sua máquina.",
         uninstallTitle: "Desinstalar Agent Duel skills?",
         uninstallMessage:
           "Remove todas as skills de orquestração do Agent Duel de ~/.agents, ~/.claude e ~/.codex.",
@@ -3236,9 +3446,6 @@ export const ptBR: TranslationResources = {
         uninstallFailed: "Não foi possível desinstalar as skills de orquestração.",
         saveSelectionFailed: "Não foi possível salvar a seleção de skills de orquestração.",
         actions: {
-          install: "Instalar",
-          installing: "Instalando...",
-          installed: "Instalado",
           update: "Atualizar",
           working: "Trabalhando...",
           remove: "Remover",
@@ -3260,6 +3467,7 @@ export const ptBR: TranslationResources = {
           title: "Ativar ferramentas do Agent Duel",
           hint: "Agentes poderão gerenciar worktrees e agentes",
           accessibilityLabel: "Injetar ferramentas do Agent Duel",
+          updateFailed: "Não foi possível atualizar as ferramentas do Agent Duel.",
         },
         systemPrompt: {
           title: "Prompt do sistema",
@@ -3275,6 +3483,19 @@ export const ptBR: TranslationResources = {
       },
       agents: {
         unavailable: "Conecte-se a este host para gerenciar agentes",
+        resumeOnStartup: {
+          title: "Retomar agentes após reiniciar",
+          info: "Reabre os agentes que estavam trabalhando quando o host parou e envia a mensagem de retomada. Aplica-se após reinicializações normais e falhas.",
+          hint: "Continuar automaticamente o trabalho interrompido.",
+          prompt: "Mensagem de retomada",
+          edit: "Editar",
+          editAccessibilityLabel: "Editar mensagem",
+        },
+        idleRuntimeCleanup: {
+          title: "Liberar agentes ociosos",
+          hint: "Libera memória após uma hora de inatividade.",
+          info: "Encerra o processo do agente e mantém a conversa. Envie uma mensagem para retomar.\n\nTrabalho ativo, notificações pendentes e verificações de segurança do provedor impedem a limpeza.",
+        },
       },
       workspaces: {
         unavailable: "Conecte-se a este host para gerenciar workspaces",
@@ -3337,6 +3558,10 @@ export const ptBR: TranslationResources = {
           requestFailedTitle: "Erro",
           requestFailedMessage:
             "Falha ao enviar a solicitação de reinício. O Agent Duel reconecta automaticamente. Tente novamente quando o host aparecer como online.",
+          closeTerminals: "Reiniciar e fechar terminais",
+          closeTerminalsHint: "Reinicia e também fecha todos os terminais abertos neste host.",
+          closeTerminalsConfirmMessage:
+            "Isso reiniciará o daemon e fechará todos os terminais dele, encerrando os programas que rodam neles. O app vai se reconectar automaticamente.",
           dialogFailedMessage: "Não foi possível abrir o diálogo de confirmação de reinício.",
         },
         update: {

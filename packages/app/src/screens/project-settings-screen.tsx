@@ -142,7 +142,6 @@ function NoEditableTarget({
           testID="project-settings-back-button"
           onPress={onBackToProjects}
           variant="secondary"
-          size="md"
         >
           {t("settings.project.backToProjects")}
         </Button>
@@ -159,7 +158,6 @@ function BackToProjectsButton({ onPress }: { onPress: () => void }) {
       accessibilityLabel={t("settings.project.backToProjects")}
       onPress={onPress}
       variant="ghost"
-      size="sm"
       leftIcon={ArrowLeft}
       style={styles.backButton}
     >
@@ -396,7 +394,7 @@ function ReadFailureCallout({ kind, error, onReload }: ReadFailureCalloutProps) 
   return (
     <View style={styles.errorBlock}>
       <Alert size="md" testID={testID} variant="error" title={title} description={description}>
-        <Button testID={`${testID}-action-0`} onPress={onReload} variant="outline" size="sm">
+        <Button testID={`${testID}-action-0`} onPress={onReload} variant="outline">
           {t("settings.project.actions.reload")}
         </Button>
       </Alert>
@@ -557,12 +555,7 @@ function ProjectConfigForm({
             title={t("settings.project.writeFailures.staleTitle")}
             description={t("settings.project.writeFailures.staleDescription")}
           >
-            <Button
-              testID="stale-callout-action-0"
-              onPress={handleReload}
-              variant="outline"
-              size="sm"
-            >
+            <Button testID="stale-callout-action-0" onPress={handleReload} variant="outline">
               {t("settings.project.actions.reload")}
             </Button>
           </Alert>
@@ -578,20 +571,10 @@ function ProjectConfigForm({
             title={t("settings.project.writeFailures.failedTitle")}
             description={t("settings.project.writeFailures.failedDescription")}
           >
-            <Button
-              testID="write-failed-callout-action-0"
-              onPress={handleSave}
-              variant="outline"
-              size="sm"
-            >
+            <Button testID="write-failed-callout-action-0" onPress={handleSave} variant="outline">
               {t("settings.project.actions.tryAgain")}
             </Button>
-            <Button
-              testID="write-failed-callout-action-1"
-              onPress={handleReload}
-              variant="outline"
-              size="sm"
-            >
+            <Button testID="write-failed-callout-action-1" onPress={handleReload} variant="outline">
               {t("settings.project.actions.reload")}
             </Button>
           </Alert>
@@ -603,7 +586,6 @@ function ProjectConfigForm({
           testID="save-button"
           accessibilityLabel={t("settings.project.actions.save")}
           variant="default"
-          size="md"
           disabled={saveDisabled}
           loading={saveMutation.isPending}
           onPress={handleSave}

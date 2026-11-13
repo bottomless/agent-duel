@@ -156,7 +156,7 @@ function FreeEnvironmentsRow({ serverId, client, freeBytes }: FreeEnvironmentsRo
       </View>
       <Button
         variant="outline"
-        size="sm"
+        size="md"
         onPress={handleFree}
         disabled={!client || mutation.isPending}
         testID="settings-storage-free-button"

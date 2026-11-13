@@ -88,7 +88,7 @@ export function WorkspaceRecoveryHistory({
       ))}
       {failedHosts.length > 0 ? (
         <View style={styles.retry}>
-          <Button variant="ghost" size="xs" onPress={onRefresh}>
+          <Button variant="ghost" size="sm" onPress={onRefresh}>
             {t("common.actions.retry")}
           </Button>
         </View>
@@ -128,7 +128,7 @@ function RecoveryHistoryRow({ entry }: { entry: RecoveryRow }) {
         </Text>
         {restore.isError ? <Text style={styles.error}>{toErrorMessage(restore.error)}</Text> : null}
       </View>
-      <Button variant="outline" size="xs" disabled={restore.isPending} onPress={handleRestore}>
+      <Button variant="outline" size="sm" disabled={restore.isPending} onPress={handleRestore}>
         {restore.isPending ? t("common.loading") : t("sidebar.archived.restore")}
       </Button>
     </View>

@@ -44,6 +44,29 @@ it("reveals an existing side panel file from the compact agent list", () => {
   expect(state.getTabDestination(workspaceKey, tabId!)).toMatchObject({ host: "side" });
 });
 
+it.each(["single-pane", "split-panes"] as const)(
+  "dismisses floating navigation when revealing a %s tab without pinning its dock",
+  (layoutMode) => {
+    const store = useWorkspaceLayoutStore.getState();
+    store.setLayoutMode(layoutMode);
+    usePanelStore.getState().closeDesktopAgentList();
+    usePanelStore.getState().showMobileAgentList();
+    const tabId = store.openTab({
+      workspaceKey,
+      target: { kind: "agent", agentId: "root" },
+      intent: "reveal",
+    });
+    revealWorkspaceTab(workspaceKey, tabId);
+    expect(usePanelStore.getState().mobilePanel.target).toBe("agent");
+    expect(usePanelStore.getState().desktop.agentListOpen).toBe(false);
+    expect(
+      useWorkspaceLayoutStore.getState().getTabDestination(workspaceKey, tabId!),
+    ).toMatchObject({
+      host: "main",
+    });
+  },
+);
+
 it("keeps the agent list beneath a new compact file sheet", () => {
   useWorkspaceLayoutStore.getState().setLayoutMode("compact");
   usePanelStore.getState().showMobileAgentList();

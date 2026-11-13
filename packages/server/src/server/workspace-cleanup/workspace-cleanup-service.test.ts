@@ -177,8 +177,8 @@ test("keeps fifteen physical parents, uses newest shared-chat activity, and rest
   await service.close();
   expect(prepared).toEqual([roots[1]]);
   expect(roots.filter(existsSync)).toHaveLength(15);
-  expect(groupWorkspaceParents(await registry.list())).toHaveLength(16);
-  expect((await registry.list()).every((record) => record.archivedAt === null)).toBe(true);
+  expect(groupWorkspaceParents(await registry.listAll())).toHaveLength(16);
+  expect((await registry.listAll()).every((record) => record.archivedAt === null)).toBe(true);
   expect((await registry.get("shared-chat"))?.cleanup).toBeUndefined();
   git(repo, "reflog", "expire", "--expire=now", "--all");
   git(repo, "gc", "--prune=now");

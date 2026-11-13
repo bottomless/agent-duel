@@ -46,7 +46,7 @@ function createWorkspaceRepo(options?: {
   };
 }
 
-function buildPayloads(input: {
+async function buildPayloads(input: {
   workspaceId: string;
   workspaceDirectory: string;
   paseoConfig?: PaseoConfig | null;
@@ -59,7 +59,9 @@ function buildPayloads(input: {
   resolveHealth?: (hostname: string) => ScriptHealthState | null;
 }) {
   const paseoConfig =
-    input.paseoConfig !== undefined ? input.paseoConfig : loadConfig(input.workspaceDirectory);
+    input.paseoConfig !== undefined
+      ? input.paseoConfig
+      : await loadConfig(input.workspaceDirectory);
   const { routeStore, serviceProxy, ...rest } = input;
   return buildWorkspaceScriptPayloads({
     ...rest,
@@ -68,8 +70,8 @@ function buildPayloads(input: {
   });
 }
 
-function loadConfig(repoRoot: string): PaseoConfig | null {
-  const result = readPaseoConfig(repoRoot);
+async function loadConfig(repoRoot: string): Promise<PaseoConfig | null> {
+  const result = await readPaseoConfig(repoRoot);
   return result.ok ? result.config : null;
 }
 
@@ -89,7 +91,7 @@ describe("script-status-projection", () => {
     ).toBeNull();
   });
 
-  it("overlays runtime, route, and health state for running services", () => {
+  it("overlays runtime, route, and health state for running services", async () => {
     const workspaceId = "workspace-running-service";
     const workspace = createWorkspaceRepo({
       branchName: "feature/card",
@@ -119,7 +121,7 @@ describe("script-status-projection", () => {
 
     try {
       expect(
-        buildPayloads({
+        await buildPayloads({
           workspaceId,
           workspaceDirectory: workspace.repoDir,
           routeStore,
@@ -147,7 +149,7 @@ describe("script-status-projection", () => {
     }
   });
 
-  it("maps internal pending health to null on the wire", () => {
+  it("maps internal pending health to null on the wire", async () => {
     const workspaceId = "workspace-pending-health";
     const workspace = createWorkspaceRepo({
       paseoConfig: {
@@ -176,7 +178,7 @@ describe("script-status-projection", () => {
 
     try {
       expect(
-        buildPayloads({
+        await buildPayloads({
           workspaceId,
           workspaceDirectory: workspace.repoDir,
           routeStore,
@@ -204,7 +206,7 @@ describe("script-status-projection", () => {
     }
   });
 
-  it("includes orphaned running runtime entries even after config removal", () => {
+  it("includes orphaned running runtime entries even after config removal", async () => {
     const workspaceId = "workspace-orphaned-service";
     const workspace = createWorkspaceRepo();
     const routeStore = new ScriptRouteStore();
@@ -227,7 +229,7 @@ describe("script-status-projection", () => {
 
     try {
       expect(
-        buildPayloads({
+        await buildPayloads({
           workspaceId,
           workspaceDirectory: workspace.repoDir,
           routeStore,
@@ -254,7 +256,7 @@ describe("script-status-projection", () => {
     }
   });
 
-  it("projects orphaned plain scripts as scripts instead of services", () => {
+  it("projects orphaned plain scripts as scripts instead of services", async () => {
     const workspaceId = "workspace-orphaned-script";
     const workspace = createWorkspaceRepo();
     const routeStore = new ScriptRouteStore();
@@ -270,7 +272,7 @@ describe("script-status-projection", () => {
 
     try {
       expect(
-        buildPayloads({
+        await buildPayloads({
           workspaceId,
           workspaceDirectory: workspace.repoDir,
           routeStore,
@@ -295,7 +297,7 @@ describe("script-status-projection", () => {
     }
   });
 
-  it("readPaseoConfig fails with configPath and error when paseo.json is malformed", () => {
+  it("readPaseoConfig fails with configPath and error when paseo.json is malformed", async () => {
     const workspace = createWorkspaceRepo();
     const configPath = path.join(workspace.repoDir, "paseo.json");
     writeFileSync(
@@ -304,7 +306,7 @@ describe("script-status-projection", () => {
     );
 
     try {
-      const result = readPaseoConfig(workspace.repoDir);
+      const result = await readPaseoConfig(workspace.repoDir);
       expect(result.ok).toBe(false);
       if (result.ok) throw new Error("unreachable");
       expect(result.configPath).toBe(configPath);
@@ -314,7 +316,7 @@ describe("script-status-projection", () => {
     }
   });
 
-  it("buildWorkspaceScriptPayloads given paseoConfig=null still surfaces orphaned runtime scripts", () => {
+  it("buildWorkspaceScriptPayloads given paseoConfig=null still surfaces orphaned runtime scripts", async () => {
     const workspaceId = "workspace-null-config";
     const workspace = createWorkspaceRepo();
     const routeStore = new ScriptRouteStore();
@@ -330,7 +332,7 @@ describe("script-status-projection", () => {
 
     try {
       expect(
-        buildPayloads({
+        await buildPayloads({
           workspaceId,
           workspaceDirectory: workspace.repoDir,
           paseoConfig: null,

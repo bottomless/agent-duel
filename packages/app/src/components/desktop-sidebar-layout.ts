@@ -2,7 +2,12 @@ import {
   ARENA_TWO_PANE_MIN_CONTENT_WIDTH,
   SETTINGS_DESKTOP_SPLIT_MIN_WIDTH,
 } from "@/constants/layout";
-import { MAX_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH } from "@/stores/panel-store";
+import {
+  MAX_SIDEBAR_WIDTH,
+  MIN_SIDEBAR_WIDTH,
+  type LeftSidebarPresentation,
+} from "@/stores/panel-store";
+import type { DesktopDivisionLayout } from "@/window-layout";
 
 const MIN_DESKTOP_CENTER_WIDTH = 400;
 
@@ -11,8 +16,43 @@ export function resolveDesktopSidebarVisibility(input: {
   isCompactLayout: boolean;
   isMounted: boolean;
   isOpen: boolean;
+  divisionLayout?: DesktopDivisionLayout | null;
 }): boolean {
-  return input.chromeEnabled && !input.isCompactLayout && input.isMounted && input.isOpen;
+  // A division layout reveals navigation without changing the saved open state. Narrow windows
+  // float the sidebar (resolveDesktopPanelPresentation) instead of hiding it.
+  return (
+    input.chromeEnabled &&
+    !input.isCompactLayout &&
+    input.isMounted &&
+    (input.divisionLayout != null || input.isOpen)
+  );
+}
+
+/**
+ * Compact layouts always present navigation as a drawer overlay. Wide layouts dock it when it is
+ * visible and fall back to an overlay when the dock is collapsed or yields its width.
+ */
+export function resolveLeftSidebarPresentation(input: {
+  chromeEnabled: boolean;
+  isCompactLayout: boolean;
+  isFocusModeEnabled: boolean;
+  desktopSidebarVisible: boolean;
+}): LeftSidebarPresentation {
+  if (!input.chromeEnabled) return "hidden";
+  if (input.isCompactLayout) return "overlay";
+  if (input.isFocusModeEnabled) return "hidden";
+  return input.desktopSidebarVisible ? "dock" : "overlay";
+}
+
+/**
+ * The overlay sidebar starts at the window's left edge, over the workspace's safe-area padding, so
+ * its content takes the left inset itself. The dock sits inside app chrome, which already pads it.
+ */
+export function resolveDesktopSidebarInsetLeft(input: {
+  overlay: boolean;
+  safeAreaLeft: number;
+}): number {
+  return input.overlay ? input.safeAreaLeft : 0;
 }
 
 export function resolveDesktopAppChromeLayout(input: {
@@ -87,4 +127,12 @@ export function resolveDesktopPanelPresentation(input: {
   return {
     agentList: sidebarFits ? "inline" : "overlay",
   };
+}
+
+export function resolveSidebarActivity(
+  visible: boolean,
+  compact: boolean,
+  mobileActive: boolean,
+): boolean {
+  return visible && (!compact || mobileActive);
 }

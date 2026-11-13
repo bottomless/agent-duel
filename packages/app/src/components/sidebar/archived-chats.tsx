@@ -267,7 +267,7 @@ export function SidebarArchivedChats({
     }
     return (
       <View style={styles.footer}>
-        <Button variant="ghost" size="xs" onPress={loadMore} disabled={isLoadingMore}>
+        <Button variant="ghost" size="sm" onPress={loadMore} disabled={isLoadingMore}>
           {isLoadingMore ? t("common.loading") : t("sidebar.archived.loadMore")}
         </Button>
       </View>
@@ -289,7 +289,7 @@ export function SidebarArchivedChats({
     body = (
       <View style={styles.centered}>
         <Text style={styles.emptyText}>{t("sidebar.archived.loadFailed")}</Text>
-        <Button variant="ghost" size="xs" onPress={handleRefresh}>
+        <Button variant="ghost" size="sm" onPress={handleRefresh}>
           {t("common.actions.retry")}
         </Button>
       </View>
@@ -301,7 +301,7 @@ export function SidebarArchivedChats({
           {isSearching ? t("sidebar.archived.noMatches") : t("sidebar.archived.empty")}
         </Text>
         {isSearching ? (
-          <Button variant="ghost" size="xs" onPress={handleClearSearch}>
+          <Button variant="ghost" size="sm" onPress={handleClearSearch}>
             {t("sidebar.archived.clearSearch")}
           </Button>
         ) : null}

@@ -18,6 +18,8 @@ type NewWorkspaceDaemonClient = Pick<
   | "connect"
   | "createPaseoWorktree"
   | "createWorkspace"
+  | "createTerminal"
+  | "killTerminal"
   | "fetchAgents"
   | "fetchWorkspaces"
   | "getPaseoWorktreeList"
@@ -35,6 +37,7 @@ type NewWorkspaceDaemonClient = Pick<
   | "removePlugin"
   | "reloadPlugin"
   | "setWorkspaceTitle"
+  | "setWorkspaceLabel"
 >;
 
 type CreateWorkspacePayload = Awaited<ReturnType<NewWorkspaceDaemonClient["createWorkspace"]>>;
@@ -386,6 +389,15 @@ export async function selectWorkspaceIsolation(
   const option = page.getByTestId(`workspace-create-isolation-${isolation}`);
   await expect(option).toBeVisible({ timeout: 30_000 });
   await option.click();
+}
+
+export async function expectWorkspaceIsolationSelected(
+  page: Page,
+  isolation: "local" | "worktree",
+): Promise<void> {
+  const trigger = page.getByTestId("workspace-create-isolation-trigger");
+  await expect(trigger).toBeVisible({ timeout: 30_000 });
+  await expect(trigger).toContainText(isolation === "worktree" ? "New worktree" : "Local");
 }
 
 export async function openStartingRefPicker(page: Page): Promise<void> {

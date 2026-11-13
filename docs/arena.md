@@ -1033,8 +1033,8 @@ the same output, so the send reads the boundary once, from the transcript it fre
 again a side whose warm fork used another. Pruning leaves the canonical session and its transcript
 hash intact, including single-agent turns that continue one model whose cache survives. Use
 canonical history when you need complete tool output. Feedback context is a bounded diagnostic
-copy of the daemon timeline; cut tool fields carry original and retained sizes where those were
-recorded. Older rows cut without size metadata cannot report the missing size.
+copy of the daemon timeline; a cut tool field ends with a `…[truncated N KB]` marker that gives
+the size removed.
 
 Keep the winner's child transcripts available after a vote and after reloading the chat, including
 nested children. Their headings must open and close on the first click in both the newly applied

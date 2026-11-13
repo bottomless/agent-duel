@@ -37,7 +37,7 @@ export function ArenaRunRetry({
   return (
     <View style={styles.retry}>
       <Button
-        size="xs"
+        size="sm"
         variant="outline"
         leftIcon={RotateCcw}
         onPress={retry}

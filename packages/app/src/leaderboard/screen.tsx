@@ -47,7 +47,7 @@ export function LeaderboardScreen() {
     () => (
       <Button
         variant="ghost"
-        size="sm"
+        size="md"
         disabled={isFetching || !endpoint || !session}
         onPress={refresh}
       >
@@ -83,7 +83,7 @@ export function LeaderboardScreen() {
             title={t("leaderboard.error")}
             description={leaderboardErrorReason(query.error)}
           >
-            <Button variant="outline" size="sm" disabled={query.isFetching} onPress={refresh}>
+            <Button variant="outline" size="md" disabled={query.isFetching} onPress={refresh}>
               {t("leaderboard.retry")}
             </Button>
           </Alert>

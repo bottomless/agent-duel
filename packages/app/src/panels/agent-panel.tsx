@@ -30,6 +30,7 @@ import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import invariant from "tiny-invariant";
 import { shallow, useShallow } from "zustand/shallow";
 import { useStoreWithEqualityFn } from "zustand/traditional";
+import { useAgentStreamTail } from "@/agent-stream/use-agent-stream-tail";
 import { AgentStreamView, type AgentStreamViewHandle } from "@/agent-stream/view";
 import { ArchivedAgentCallout } from "@/components/archived-agent-callout";
 import { ComposerDock } from "@/composer/dock";
@@ -39,6 +40,7 @@ import { useRetainedPanelActive } from "@/components/retained-panel";
 import { RetainedChatContent } from "./retained-chat-content";
 import { DatabaseUpgradeChat, DatabaseImportError } from "./database-upgrade-chat";
 import { Composer } from "@/composer";
+import { AgentCommandsProvider } from "@/agent-commands";
 import {
   dispatchComposerAgentMessage,
   editQueuedComposerMessage,
@@ -51,7 +53,6 @@ import {
   useComposerFullscreen,
   type ComposerEditingSession,
 } from "@/composer/editing-session";
-import { useWorkspaceHasDiffStat } from "@/composer/workspace-diff-stat";
 import {
   resolveComposerTrackControlClearance,
   resolveComposerTrackTailClearance,
@@ -65,7 +66,7 @@ import { useWorkspaceAttachmentScopeKey } from "@/attachments/workspace-attachme
 import { useWorkspaceFields } from "@/stores/session-store-hooks";
 import { WorkspaceFilesRecoveryBanner } from "@/screens/workspace/workspace-route-state-views";
 import { useWorkspaceRecovery } from "@/workspace-recovery/use-workspace-recovery";
-import { COMPACT_FORM_FACTOR_WIDTH, useIsCompactFormFactor } from "@/constants/layout";
+import { COMPACT_CONTENT_WIDTH, useIsCompactFormFactor } from "@/constants/layout";
 import { isNative, isWeb } from "@/constants/platform";
 import { useAgentAttentionClear } from "@/hooks/use-agent-attention-clear";
 import { useAgentInputDraft, type AgentInputDraft } from "@/composer/draft/input-draft";
@@ -87,7 +88,6 @@ import { useAgentFactsLine } from "@/panels/agent-facts-line";
 import { PaneSubtitle } from "@/panels/pane-subtitle";
 import { definePanel } from "@/panels/panel-registry";
 import { RenderProfile } from "@/utils/render-profiler";
-import { useHasPluginComposerPills } from "@/plugins";
 import { buildDraftPanelDescriptor } from "@/panels/draft-panel-descriptor";
 import {
   type HostRuntimeConnectionStatus,
@@ -103,23 +103,29 @@ import {
   deriveRouteBottomAnchorRequest,
 } from "@/screens/agent/agent-ready-screen-bottom-anchor";
 import { ordinaryTaskListState, tasksAfterBattle } from "@/composer/task-list/tasks";
-import { WorkspaceDraftAgentTab } from "@/composer/draft/workspace-tab";
-import { AgentTracks, hasAgentTracks } from "@/panels/agent-tracks";
+import {
+  DraftBattleTimeline,
+  useDraftBattleStart,
+  WorkspaceDraftComposer,
+} from "@/composer/draft/workspace-tab";
+import { type DraftConversation, useDraftTimeline } from "@/composer/draft/timeline";
+import { AgentTracks } from "@/panels/agent-tracks";
+import { OverlayDismissalScope } from "@/components/ui/overlay-dismissal";
+import { ParentAgentCallout, useParentAgentId } from "@/subagents/parent";
 import { useCreateFlowStore } from "@/stores/create-flow-store";
 import { buildDraftStoreKey, generateDraftId } from "@/stores/draft-keys";
 import {
   selectAgentTimelineState,
-  selectAgentTurnPresentation,
+  selectAgentTimelineTurnPresentation,
   type Agent,
   useSessionStore,
 } from "@/stores/session-store";
 import { useWorkspaceLayoutStore } from "@/stores/workspace-layout-store";
-import { buildWorkspaceTabPersistenceKey } from "@/workspace-tabs/model";
+import { buildWorkspaceTabPersistenceKey, type WorkspaceTabTarget } from "@/workspace-tabs/model";
 import type { Theme } from "@/styles/theme";
 import type { PendingPermission } from "@/types/shared";
 import type { StreamItem, TodoEntry } from "@/types/stream";
 import type { ViewedTimelineStatus, ViewedTimelineUiBridge } from "@/timeline/viewed-timeline-sync";
-import { useArchiveFinishedSubagents, useSubagentsForParent } from "@/subagents";
 import { getInitDeferred, getInitKey } from "@/utils/agent-initialization";
 import { derivePendingPermissionKey, normalizeAgentSnapshot } from "@/utils/agent-snapshots";
 import { applyLegacyDaemonWorkspaceOwnership } from "@/workspace/legacy-daemon-workspaces";
@@ -197,7 +203,8 @@ interface ChatAgentStateShape {
   model?: Agent["model"];
   thinkingOptionId?: Agent["thinkingOptionId"];
   runtimeInfo?: Agent["runtimeInfo"];
-  features?: Agent["features"];
+  options?: Agent["options"];
+  controls?: Agent["controls"];
   lastError?: Agent["lastError"] | null;
 }
 
@@ -289,7 +296,8 @@ function selectChatAgentState(
     model: agent.model,
     thinkingOptionId: agent.thinkingOptionId,
     runtimeInfo: agent.runtimeInfo,
-    features: agent.features,
+    options: agent.options,
+    controls: agent.controls,
     lastError: agent.lastError ?? null,
     archivedAt: agent.archivedAt ?? null,
     requiresAttention: agent.requiresAttention ?? false,
@@ -317,7 +325,8 @@ function buildChatAgentFromState(
     model: state.model,
     thinkingOptionId: state.thinkingOptionId,
     runtimeInfo: state.runtimeInfo,
-    features: state.features,
+    options: state.options,
+    controls: state.controls,
     lastError: state.lastError ?? null,
     projectPlacement,
   };
@@ -331,13 +340,37 @@ function AgentLoadErrorView({ message, onRetry }: { message: string; onRetry: ()
         <Text style={styles.errorText}>{t("agentPanel.states.failedToLoad")}</Text>
         <Text style={styles.statusText}>{message}</Text>
         <View style={styles.errorAction}>
-          <Button size="sm" variant="secondary" onPress={onRetry} testID="agent-load-error-retry">
+          <Button variant="secondary" onPress={onRetry} testID="agent-load-error-retry">
             {t("common.actions.retry")}
           </Button>
         </View>
       </View>
     </View>
   );
+}
+
+/** A draft has no agent to wait for; an agent shows its loading and error states until ready. */
+function renderConversationNonReadyView(args: {
+  draft: DraftConversation | null;
+  agentId: string | undefined;
+  cwd: string | null;
+  viewState: AgentScreenViewState;
+  effectiveAgent: AgentScreenAgent | null;
+  t: TFunction;
+  onRetryLoad: () => void;
+  serverId: string;
+}): React.ReactElement | null {
+  if (args.draft) {
+    return null;
+  }
+  const nonReadyView = renderChatAgentNonReadyView(args);
+  if (nonReadyView) {
+    return nonReadyView;
+  }
+  invariant(args.agentId, "agent id is defined when agent content is ready");
+  invariant(args.effectiveAgent, "effectiveAgent is defined when the non-ready view is absent");
+  invariant(args.cwd, "agent cwd is defined when agent content is ready");
+  return null;
 }
 
 function renderChatAgentNonReadyView(args: {
@@ -425,65 +458,38 @@ function storeFetchedAgentDetail(input: {
   return hydrated;
 }
 
-function AgentPanel() {
+type ConversationTarget = Extract<WorkspaceTabTarget, { kind: "agent" } | { kind: "draft" }>;
+
+/** The agent a conversation shows; a draft has none until its first prompt creates one. */
+function resolveConversationAgentId(target: ConversationTarget): string | undefined {
+  return target.kind === "agent" ? target.agentId.trim() || undefined : undefined;
+}
+
+/**
+ * Drafts and agents render through one chain so the timeline stays mounted when the draft's
+ * first prompt creates the agent and the tab retargets. The agent gates are idle for a draft.
+ */
+export function AgentConversationPanel() {
   const { serverId, workspaceId, target, openFileInWorkspace } = usePaneContext();
   const { isInteractive } = usePaneFocus();
-  invariant(target.kind === "agent", "AgentPanel requires agent target");
+  invariant(
+    target.kind === "agent" || target.kind === "draft",
+    "AgentConversationPanel requires an agent or draft target",
+  );
 
   return (
     <RetainedChatContent>
-      <DatabaseUpgradeChat serverId={serverId} agentId={target.agentId}>
+      <DatabaseUpgradeChat serverId={serverId} agentId={resolveConversationAgentId(target) ?? ""}>
         <AgentPanelContent
           serverId={serverId}
           workspaceId={workspaceId}
-          agentId={target.agentId}
+          target={target}
           isPaneFocused={isInteractive}
           onOpenWorkspaceFile={openFileInWorkspace}
         />
       </DatabaseUpgradeChat>
     </RetainedChatContent>
   );
-}
-
-function DraftPanel() {
-  const { serverId, workspaceId, tabId, target, openFileInWorkspace, retargetCurrentTab } =
-    usePaneContext();
-  const { isInteractive } = usePaneFocus();
-  invariant(target.kind === "draft", "DraftPanel requires draft target");
-
-  const handleCreated = useCallback(
-    (agentSnapshot: Parameters<typeof normalizeAgentSnapshot>[0]) => {
-      const normalized = normalizeAgentSnapshot(agentSnapshot, serverId);
-      const agent = applyLegacyDaemonWorkspaceOwnership({ serverId, agent: normalized });
-      getHostRuntimeStore().acceptAgentSnapshot(serverId, agent);
-      retargetCurrentTab({ kind: "agent", agentId: agentSnapshot.id });
-    },
-    [retargetCurrentTab, serverId],
-  );
-
-  return (
-    <WorkspaceDraftAgentTab
-      serverId={serverId}
-      workspaceId={workspaceId}
-      tabId={tabId}
-      draftId={target.draftId}
-      initialSetup={target.setup}
-      isPaneFocused={isInteractive}
-      onOpenWorkspaceFile={openFileInWorkspace}
-      onCreated={handleCreated}
-    />
-  );
-}
-
-export function AgentConversationPanel() {
-  const { target } = usePaneContext();
-  if (target.kind === "draft") {
-    return <DraftPanel />;
-  }
-  if (target.kind === "agent") {
-    return <AgentPanel />;
-  }
-  invariant(false, "AgentConversationPanel requires an agent or draft target");
 }
 
 export const agentPanelRegistration = definePanel("agent", {
@@ -560,18 +566,18 @@ type AgentLookupState =
 function AgentPanelContent({
   serverId,
   workspaceId,
-  agentId,
+  target,
   isPaneFocused,
   onOpenWorkspaceFile,
 }: {
   serverId: string;
   workspaceId: string;
-  agentId: string;
+  target: ConversationTarget;
   isPaneFocused: boolean;
   onOpenWorkspaceFile?: (request: WorkspaceFileOpenRequest) => void;
 }) {
   const { t } = useTranslation();
-  const resolvedAgentId = agentId.trim() || undefined;
+  const resolvedAgentId = resolveConversationAgentId(target);
   const resolvedServerId = serverId.trim() || undefined;
   const daemons = useHosts();
   const runtimeServerId = resolvedServerId ?? "";
@@ -600,7 +606,7 @@ function AgentPanelContent({
       : runtimeConnectionStatus;
   const lastConnectionError = runtimeLastError;
 
-  if (!resolvedServerId || (!runtimeClient && !hasCachedAgent)) {
+  if (target.kind === "agent" && (!resolvedServerId || (!runtimeClient && !hasCachedAgent))) {
     return (
       <AgentSessionUnavailableState
         serverLabel={serverLabel}
@@ -614,9 +620,9 @@ function AgentPanelContent({
 
   return (
     <AgentPanelBody
-      serverId={resolvedServerId}
+      serverId={resolvedServerId ?? serverId}
       workspaceId={workspaceId}
-      agentId={resolvedAgentId}
+      target={target}
       isPaneFocused={isPaneFocused}
       client={runtimeClient}
       isConnected={runtimeIsConnected}
@@ -628,7 +634,7 @@ function AgentPanelContent({
 function AgentPanelBody({
   serverId,
   workspaceId,
-  agentId,
+  target,
   isPaneFocused,
   client,
   isConnected,
@@ -636,13 +642,14 @@ function AgentPanelBody({
 }: {
   serverId: string;
   workspaceId: string;
-  agentId?: string;
+  target: ConversationTarget;
   isPaneFocused: boolean;
   client: ReturnType<typeof useHostRuntimeClient>;
   isConnected: boolean;
   onOpenWorkspaceFile?: (request: WorkspaceFileOpenRequest) => void;
 }) {
   const { t } = useTranslation();
+  const agentId = resolveConversationAgentId(target);
   const { isArchivingAgent: _isArchivingAgent } = useArchiveAgent();
   const hasSession = useSessionStore((state) => Boolean(state.sessions[serverId]));
   const projectPlacement = useStoreWithEqualityFn(
@@ -770,13 +777,14 @@ function AgentPanelBody({
           model: agentState.model,
           thinkingOptionId: agentState.thinkingOptionId,
           runtimeInfo: agentState.runtimeInfo,
-          features: agentState.features,
+          options: agentState.options,
+          controls: agentState.controls,
           lastError: agentState.lastError ?? null,
           projectPlacement,
         }
       : null;
 
-  if (!agent) {
+  if (target.kind === "agent" && !agent) {
     return (
       <View style={styles.container} testID="agent-loading">
         <View style={styles.errorContainer}>
@@ -790,7 +798,7 @@ function AgentPanelBody({
     <ChatAgentContent
       serverId={serverId}
       workspaceId={workspaceId}
-      agentId={agentId}
+      target={target}
       isPaneFocused={isPaneFocused}
       client={client}
       isConnected={isConnected}
@@ -802,7 +810,7 @@ function AgentPanelBody({
 function ChatAgentContent({
   serverId,
   workspaceId,
-  agentId,
+  target,
   isPaneFocused,
   client,
   isConnected,
@@ -810,19 +818,19 @@ function ChatAgentContent({
 }: {
   serverId: string;
   workspaceId: string;
-  agentId?: string;
+  target: ConversationTarget;
   isPaneFocused: boolean;
   client: ReturnType<typeof useHostRuntimeClient>;
   isConnected: boolean;
   onOpenWorkspaceFile?: (request: WorkspaceFileOpenRequest) => void;
 }) {
   const { t } = useTranslation();
+  const { tabId } = usePaneContext();
+  const agentId = resolveConversationAgentId(target);
   const isPaneVisible = useRetainedPanelActive();
   const { api: toastApi, toast: toastState, dismiss: dismissToast } = useToastHost();
   const { isArchivingAgent } = useArchiveAgent();
   const streamViewRef = useRef<AgentStreamViewHandle>(null);
-  const clearOnAgentBlurRef = useRef<() => void>(() => {});
-  const wasPaneFocusedRef = useRef(isPaneFocused);
   const initAttemptTokenRef = useRef(0);
   const routeBottomAnchorRequestRef = useRef<{
     routeKey: string;
@@ -868,13 +876,11 @@ function ChatAgentContent({
     (listener: () => void) => viewedTimelineSync?.subscribe(listener) ?? (() => {}),
     [viewedTimelineSync],
   );
-  const readTimelineStatus = useCallback(
-    () =>
-      !agentId || !viewedTimelineSync
-        ? ("ready" as const)
-        : viewedTimelineSync.getAgentTimelineStatus(agentId),
-    [agentId, viewedTimelineSync],
-  );
+  const readTimelineStatus = useCallback((): ViewedTimelineStatus => {
+    if (!agentId) return "ready";
+    // Until the owner is published nothing has confirmed this chat, so its check has not begun.
+    return viewedTimelineSync?.getAgentTimelineStatus(agentId) ?? "checking";
+  }, [agentId, viewedTimelineSync]);
   const timelineStatus = useSyncExternalStore(
     subscribeToVisibilityCatchUp,
     readTimelineStatus,
@@ -902,34 +908,30 @@ function ChatAgentContent({
   const hasHydratedHistoryBefore =
     hasAppliedAuthoritativeHistory || replicaTimelineStatus === "painted";
 
+  const focusRequest = useWorkspaceLayoutStore((state) => {
+    const request = state.focusRequest;
+    return request?.workspaceKey === `${serverId}:${workspaceId}` && request.tabId === tabId
+      ? request
+      : null;
+  });
+  const reportAttentionError = useCallback(
+    (error: unknown) => {
+      toastApi.show(String(error), { variant: "error", durationMs: null });
+    },
+    [toastApi],
+  );
   const attentionController = useAgentAttentionClear({
     agentId,
     client,
     isConnected,
+    isAgentDataReady: agentHistorySyncGeneration === historySyncGeneration,
     requiresAttention: agentState.requiresAttention,
     attentionReason: agentState.attentionReason,
     isScreenFocused: isPaneFocused,
+    focusRequest,
+    onError: reportAttentionError,
   });
-  useEffect(() => {
-    clearOnAgentBlurRef.current = attentionController.clearOnAgentBlur;
-  }, [attentionController.clearOnAgentBlur]);
-
   const isArchivingCurrentAgent = Boolean(agentId && isArchivingAgent({ serverId, agentId }));
-
-  useEffect(() => {
-    if (wasPaneFocusedRef.current && !isPaneFocused) {
-      clearOnAgentBlurRef.current();
-    }
-    wasPaneFocusedRef.current = isPaneFocused;
-  }, [isPaneFocused]);
-
-  useEffect(() => {
-    return () => {
-      if (wasPaneFocusedRef.current) {
-        clearOnAgentBlurRef.current();
-      }
-    };
-  }, []);
 
   const isInitializing = agentId ? isInitializingFromMap : false;
   const isHistorySyncing = useMemo(() => {
@@ -1140,7 +1142,17 @@ function ChatAgentContent({
     visibilityCatchUpStatus,
   ]);
 
-  const nonReadyView = renderChatAgentNonReadyView({
+  const draft = useMemo<DraftConversation | null>(
+    () =>
+      target.kind === "draft"
+        ? { tabId, workspaceId, draftId: target.draftId, setup: target.setup }
+        : null,
+    [tabId, target, workspaceId],
+  );
+  const nonReadyView = renderConversationNonReadyView({
+    draft,
+    agentId,
+    cwd: agentState.cwd,
     viewState,
     effectiveAgent,
     t,
@@ -1148,10 +1160,6 @@ function ChatAgentContent({
     serverId,
   });
   if (nonReadyView) return nonReadyView;
-  invariant(agentId, "agent id is defined when agent content is ready");
-  invariant(effectiveAgent, "effectiveAgent is defined when the non-ready view is absent");
-  const agentCwd = agentState.cwd;
-  invariant(agentCwd, "agent cwd is defined when agent content is ready");
   const showHistorySyncOverlay =
     viewState.tag === "ready" &&
     viewState.sync.status === "catching_up" &&
@@ -1166,7 +1174,8 @@ function ChatAgentContent({
     <ChatAgentReadyContent
       serverId={serverId}
       workspaceId={workspaceId}
-      agentId={agentId}
+      agentId={agentId ?? tabId}
+      draft={draft}
       isPaneFocused={isPaneFocused}
       isPaneVisible={isPaneVisible}
       isArchivingCurrentAgent={isArchivingCurrentAgent}
@@ -1174,6 +1183,7 @@ function ChatAgentContent({
       effectiveAgent={effectiveAgent}
       routeBottomAnchorRequest={routeBottomAnchorRequest}
       hasAppliedAuthoritativeHistory={hasAppliedAuthoritativeHistory}
+      hasCachedHistory={replicaTimelineStatus === "painted"}
       toastApi={toastApi}
       toast={toastState}
       dismiss={dismissToast}
@@ -1185,7 +1195,7 @@ function ChatAgentContent({
       showHistorySyncOverlay={showHistorySyncOverlay}
       showHistorySyncError={showHistorySyncError}
       isRetryingHistorySync={isRetryingHistorySync}
-      cwd={agentCwd}
+      cwd={agentState.cwd ?? ""}
       retryTimelineSync={retryTimelineSync}
       onAttentionInputFocus={attentionController.clearOnInputFocus}
       onAttentionPromptSend={attentionController.clearOnPromptSend}
@@ -1194,10 +1204,35 @@ function ChatAgentContent({
   );
 }
 
+interface WorkspaceFilesComposerGateProps {
+  serverId: string;
+  workspaceId: string;
+  children: ReactNode;
+}
+
+/** A workspace whose files are gone takes no prompts; its recovery banner sits in the stream. */
+function WorkspaceFilesComposerGate({
+  serverId,
+  workspaceId,
+  children,
+}: WorkspaceFilesComposerGateProps) {
+  const filesUnavailable =
+    useWorkspaceFields(
+      serverId,
+      workspaceId,
+      (workspace) => workspace.filesState !== undefined && workspace.filesState !== "available",
+    ) ?? false;
+  if (filesUnavailable) {
+    return null;
+  }
+  return children;
+}
+
 const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
   serverId,
   workspaceId,
   agentId,
+  draft,
   isPaneFocused,
   isPaneVisible,
   isArchivingCurrentAgent,
@@ -1205,6 +1240,7 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
   effectiveAgent,
   routeBottomAnchorRequest,
   hasAppliedAuthoritativeHistory,
+  hasCachedHistory,
   toastApi,
   toast,
   dismiss,
@@ -1224,14 +1260,17 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
 }: {
   serverId: string;
   workspaceId: string;
+  /** The agent's id, or the tab id while a draft has no agent yet. */
   agentId: string;
+  draft: DraftConversation | null;
   isPaneFocused: boolean;
   isPaneVisible: boolean;
   isArchivingCurrentAgent: boolean;
   agentState: ChatAgentSelectedState;
-  effectiveAgent: AgentScreenAgent;
+  effectiveAgent: AgentScreenAgent | null;
   routeBottomAnchorRequest: RouteBottomAnchorRequest;
   hasAppliedAuthoritativeHistory: boolean;
+  hasCachedHistory: boolean;
   toastApi: ToastApi;
   toast: ToastState | null;
   dismiss: () => void;
@@ -1250,33 +1289,17 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
   onOpenWorkspaceFile?: (request: WorkspaceFileOpenRequest) => void;
 }) {
   const { t } = useTranslation();
-  const workspaceFilesUnavailable =
-    useWorkspaceFields(
-      serverId,
-      workspaceId,
-      (workspace) => workspace.filesState !== undefined && workspace.filesState !== "available",
-    ) ?? false;
   const [decisionPillHeight, setDecisionPillHeight] = useState(0);
   // The workspace sheet is for looking; Open as tab brings the agent back with its composer.
-  const showsComposer = usePaneContext().host !== "sheet";
+  const paneHost = usePaneContext().host;
+  const showsComposer = draft !== null || paneHost !== "sheet";
   // The dock lays out fullscreen for the same session the composer edits in.
   const composerEditingSession = useComposerEditingSession("chat");
   const isComposerFullscreen = useComposerFullscreen(composerEditingSession);
-  const subagentRows = useSubagentsForParent({ serverId, parentAgentId: agentId });
-  const tasks = useChatTasks({ serverId, agentId });
-  const archiveFinishedSubagents = useArchiveFinishedSubagents({
-    serverId,
-    parentAgentId: agentId,
-    rows: subagentRows,
-  });
-  const hasPluginComposerPills = useHasPluginComposerPills(serverId, workspaceId, agentId);
   const hasActiveComposer = !agentState.archivedAt && !isArchivingCurrentAgent;
-  const hasVisibleAgentTracks = hasAgentTracks({
-    subagentRows,
-    tasks,
-    archiveFinishedStatus: archiveFinishedSubagents.status,
-    hasPluginComposerPills,
-  });
+  const parentAgentId = useParentAgentId(serverId, agentId);
+  // With a composer the parent is a pill above it; without one, the box takes the composer's place.
+  const parentPillAgentId = showsComposer ? parentAgentId : null;
   const rawAgentInputDraft = useAgentInputDraft({
     draftKey: buildDraftStoreKey({
       serverId,
@@ -1323,8 +1346,11 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
       composerState,
     ],
   );
-  const composerSection =
-    showsComposer && !workspaceFilesUnavailable ? (
+  const parentCallout = parentAgentId ? (
+    <ParentAgentCallout serverId={serverId} parentAgentId={parentAgentId} />
+  ) : null;
+  const agentComposerSection = showsComposer ? (
+    <WorkspaceFilesComposerGate serverId={serverId} workspaceId={workspaceId}>
       <RenderProfile id={`AgentComposerSection:${agentId}`}>
         <AgentComposerSection
           agentId={agentId}
@@ -1343,9 +1369,29 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
           onMessageSent={handleMessageSent}
         />
       </RenderProfile>
-    ) : null;
+    </WorkspaceFilesComposerGate>
+  ) : (
+    parentCallout
+  );
+  const composerSection = draft ? (
+    <DraftComposerSection
+      serverId={serverId}
+      draft={draft}
+      isPaneFocused={isPaneFocused}
+      editingSession={composerEditingSession}
+    />
+  ) : (
+    agentComposerSection
+  );
+  const handleAttentionInteraction = useCallback(() => {
+    onAttentionInputFocus();
+    return false;
+  }, [onAttentionInputFocus]);
   const streamContent = (
-    <View style={animatedStaticStyles.content}>
+    <View
+      style={animatedStaticStyles.content}
+      onStartShouldSetResponderCapture={handleAttentionInteraction}
+    >
       {showsComposer ? null : <SheetAgentFacts serverId={serverId} agentId={agentId} />}
       <RenderProfile id={`AgentStreamSection:${agentId}`}>
         <AgentStreamSection
@@ -1355,25 +1401,27 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
           workspaceId={workspaceId}
           agentId={agentId}
           agent={effectiveAgent}
+          draft={draft}
           routeBottomAnchorRequest={routeBottomAnchorRequest}
           hasAppliedAuthoritativeHistory={hasAppliedAuthoritativeHistory}
           feedbackPromptEligible={isPaneVisible && isPaneFocused}
+          isInitialHistoryLoading={
+            routeBottomAnchorRequest?.reason === "initial-entry" &&
+            !hasCachedHistory &&
+            !showHistorySyncError
+          }
+          revealInitialHistory={hasCachedHistory || showHistorySyncError}
           hasActiveComposer={hasActiveComposer}
-          hasVisibleAgentTracks={hasVisibleAgentTracks}
           toast={toastApi}
           onOpenWorkspaceFile={onOpenWorkspaceFile}
         />
       </RenderProfile>
-      {hasActiveComposer ? (
-        <AgentTracks
+      {hasActiveComposer && !draft ? (
+        <ChatAgentTracks
           serverId={serverId}
           workspaceId={workspaceId}
           agentId={agentId}
-          subagentRows={subagentRows}
-          tasks={tasks}
-          archiveFinishedStatus={archiveFinishedSubagents.status}
-          onArchiveFinished={archiveFinishedSubagents.archiveFinished}
-          hasPluginComposerPills={hasPluginComposerPills}
+          parentAgentId={parentPillAgentId}
         />
       ) : null}
     </View>
@@ -1409,7 +1457,7 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
     </ChatSurface>
   );
 
-  return (
+  const content = (
     <RewindComposerRestoreProvider
       textSource={agentInputDraft.textSource}
       setText={agentInputDraft.replaceText}
@@ -1428,7 +1476,39 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
       </View>
     </RewindComposerRestoreProvider>
   );
+  return wrapAgentCommandProvider({
+    enabled: showsComposer && hasActiveComposer && !draft,
+    serverId,
+    agentId,
+    editingSession: composerEditingSession,
+    children: content,
+  });
 });
+
+function wrapAgentCommandProvider({
+  enabled,
+  serverId,
+  agentId,
+  editingSession,
+  children,
+}: {
+  enabled: boolean;
+  serverId: string;
+  agentId: string;
+  editingSession: ComposerEditingSession;
+  children: ReactNode;
+}) {
+  return (
+    <AgentCommandsProvider
+      serverId={serverId}
+      agentId={agentId}
+      editingSession={editingSession}
+      enabled={enabled}
+    >
+      {children}
+    </AgentCommandsProvider>
+  );
+}
 
 function ChatSurface({
   children,
@@ -1439,10 +1519,14 @@ function ChatSurface({
   disabled: boolean;
   fullscreen: boolean;
 }) {
+  // The tracks above the composer open their pages from outside it, so focusing the composer
+  // closes everything the chat opened.
   return (
-    <FileDropZone style={styles.container} disabled={disabled}>
-      <ComposerDock fullscreen={fullscreen}>{children}</ComposerDock>
-    </FileDropZone>
+    <OverlayDismissalScope>
+      <FileDropZone style={styles.container} disabled={disabled}>
+        <ComposerDock fullscreen={fullscreen}>{children}</ComposerDock>
+      </FileDropZone>
+    </OverlayDismissalScope>
   );
 }
 
@@ -1462,7 +1546,6 @@ function TimelineSyncErrorCallout({
             {t("agentPanel.states.timelineSyncFailed")}
           </Text>
           <Button
-            size="sm"
             variant="secondary"
             onPress={onRetry}
             disabled={isRetrying}
@@ -1506,6 +1589,11 @@ function useArenaChatCallouts({
   toast,
 }: ArenaChatCalloutsInput): React.ReactNode {
   const calloutClient = useHostRuntimeClient(serverId);
+  const calloutProjectId = useWorkspaceFields(
+    serverId,
+    agent.workspaceId ?? null,
+    (workspace) => workspace.projectId,
+  );
   // The section renders before an agent exists; the resolve action is gated on agentId below, so
   // an empty key here just reads the defaults until the real one arrives.
   const calloutArenaPreferences = useArenaPreferences(
@@ -1595,6 +1683,7 @@ function useArenaChatCallouts({
     return (
       <ArenaChatCallouts
         serverId={serverId}
+        projectId={calloutProjectId}
         cwd={agent.cwd}
         snapshot={snapshot}
         onResolveConflicts={resolveTrunkConflicts}
@@ -1607,6 +1696,7 @@ function useArenaChatCallouts({
     agentIsWorking,
     snapshot,
     serverId,
+    calloutProjectId,
     agent.cwd,
     calloutPendingPrompt,
     calloutReview,
@@ -1622,11 +1712,13 @@ const AgentStreamSection = memo(function AgentStreamSection({
   workspaceId,
   agentId,
   agent,
+  draft,
   routeBottomAnchorRequest,
   hasAppliedAuthoritativeHistory,
   feedbackPromptEligible,
+  isInitialHistoryLoading,
+  revealInitialHistory,
   hasActiveComposer,
-  hasVisibleAgentTracks,
   toast,
   onOpenWorkspaceFile,
 }: {
@@ -1635,28 +1727,115 @@ const AgentStreamSection = memo(function AgentStreamSection({
   serverId: string;
   workspaceId: string;
   agentId?: string;
-  agent: AgentScreenAgent;
+  agent: AgentScreenAgent | null;
+  draft: DraftConversation | null;
   routeBottomAnchorRequest: RouteBottomAnchorRequest;
   hasAppliedAuthoritativeHistory: boolean;
   feedbackPromptEligible: boolean;
+  isInitialHistoryLoading: boolean;
+  revealInitialHistory: boolean;
   hasActiveComposer: boolean;
-  hasVisibleAgentTracks: boolean;
   toast: ReturnType<typeof useToastHost>["api"];
   onOpenWorkspaceFile?: (request: WorkspaceFileOpenRequest) => void;
 }) {
   const isCompactFormFactor = useIsCompactFormFactor();
-  const hasWorkspaceDiffStat = useWorkspaceHasDiffStat(serverId, workspaceId);
-  const hasVisibleComposerTracks =
-    hasActiveComposer && (hasVisibleAgentTracks || hasWorkspaceDiffStat);
-  const bottomOverlayTailClearance = hasVisibleComposerTracks
+  // The track bar's space is reserved whenever the bar is mounted, pills or not: pills come and go
+  // every turn, and the transcript must not jump with them.
+  const bottomOverlayTailClearance = hasActiveComposer
     ? resolveComposerTrackTailClearance(isCompactFormFactor)
     : 0;
-  const bottomOverlayControlClearance = hasVisibleComposerTracks
+  const bottomOverlayControlClearance = hasActiveComposer
     ? resolveComposerTrackControlClearance(isCompactFormFactor)
     : 0;
-  const streamItemsRaw = useSessionStore((state) =>
-    agentId ? state.sessions[serverId]?.agentStreamTail?.get(agentId) : undefined,
+  // A draft's timeline exists only while its first prompt creates the agent. The created agent's
+  // timeline then replaces this input in the same mounted view.
+  const draftTimeline = useDraftTimeline({ serverId, draft });
+  // A battle draft shows the battle it is setting up in place of the pending prompt row.
+  const draftBattle = useDraftBattleStart({ serverId, draftId: draft?.draftId ?? null });
+
+  if (draftBattle) {
+    return <DraftBattleTimeline prompt={draftBattle.prompt} timestamp={draftBattle.timestamp} />;
+  }
+  if (draftTimeline) {
+    return (
+      <AgentStreamView
+        ref={streamViewRef}
+        agentId={draftTimeline.agent.id}
+        serverId={serverId}
+        context={draftTimeline.agent}
+        streamItems={draftTimeline.streamItems}
+        pendingPermissions={EMPTY_PENDING_PERMISSIONS}
+        bottomOverlayTailClearance={bottomOverlayTailClearance}
+        bottomOverlayControlClearance={bottomOverlayControlClearance}
+        toast={toast}
+        pendingMessageSubmissions={draftTimeline.pendingMessageSubmissions}
+        turnPresentation={draftTimeline.turnPresentation}
+        onOpenWorkspaceFile={onOpenWorkspaceFile}
+      />
+    );
+  }
+  if (draft || !agent || !agentId) {
+    return null;
+  }
+  return (
+    <ArenaAgentStream
+      streamViewRef={streamViewRef}
+      bottomOverlayHeight={bottomOverlayHeight}
+      bottomOverlayTailClearance={bottomOverlayTailClearance}
+      bottomOverlayControlClearance={bottomOverlayControlClearance}
+      serverId={serverId}
+      workspaceId={workspaceId}
+      agentId={agentId}
+      agent={agent}
+      routeBottomAnchorRequest={routeBottomAnchorRequest}
+      hasAppliedAuthoritativeHistory={hasAppliedAuthoritativeHistory}
+      feedbackPromptEligible={feedbackPromptEligible}
+      isInitialHistoryLoading={isInitialHistoryLoading}
+      revealInitialHistory={revealInitialHistory}
+      toast={toast}
+      onOpenWorkspaceFile={onOpenWorkspaceFile}
+    />
   );
+});
+
+/**
+ * An agent's stream with its battle: the contestant panes, the summaries and callouts in the
+ * stream, and the chat ordered the way the panes read. A draft has no agent and none of this.
+ */
+function ArenaAgentStream({
+  streamViewRef,
+  bottomOverlayHeight,
+  bottomOverlayTailClearance,
+  bottomOverlayControlClearance,
+  serverId,
+  workspaceId,
+  agentId,
+  agent,
+  routeBottomAnchorRequest,
+  hasAppliedAuthoritativeHistory,
+  feedbackPromptEligible,
+  isInitialHistoryLoading,
+  revealInitialHistory,
+  toast,
+  onOpenWorkspaceFile,
+}: {
+  streamViewRef: React.RefObject<AgentStreamViewHandle | null>;
+  bottomOverlayHeight: number;
+  bottomOverlayTailClearance: number;
+  bottomOverlayControlClearance: number;
+  serverId: string;
+  workspaceId: string;
+  agentId: string;
+  agent: AgentScreenAgent;
+  routeBottomAnchorRequest: RouteBottomAnchorRequest;
+  hasAppliedAuthoritativeHistory: boolean;
+  feedbackPromptEligible: boolean;
+  isInitialHistoryLoading: boolean;
+  revealInitialHistory: boolean;
+  toast: ReturnType<typeof useToastHost>["api"];
+  onOpenWorkspaceFile?: (request: WorkspaceFileOpenRequest) => void;
+}) {
+  const streamItemsRaw = useAgentStreamTail(serverId, agentId);
   const pendingMessageSubmissions = useSessionStore(
     useShallow((state) =>
       agentId
@@ -1667,13 +1846,8 @@ const AgentStreamSection = memo(function AgentStreamSection({
   const turnPresentation = useSessionStore(
     useShallow((state) =>
       agentId
-        ? selectAgentTurnPresentation(state.sessions[serverId], agentId)
-        : {
-            isActive: false,
-            isCancelling: false,
-            startedAt: null,
-            turnId: null,
-          },
+        ? selectAgentTimelineTurnPresentation(state.sessions[serverId], agentId)
+        : { isActive: false, isCancelling: false, startedAt: null, turnId: null },
     ),
   );
   const streamItems = streamItemsRaw ?? EMPTY_STREAM_ITEMS;
@@ -1943,7 +2117,6 @@ const AgentStreamSection = memo(function AgentStreamSection({
       ),
     [arenaStatusError, arenaSession.refetch, liveContent],
   );
-
   return (
     <ArenaPartSourceContext.Provider value={arenaPartSource}>
       <AgentStreamView
@@ -1956,6 +2129,8 @@ const AgentStreamSection = memo(function AgentStreamSection({
         pendingPermissions={pendingPermissions}
         routeBottomAnchorRequest={routeBottomAnchorRequest}
         isAuthoritativeHistoryReady={hasAppliedAuthoritativeHistory}
+        isInitialHistoryLoading={isInitialHistoryLoading}
+        revealInitialHistory={revealInitialHistory}
         toast={toast}
         pendingMessageSubmissions={pendingMessageSubmissions}
         turnPresentation={turnPresentation}
@@ -1971,7 +2146,44 @@ const AgentStreamSection = memo(function AgentStreamSection({
       />
     </ArenaPartSourceContext.Provider>
   );
-});
+}
+
+/** The draft's composer, which creates the agent and retargets this tab to it. */
+function DraftComposerSection({
+  serverId,
+  draft,
+  isPaneFocused,
+  editingSession,
+}: {
+  serverId: string;
+  draft: DraftConversation;
+  isPaneFocused: boolean;
+  editingSession: ComposerEditingSession;
+}) {
+  const { retargetCurrentTab } = usePaneContext();
+  const handleCreated = useCallback(
+    (agentSnapshot: Parameters<typeof normalizeAgentSnapshot>[0]) => {
+      const normalized = normalizeAgentSnapshot(agentSnapshot, serverId);
+      const agent = applyLegacyDaemonWorkspaceOwnership({ serverId, agent: normalized });
+      getHostRuntimeStore().acceptAgentSnapshot(serverId, agent);
+      retargetCurrentTab({ kind: "agent", agentId: agentSnapshot.id });
+    },
+    [retargetCurrentTab, serverId],
+  );
+
+  return (
+    <WorkspaceDraftComposer
+      serverId={serverId}
+      workspaceId={draft.workspaceId}
+      tabId={draft.tabId}
+      draftId={draft.draftId}
+      initialSetup={draft.setup}
+      isPaneFocused={isPaneFocused}
+      editingSession={editingSession}
+      onCreated={handleCreated}
+    />
+  );
+}
 
 const AgentComposerSection = memo(function AgentComposerSection({
   agentId,
@@ -2115,6 +2327,30 @@ function useSingleAgentRatingDialog({
  * battles run, and once a battle ends it skips the winner's replayed task lists, which keep their
  * original timestamps.
  */
+/** The pills above an agent's composer, with the task list a battle chat shows (`useChatTasks`). */
+function ChatAgentTracks({
+  serverId,
+  workspaceId,
+  agentId,
+  parentAgentId,
+}: {
+  serverId: string;
+  workspaceId: string;
+  agentId: string;
+  parentAgentId: string | null;
+}) {
+  const tasks = useChatTasks({ serverId, agentId });
+  return (
+    <AgentTracks
+      serverId={serverId}
+      workspaceId={workspaceId}
+      agentId={agentId}
+      parentAgentId={parentAgentId}
+      tasks={tasks}
+    />
+  );
+}
+
 function useChatTasks({
   serverId,
   agentId,
@@ -2231,10 +2467,8 @@ function ActiveAgentComposer({
   );
   const isCompactFormFactor = useIsCompactFormFactor();
   const { onLayout: onInputAreaLayout, isBelow: isCompactComposerLayout } = useContainerWidthBelow(
-    COMPACT_FORM_FACTOR_WIDTH,
-    {
-      initialIsBelow: isCompactFormFactor,
-    },
+    COMPACT_CONTENT_WIDTH,
+    { initialIsBelow: isCompactFormFactor },
   );
   const paneContext = usePaneContext();
   const { workspaceId, tabId, retargetCurrentTab } = paneContext;

@@ -6,6 +6,9 @@ import {
   useAssistantFileLinkEnvironment,
 } from "@/assistant-file-links";
 import { useStableEvent } from "@/hooks/use-stable-event";
+import { matchCommandLink, useAgentCommandHints, type CommandHints } from "@/agent-commands";
+import { useForgeShorthand } from "@/git/forge-shorthand";
+import { openExternalUrl } from "@/utils/open-external-url";
 import { AttachmentLightbox, type ImageLightboxSource } from "@/components/attachment-lightbox";
 import type { Theme } from "@/styles/theme";
 import { isWeb } from "@/constants/platform";
@@ -33,15 +36,21 @@ type MarkdownStyleMapping = (
 // function identity changes, so the mapping for a given set has to be stable.
 const markdownStyles = new Map<string, MarkdownStyleMapping>();
 
-function markdownStyle(compact: boolean, variant: Required<MarkdownStyleVariant>) {
-  const key = `${compact}|${variant.subdued}|${variant.flatHeadings}|${variant.proseMeasure}`;
+function markdownStyle(compact: boolean, muted: boolean, variant: Required<MarkdownStyleVariant>) {
+  // Muted text is for compact surfaces only.
+  const mutedText = compact && muted;
+  const key = `${compact}|${mutedText}|${variant.subdued}|${variant.flatHeadings}|${variant.proseMeasure}`;
   let mapping = markdownStyles.get(key);
   if (!mapping) {
     // Reading the breakpoint here makes Unistyles restyle the text when the layout crosses it.
     mapping = (theme, rt) =>
       applyMarkdownStyleVariant(
         theme,
-        createMarkdownStyles(theme, { compact, blockGap: resolveDensity(rt, density.blockGap) }),
+        createMarkdownStyles(theme, {
+          compact,
+          muted: mutedText,
+          blockGap: resolveDensity(rt, density.blockGap),
+        }),
         variant,
       );
     markdownStyles.set(key, mapping);
@@ -52,8 +61,12 @@ function markdownStyle(compact: boolean, variant: Required<MarkdownStyleVariant>
 export interface MarkdownRendererProps extends MarkdownImageContext, MarkdownStyleVariant {
   text: string;
   compact?: boolean;
+  /** Muted text colour. Compact surfaces only. */
+  muted?: boolean;
+  selectable?: boolean;
   streaming?: boolean;
   onLinkPress?: (url: string) => unknown;
+  agentCommands?: boolean;
 }
 
 /** All Markdown surfaces share the same engine and source adaptation. */
@@ -65,41 +78,66 @@ export const MarkdownRenderer = memo(function MarkdownRenderer(props: MarkdownRe
     () => splitStreamingMarkdown(completeLines, true).head.length,
     [completeLines],
   );
-  if (!streaming || boundary === 0) return <MarkdownPart {...props} />;
+  const Part = props.agentCommands ? CommandMarkdownPart : MarkdownPart;
+  if (!streaming || boundary === 0) return <Part {...props} />;
   return (
     <MarkdownBlockStack>
-      <MarkdownPart {...props} text={props.text.slice(0, boundary)} />
-      <MarkdownPart {...props} text={props.text.slice(boundary)} />
+      <Part {...props} text={props.text.slice(0, boundary)} />
+      <Part {...props} text={props.text.slice(boundary)} />
     </MarkdownBlockStack>
   );
+});
+
+const CommandMarkdownPart = memo(function CommandMarkdownPart(props: MarkdownRendererProps) {
+  const commandHints = useAgentCommandHints();
+  return <MarkdownPart {...props} commandHints={commandHints} />;
 });
 
 const MarkdownPart = memo(function MarkdownPart({
   text,
   compact = false,
+  muted = false,
+  selectable = true,
   streaming = false,
   onLinkPress,
   subdued = false,
   flatHeadings = false,
   proseMeasure = false,
+  agentCommands: _agentCommands,
+  commandHints = null,
   ...imageContext
-}: MarkdownRendererProps) {
+}: MarkdownRendererProps & { commandHints?: CommandHints | null }) {
   const environment = useAssistantFileLinkEnvironment();
   const actions = useAssistantFileLinkActions();
   const openInWorkspaceBrowser = useWorkspaceBrowserLinkOpener();
+  const forgeShorthand = useForgeShorthand();
   const client =
     imageContext.client ??
     (environment.client?.readFile
       ? { readFile: environment.client.readFile.bind(environment.client) }
       : undefined);
-  const { markdown, imageSources, linkRecognition, linkSource } = useMarkdownSource(text, {
-    workspaceRoot: environment.workspaceRoot,
-    serverId: environment.serverId,
-    ...imageContext,
-    client,
-  });
+  const { markdown, imageSources, linkRecognition, linkSource } = useMarkdownSource(
+    text,
+    {
+      workspaceRoot: environment.workspaceRoot,
+      serverId: environment.serverId,
+      ...imageContext,
+      client,
+    },
+    { commandNames: commandHints?.names, forgeReferencePattern: forgeShorthand?.pattern },
+  );
   const [image, setImage] = useState<ImageLightboxSource | null>(null);
   const pressLink = useStableEvent(({ url, sourceType }: LinkPressEvent) => {
+    const command = commandHints && matchCommandLink(url, sourceType, commandHints.names);
+    if (command) {
+      commandHints.insert(command);
+      return;
+    }
+    const forgeUrl = sourceType === "text" ? forgeShorthand?.resolve(url) : null;
+    if (forgeUrl) {
+      void openExternalUrl(forgeUrl);
+      return;
+    }
     const source = linkSource(url, sourceType);
     const isFile = actions.canResolveFile(source);
     if (onLinkPress && !isFile) onLinkPress(url);
@@ -127,9 +165,9 @@ const MarkdownPart = memo(function MarkdownPart({
             <ThemedMarkdown
               key={`${segment.kind}:${segment.id}`}
               markdown={segment.source}
-              uniProps={markdownStyle(compact, { subdued, flatHeadings, proseMeasure })}
+              uniProps={markdownStyle(compact, muted, { subdued, flatHeadings, proseMeasure })}
               flavor="github"
-              selectable
+              selectable={selectable}
               md4cFlags={MD4C_FLAGS}
               linkRecognition={linkRecognition}
               enableTaskListItemToggle={false}

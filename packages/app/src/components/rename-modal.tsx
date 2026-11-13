@@ -4,9 +4,8 @@ import { StyleSheet } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
 import { AdaptiveModalSheet, type SheetHeader } from "@/components/adaptive-modal-sheet";
 import { Button } from "@/components/ui/button";
-import { type FieldControlSize } from "@/components/ui/control-geometry";
+import { type ControlSize } from "@/components/ui/control-geometry";
 import { FormTextInput } from "@/components/ui/form-field";
-import { useIsCompactFormFactor } from "@/constants/layout";
 import { isWeb } from "@/constants/platform";
 import type { EditingTextInputHandle } from "@/components/ui/text-input";
 
@@ -42,7 +41,8 @@ export function AdaptiveRenameModal({
   testID,
 }: AdaptiveRenameModalProps) {
   const { t } = useTranslation();
-  const controlSize: FieldControlSize = useIsCompactFormFactor() ? "md" : "sm";
+  // `md` is pointer-sized on desktop and a full touch target on touch screens.
+  const controlSize: ControlSize = "md";
   const [draft, setDraft] = useState(initialValue);
   const [error, setError] = useState<string | null>(null);
   const [isPending, setIsPending] = useState(false);
@@ -172,7 +172,6 @@ export function AdaptiveRenameModal({
         <View style={styles.actions}>
           <Button
             variant="secondary"
-            size="sm"
             style={styles.actionButton}
             onPress={handleCancel}
             disabled={isPending}
@@ -182,7 +181,6 @@ export function AdaptiveRenameModal({
           </Button>
           <Button
             variant="default"
-            size="sm"
             style={styles.actionButton}
             onPress={handleSubmitVoid}
             disabled={submitDisabled}

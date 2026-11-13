@@ -276,7 +276,7 @@ export function SplitFileView({
       </View>
       {truncated ? (
         <View style={styles.pad}>
-          <Button size="xs" variant="ghost" onPress={showAll}>
+          <Button size="sm" variant="ghost" onPress={showAll}>
             {t("arena.showAllRows", { total: rows.length })}
           </Button>
         </View>

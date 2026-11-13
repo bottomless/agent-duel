@@ -796,7 +796,8 @@ function createDeps(options?: {
   const workspaceRegistry: WorkspaceRegistry = {
     initialize: async () => {},
     existsOnDisk: async () => true,
-    list: async () => Array.from(workspaces.values()),
+    listAll: async () => Array.from(workspaces.values()),
+    listActive: async () => Array.from(workspaces.values()).filter((record) => !record.archivedAt),
     get: async (workspaceId) => workspaces.get(workspaceId) ?? null,
     update: async (workspaceId, updater) => {
       const workspace = workspaces.get(workspaceId);
@@ -819,6 +820,7 @@ function createDeps(options?: {
   };
   const workspaceGitService = createWorkspaceGitServiceStub();
   const workspaceProvisioning = createWorkspaceProvisioningService({
+    unarchiveWorkspaceAgents: async () => {},
     projectRegistry,
     workspaceRegistry,
     workspaceGitService,

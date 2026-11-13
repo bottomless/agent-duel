@@ -114,7 +114,7 @@ export function ChatFeedbackCard({
           <Text style={styles.successText}>{t("feedback.chat.successTitle")}</Text>
           <Button
             variant="ghost"
-            size="xs"
+            size="sm"
             leftIcon={X}
             onPress={dismiss}
             accessibilityLabel={t("common.actions.dismiss")}
@@ -130,7 +130,7 @@ export function ChatFeedbackCard({
             </View>
             <Button
               variant="ghost"
-              size="xs"
+              size="sm"
               leftIcon={X}
               onPress={dismiss}
               accessibilityLabel={t("feedback.chat.dismiss")}
@@ -141,7 +141,7 @@ export function ChatFeedbackCard({
           <View style={styles.ratingRow}>
             <Button
               variant={selected === "not_great" ? "secondary" : "ghost"}
-              size="sm"
+              size="md"
               style={styles.ratingButton}
               onPress={selectNotGreat}
               testID="chat-feedback-not-great"
@@ -150,7 +150,7 @@ export function ChatFeedbackCard({
             </Button>
             <Button
               variant={selected === "okay" ? "secondary" : "ghost"}
-              size="sm"
+              size="md"
               style={styles.ratingButton}
               onPress={selectOkay}
               testID="chat-feedback-okay"
@@ -159,7 +159,7 @@ export function ChatFeedbackCard({
             </Button>
             <Button
               variant={selected === "great" ? "secondary" : "ghost"}
-              size="sm"
+              size="md"
               style={styles.ratingButton}
               onPress={selectGreat}
               testID="chat-feedback-great"
@@ -172,7 +172,7 @@ export function ChatFeedbackCard({
             <View style={styles.commentRow}>
               <View style={styles.commentInputWrap}>
                 <FormTextInput
-                  size="sm"
+                  size="md"
                   placeholder={t("feedback.chat.commentPlaceholder")}
                   onChangeText={setComment}
                   onSubmitEditing={submit}
@@ -182,7 +182,7 @@ export function ChatFeedbackCard({
               </View>
               <Button
                 variant="default"
-                size="sm"
+                size="md"
                 onPress={submit}
                 loading={submitting}
                 testID="chat-feedback-submit"

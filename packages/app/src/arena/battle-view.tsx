@@ -443,7 +443,7 @@ function BattlePane({
           {awayFromLatest ? (
             <View style={styles.latestOverlay} pointerEvents="box-none">
               <Button
-                size="sm"
+                size="md"
                 variant="outline"
                 style={styles.latestButton}
                 leftIcon={ArrowDown}

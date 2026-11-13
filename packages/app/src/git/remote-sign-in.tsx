@@ -157,7 +157,7 @@ function RemoteLoginForm({ remote }: { remote: RemoteSignIn }) {
       ) : null}
       <View style={styles.actions}>
         <Button
-          size="sm"
+          size="md"
           variant="secondary"
           onPress={handleSubmit}
           loading={remote.pending}

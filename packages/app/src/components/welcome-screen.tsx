@@ -189,7 +189,6 @@ export function WelcomeScreen() {
 
           <Button
             variant="ghost"
-            size="sm"
             leftIcon={Settings}
             onPress={handleOpenSettings}
             style={styles.settingsButton}

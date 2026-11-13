@@ -210,13 +210,7 @@ function createTerminalManagerStub(options?: {
             id: `terminal-${terminals.length + 1}`,
             name: input.name ?? "Terminal",
             cwd: input.cwd,
-            getState: () => ({
-              rows: 1,
-              cols: 1,
-              scrollback: [[{ char: "$" }]],
-              grid: [],
-              cursor: { row: 0, col: 0 },
-            }),
+            hasOutput: () => true,
             subscribe: () => () => {},
             onExit: () => () => {},
             onCommandFinished: () => () => {},
@@ -335,7 +329,8 @@ function createPaseoWorktreeForTest(options: {
   const workspaceRegistry: WorkspaceRegistry = {
     initialize: async () => {},
     existsOnDisk: async () => true,
-    list: async () => Array.from(workspaces.values()),
+    listAll: async () => Array.from(workspaces.values()),
+    listActive: async () => Array.from(workspaces.values()).filter((w) => !w.archivedAt),
     get: async (workspaceId) => workspaces.get(workspaceId) ?? null,
     update: async (workspaceId, updater) => {
       const workspace = workspaces.get(workspaceId);
@@ -357,6 +352,7 @@ function createPaseoWorktreeForTest(options: {
     },
   };
   const workspaceProvisioning = createWorkspaceProvisioningService({
+    unarchiveWorkspaceAgents: async () => {},
     projectRegistry,
     workspaceRegistry,
     workspaceGitService,
@@ -480,9 +476,9 @@ describe("create-agent worktree setup boundary", () => {
   });
 });
 
-function createAgentStorageStub(): Pick<AgentStorage, "list"> {
+function createAgentStorageStub(): Pick<AgentStorage, "listAll"> {
   return {
-    list: async (): Promise<StoredAgentRecord[]> => [],
+    listAll: async (): Promise<StoredAgentRecord[]> => [],
   };
 }
 

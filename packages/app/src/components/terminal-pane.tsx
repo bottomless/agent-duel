@@ -1,5 +1,6 @@
 import { TerminalFind, type TerminalPaneFindHandle } from "@/terminal/find";
 import type { TerminalFindResult } from "@/terminal/runtime/terminal-emulator-runtime";
+import type { TerminalCharacterWidths } from "@/terminal/character-widths";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { useRetainedPanelActive } from "@/components/retained-panel";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -15,7 +16,6 @@ import Animated, { runOnJS, useAnimatedReaction } from "react-native-reanimated"
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import { Keyboard as KeyboardIcon, KeyboardOff as KeyboardOffIcon } from "lucide-react-native";
 import type { TerminalKeyInput } from "@getpaseo/protocol/terminal-key-input";
-import type { TerminalState } from "@getpaseo/protocol/messages";
 import {
   DEFAULT_TERMINAL_INPUT_MODE_STATE,
   type TerminalInputModeState,
@@ -60,7 +60,6 @@ import { getDesktopHost } from "@/desktop/host";
 import { routeTerminalDrop } from "@/terminal/drop/terminal-file-drop";
 import { prepareDroppedPathsForTerminal } from "@/terminal/drop/terminal-path";
 import { toErrorMessage } from "@/utils/error-messages";
-import { getWorkspaceTerminalSession } from "@/terminal/runtime/workspace-terminal-session";
 import {
   EMPTY_FOCUS_CLAIM_STATE,
   canAttachWithSizeClaim,
@@ -87,10 +86,10 @@ import {
 } from "./terminal-resize-debouncer";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { isNative } from "@/constants/platform";
+import { useKeyboardFocusSurface } from "@/keyboard";
 import {
   applyTerminalRendererReadyChange,
   resolveTerminalStreamTarget,
-  shouldReplayTerminalSnapshotForRenderer,
   shouldShowTerminalLoadingOverlay,
   type TerminalRendererReadyChange,
 } from "@/utils/terminal-renderer-readiness";
@@ -271,6 +270,61 @@ function KeyboardToggleButton({
   );
 }
 
+interface CursorAnchorProps {
+  onCursorAnchorChange?: (top: number | null) => void;
+}
+
+interface BelowCursorPlacement {
+  top: number;
+  onOutputLayout: (event: LayoutChangeEvent) => void;
+  onSlotLayout: (event: LayoutChangeEvent) => void;
+  /** Empty without a note, so the emulator only tracks the cursor row when something hangs off it. */
+  cursorAnchorProps: CursorAnchorProps;
+}
+
+function useBelowCursorPlacement(belowCursor: ReactNode): BelowCursorPlacement {
+  const [cursorAnchorTop, setCursorAnchorTop] = useState<number | null>(null);
+  const [outputHeight, setOutputHeight] = useState(0);
+  const [belowCursorHeight, setBelowCursorHeight] = useState(0);
+  const handleOutputLayout = useCallback((event: LayoutChangeEvent) => {
+    setOutputHeight(event.nativeEvent.layout.height);
+  }, []);
+  const handleBelowCursorLayout = useCallback((event: LayoutChangeEvent) => {
+    setBelowCursorHeight(event.nativeEvent.layout.height);
+  }, []);
+  const top = resolveBelowCursorTop({
+    anchor: cursorAnchorTop,
+    outputHeight,
+    noticeHeight: belowCursorHeight,
+  });
+  const cursorAnchorProps: CursorAnchorProps = belowCursor
+    ? { onCursorAnchorChange: setCursorAnchorTop }
+    : {};
+  return {
+    top,
+    onOutputLayout: handleOutputLayout,
+    onSlotLayout: handleBelowCursorLayout,
+    cursorAnchorProps,
+  };
+}
+
+interface BelowCursorSlotProps {
+  top: number;
+  onLayout: (event: LayoutChangeEvent) => void;
+  children: ReactNode;
+}
+
+function BelowCursorSlot({ top, onLayout, children }: BelowCursorSlotProps) {
+  if (!children) {
+    return null;
+  }
+  return (
+    <View pointerEvents="none" style={[styles.belowCursorSlot, { top }]} onLayout={onLayout}>
+      {children}
+    </View>
+  );
+}
+
 export function TerminalPane({
   serverId,
   cwd,
@@ -285,9 +339,7 @@ export function TerminalPane({
   const { t } = useTranslation();
   const readOnlyRef = useRef(readOnly);
   readOnlyRef.current = readOnly;
-  const [cursorAnchorTop, setCursorAnchorTop] = useState<number | null>(null);
-  const [outputHeight, setOutputHeight] = useState(0);
-  const [belowCursorHeight, setBelowCursorHeight] = useState(0);
+  const belowCursorPlacement = useBelowCursorPlacement(belowCursor);
   const retainedPanelActive = useRetainedPanelActive();
   const isAppActivelyVisible = useAppActivelyVisible();
   const { theme } = useUnistyles();
@@ -327,6 +379,11 @@ export function TerminalPane({
   const supportsTerminalSizeOwnership = useSessionStore(
     (state) => state.sessions[serverId]?.serverInfo?.features?.["terminal-size-ownership"] === true,
   );
+  const characterWidths: TerminalCharacterWidths = useSessionStore((state) =>
+    state.sessions[serverId]?.serverInfo?.features?.["terminal-grapheme-widths"] === true
+      ? "graphemes"
+      : "legacy",
+  );
   const setFocusedTerminalId = useSessionStore((state) => state.setFocusedTerminalId);
 
   const scopeKey = useMemo(() => terminalScopeKey({ serverId, cwd }), [serverId, cwd]);
@@ -336,10 +393,6 @@ export function TerminalPane({
   const measuredTerminalSizeRef = useRef<{ rows: number; cols: number } | null>(null);
   const lastSentTerminalSizeRef = useRef<{ rows: number; cols: number } | null>(null);
   const streamControllerRef = useRef<TerminalStreamController | null>(null);
-  const workspaceTerminalSession = useMemo(
-    () => getWorkspaceTerminalSession({ scopeKey }),
-    [scopeKey],
-  );
   const [isAttaching, setIsAttaching] = useState(false);
   const [streamError, setStreamError] = useState<string | null>(null);
   const [rendererReadyStreamKey, setRendererReadyStreamKey] = useState<string | null>(null);
@@ -403,7 +456,6 @@ export function TerminalPane({
   const keyboardRefitTimeoutsRef = useRef<Array<ReturnType<typeof setTimeout>>>([]);
   const lastAutoFocusKeyRef = useRef<string | null>(null);
   const paneFocusResizeClaimRef = useRef(EMPTY_FOCUS_CLAIM_STATE);
-  const initialSnapshot = workspaceTerminalSession.snapshots.get({ terminalId });
 
   useEffect(() => {
     terminalIdRef.current = terminalId;
@@ -461,16 +513,8 @@ export function TerminalPane({
     (change: TerminalRendererReadyChange) => {
       if (!change.isReady && change.streamKey === terminalStreamKey) findRef.current?.reset();
       setRendererReadyStreamKey((current) => applyTerminalRendererReadyChange(current, change));
-      if (!shouldReplayTerminalSnapshotForRenderer({ change, terminalStreamKey })) {
-        return;
-      }
-
-      const snapshot = workspaceTerminalSession.snapshots.get({ terminalId });
-      if (snapshot) {
-        emulatorRef.current?.renderSnapshot(snapshot);
-      }
     },
-    [terminalId, terminalStreamKey, workspaceTerminalSession.snapshots],
+    [terminalStreamKey],
   );
 
   useEffect(() => {
@@ -487,6 +531,8 @@ export function TerminalPane({
       requestTerminalFocus();
     }
   }, [isMobile, isPaneFocused, isWorkspaceFocused, requestTerminalFocus, scopeKey, terminalId]);
+
+  useKeyboardFocusSurface("terminal", isTerminalPresented && isPaneFocused && terminalId != null);
 
   useEffect(() => {
     const canRequest = canRequestFocusClaim({
@@ -584,7 +630,6 @@ export function TerminalPane({
   );
 
   const handleStreamExit = useStableEvent((exitedTerminalId: string) => {
-    workspaceTerminalSession.snapshots.clear({ terminalId: exitedTerminalId });
     if (terminalIdRef.current === exitedTerminalId) emulatorRef.current?.clear();
     setModifiers({ ...EMPTY_MODIFIERS });
   });
@@ -631,29 +676,10 @@ export function TerminalPane({
     },
   );
 
-  const handleStreamRestore = useStableEvent(
-    ({ terminalId: restoreTerminalId, data }: { terminalId: string; data: Uint8Array }) => {
-      workspaceTerminalSession.snapshots.clear({ terminalId: restoreTerminalId });
-      if (terminalIdRef.current !== restoreTerminalId) {
-        return;
-      }
-      emulatorRef.current?.restoreOutput(data);
-    },
-  );
-
-  const handleStreamSnapshot = useStableEvent(
-    ({ terminalId: snapshotTerminalId, state }: { terminalId: string; state: TerminalState }) => {
-      workspaceTerminalSession.snapshots.set({ terminalId: snapshotTerminalId, state });
-      if (terminalIdRef.current !== snapshotTerminalId) {
-        return;
-      }
-      emulatorRef.current?.renderSnapshot(state);
-    },
-  );
-
   const getStreamRestoreOptions = useStableEvent(() =>
     resolveTerminalRestoreOptions({
       supportsTerminalRestoreModes,
+      scrollbackLines: settings.terminalScrollbackLines,
       canClaimSize: canAttachWithSizeClaim({
         isWorkspaceFocused: terminalPresentedRef.current,
         isPaneFocused,
@@ -680,8 +706,9 @@ export function TerminalPane({
       client,
       getPreferredSize: getPreferredStreamSize,
       onOutput: handleStreamOutput,
-      onRestore: handleStreamRestore,
-      onSnapshot: handleStreamSnapshot,
+      onReplay: ({ terminalId: id, replay }) => {
+        if (terminalIdRef.current === id) emulatorRef.current?.replay(replay);
+      },
       onExit: handleStreamExit,
       getRestoreOptions: getStreamRestoreOptions,
       onStatusChange: handleStreamControllerStatus,
@@ -701,8 +728,6 @@ export function TerminalPane({
     getStreamRestoreOptions,
     handleStreamControllerStatus,
     handleStreamOutput,
-    handleStreamRestore,
-    handleStreamSnapshot,
     handleStreamExit,
     isConnected,
   ]);
@@ -1171,18 +1196,6 @@ export function TerminalPane({
     emulatorRef.current?.blur();
     onOpenFileExplorer();
   }, [swipeGesturesEnabled, onOpenFileExplorer]);
-  const handleOutputLayout = useCallback((event: LayoutChangeEvent) => {
-    setOutputHeight(event.nativeEvent.layout.height);
-  }, []);
-  const handleBelowCursorLayout = useCallback((event: LayoutChangeEvent) => {
-    setBelowCursorHeight(event.nativeEvent.layout.height);
-  }, []);
-  const belowCursorTop = resolveBelowCursorTop({
-    anchor: cursorAnchorTop,
-    outputHeight,
-    noticeHeight: belowCursorHeight,
-  });
-
   const showPasteAction = shouldShowTerminalPasteAction({ isNative });
   const showFloatingCopyAction = shouldShowTerminalFloatingCopyAction({
     hasSelection,
@@ -1251,23 +1264,26 @@ export function TerminalPane({
     <Animated.View style={containerStyle}>
       <FileDropZone style={styles.outputContainer} disabled={readOnly}>
         <TerminalFileDropSink onFiles={handleDroppedFiles} />
-        <View style={styles.terminalGestureContainer} onLayout={handleOutputLayout}>
+        <View
+          style={styles.terminalGestureContainer}
+          onLayout={belowCursorPlacement.onOutputLayout}
+        >
           <TerminalEmulator
             ref={emulatorRef}
             dom={TERMINAL_EMULATOR_DOM_PROPS}
             streamKey={terminalStreamKey}
             supportsTerminalInputModeReplay={supportsTerminalInputModeReplay}
+            characterWidths={characterWidths}
             testId="terminal-surface"
             xtermTheme={xtermTheme}
             scrollbackLines={settings.terminalScrollbackLines}
             inputEnabled={!readOnly}
-            {...(belowCursor ? { onCursorAnchorChange: setCursorAnchorTop } : {})}
+            {...belowCursorPlacement.cursorAnchorProps}
             fontFamily={terminalFontFamily}
             fontSize={settings.codeFontSize}
             keyboardInset={keyboardInset}
             isKeyboardVisible={isKeyboardVisible}
             swipeGesturesEnabled={swipeGesturesEnabled}
-            initialSnapshot={initialSnapshot}
             onRendererReadyChange={handleRendererReadyChange}
             onSwipeRight={handleSwipeRight}
             onSwipeLeft={handleSwipeLeft}
@@ -1305,15 +1321,12 @@ export function TerminalPane({
           </View>
         ) : null}
 
-        {belowCursor ? (
-          <View
-            pointerEvents="none"
-            style={[styles.belowCursorSlot, { top: belowCursorTop }]}
-            onLayout={handleBelowCursorLayout}
-          >
-            {belowCursor}
-          </View>
-        ) : null}
+        <BelowCursorSlot
+          top={belowCursorPlacement.top}
+          onLayout={belowCursorPlacement.onSlotLayout}
+        >
+          {belowCursor}
+        </BelowCursorSlot>
 
         {showFloatingCopyAction ? (
           <View pointerEvents="box-none" style={styles.floatingCopyContainer}>

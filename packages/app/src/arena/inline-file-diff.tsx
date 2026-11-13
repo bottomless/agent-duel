@@ -103,7 +103,7 @@ export function InlineFileDiff({
     return (
       <View style={styles.status} accessibilityRole="alert" testID="arena-inline-diff-error">
         <Text style={styles.error}>{toErrorMessage(query.error)}</Text>
-        <Button size="xs" variant="ghost" loading={query.isFetching} onPress={retry}>
+        <Button size="sm" variant="ghost" loading={query.isFetching} onPress={retry}>
           {t("arena.retryDiff")}{" "}
         </Button>
       </View>

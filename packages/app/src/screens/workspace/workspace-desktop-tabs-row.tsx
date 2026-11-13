@@ -1,6 +1,8 @@
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import React, {
   Fragment,
+  createContext,
+  useContext,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -60,7 +62,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useShortcutKeys } from "@/hooks/use-shortcut-keys";
 import { WORKSPACE_SECONDARY_HEADER_HEIGHT, useIsCompactFormFactor } from "@/constants/layout";
-import { buttonControlHeight } from "@/components/ui/control-geometry";
+import { CONTROL_HEIGHTS } from "@/components/ui/control-geometry";
 import { useWorkspaceTabLayout } from "@/screens/workspace/use-workspace-tab-layout";
 import { retainWorkspaceTabMeasuredWidth } from "@/screens/workspace/workspace-tab-layout";
 import {
@@ -88,6 +90,7 @@ import { TrailingActionScrim } from "@/components/ui/trailing-action-scrim";
 import { useCompactTimeAgo } from "@/hooks/use-time-ago";
 import { formatCompactTimeAgoAsProse } from "@/utils/time";
 import {
+  paneContentToolbarIconSize,
   paneContentToolbarTrailingPadding,
   ToolbarButton,
   ToolbarControls,
@@ -120,6 +123,8 @@ const TAB_ICON_WIDTH = 14;
 const TAB_CONTENT_GAP = 4;
 const TAB_DROP_INDICATOR_WIDTH = 4;
 const TAB_MODIFIED_DOT_SIZE = 8;
+// The tab rail only renders in the wide layout, so the device alone picks its glyph size.
+const TAB_RAIL_GLYPH_SIZE = paneContentToolbarIconSize(false);
 const TAB_MIN_WIDTH = 64;
 const TAB_MAX_WIDTH = 160;
 const TAB_CLOSE_BUTTON_RESERVED_WIDTH = 0;
@@ -311,7 +316,7 @@ function SidePanelTabRowExtras({
         label={t("workspace.tabs.actions.newSidePanelTab")}
         testID="workspace-side-panel-new-tab-menu-trigger"
       >
-        <ThemedPlus size={14} uniProps={extraMutedColorMapping} />
+        <ThemedPlus size={TAB_RAIL_GLYPH_SIZE} uniProps={extraMutedColorMapping} />
       </ToolbarButton>
       <DropdownMenuContent side="bottom" align="end" offset={4} minWidth={200}>
         {launchers.changes ? (
@@ -406,9 +411,9 @@ function SidePanelPlacementControl({
         testID="workspace-side-panel-placement-trigger"
       >
         {placement === "bottom" ? (
-          <ThemedRows2 size={14} uniProps={extraMutedColorMapping} />
+          <ThemedRows2 size={TAB_RAIL_GLYPH_SIZE} uniProps={extraMutedColorMapping} />
         ) : (
-          <ThemedColumns2 size={14} uniProps={extraMutedColorMapping} />
+          <ThemedColumns2 size={TAB_RAIL_GLYPH_SIZE} uniProps={extraMutedColorMapping} />
         )}
       </ToolbarButton>
       <DropdownMenuContent side="bottom" align="end" offset={4} minWidth={180}>
@@ -456,7 +461,7 @@ export function WorkspaceExitFocusModeButton({
         testID="workspace-exit-focus-mode"
         onPress={onPress}
       >
-        <ThemedX size={14} uniProps={mutedColorMapping} />
+        <ThemedX size={TAB_RAIL_GLYPH_SIZE} uniProps={mutedColorMapping} />
       </ToolbarButton>
     </View>
   );
@@ -530,6 +535,13 @@ interface WorkspaceTabLabel {
 interface WorkspaceTabLabelMeasurement {
   label: string;
   width: number;
+}
+
+const TabMeasurementCache = createContext<Map<string, WorkspaceTabLabelMeasurement> | null>(null);
+
+export function WorkspaceTabMeasurementScope({ children }: { children: React.ReactNode }) {
+  const cache = useMemo(() => new Map<string, WorkspaceTabLabelMeasurement>(), []);
+  return <TabMeasurementCache.Provider value={cache}>{children}</TabMeasurementCache.Provider>;
 }
 
 interface WorkspaceTabTrackSnapshot {
@@ -1109,9 +1121,13 @@ function ResolvedWorkspaceDesktopTabsRow({
   const tabsScrollRef = useRef<ScrollView>(null);
   const [exitFocusModeWidth, setExitFocusModeWidth] = useState<number>(0);
   const tabScrollBoundary = useHorizontalScrollBoundary();
-  const [labelMeasurements, setLabelMeasurements] = useState(
-    () => new Map<string, WorkspaceTabLabelMeasurement>(),
-  );
+  const measurementCache = useContext(TabMeasurementCache);
+  const [labelMeasurements, setLabelMeasurements] = useState(() => new Map(measurementCache ?? []));
+  useLayoutEffect(() => {
+    if (!measurementCache) return;
+    measurementCache.clear();
+    for (const [key, value] of labelMeasurements) measurementCache.set(key, value);
+  }, [measurementCache, labelMeasurements]);
   const [trackSnapshot, setTrackSnapshot] = useState<WorkspaceTabTrackSnapshot | null>(null);
 
   const handleTabsContainerLayout = useCallback((event: LayoutChangeEvent) => {
@@ -1683,7 +1699,7 @@ const styles = StyleSheet.create((theme) => ({
     marginRight: PANE_TOOLBAR_OUTER_MARGIN,
   },
   tab: {
-    height: buttonControlHeight.xs,
+    height: CONTROL_HEIGHTS.sm,
     paddingHorizontal: TAB_CHIP_HORIZONTAL_PADDING,
     borderRadius: theme.borderRadius.md,
     flexDirection: "row",

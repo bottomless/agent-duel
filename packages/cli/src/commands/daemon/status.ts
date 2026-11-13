@@ -66,7 +66,7 @@ async function probeDaemonStatus(
     connectedDaemon = "unreachable";
     if (failure.code === "AUTH_REQUIRED") connectedDaemon = "auth_required";
     if (failure.code === "AUTH_FAILED") connectedDaemon = "auth_failed";
-    connectedDaemon = refusedProbeState(failure.code) ?? connectedDaemon;
+    connectedDaemon = refusedProbeState(failure.code, connectedDaemon);
     note = failure.message;
   }
   if (!client) return { connectedDaemon, note };
@@ -105,6 +105,7 @@ async function probeDaemonStatus(
         daemonNode: status.nodePath,
         providers: status.providers,
         relay: status.relay,
+        ...(status.terminalsUnavailable ? { terminals: status.terminalsUnavailable } : {}),
       };
     }
   } finally {
@@ -115,12 +116,13 @@ async function probeDaemonStatus(
 
 /**
  * A daemon that refuses the probe is still up. Reporting it as refused rather than unreachable
- * stops the desktop shell from launching a second daemon onto the same port.
+ * stops the desktop shell from launching a second daemon onto the same port. Any other code keeps
+ * the state the caller already worked out.
  */
-function refusedProbeState(code: string): string | null {
+function refusedProbeState(code: string, otherwise: string): string {
   if (code === "SIGN_IN_REQUIRED") return "sign_in_required";
   if (code === "ACCOUNTS_UNAVAILABLE") return "accounts_unavailable";
-  return null;
+  return otherwise;
 }
 
 function readHomeServerId(home: string): string | undefined {

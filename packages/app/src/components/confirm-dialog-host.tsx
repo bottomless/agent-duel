@@ -5,11 +5,8 @@ import { StyleSheet } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { isWeb } from "@/constants/platform";
-import {
-  getOverlayRoot,
-  useGlobalWebOverlayLayer,
-  useWebOverlayRegistration,
-} from "@/lib/overlay-root";
+import { useOverlayRegistration, type KeyboardInputEvent } from "@/keyboard";
+import { getOverlayRoot, useGlobalOverlayLayer } from "@/lib/overlay-root";
 import { inlineUnistylesStyle } from "@/styles/unistyles-inline-style";
 import {
   answerConfirmDialog,
@@ -102,7 +99,7 @@ function ConfirmDialogChoiceButton({
   return (
     <Button
       variant={selected ? "secondary" : "outline"}
-      size="xs"
+      size="sm"
       accessibilityState={accessibilityState}
       onPress={handlePress}
       testID={`confirm-dialog-choice-${id}`}
@@ -116,7 +113,7 @@ function ConfirmDialog({ request, open }: { request: ConfirmDialogRequest; open:
   const { t } = useTranslation();
   const titleId = useId();
   const messageId = useId();
-  const layer = useGlobalWebOverlayLayer("modal", true);
+  const layer = useGlobalOverlayLayer("modal", true);
   const { id, destructive } = request;
   // Held with the request it was picked for, so the next question starts with nothing picked.
   const [picked, setPicked] = useState<{ id: number; choice: string | undefined } | null>(null);
@@ -129,7 +126,7 @@ function ConfirmDialog({ request, open }: { request: ConfirmDialogRequest; open:
   const cancel = useCallback(() => answerConfirmDialog(id, false), [id]);
   const confirm = useCallback(() => answerConfirmDialog(id, true, choice), [choice, id]);
   const handleKeyDown = useCallback(
-    (event: KeyboardEvent) => {
+    (event: KeyboardInputEvent) => {
       if (event.key !== "Escape") return false;
       event.preventDefault();
       cancel();
@@ -137,7 +134,12 @@ function ConfirmDialog({ request, open }: { request: ConfirmDialogRequest; open:
     },
     [cancel],
   );
-  const setScope = useWebOverlayRegistration({ active: open, layer, onKeyDown: handleKeyDown });
+  const setScope = useOverlayRegistration({
+    keys: ["Escape"],
+    active: open,
+    layer,
+    onKeyDown: handleKeyDown,
+  });
 
   const scrimStyle = useMemo(
     () => [
@@ -194,7 +196,7 @@ function ConfirmDialog({ request, open }: { request: ConfirmDialogRequest; open:
           <Button
             ref={destructive ? focusOnAttach : undefined}
             variant="secondary"
-            size="sm"
+            size="md"
             onPress={cancel}
             testID="confirm-dialog-cancel"
           >
@@ -203,7 +205,7 @@ function ConfirmDialog({ request, open }: { request: ConfirmDialogRequest; open:
           <Button
             ref={destructive ? undefined : focusOnAttach}
             variant={destructive ? "destructive" : "default"}
-            size="sm"
+            size="md"
             onPress={confirm}
             testID="confirm-dialog-confirm"
           >

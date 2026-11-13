@@ -20,16 +20,41 @@ const resolvePackageEntry = (packageName: string) => {
 export default defineConfig({
   plugins: [
     {
-      name: "compile-usage-components",
+      name: "markdown-wasm-commonjs-export",
+      transform(source, id) {
+        // The ESM package contains a CommonJS WASM factory. Metro handles the
+        // interop; Vite needs an ESM export instead of the CommonJS trailer.
+        // Vite can request the file with a version query (`md4c.js?v=<hash>`), so match the
+        // path without it.
+        if (!id.split("?")[0].endsWith("/lib/module/web/wasm/md4c.js")) return;
+        const trailer = source.lastIndexOf("\nif (typeof exports === 'object'");
+        if (trailer < 0) throw new Error("Markdown WASM CommonJS trailer was not found");
+        return {
+          code: `${source.slice(0, trailer)}\nexport default createMd4cModule;`,
+          map: null,
+        };
+      },
+    },
+    {
+      name: "compile-react-components",
       enforce: "pre",
       transform(source, id) {
-        // Exercise invalidation across the compiler's caches as well as React.memo.
-        const compiledComponent =
-          id.includes("/src/usage/") ||
+        // Exercise compiler-sensitive labels, overlay lifetime and timeline row revisions in the same
+        // form as Expo, and invalidation of the Arena child rows across the compiler's caches as
+        // well as React.memo.
+        const usageComponent = id.includes("/src/usage/") && id.endsWith(".tsx");
+        const overlayLayer = id.endsWith("/src/lib/overlay-root.ts");
+        const streamRow = id.endsWith("/src/agent-stream/stream-row.tsx");
+        const arenaRow =
           id.endsWith("/src/arena/chat-subagent.tsx") ||
-          id.endsWith("/src/agent-stream/row.tsx") ||
+          id.endsWith("/src/agent-stream/arena-stream-row.tsx") ||
           id.endsWith("/src/agent-stream/view.tsx");
-        if (!compiledComponent || !id.endsWith(".tsx") || id.includes(".test.")) return;
+        if (
+          (!usageComponent && !overlayLayer && !streamRow && !arenaRow) ||
+          id.includes(".test.")
+        ) {
+          return;
+        }
         const result = transformSync(source, {
           filename: id,
           babelrc: false,
@@ -69,20 +94,38 @@ export default defineConfig({
         test: {
           name: "unit",
           environment: "node",
-          include: ["src/**/*.{test,spec}.{ts,tsx}", "vitest-environment.test.ts"],
+          include: [
+            "src/**/*.{test,spec}.{ts,tsx}",
+            "modules/**/*.{test,spec}.{ts,tsx}",
+            "vitest-environment.test.ts",
+          ],
           setupFiles: [path.resolve(__dirname, "vitest.setup.ts")],
           exclude: [...configDefaults.exclude, "e2e/**", "src/**/*.browser.{test,spec}.{ts,tsx}"],
         },
       },
       {
         extends: true,
+        resolve: {
+          alias: [
+            // The app renders LegendList on native only, from the patched native build. Browser
+            // tests render that build too, instead of the package's separate web build. Unit tests
+            // load it outside Vite, where its react-native import would miss the web alias.
+            {
+              find: /^@legendapp\/list\/react-native$/,
+              replacement: path.resolve(rootNodeModules, "@legendapp/list/react-native.mjs"),
+            },
+          ],
+        },
         test: {
           name: "browser",
           fileParallelism: false,
           include: ["src/**/*.browser.{test,spec}.{ts,tsx}"],
           browser: {
             enabled: true,
-            provider: playwright(),
+            provider: playwright({
+              // Exercise real WebGL glyph rendering on GPU-less CI runners.
+              launchOptions: { args: ["--enable-unsafe-swiftshader"] },
+            }),
             headless: true,
             connectTimeout: 180_000,
             instances: [{ browser: "chromium" }],
@@ -143,19 +186,25 @@ export default defineConfig({
       "expo-router/react-navigation",
       "@testing-library/react",
       "@tanstack/react-query",
+      "@tanstack/react-virtual",
+      "@legendapp/list/react-native",
       "react-i18next",
       "i18next",
       "@marijn/find-cluster-break",
       "tiny-invariant",
+      "react/jsx-dev-runtime",
       "react-native-gesture-handler > hoist-non-react-statics",
       "react-native-gesture-handler > invariant",
     ],
     exclude: [
+      "react-native-enriched-markdown",
       "react-native-reanimated",
       "react-native-gesture-handler",
       "react-native-keyboard-controller",
     ],
   },
+  // babel-preset-expo compiles JSX with the automatic runtime, so app modules don't import React.
+  esbuild: { jsx: "automatic" },
   // The globals a React Native bundler defines, which esbuild is no longer there to supply for
   // the package excluded above.
   define: {
@@ -212,12 +261,20 @@ export default defineConfig({
         find: /^react-native\/Libraries\/Renderer\/shims\/ReactFabric$/,
         replacement: path.resolve(__dirname, "test-stubs/react-native-fabric-shim.ts"),
       },
-      // Point to the ESM build so Vite can transform its imports and apply the
+      // The CJS entry requires the real react-native, whose Flow sources do not parse.
+      {
+        find: /^@floating-ui\/react-native$/,
+        replacement: path.resolve(
+          rootNodeModules,
+          "@floating-ui/react-native/dist/floating-ui.react-native.esm.js",
+        ),
+      },
+      // Point to react-native-web's ESM build so Vite can transform its imports and apply the
       // react alias below (the CJS build uses require('react') which bypasses
-      // Vite alias resolution).
+      // Vite alias resolution). The stub re-exports it and adds what web lacks.
       {
         find: "react-native",
-        replacement: path.resolve(rootNodeModules, "react-native-web/dist/index.js"),
+        replacement: path.resolve(__dirname, "test-stubs/react-native.mjs"),
       },
       { find: "react", replacement: resolvePackageEntry("react") },
       {
@@ -253,6 +310,10 @@ export default defineConfig({
       {
         find: /^react-native-reanimated\/scripts\/validate-worklets-version$/,
         replacement: path.resolve(__dirname, "test-stubs/reanimated-validate-worklets-version.ts"),
+      },
+      {
+        find: /^expo-clipboard$/,
+        replacement: path.resolve(__dirname, "test-stubs/expo-clipboard.ts"),
       },
       {
         find: /^expo-linking$/,

@@ -56,7 +56,7 @@ export function SidebarFilterEmptyState() {
     >
       <Button
         variant="secondary"
-        size="xs"
+        size="sm"
         style={styles.action}
         textStyle={styles.actionText}
         onPress={clearFilters}
@@ -78,7 +78,7 @@ export function SidebarProjectEmptyState({ onAddProject }: { onAddProject?: () =
     >
       <Button
         variant="secondary"
-        size="xs"
+        size="sm"
         leftIcon={Plus}
         style={styles.action}
         textStyle={styles.actionText}

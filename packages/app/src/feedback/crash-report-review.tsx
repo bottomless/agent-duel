@@ -7,7 +7,6 @@ import type { AccountsEndpoint } from "@/accounts/client";
 import { AdaptiveModalSheet, type SheetHeader } from "@/components/adaptive-modal-sheet";
 import { Button } from "@/components/ui/button";
 import { Field, FormTextInput } from "@/components/ui/form-field";
-import { useIsCompactFormFactor } from "@/constants/layout";
 import { decideCrashReports, fetchCrashReportsAwaitingUser } from "./crash-reports";
 
 // Asked once per launch: closing the modal leaves the reports for the next launch to ask about.
@@ -30,7 +29,6 @@ export interface CrashReportReviewProps {
  */
 export function CrashReportReview({ endpoint, sessionToken }: CrashReportReviewProps) {
   const { t, i18n } = useTranslation();
-  const isCompact = useIsCompactFormFactor();
   const [review, setReview] = useState<LaunchReview | null>(launchReview);
   const reports = review?.reports ?? NO_REPORTS;
   const [message, setMessage] = useState("");
@@ -149,7 +147,7 @@ export function CrashReportReview({ endpoint, sessionToken }: CrashReportReviewP
       </View>
       <Field label={t("feedback.crashReports.messageLabel")}>
         <FormTextInput
-          size={isCompact ? "md" : "sm"}
+          size="md"
           multiline
           numberOfLines={4}
           textAlignVertical="top"

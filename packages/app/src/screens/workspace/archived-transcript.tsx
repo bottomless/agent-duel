@@ -134,7 +134,7 @@ export function ArchivedTranscript({
     <View style={styles.container} testID="archived-transcript">
       <View style={styles.header}>
         <Text style={styles.title}>Archived chat · read only</Text>
-        <Button size="sm" variant="ghost" onPress={onClose}>
+        <Button size="md" variant="ghost" onPress={onClose}>
           Back
         </Button>
       </View>
@@ -144,14 +144,14 @@ export function ArchivedTranscript({
       {query.error ? (
         <View style={styles.header} accessibilityRole="alert">
           <Text style={styles.error}>{toErrorMessage(query.error)}</Text>
-          <Button size="sm" variant="outline" onPress={retry} loading={query.isFetching}>
+          <Button size="md" variant="outline" onPress={retry} loading={query.isFetching}>
             Retry transcript
           </Button>
         </View>
       ) : null}
       {query.isPending ? <Text style={styles.status}>Loading transcript…</Text> : null}
       {oldest?.hasOlder ? (
-        <Button size="sm" variant="ghost" onPress={loadOlder} loading={query.isFetching}>
+        <Button size="md" variant="ghost" onPress={loadOlder} loading={query.isFetching}>
           Load earlier messages
         </Button>
       ) : null}

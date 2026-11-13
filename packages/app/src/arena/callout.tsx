@@ -82,7 +82,7 @@ export function ArenaCallout({
           // surface0, which is invisible on light. These are the callout's actions, not
           // low-emphasis row controls, so they take filled or ghost surfaces instead.
           variant={action.variant ?? "secondary"}
-          size="sm"
+          size="md"
           style={styles.calloutAction}
           onPress={action.onPress}
           loading={action.loading}

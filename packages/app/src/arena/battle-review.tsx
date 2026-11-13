@@ -67,7 +67,7 @@ function Verdict({
       {failed ? (
         <View style={styles.loading}>
           <Text style={styles.error}>{t("arena.summaryFailed")}</Text>
-          <Button size="xs" variant="ghost" loading={retrying} onPress={onRetry}>
+          <Button size="sm" variant="ghost" loading={retrying} onPress={onRetry}>
             {t("arena.retrySummary")}{" "}
           </Button>
         </View>
@@ -149,7 +149,7 @@ function ChangesTab({
     return (
       <View style={styles.loading} accessibilityRole="alert">
         <Text style={styles.error}>{toErrorMessage(error)}</Text>
-        <Button size="xs" variant="ghost" loading={retrying} onPress={onRetry}>
+        <Button size="sm" variant="ghost" loading={retrying} onPress={onRetry}>
           {t("arena.retryChanges")}{" "}
         </Button>
       </View>
@@ -199,7 +199,7 @@ function ReviewTab({
     <View style={styles.tab}>
       <Button
         variant="ghost"
-        size="sm"
+        size="md"
         accessibilityRole="tab"
         accessibilityState={accessibilityState}
         aria-selected={selected}

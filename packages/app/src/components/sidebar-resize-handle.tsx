@@ -9,7 +9,7 @@ import {
 } from "@/components/sidebar-resize-handle-layout";
 import { MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH } from "@/stores/panel-store";
 import { isWeb } from "@/constants/platform";
-import { useHasFinePointer } from "@/hooks/use-fine-pointer";
+import { usePointerCapabilities } from "@/hooks/pointer-capabilities";
 
 interface SidebarResizeHandleProps {
   edge: SidebarResizeEdge;
@@ -40,7 +40,7 @@ export function SidebarResizeHandle({
   width,
   onResize,
 }: SidebarResizeHandleProps) {
-  const finePointer = useHasFinePointer();
+  const { finePointer } = usePointerCapabilities();
 
   if (finePointer) {
     return (

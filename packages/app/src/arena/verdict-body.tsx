@@ -67,7 +67,7 @@ export function VerdictBody({
       {folded ? <View style={styles.fade} pointerEvents="none" /> : null}
       {folded ? (
         <View style={styles.more}>
-          <Button size="xs" variant="ghost" onPress={showAll} testID="arena-verdict-more">
+          <Button size="sm" variant="ghost" onPress={showAll} testID="arena-verdict-more">
             {t("arena.fullSummary")}{" "}
           </Button>
         </View>

@@ -792,6 +792,104 @@ lines.on("line", (line) => {
     await connection.close();
   });
 
+  it.each([
+    { counts: null, context: false, expected: [] },
+    {
+      counts: { totalTokens: 0, inputTokens: 0, outputTokens: 0 },
+      context: false,
+      expected: [
+        {
+          turnId: "acp:first",
+          usage: { inputTokens: 0, outputTokens: 0, cachedInputTokens: undefined },
+        },
+      ],
+    },
+    {
+      counts: { totalTokens: 18971, inputTokens: 12152, outputTokens: 78, cachedReadTokens: 6741 },
+      context: true,
+      expected: [
+        {
+          turnId: undefined,
+          usage: { contextWindowUsedTokens: 42, contextWindowMaxTokens: 100, totalCostUsd: 0.25 },
+        },
+        {
+          turnId: "acp:first",
+          usage: {
+            inputTokens: 12152,
+            outputTokens: 78,
+            cachedInputTokens: 6741,
+            contextWindowUsedTokens: 42,
+            contextWindowMaxTokens: 100,
+            totalCostUsd: 0.25,
+          },
+        },
+      ],
+    },
+  ])(
+    "forwards prompt-result usage $counts while preserving context updates: $context",
+    async ({ counts, context, expected }) => {
+      const harness = connectorHarness({
+        handleRequest(instance, message) {
+          if (message.method !== "session/prompt") return false;
+          if (context)
+            instance.notify("session/update", {
+              sessionId: "connector-session",
+              update: {
+                sessionUpdate: "usage_update",
+                used: 42,
+                size: 100,
+                cost: { amount: 0.25, currency: "USD" },
+              },
+            });
+          instance.respond(message, {
+            stopReason: "end_turn",
+            ...(counts ? { usage: counts } : {}),
+          });
+          return true;
+        },
+      });
+      const registration = runAcpProvider({
+        id: "usage-acp",
+        label: "Usage ACP",
+        connector: harness.connector,
+      });
+      const connection = await registration.connect({
+        versions: [1],
+        capabilities: ["prompt.message"],
+      });
+      const events: ProviderEvent[] = [];
+      connection.onEvent((event) => events.push(event));
+      try {
+        await connection.send(openInput());
+        await waitForEvent(events, (event) => event.type === "session.ready");
+        await connection.send({
+          type: "session.prompt",
+          sessionId: "session-1",
+          prompt: {
+            clientMessageId: "first",
+            delivery: "auto",
+            input: { type: "message", content: [{ type: "text", text: "hello" }] },
+          },
+        });
+        await waitForEvent(
+          events,
+          (event) => event.type === "session.turn" && event.state === "completed",
+        );
+        const usage = events.flatMap((event) =>
+          event.type === "session.usage" ? [{ turnId: event.turnId, usage: event.usage }] : [],
+        );
+        expect(usage).toEqual(expected);
+        const lastUsage = events.findLastIndex((event) => event.type === "session.usage");
+        const completed = events.findIndex(
+          (event) => event.type === "session.turn" && event.state === "completed",
+        );
+        expect(lastUsage).toBeLessThan(completed);
+      } finally {
+        await connection.close();
+      }
+    },
+  );
+
   it("serializes configuration mutations", async () => {
     let releaseMutation: (() => void) | null = null;
     const configOptions = [
@@ -1155,6 +1253,99 @@ lines.on("line", (line) => {
     },
   );
 
+  it("selects the model control when an agent files several controls under the model category", async () => {
+    const executable = await fakeAcp(`const readline = require("node:readline");
+const lines = readline.createInterface({ input: process.stdin });
+const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
+let model = "small";
+const modes = { currentModeId: "auto", availableModes: [{ id: "auto", name: "Auto" }, { id: "ask", name: "Ask" }] };
+const options = () => [
+  { id: "provider", name: "Provider", category: "model", type: "select", currentValue: "gateway", options: [{ name: "Gateway", value: "gateway" }, { name: "Local", value: "local" }] },
+  { id: "model", name: "Model", category: "model", type: "select", currentValue: model, options: [{ name: "Small", value: "small" }, { name: "Large", value: "large" }] },
+  { id: "mode", name: "Session Mode", category: "mode", type: "select", currentValue: "auto", options: [{ name: "Auto", value: "auto" }, { name: "Ask", value: "ask" }] },
+  { id: "fast", name: "Fast Mode", category: "model", type: "select", currentValue: "false", options: [{ name: "Off", value: "false" }, { name: "On", value: "true" }] },
+];
+lines.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.method === "initialize") send({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: message.params.protocolVersion, agentCapabilities: {} } });
+  else if (message.method === "session/new") send({ jsonrpc: "2.0", id: message.id, result: { sessionId: "native-1", modes, configOptions: options() } });
+  else if (message.method === "session/set_config_option") {
+    if (message.params.configId === "model") model = message.params.value;
+    send({ jsonrpc: "2.0", id: message.id, result: { configOptions: options() } });
+  }
+});`);
+    const { connection, events } = await connect(executable, [
+      "prompt.message",
+      "session.configure",
+    ]);
+    await connection.send({ type: "catalog", requestId: "catalog-1" });
+    await waitForEvent(events, (event) => event.type === "catalog");
+    expect(events.find((event) => event.type === "catalog")).toMatchObject({
+      catalog: {
+        defaultModel: "small",
+        models: [
+          { id: "small", label: "Small" },
+          { id: "large", label: "Large" },
+        ],
+      },
+    });
+
+    await connection.send(openInput());
+    await waitForEvent(events, (event) => event.type === "session.ready");
+    await connection.send({
+      type: "session.configure",
+      requestId: "configure-1",
+      sessionId: "session-1",
+      changes: { model: "large" },
+    });
+    await waitForEvent(
+      events,
+      (event) => event.type === "request.completed" && event.requestId === "configure-1",
+    );
+    const config = events.findLast((event) => event.type === "session.config");
+    expect(config).toMatchObject({ config: { model: "large" } });
+    if (config?.type !== "session.config") throw new Error("Expected session.config");
+    expect(config.config.settings?.map((setting) => setting.id)).toEqual(["provider", "fast"]);
+    await connection.close();
+  });
+
+  it("applies opening configuration in the order the agent lists its options", async () => {
+    const executable = await fakeAcp(`const readline = require("node:readline");
+const lines = readline.createInterface({ input: process.stdin });
+const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
+let provider = "first";
+let model = "first-saved";
+const saved = { first: "first-saved", second: "second-saved" };
+const select = (id, currentValue, values) => ({ id, name: id, category: "model", type: "select", currentValue, options: values.map((value) => ({ name: value, value })) });
+const options = () => [
+  select("provider", provider, ["first", "second"]),
+  select("model", model, ["first-saved", "second-saved", "second-chosen"]),
+];
+lines.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.method === "initialize") send({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: message.params.protocolVersion, agentCapabilities: {} } });
+  else if (message.method === "session/new") send({ jsonrpc: "2.0", id: message.id, result: { sessionId: "native-1", configOptions: options() } });
+  else if (message.method === "session/set_config_option") {
+    if (message.params.configId === "provider") { provider = message.params.value; model = saved[provider]; }
+    if (message.params.configId === "model") model = message.params.value;
+    send({ jsonrpc: "2.0", id: message.id, result: { configOptions: options() } });
+  }
+});`);
+    const { connection, events } = await connect(executable, [
+      "prompt.message",
+      "session.configure",
+    ]);
+    const input = openInput({ provider: "second" });
+
+    await connection.send({ ...input, config: { ...input.config, model: "second-chosen" } });
+
+    await waitForEvent(events, (event) => event.type === "session.ready");
+    expect(events.findLast((event) => event.type === "session.config")).toMatchObject({
+      config: { model: "second-chosen" },
+    });
+    await connection.close();
+  });
+
   it("gives discovery transformers the discovered session configuration facade", async () => {
     const executable = await fakeAcp(`const readline = require("node:readline");
 const lines = readline.createInterface({ input: process.stdin });
@@ -1307,7 +1498,15 @@ describe("runAcpProvider streamed chunks without messageId (#4699)", () => {
     const items = events.flatMap((event) =>
       event.type === "timeline.item" &&
       (event.item.type === "assistant_message" || event.item.type === "reasoning")
-        ? [{ id: event.item.id, text: event.item.text }]
+        ? [
+            {
+              id: event.item.id,
+              text: event.item.text,
+              ...(event.item.type === "assistant_message" && event.item.messageId
+                ? { messageId: event.item.messageId }
+                : {}),
+            },
+          ]
         : [],
     );
     expect(items).toEqual([
@@ -1315,7 +1514,11 @@ describe("runAcpProvider streamed chunks without messageId (#4699)", () => {
       { id: "agent_message_chunk:1", text: "- **Current temperature**: 25°C" },
       { id: "agent_message_chunk:2", text: "next turn" },
       { id: "agent_thought_chunk:3", text: "think A" },
-      { id: "m-explicit", text: "say" },
+      {
+        id: JSON.stringify(["agent_message_chunk", "m-explicit"]),
+        messageId: "m-explicit",
+        text: "say",
+      },
       { id: "agent_thought_chunk:4", text: "think B" },
     ]);
     await connection.close();
@@ -1402,6 +1605,21 @@ async function streamChunkTurns(
 }
 
 describe("ACP streamed message boundaries", () => {
+  it("keeps reasoning separate from a reply sharing its native message ID", async () => {
+    expect(
+      await streamChunkTurns([
+        textChunk("private ", "agent_thought_chunk", "shared-id"),
+        textChunk("reasoning", "agent_thought_chunk", "shared-id"),
+        textChunk("public ", "agent_message_chunk", "shared-id"),
+        textChunk("reply", "agent_message_chunk", "shared-id"),
+      ]),
+    ).toEqual([
+      { type: "reasoning", text: "private reasoning" },
+      { type: "assistant_message", text: "public reply" },
+      { type: "assistant_message", text: "Next turn" },
+    ]);
+  });
+
   it.each([
     {
       name: "tool call",
@@ -1584,8 +1802,12 @@ describe("ACP session history replay", () => {
     );
     try {
       expect(timelineProjection(events)).toEqual([
-        { type: "user_message", id: "user-1", text: "What is the " },
-        { type: "user_message", id: "user-1", text: "What is the temperature?" },
+        { type: "user_message", id: '["user_message_chunk","user-1"]', text: "What is the " },
+        {
+          type: "user_message",
+          id: '["user_message_chunk","user-1"]',
+          text: "What is the temperature?",
+        },
         { type: "reasoning", id: "agent_thought_chunk:1", text: "Checking the sensor" },
         { type: "tool_call", id: "tool-1", status: "running" },
         { type: "tool_call", id: "tool-1", status: "completed" },
@@ -1594,6 +1816,48 @@ describe("ACP session history replay", () => {
       const lastReplayed = events.findLastIndex((event) => event.type === "timeline.item");
       const opened = events.findIndex((event) => event.type === "session.opened");
       expect(lastReplayed).toBeLessThan(opened);
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it("keeps replayed user, reasoning and reply chunks separate when their native IDs match", async () => {
+    const { connection, events } = await openReplaySession(
+      [
+        userChunk("What is the ", "shared-id"),
+        userChunk("temperature?", "shared-id"),
+        textChunk("Checking ", "agent_thought_chunk", "shared-id"),
+        textChunk("the sensor", "agent_thought_chunk", "shared-id"),
+        textChunk("It is ", "agent_message_chunk", "shared-id"),
+        textChunk("25°C", "agent_message_chunk", "shared-id"),
+      ],
+      "replay",
+    );
+    try {
+      const items = new Map(
+        events.flatMap((event) =>
+          event.type === "timeline.item" ? [[event.item.id, event.item] as const] : [],
+        ),
+      );
+      expect([...items.values()]).toEqual([
+        {
+          type: "user_message",
+          id: '["user_message_chunk","shared-id"]',
+          messageId: "shared-id",
+          text: "What is the temperature?",
+        },
+        {
+          type: "reasoning",
+          id: '["agent_thought_chunk","shared-id"]',
+          text: "Checking the sensor",
+        },
+        {
+          type: "assistant_message",
+          id: '["agent_message_chunk","shared-id"]',
+          messageId: "shared-id",
+          text: "It is 25°C",
+        },
+      ]);
     } finally {
       await connection.close();
     }

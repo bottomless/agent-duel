@@ -28,13 +28,14 @@ import { planWorkspaceOpenTargets } from "@/workspace/open-in-editor/planner";
 import type { Theme } from "@/styles/theme";
 import { ForgeBrandIcon } from "@/git/forge-icon";
 import { getForgePresentation } from "@/git/forge";
-import { buttonControlHeight, HEADER_CONTROL_HEIGHT } from "@/components/ui/control-geometry";
+import { HEADER_CONTROL_HEIGHT } from "@/components/ui/control-geometry";
 import { extraMutedIconColorMapping } from "@/components/ui/icon-button-chrome";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 export interface WorkspaceOpenInEditorMenuItemsProps {
   serverId: string;
   cwd: string;
+  projectId: string | null;
   activeFile?: WorkspaceFileLocation | null;
   additionalFiles?: readonly WorkspaceFileLocation[];
 }
@@ -96,6 +97,7 @@ function OpenTargetMenuItem({ target, isPreferred, onSelect, label }: OpenTarget
 function useWorkspaceOpenInEditor({
   serverId,
   cwd,
+  projectId,
   activeFile,
   additionalFiles,
 }: WorkspaceOpenInEditorMenuItemsProps) {
@@ -103,10 +105,11 @@ function useWorkspaceOpenInEditor({
   const toast = useToast();
   const isConnected = useHostRuntimeIsConnected(serverId);
   const isLocalDaemon = useIsLocalDaemon(serverId);
-  const { preferredEditorId, updatePreferredEditor } = usePreferredEditor();
+  const { preferredEditorId, updatePreferredEditor } = usePreferredEditor({ serverId, projectId });
   const { targets: desktopOpenTargets, isAvailable: isDesktopOpenAvailable } =
     useDesktopOpenTargets({
       isLocalExecution: isLocalDaemon,
+      workspacePath: cwd,
     });
 
   const resolvedFile = useMemo(
@@ -213,9 +216,11 @@ function useWorkspaceOpenInEditor({
 
   const handleSelectTarget = useCallback(
     (target: OpenTarget) => {
-      void updatePreferredEditor(target.id).catch(() => undefined);
+      void updatePreferredEditor(target.id).catch((error: unknown) => {
+        toast.error(error instanceof Error ? error.message : t("common.errors.unableToSave"));
+      });
     },
-    [updatePreferredEditor],
+    [updatePreferredEditor, toast, t],
   );
 
   return {
@@ -232,6 +237,7 @@ function useWorkspaceOpenInEditor({
 
 export function WorkspaceOpenInEditorMenuItems({
   serverId,
+  projectId,
   cwd,
   activeFile,
   additionalFiles,
@@ -243,7 +249,7 @@ export function WorkspaceOpenInEditorMenuItems({
     effectivePreferredEditorId,
     handleOpenTarget,
     targets,
-  } = useWorkspaceOpenInEditor({ serverId, cwd, activeFile, additionalFiles });
+  } = useWorkspaceOpenInEditor({ serverId, projectId, cwd, activeFile, additionalFiles });
 
   if (!canResolveWorkspace || targets.length === 0) {
     return null;
@@ -279,6 +285,7 @@ export function WorkspaceOpenInEditorSubTrigger({
   id,
   testID,
   serverId,
+  projectId,
   cwd,
   activeFile,
   additionalFiles,
@@ -286,6 +293,7 @@ export function WorkspaceOpenInEditorSubTrigger({
   const { t } = useTranslation();
   const { canResolveWorkspace, targets } = useWorkspaceOpenInEditor({
     serverId,
+    projectId,
     cwd,
     activeFile,
     additionalFiles,
@@ -304,6 +312,7 @@ export function WorkspaceOpenInEditorSubTrigger({
 
 export function WorkspaceOpenInEditorButton({
   serverId,
+  projectId,
   cwd,
   activeFile,
   additionalFiles,
@@ -320,7 +329,7 @@ export function WorkspaceOpenInEditorButton({
     isPending,
     primaryOption,
     targets,
-  } = useWorkspaceOpenInEditor({ serverId, cwd, activeFile, additionalFiles });
+  } = useWorkspaceOpenInEditor({ serverId, projectId, cwd, activeFile, additionalFiles });
 
   const primaryPressableStyle = useCallback(
     ({ pressed, hovered = false }: PressableStateCallbackType & { hovered?: boolean }) => [
@@ -440,10 +449,7 @@ const styles = StyleSheet.create((theme) => ({
     flexShrink: 0,
   },
   splitButton: {
-    height: {
-      xs: buttonControlHeight.xs,
-      md: HEADER_CONTROL_HEIGHT,
-    },
+    height: HEADER_CONTROL_HEIGHT,
     flexDirection: "row",
     alignItems: "stretch",
     borderRadius: theme.borderRadius.md,
@@ -460,10 +466,7 @@ const styles = StyleSheet.create((theme) => ({
     position: "relative",
   },
   splitButtonPrimaryIconOnly: {
-    width: {
-      xs: buttonControlHeight.xs,
-      md: HEADER_CONTROL_HEIGHT,
-    },
+    width: HEADER_CONTROL_HEIGHT,
     paddingHorizontal: 0,
     justifyContent: "center",
     position: "relative",
@@ -491,10 +494,7 @@ const styles = StyleSheet.create((theme) => ({
     transform: [{ scale: 0.8 }],
   },
   splitButtonCaret: {
-    width: {
-      xs: buttonControlHeight.xs,
-      md: HEADER_CONTROL_HEIGHT,
-    },
+    width: HEADER_CONTROL_HEIGHT,
     alignItems: "center",
     justifyContent: "center",
     borderLeftWidth: theme.borderWidth[1],

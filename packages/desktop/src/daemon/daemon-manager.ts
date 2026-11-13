@@ -31,6 +31,7 @@ import {
   getBundledCliShimPath,
   getCliInstallStatus,
   installCli,
+  uninstallCli,
 } from "../integrations/cli-install/index.js";
 import {
   openLocalTransportSession,
@@ -38,7 +39,11 @@ import {
   closeLocalTransportSession,
 } from "./local-transport.js";
 import { createNodeEntrypointInvocation, resolveDaemonRunnerEntrypoint } from "./runtime-paths.js";
-import { runExternalCliJsonCommand, runExternalCliTextCommand } from "./cli/external.js";
+import {
+  ExternalCliCommandError,
+  runExternalCliJsonCommand,
+  runExternalCliTextCommand,
+} from "./cli/external.js";
 import {
   createDesktopSettingsCommandHandlers,
   type DesktopCommandHandler,
@@ -371,21 +376,14 @@ export async function stopDesktopDaemon(
       "Daemon changed since confirmation; inspect its current home and PID before stopping it.",
     );
   if (!instance || (!owned && !explicit)) return resolveDesktopDaemonStatus();
-  logDesktopDaemonLifecycle("stopping captured supervisor", { reason, pid: instance.pid, owned });
-  // Windows has no signal a daemon can handle, so the stop goes through the CLI's lifecycle RPC. A
-  // daemon with accounts refuses every connection without a signed-in session, and the CLI never
-  // has one, so the RPC fails signed in or not. Without force that failure left the daemon running
-  // after quit and failed every Install & restart. The instance is pinned above and checked again
-  // before the kill, so ending its process tree is the same stop, not a guess.
-  const forceOnWindows = process.platform === "win32";
-  const result = await stopDaemonInstance(home, {
-    instance,
-    timeoutMs: 15_000,
-    force: forceOnWindows,
-    requestShutdown: async (ready) => {
-      await runExternalCliJsonCommand(["daemon", "stop", "--host", ready.listen, "--json"]);
-    },
+  const keepTerminals = keepsTerminalsOnStop(reason, process.platform);
+  logDesktopDaemonLifecycle("stopping captured supervisor", {
+    reason,
+    pid: instance.pid,
+    owned,
+    keepTerminals,
   });
+  const result = await stopCapturedDaemon({ home, instance, reason, keepTerminals });
   if (result.forced && !result.usedLifecycleRpc) {
     // Asked for, not a crash: release its marker so the next start shows no crash report. A daemon
     // that took the RPC and then hung is still reported.
@@ -397,6 +395,82 @@ export async function stopDesktopDaemon(
   }
   if (owned) ownedLaunch = null;
   return resolveDesktopDaemonStatus();
+}
+
+export interface StopCapturedDaemonInput {
+  home: string;
+  instance: DaemonInstance;
+  reason: DesktopDaemonStopReason;
+  keepTerminals: boolean;
+  platform?: NodeJS.Platform;
+  stopInstance?: typeof stopDaemonInstance;
+  runCliJson?: typeof runExternalCliJsonCommand;
+  log?: typeof logDesktopDaemonLifecycle;
+}
+
+/** Stops the supervisor desktop captured, keeping its terminals when asked and supported. */
+export async function stopCapturedDaemon(
+  input: StopCapturedDaemonInput,
+): Promise<Awaited<ReturnType<typeof stopDaemonInstance>>> {
+  const stopInstance = input.stopInstance ?? stopDaemonInstance;
+  const runCliJson = input.runCliJson ?? runExternalCliJsonCommand;
+  const logLifecycle = input.log ?? logDesktopDaemonLifecycle;
+  // Windows has no signal a daemon can handle, so the stop goes through the CLI's lifecycle RPC. A
+  // daemon with accounts refuses every connection without a signed-in session, and the CLI never
+  // has one, so the RPC fails signed in or not. Without force that failure left the daemon running
+  // after quit and failed every Install & restart. The instance is pinned by the caller and checked
+  // again before the kill, so ending its process tree is the same stop, not a guess.
+  const force = (input.platform ?? process.platform) === "win32";
+  const stop = (keep: boolean) =>
+    stopInstance(input.home, {
+      instance: input.instance,
+      timeoutMs: 15_000,
+      force,
+      keepTerminals: keep,
+      requestShutdown: async (ready) => {
+        await runCliJson([
+          "daemon",
+          "stop",
+          "--host",
+          ready.listen,
+          ...(keep ? ["--keep-terminals"] : []),
+          "--json",
+        ]);
+      },
+    });
+  try {
+    return await stop(input.keepTerminals);
+  } catch (error) {
+    // The CLI refuses a keep stop before sending anything when the daemon predates the feature;
+    // that daemon closes terminals on every stop, as every upgrade did before.
+    if (
+      !input.keepTerminals ||
+      !(error instanceof ExternalCliCommandError) ||
+      error.code !== "TERMINALS_KEEP_UNSUPPORTED"
+    ) {
+      throw error;
+    }
+    const version = typeof error.error?.version === "string" ? error.error.version : "unknown";
+    logLifecycle(`daemon v${version} cannot keep terminals; stopping it and closing them`, {
+      reason: input.reason,
+      pid: input.instance.pid,
+    });
+    return await stop(false);
+  }
+}
+
+/**
+ * Whether a desktop stop keeps the daemon's terminals running for the daemon that replaces it.
+ * Only when one comes straight back (an app update, a version-mismatch restart), and never on
+ * Windows: a surviving terminal worker runs Paseo.exe and would lock the install folder the
+ * update replaces. Quit, Settings, host removal and manual stops close terminals.
+ */
+export function keepsTerminalsOnStop(
+  reason: DesktopDaemonStopReason,
+  platform: NodeJS.Platform,
+): boolean {
+  if (platform === "win32") return false;
+  return reason === "app_update" || reason === "version_mismatch";
 }
 
 async function restartDaemon(): Promise<DesktopDaemonStatus> {
@@ -507,6 +581,7 @@ export function createDaemonCommandHandlers(): Record<string, DesktopCommandHand
     },
     get_local_daemon_version: () => getLocalDaemonVersion(),
     install_cli: () => installCli(),
+    uninstall_cli: () => uninstallCli(),
     get_cli_install_status: () => getCliInstallStatus(),
     read_legacy_skill_selection: () => readLegacySkillSelection(),
     delete_legacy_skill_selection: () => deleteLegacySkillSelection(),

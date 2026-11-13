@@ -11,9 +11,8 @@ export function revealWorkspaceTab(workspaceKey: string, tabId: string | null): 
   if (destination.kind === "sheet") return tabId;
   // Focusing a side panel tab also reveals a hidden side panel.
   store.focusTab(workspaceKey, tabId);
-  if (store.layoutMode === "compact") {
-    // Both panes live in the workspace drawer; bring it back over the agent list.
-    usePanelStore.getState().showMobileAgent();
-  }
+  // Revealing a tab dismisses floating navigation. On compact layouts both panes live in the
+  // workspace drawer, so this brings it back over the agent list.
+  usePanelStore.getState().showMobileAgent();
   return tabId;
 }

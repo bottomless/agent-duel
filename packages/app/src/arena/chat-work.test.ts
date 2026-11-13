@@ -23,14 +23,7 @@ const thought: ThoughtItem = {
   timestamp: new Date(0),
 };
 function run(items: Array<ToolCallItem | ThoughtItem>): ToolCallRun {
-  const calls = items.filter((item): item is ToolCallItem => item.kind === "tool_call");
-  return {
-    id: "run",
-    calls,
-    items,
-    latest: calls.at(-1) ?? (calls[0] as ToolCallItem),
-    isSealed: true,
-  };
+  return { id: "run", calls: items, latest: items.at(-1)!, isSealed: true };
 }
 
 describe("arenaChatWorkLabel", () => {

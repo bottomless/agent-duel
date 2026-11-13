@@ -1,9 +1,9 @@
 import { matchesSettingsSearch } from "@/screens/settings/settings-search";
+import { useHardwareKeyboardPresent } from "@/keyboard";
 import { useCallback, useMemo, useState } from "react";
 import type { ComponentType, ReactNode } from "react";
 import { Pressable, ScrollView, Text, View, type PressableStateCallbackType } from "react-native";
 import { useRouter } from "expo-router";
-import { useFocusEffect } from "expo-router/react-navigation";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
@@ -58,12 +58,16 @@ import {
   type SupportedLocale,
 } from "@/i18n/locales";
 import { PluginSettingsContent } from "@/plugins/settings";
-import { useInstalledPlugins } from "@/plugins/registry";
+import { usePluginDisplayName } from "@/plugins/plugin-list";
 import { HostPluginsPage } from "@/screens/settings/plugins-page";
 import ProjectsScreen from "@/screens/projects-screen";
 import ProjectSettingsScreen from "@/screens/project-settings-screen";
-import { SETTINGS_DESKTOP_SIDEBAR_WIDTH, useIsCompactFormFactor } from "@/constants/layout";
-import { densityIconSize } from "@/styles/density";
+import {
+  SETTINGS_DESKTOP_DETAIL_MIN_WIDTH,
+  SETTINGS_DESKTOP_SIDEBAR_WIDTH,
+  useIsCompactFormFactor,
+} from "@/constants/layout";
+import { density, densityIconSize } from "@/styles/density";
 import { useLocalDaemonServerId } from "@/hooks/use-is-local-daemon";
 import {
   buildSettingsHostSectionRoute,
@@ -71,7 +75,10 @@ import {
   type HostSectionSlug,
   type SettingsSectionSlug,
 } from "@/utils/host-routes";
-import { useLastWorkspaceSelection } from "@/stores/navigation-active-workspace-store";
+import {
+  useSettingsHostSelection,
+  useSettingsSidebarScroll,
+} from "@/navigation/settings-presentation";
 import { returnFromSettings, type SettingsView } from "@/navigation/settings-navigation";
 
 // ---------------------------------------------------------------------------
@@ -83,6 +90,7 @@ interface SidebarSectionItem {
   labelKey: string;
   icon: ComponentType<{ size: number; color: string; strokeWidth?: number }>;
   desktopOnly?: boolean;
+  hardwareKeyboardOnly?: boolean;
   /** The page body, for pages that need nothing from the settings screen. */
   Content?: ComponentType;
 }
@@ -109,7 +117,7 @@ const SIDEBAR_SECTION_ITEMS: SidebarSectionItem[] = [
     id: "shortcuts",
     labelKey: "settings.sections.shortcuts",
     icon: Keyboard,
-    desktopOnly: true,
+    hardwareKeyboardOnly: true,
     Content: KeyboardShortcutsSection,
   },
   {
@@ -122,7 +130,12 @@ const SIDEBAR_SECTION_ITEMS: SidebarSectionItem[] = [
   { id: "storage", labelKey: "settings.sections.storage", icon: HardDrive },
 ];
 
-function isSectionAvailable(item: SidebarSectionItem, isDesktopApp: boolean): boolean {
+function isSectionAvailable(
+  item: SidebarSectionItem,
+  isDesktopApp: boolean,
+  hardwareKeyboardPresent: boolean,
+): boolean {
+  if (item.hardwareKeyboardOnly && !hardwareKeyboardPresent) return false;
   return !item.desktopOnly || isDesktopApp;
 }
 
@@ -416,15 +429,19 @@ function SettingsSidebar({
   const sortedHosts = useSortedHosts(hosts, localServerId);
   const hasHosts = sortedHosts.length > 0;
   const isDesktopApp = isElectronRuntime();
+  const hardwareKeyboardPresent = useHardwareKeyboardPresent();
   const query = search.trim().toLocaleLowerCase();
   const items = SIDEBAR_SECTION_ITEMS.filter(
-    (item) => isSectionAvailable(item, isDesktopApp) && matchesSectionSearch(query, item, t),
+    (item) =>
+      isSectionAvailable(item, isDesktopApp, hardwareKeyboardPresent) &&
+      matchesSectionSearch(query, item, t),
   );
   const hostItems = HOST_SECTION_ITEMS.filter((item) =>
     matchesSettingsSearch(query, t(item.labelKey)),
   );
   const insets = useSafeAreaInsets();
   const isDesktop = layout === "desktop";
+  const sidebarScroll = useSettingsSidebarScroll(isDesktop);
   const outerContainerStyle = useMemo(
     () => [isDesktop ? sidebarStyles.desktopContainer : sidebarStyles.mobileContainer],
     [isDesktop],
@@ -501,6 +518,7 @@ function SettingsSidebar({
             style={sidebarStyles.scrollBody}
             showsVerticalScrollIndicator={false}
             testID="settings-sidebar-scroll-body"
+            {...sidebarScroll}
           >
             {sidebarBody}
           </ScrollView>
@@ -526,27 +544,14 @@ export default function SettingsScreen({ view }: SettingsScreenProps) {
   const { t } = useTranslation();
   const { settings, isLoading: settingsLoading, updateSettings } = useAppSettings();
   const isDesktopApp = isElectronRuntime();
+  const hardwareKeyboardPresent = useHardwareKeyboardPresent();
   const isCompactLayout = useIsCompactFormFactor();
   const insets = useSafeAreaInsets();
   const insetBottomStyle = useMemo(() => ({ paddingBottom: insets.bottom }), [insets.bottom]);
   const hosts = useHosts();
   const localServerId = useLocalDaemonServerId();
   const sortedHosts = useSortedHosts(hosts, localServerId);
-  const lastWorkspaceSelection = useLastWorkspaceSelection();
-  const routedSettingsHostServerId =
-    view.kind === "host" || view.kind === "project" || view.kind === "plugin"
-      ? view.serverId
-      : null;
-  const [selectedSettingsHostServerId, setSelectedSettingsHostServerId] = useState<string | null>(
-    routedSettingsHostServerId ?? lastWorkspaceSelection?.serverId ?? null,
-  );
-  useFocusEffect(
-    useCallback(() => {
-      setSelectedSettingsHostServerId(
-        routedSettingsHostServerId ?? lastWorkspaceSelection?.serverId ?? null,
-      );
-    }, [lastWorkspaceSelection?.serverId, routedSettingsHostServerId]),
-  );
+  const selectedSettingsHostServerId = useSettingsHostSelection();
 
   // The host the sections scope to: the host on the active view, otherwise the
   // last workspace's host, otherwise the connected local daemon, otherwise the first host.
@@ -603,15 +608,10 @@ export default function SettingsScreen({ view }: SettingsScreenProps) {
     returnFromSettings({ kind: "root" });
   }, []);
 
-  const installedPlugins = useInstalledPlugins();
+  // The header names the plugin; its tabs name the open settings screen.
+  const pluginDisplayName = usePluginDisplayName(view.kind === "plugin" ? view : null);
   const detailTitle = ((): string | undefined => {
-    if (view.kind === "plugin") {
-      const plugin = installedPlugins.find(
-        (candidate) => candidate.serverId === view.serverId && candidate.id === view.pluginId,
-      );
-      const screen = plugin?.settingsScreens.find((candidate) => candidate.id === view.screenId);
-      return `${view.pluginId} · ${plugin && screen ? plugin.i18n.resolve(screen.title, plugin.locale) : t("settings.title")}`;
-    }
+    if (view.kind === "plugin") return pluginDisplayName;
     if (view.kind === "host") {
       const item = HOST_SECTION_ITEMS.find((s) => s.id === view.section);
       return item ? t(item.labelKey) : undefined;
@@ -628,7 +628,7 @@ export default function SettingsScreen({ view }: SettingsScreenProps) {
 
   const renderSection = (section: SettingsSectionSlug): ReactNode => {
     const item = SIDEBAR_SECTION_ITEMS.find((candidate) => candidate.id === section);
-    if (!item || !isSectionAvailable(item, isDesktopApp)) return null;
+    if (!item || !isSectionAvailable(item, isDesktopApp, hardwareKeyboardPresent)) return null;
     switch (section) {
       case "general":
         return (
@@ -658,7 +658,9 @@ export default function SettingsScreen({ view }: SettingsScreenProps) {
     }
   };
   const searchResults = SIDEBAR_SECTION_ITEMS.filter(
-    (item) => isSectionAvailable(item, isDesktopApp) && matchesSectionSearch(search, item, t),
+    (item) =>
+      isSectionAvailable(item, isDesktopApp, hardwareKeyboardPresent) &&
+      matchesSectionSearch(search, item, t),
   );
   const hostSearchResults = activeHostServerId
     ? HOST_SECTION_ITEMS.filter((item) => matchesSettingsSearch(search, t(item.labelKey)))
@@ -772,7 +774,11 @@ export default function SettingsScreen({ view }: SettingsScreenProps) {
         </WindowChromeRegion>
         <WindowChromeRegion corners="top-right">
           <View style={desktopStyles.contentPane} testID="settings-detail-pane">
-            <PageLayout title={detailTitle} titleTestID="settings-detail-header-title">
+            <PageLayout
+              title={detailTitle}
+              titleTestID="settings-detail-header-title"
+              testID="settings-detail-scroll-body"
+            >
               {content}
             </PageLayout>
           </View>
@@ -823,6 +829,7 @@ const desktopStyles = StyleSheet.create({
   },
   contentPane: {
     flex: 1,
+    minWidth: SETTINGS_DESKTOP_DETAIL_MIN_WIDTH,
   },
 });
 
@@ -838,6 +845,7 @@ const sidebarStyles = StyleSheet.create((theme) => ({
   },
   desktopContainer: {
     width: SETTINGS_DESKTOP_SIDEBAR_WIDTH,
+    flexShrink: 1,
     borderRightWidth: 1,
     borderRightColor: theme.colors.border,
     backgroundColor: theme.colors.surfaceSidebar,
@@ -874,7 +882,7 @@ const sidebarStyles = StyleSheet.create((theme) => ({
     flexDirection: "row",
     alignItems: "center",
     gap: { xs: theme.spacing[3], md: theme.spacing[2] },
-    minHeight: { xs: 52, md: 28 },
+    minHeight: { xs: 52, md: density.tightRowHeight.md },
     paddingVertical: theme.spacing[1],
     paddingHorizontal: { xs: theme.spacing[4], md: theme.spacing[2] },
     borderRadius: { xs: 0, md: theme.borderRadius.lg },

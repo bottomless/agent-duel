@@ -27,7 +27,10 @@ the sync needs merge commits allowed for it.
    the files still in conflict.
 3. Resolve what is left (rules below).
 4. `node scripts/sync-workspace-versions.mjs && npm install` to regenerate the lockfile on our
-   version line, then `npm run build:server`, `npm run typecheck`, `npm run lint`, and the
+   version line. Start `package-lock.json` from upstream's side and add `main`'s entries for the
+   packages upstream doesn't have. Starting from `main`'s alone lets npm resolve upstream's new
+   dependencies to newer versions than upstream's `patches/` target, and `postinstall` fails. Then
+   `npm run build:server`, `npm run typecheck`, `npm run lint`, and the
    targeted tests of the files you resolved. Compare failing tests with the same files on `main`
    before blaming the merge; some fail there already.
 5. QA in Electron with stubbed models ([QA](qa.md)): a battle turn through vote and apply, a reply
@@ -43,8 +46,9 @@ the sync needs merge commits allowed for it.
 `scripts/upstream-sync.mjs` holds the lists; change them there.
 
 - **Drop** — Paseo surfaces Agent Duel removed: the website, public docs, mobile and store
-  release, Hub, Schedules, heartbeats, host pairing, the diagnostic report, the in-app changelog,
-  upstream's built-in plugins, upstream's release workflows. Upstream edits and additions there are removed by `prepare`. A
+  release, Hub, Schedules, heartbeats, host pairing and the add-host flow, the diagnostic report,
+  the in-app changelog, the first-run setup modal, upstream's built-in plugins, upstream's release
+  workflows. Upstream edits and additions there are removed by `prepare`. A
   file Agent Duel deleted stays deleted even when upstream kept editing it.
 - **Ours** — files Agent Duel owns outright: licensing, the root guides, CI and release workflows,
   the app config, the Arena and account docs. `prepare` keeps our side.
@@ -96,3 +100,9 @@ again the next time upstream touches those files. Record the decision here.
 | Terminal profiles in the tab launcher                         | No profile UI                                                                         | `workspace-tabs/launcher/index.tsx`                                                            |
 | Host filters (plugin screens, Usage, label manager)           | One host                                                                              | removed from those screens                                                                     |
 | Built-in plugins (usage sources, Antigravity, Hoplite, Muse)  | Not shipped; they require Paseo 0.9.2 or newer and failed on every start (2026-10-26) | `plugins/` is dropped; `server/plugins/builtin/index.ts` lists none                            |
+| First-run setup modal                                         | Not shipped; Agent Duel's welcome screen is the first run (2026-11-12)                | `packages/app/src/onboarding/` is dropped; startup in `app/_layout.tsx` does not wait for it   |
+| Send shortcut setting                                         | No setting; Enter steers, Cmd/Ctrl+Enter queues (2026-11-12)                          | `composer/index.tsx` passes `sendShortcut="enter"`; the Sending settings section is not here   |
+| Sidebar footer overflow menu (Usage, Hosts, Help)             | Not shipped; Agent Duel's footer icons fit the minimum sidebar width (2026-11-12)     | the overflow menu files are removed; `left-sidebar.tsx` renders Agent Duel's footer            |
+| Voice settings page                                           | Not shipped; the composer mic (dictation) keeps working as before (2026-11-13)        | `packages/app/src/screens/settings/voice/` is dropped; `HOST_SECTION_SLUGS` has no `voice`     |
+| Idle runtime release after an hour                            | Not for Arena chats; a battle waiting for a vote looks idle (2026-11-12)              | `OpenCodeV2Session.canStopRuntime` returns false in Arena mode                                 |
+| Folding finished turns by default                             | Off by default; "Collapse tool calls" stays the default chat display (2026-11-12)     | `DEFAULT_CLIENT_SETTINGS.chatDisplay` in `hooks/use-settings/storage.ts`                       |

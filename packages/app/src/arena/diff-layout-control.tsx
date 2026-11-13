@@ -25,7 +25,7 @@ export function DiffLayoutControl({ agentId, width }: { agentId: string; width: 
       options={diffLayoutOptions(t)}
       value={layout}
       onValueChange={onChange}
-      size="xs"
+      size="sm"
       testID="arena-diff-layout"
     />
   );

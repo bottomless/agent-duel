@@ -153,7 +153,7 @@ export function FeedbackSheet({ visible, onClose, contextTarget }: FeedbackSheet
               options={options}
               value={kind}
               onValueChange={setKind}
-              size={isCompact ? "md" : "sm"}
+              size="md"
               testID="feedback-kind"
             />
           </Field>
@@ -161,7 +161,7 @@ export function FeedbackSheet({ visible, onClose, contextTarget }: FeedbackSheet
           <Field label={t("feedback.sheet.messageLabel")}>
             <FormTextInput
               resetKey={resetKey}
-              size={isCompact ? "md" : "sm"}
+              size="md"
               multiline
               numberOfLines={6}
               textAlignVertical="top"

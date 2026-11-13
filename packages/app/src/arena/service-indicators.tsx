@@ -59,7 +59,7 @@ export function PreviewButton({
   if (!entry) return null;
   return (
     <Button
-      size="xs"
+      size="sm"
       variant="outline"
       disabled={!ready}
       onPress={handlePress}

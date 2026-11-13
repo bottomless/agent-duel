@@ -156,12 +156,17 @@ describe("createGitMetadataGenerator", () => {
     vi.useFakeTimers();
     const { diffSource } = createDiffSource(DIFF_WITH_TWO_FILES);
     let signal: AbortSignal | undefined;
+    const writing = Promise.withResolvers<void>();
     const { writer } = createWriter((_request, received) => {
       signal = received;
+      writing.resolve();
       return new Promise(() => {});
     });
 
     const message = generatorFor(diffSource, writer).generateCommitMessage("/repo");
+    // The paseo.json read before the write is real async I/O; start the clock once the writer
+    // has the request, so the write timeout is the only timer the advance reaches.
+    await writing.promise;
     await vi.advanceTimersByTimeAsync(30_000);
 
     await expect(message).resolves.toBe("Update 2 files");

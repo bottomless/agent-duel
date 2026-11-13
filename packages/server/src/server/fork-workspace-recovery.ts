@@ -35,8 +35,10 @@ export async function recoverInterruptedForkWorkspaces(
   // Only run before accepting requests. Empty workspaces without this marker
   // may be intentional; never infer an interrupted fork from emptiness alone.
   const { agentStorage, workspaceRegistry, logger } = dependencies;
-  const agentWorkspaceIds = new Set((await agentStorage.list()).map((agent) => agent.workspaceId));
-  for (const workspace of await workspaceRegistry.list()) {
+  const agentWorkspaceIds = new Set(
+    (await agentStorage.listAll()).map((agent) => agent.workspaceId),
+  );
+  for (const workspace of await workspaceRegistry.listAll()) {
     if (!workspace.pendingFork) continue;
     try {
       if (!workspace.archivedAt && !agentWorkspaceIds.has(workspace.workspaceId)) {
@@ -66,8 +68,8 @@ export async function recoverUnrecordedForkWorktrees(
 ): Promise<void> {
   const { agentStorage, workspaceRegistry, workspaceProvisioning, paseoHome, logger } =
     dependencies;
-  const workspaces = await workspaceRegistry.list();
-  const agents = await agentStorage.list();
+  const workspaces = await workspaceRegistry.listAll();
+  const agents = await agentStorage.listAll();
   const isWithinWorktree = (worktreePath: string, candidate: string): boolean => {
     const relative = path.relative(worktreePath, candidate);
     return (
@@ -191,7 +193,7 @@ async function createArchivedForkWorkspaceRecord(input: {
   const branch = await getCurrentBranch(worktreePath);
   let baseBranch: string | null = null;
   try {
-    baseBranch = readPaseoWorktreeMetadata(worktreePath)?.baseRefName ?? null;
+    baseBranch = (await readPaseoWorktreeMetadata(worktreePath))?.baseRefName ?? null;
   } catch {
     // The crash may have interrupted metadata writing; the checkout remains recoverable.
   }

@@ -107,7 +107,7 @@ back as a tall one when it moves to the bottom.
 
 Both panes have floors, in the shape of the Codex app's panels
 (`packages/app/src/components/split-container-floors.ts`). Docked right, the chat keeps 400px and
-the panel 319px; with the 1px handle they fill the `md` breakpoint (720px) exactly, and below it
+the panel 319px; with the 1px handle they fill 720px exactly, and below it
 only one pane shows, so both always fit. Docked at the bottom, the panel stays between 160px and half the height. A fraction
 alone let a wide window squeeze the chat until its composer controls overlapped, or the panel until
 its tabs read "T..". Each floor is a minimum on the pane plus a matching stop on the resize handle,

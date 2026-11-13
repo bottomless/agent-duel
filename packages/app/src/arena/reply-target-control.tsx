@@ -65,7 +65,7 @@ export function ArenaReplyTargetControl({
       options={options}
       value={value}
       onValueChange={onValueChange}
-      size="xs"
+      size="sm"
       style={styles.track}
       testID="arena-reply-target-control"
     />

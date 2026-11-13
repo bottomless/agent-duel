@@ -1,4 +1,9 @@
 export const en = {
+  pluginCombobox: {
+    searching: "Searching…",
+    empty: "No results",
+    failed: "Search failed: {{message}}",
+  },
   time: {
     now: "now",
     justNow: "just now",
@@ -639,6 +644,7 @@ export const en = {
       daemonClientUnavailable: "Daemon client unavailable",
       daemonClientDisconnected: "Daemon client is disconnected",
       noFileFound: "No file found for {{token}}",
+      folderOutsideWorkspace: "{{path}} is outside this workspace",
       unexpectedDictationError: "An unexpected error occurred while handling dictation.",
     },
     connectionStatus: {
@@ -705,6 +711,8 @@ export const en = {
       sendAndInterrupt: "Send and interrupt",
       sendAndSteer: "Send and steer",
       sendMessage: "Send message",
+      longPressToQueue: "Long press to queue",
+      longPressToSendNow: "Long press to send now",
       queue: "Queue",
       send: "Send",
     },
@@ -923,6 +931,24 @@ export const en = {
       answerPlaceholder: "Type your answer...",
       otherPlaceholder: "Other...",
     },
+    backgroundWork: {
+      pillOne: "1 background task",
+      pillMany: "{{count}} background tasks",
+      notRunning: "No longer running",
+      dismiss: "Dismiss",
+      stop: "Stop",
+      stopping: "Stopping…",
+      stopError: "Could not confirm stop.",
+      label: "Background",
+      title: "Background work",
+      waiting: "Waiting for background work details",
+      error: "Could not load background work",
+      retry: "Retry",
+      running: "Background work running",
+      shell: "Shell",
+      monitor: "Monitor",
+      other: "Other work",
+    },
     todo: {
       title: "Tasks",
       empty: "No tasks yet.",
@@ -1126,6 +1152,7 @@ export const en = {
     terminal: {
       hostDisconnected: "Host is not connected",
       updateHost: "Update the host to use the native terminal renderer.",
+      restoreRequiresUpdate: "Update the host to view terminals.",
       unableToSubscribe: "Unable to subscribe to terminal",
       fileUploaded: "File uploaded",
       pasteFileFailed: "Failed to paste file: {{reason}}",
@@ -1492,6 +1519,9 @@ export const en = {
         },
       },
       diff: {
+        baseBranch: {
+          title: "Change base",
+        },
         openChangesTab: "Open Changes tab",
         openDiffTab: "Open Diff tab",
         closeChangesTab: "Close Changes tab",
@@ -1721,6 +1751,8 @@ export const en = {
     title: "What's new",
     installed: "Installed",
     showMore: "Show more",
+    showAllChanges: "Show all changes",
+    hideAllChanges: "Hide all changes",
     openWebsite: "Full changelog",
     error: {
       title: "Unable to load the changelog",
@@ -1728,6 +1760,14 @@ export const en = {
     },
   },
   sidebar: {
+    view: {
+      failed: "Sidebar view failed to load.",
+      useDefault: "Use default view",
+      readFailed: "Could not load your sidebar view preference.",
+      agentUnavailable: "Agent is no longer available",
+      terminalUnavailable: "Terminal is no longer available",
+      projectUnavailable: "Project is no longer available",
+    },
     statusGroupAccessibility: "{{label}} group",
     statusBucket: {
       needsInput: "Needs input",
@@ -1804,6 +1844,7 @@ export const en = {
       home: "Home",
       settings: "Settings",
       closeSidebar: "Close sidebar",
+      moreActions: "More actions",
     },
     footer: {
       usage: "Usage",
@@ -1923,6 +1964,9 @@ export const en = {
         hostDisconnected: "Host is not connected",
         hideFailed: "Failed to hide workspace",
         archiveFailed: "Failed to archive workspace",
+        archived: "Chat archived",
+        undoArchive: "Undo",
+        undoArchiveFailed: "Couldn't undo the archive",
         archiveKeptFiles:
           "Archived, but this chat's work could not be saved, so its files stay on disk. Unarchive the chat to open them. {{reason}}",
         archiveKeptReasons: {
@@ -2200,6 +2244,9 @@ export const en = {
       cli: {
         statusFailed: "Unable to check CLI install status.",
         installFailed: "Unable to install the Agent Duel CLI.",
+        uninstallFailed: "Unable to uninstall the Agent Duel CLI.",
+        keptForeign:
+          "Kept a paseo command that Agent Duel didn't install. Remove it yourself to uninstall it.",
       },
 
       skills: {
@@ -2260,6 +2307,7 @@ export const en = {
     placeholder: "Switch branch...",
     searchPlaceholder: "Filter branches...",
     empty: "No branches found.",
+    failedToLoad: "Could not load branches. Reopen the picker to try again.",
     title: "Switch branch",
     uncommittedTitle: "Uncommitted changes",
     uncommittedMessage: "You have uncommitted changes. Stash them before switching branches?",
@@ -2278,7 +2326,11 @@ export const en = {
     loadingCommands: "Loading commands...",
     noFiles: "No files or directories found",
     noCommands: "No commands found",
-    failedToLoad: "Failed to load",
+    loadingProviderCommands: "Loading {{provider}} commands...",
+    commandsFailed: "Couldn't load commands",
+    providerCommandsFailed: "Couldn't load {{provider}} commands",
+    filesFailed: "Couldn't search files",
+    skillTag: "Skill",
     chooseProjectForCommands: "Choose a project to see commands",
     chooseModelForCommands: "Select a model to see commands",
   },
@@ -2305,6 +2357,60 @@ export const en = {
     },
   },
   onboarding: {
+    setup: {
+      title: "Agent Duel",
+      stepCounter: "Step {{current}} of {{total}}",
+      skip: "Skip setup",
+      continue: "Continue",
+      finish: "Finish",
+      steps: {
+        appearance: {
+          label: "Appearance",
+          title: "Welcome to Agent Duel",
+          description: "Let's start by picking a look",
+        },
+        providers: {
+          label: "Providers",
+          title: "Your agents",
+          description: "Agent Duel runs the agent CLIs already on this computer",
+        },
+        projects: {
+          label: "Projects",
+          title: "Add your projects",
+          description: "Where do you want your agents to work on",
+          addProject: "Add project",
+          added: "Added",
+          suggestions: {
+            loading: "Looking for folders you've worked in",
+            empty: "No recent projects found",
+            lastUsed: "Last used {{time}}",
+            addSelected_one: "Add {{count}} project",
+            addSelected_other: "Add {{count}} projects",
+            adding: "Adding…",
+            addFailed: "Couldn't add this folder",
+          },
+        },
+        orchestration: {
+          label: "Orchestration",
+          title: "Let agents use Agent Duel",
+          description: "Let your agents create workspaces and talk to other agents",
+        },
+        phone: {
+          label: "Mobile",
+          title: "Take your agents with you",
+          description:
+            "The fully featured native mobile app allows you to control any Agent Duel computer from your phone",
+          appStore: "App Store",
+          googlePlay: "Google Play",
+          connectTitle: "Choose how to connect",
+          connectDocs: "Docs",
+          openConnectDocs: "Open connectivity documentation",
+          recommended: "Recommended",
+          relay: { title: "Relay", hint: "End-to-end encrypted, scan a QR code" },
+          tailscale: { title: "Tailscale", hint: "Requires some setup" },
+        },
+      },
+    },
     title: "Welcome to Agent Duel",
     subtitle: "Connect your computer to get started",
     actions: {
@@ -2403,6 +2509,12 @@ export const en = {
     backdrop: "Menu backdrop",
   },
   subagents: {
+    parent: {
+      backToParent: "Back to parent",
+      backTo: "Back to {{label}}",
+      parentAgent: "Parent agent",
+      openParent: "Open parent",
+    },
     title: "Subagents",
     pillLabelOne: "1 subagent",
     pillLabelMany: "{{count}} subagents",
@@ -2509,11 +2621,17 @@ export const en = {
   toolCallDetails: {
     error: "Error",
     empty: "No additional details available",
-    subAgentActivity: "Sub-agent activity",
     input: "Input",
     output: "Output",
   },
+  turnSummary: {
+    details: "View turn details",
+    sentBy: "Sent by {{name}}",
+    showMore: "Show more",
+    showLess: "Show less",
+  },
   toolCallGroup: {
+    thought: "Thought",
     editedFiles: {
       one: "edited {{count}} file",
       other: "edited {{count}} files",
@@ -2657,6 +2775,11 @@ export const en = {
     },
   },
   providerUsage: {
+    checkUsage: "Check usage",
+    checkUsageHint: "Applies to {{host}} on every device",
+    off: "Usage is off on {{host}}.",
+    turnOn: "Turn on",
+
     options: "Settings",
     refreshFailed: "Unable to refresh usage",
     noHosts: "No connected hosts",
@@ -2704,15 +2827,18 @@ export const en = {
       days: "{{value}}d",
       hours: "{{value}}h",
       minutes: "{{value}}m",
+      pair: "{{first}} {{second}}",
     },
     timing: {
       lastUpdated: "Last updated {{relativeTime}}",
       noSuccessfulUpdate: "No successful update",
       resetTimePassed: "Reset time passed",
       resettingNow: "resetting now",
-      resetsIn: "resets {{duration}}",
+      resetsIn: "resets in {{duration}}",
+      resetsAtWeekday: "{{weekday}} {{time}}",
+      resetsAtDate: "{{date}}, {{time}}",
       runsOutNow: "runs out now",
-      runsOutIn: "runs out {{duration}}",
+      runsOutIn: "runs out in {{duration}}",
       justNow: "just now",
       daysAgo: "{{value}}d ago",
       hoursAgo: "{{value}}h ago",
@@ -2848,6 +2974,7 @@ export const en = {
       projects: "Projects",
       agents: "Agents",
       metadata: "Metadata",
+      voice: "Voice",
       workspaces: "Workspaces",
       providers: "Providers",
       usage: "Usage",
@@ -2876,7 +3003,7 @@ export const en = {
       installing: "Installing…",
       logs: {
         action: "Logs",
-        title: "Logs: {{id}}",
+        title: "Logs: {{name}}",
         loading: "Loading logs…",
         refresh: "Refresh",
         refreshing: "Refreshing…",
@@ -2885,7 +3012,8 @@ export const en = {
       },
       status: { running: "running", disabled: "disabled", failed: "failed" },
       actions: {
-        menu: "Actions for {{id}}",
+        menu: "Actions for {{name}}",
+        settings: "Settings",
         reload: "Reload",
         reloading: "Reloading…",
         enable: "Enable",
@@ -2896,16 +3024,16 @@ export const en = {
         removing: "Removing…",
       },
       feedback: {
-        installed: "Installed {{id}}",
-        reload: "Reloaded {{id}}",
-        enable: "Enabled {{id}}",
-        disable: "Disabled {{id}}",
-        remove: "Removed {{id}}",
-        kept: "Kept {{id}}",
+        installed: "Installed {{name}}",
+        reload: "Reloaded {{name}}",
+        enable: "Enabled {{name}}",
+        disable: "Disabled {{name}}",
+        remove: "Removed {{name}}",
+        kept: "Kept {{name}}",
         globalEnabled: "Plugins enabled",
         globalDisabled: "Plugins disabled",
       },
-      removeConfirmTitle: "Remove {{id}}?",
+      removeConfirmTitle: "Remove {{name}}?",
       removeConfirmMessage: "This removes the configuration. The source directory is not deleted.",
       states: {
         offlineTitle: "Plugin host is offline",
@@ -2970,6 +3098,69 @@ export const en = {
           "Less than {{size}} is free, so only the latest chat on this disk keeps its battle environments.",
       },
     },
+    voice: {
+      offline: "Connect to this host to configure voice.",
+      updateHost: "Update the host to configure voice.",
+      saveError: "Unable to update voice settings",
+      provider: "Provider",
+      providers: {
+        local: "Local",
+        openai: "OpenAI",
+      },
+      voice: "Voice",
+      save: "Save",
+      retry: "Retry",
+      cancel: "Cancel",
+      model: "Model",
+      language: "Language",
+      languagePlaceholder: "Auto-detect",
+      setBy: "Set by {{name}}",
+      unknownProvider: "Update the app to configure {{provider}}",
+      sites: {
+        dictationStt: "Speech-to-text",
+        voiceModeStt: "Listening",
+        voiceModeTts: "Speaking",
+      },
+      dictation: {
+        title: "Dictation",
+        enabled: "Dictation",
+        enabledHint: "Speak into the message box instead of typing",
+      },
+      voiceMode: {
+        title: "Voice mode",
+        info: "Voice mode transcribes what you say and reads agent replies aloud.",
+        enabled: "Voice mode",
+        enabledHint: "Talk with your agents hands-free",
+      },
+      openai: {
+        apiKey: "API key",
+        apiKeyHint: "Saved on the host and never shown again.",
+        keyPlaceholder: "sk-...",
+        savedKeyPlaceholder: "Saved",
+        missingKey: "API key missing",
+        baseUrl: "Base URL",
+        baseUrlHint: "For OpenAI-compatible servers. Leave empty to use OpenAI.",
+      },
+      models: {
+        loading: "Loading models...",
+        loadError: "Couldn't load local models",
+        none: "No models available",
+        downloaded: "Downloaded",
+        inUse: "In use",
+        recommended: "Recommended",
+        download: "Download",
+        downloadAction: "Download {{label}}",
+        downloading: "Downloading...",
+        downloadingPercent: "Downloading {{percent}}%",
+        extracting: "Extracting...",
+        delete: "Delete",
+        deleteAction: "Delete {{label}}",
+        deleteTitle: "Delete {{label}}?",
+        deleteMessage: "This frees {{size}}. You can download it again later.",
+        languages: "{{label}} languages",
+        moreLanguages: "{{languages}} and {{count}} more",
+      },
+    },
     general: {
       title: "General",
       openRouterKey: {
@@ -2991,6 +3182,11 @@ export const en = {
         removeFailed: "Couldn't remove the key. Try again.",
       },
       sending: "Sending",
+      setup: {
+        label: "First-run setup",
+        description: "Walk through appearance, providers, projects and phone pairing again",
+        action: "Show setup again",
+      },
       browserData: {
         title: "Browser data",
         siteData: "Cookies and site data",
@@ -3002,6 +3198,13 @@ export const en = {
         success: "Browser data cleared.",
         error: "Couldn't clear browser data.",
       },
+      sendShortcut: {
+        label: "Send shortcut",
+        options: {
+          enter: "Enter",
+          "mod-enter": "{{modifier}}+Enter",
+        },
+      },
       terminalScrollback: {
         label: "Terminal scrollback",
         description: "Lines kept in the built-in terminal buffer",
@@ -3011,12 +3214,13 @@ export const en = {
         label: "Always expand reasoning",
         description: "Show agent thinking and chain-of-thought blocks fully expanded by default",
       },
-      toolCallDetail: {
-        label: "Tool call display",
-        description: "How tool calls appear in the timeline",
+      chatDisplay: {
+        label: "Chat display",
+        description: "How much of an agent's work the chat shows",
         options: {
-          overview: "Summary",
-          detailed: "Full detail",
+          full: "Full",
+          collapseToolCalls: "Collapse tool calls",
+          collapseTurns: "Collapse turns",
         },
 
         accessibilityLabel: "Select tool call display ({{value}})",
@@ -3099,6 +3303,12 @@ export const en = {
         description: "Show an outline for jumping between prompts",
       },
       sidebar: {
+        view: {
+          title: "Sidebar view",
+          label: "View",
+          default: "Default view",
+          unavailable: "The selected view is unavailable or disabled. Showing Default view.",
+        },
         header: {
           title: "Header",
           description: "Choose which items appear at the top of the sidebar and in what order",
@@ -3216,6 +3426,7 @@ export const en = {
       commandLine: {
         title: "Command line",
         description: "Control and script agents from your terminal",
+        accessibilityLabel: "Install the Agent Duel CLI",
       },
       actions: {
         install: "Install",
@@ -3283,7 +3494,7 @@ export const en = {
       skills: {
         sectionTitle: "Orchestration skills",
         title: "Orchestration skills",
-        description: "Teach your agents to orchestrate through the CLI",
+        description: "Teach your agents how to use Agent Duel tools",
         docs: "Skills",
         openDocs: "Open skills documentation",
         unavailable: "Connect to this host to manage orchestration skills",
@@ -3294,7 +3505,6 @@ export const en = {
         saveSelectionFailed: "Unable to save the orchestration skills selection.",
         updateAvailable: "Update available",
         updateTitle: "Update Agent Duel skills?",
-        updateFallback: "Sync bundled skills to this host.",
         uninstallTitle: "Uninstall Agent Duel skills?",
         uninstallMessage:
           "Removes all Agent Duel orchestration skills from ~/.agents, ~/.claude, ~/.codex on this host.",
@@ -3308,9 +3518,6 @@ export const en = {
           "{{skills}} will be deleted from ~/.agents, ~/.claude, and ~/.codex on this host. Anything you added inside those skill folders is deleted too.",
         saveFailed: "Could not save your skill selection.",
         actions: {
-          install: "Install",
-          installing: "Installing...",
-          installed: "Installed",
           update: "Update",
           working: "Working...",
           remove: "Remove",
@@ -3332,6 +3539,7 @@ export const en = {
           title: "Enable Agent Duel tools",
           hint: "Agents will be able to manage worktrees and agents",
           accessibilityLabel: "Inject Agent Duel tools",
+          updateFailed: "Unable to update Agent Duel tools.",
         },
         systemPrompt: {
           title: "System prompt",
@@ -3347,6 +3555,19 @@ export const en = {
       },
       agents: {
         unavailable: "Connect to this host to manage agents",
+        resumeOnStartup: {
+          title: "Resume agents after restart",
+          info: "Reopen agents that were working when the host stopped and send the resume prompt. Applies after graceful restarts and crashes.",
+          hint: "Continue interrupted work automatically.",
+          prompt: "Resume prompt",
+          edit: "Edit",
+          editAccessibilityLabel: "Edit prompt",
+        },
+        idleRuntimeCleanup: {
+          title: "Release idle agents",
+          hint: "Free up memory after an hour of inactivity.",
+          info: "Stops the agent's process while keeping its conversation. Send a message to resume.\n\nActive work, pending notifications, and provider safety checks prevent cleanup.",
+        },
       },
       workspaces: {
         unavailable: "Connect to this host to manage workspaces",
@@ -3408,6 +3629,10 @@ export const en = {
           requestFailedTitle: "Error",
           requestFailedMessage:
             "Failed to send the restart request. Agent Duel reconnects automatically-try again once the host shows as online.",
+          closeTerminals: "Restart and close terminals",
+          closeTerminalsHint: "Restart and also close every terminal running on this host.",
+          closeTerminalsConfirmMessage:
+            "This will restart the daemon and close every terminal on it, ending the programs running in them. The app will reconnect automatically.",
           dialogFailedMessage: "Unable to open the restart confirmation dialog.",
         },
         update: {

@@ -157,7 +157,7 @@ export function ArenaByokKeySection({ serverId }: { serverId: string | null }) {
           </View>
           {configured ? (
             <Button
-              size="sm"
+              size="md"
               variant="outline"
               loading={isRemoving}
               disabled={isPending}
@@ -171,7 +171,7 @@ export function ArenaByokKeySection({ serverId }: { serverId: string | null }) {
         <View style={[settingsStyles.row, settingsStyles.rowBorder, styles.inputRow]}>
           <View style={settingsStyles.rowContent}>
             <FormTextInput
-              size="sm"
+              size="md"
               resetKey={input.resetKey}
               onChangeText={handleChangeText}
               onSubmitEditing={handleSave}
@@ -192,7 +192,7 @@ export function ArenaByokKeySection({ serverId }: { serverId: string | null }) {
             ) : null}
           </View>
           <Button
-            size="sm"
+            size="md"
             variant="outline"
             loading={isSaving}
             disabled={isPending || key.length === 0}

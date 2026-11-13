@@ -10,21 +10,28 @@ import { HeaderToggleButton } from "@/components/headers/header-toggle-button";
 import { CompactHeader } from "@/components/headers/compact-header";
 import { ScreenHeader } from "@/components/headers/screen-header";
 import { ScreenTitle } from "@/components/headers/screen-title";
+import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { useIsCompactFormFactor } from "@/constants/layout";
-import { useHostRuntimeClient, useHosts } from "@/runtime/host-runtime";
+import {
+  useHostRuntimeClient,
+  useHostRuntimeConnectionStatus,
+  useHosts,
+} from "@/runtime/host-runtime";
 import type { Theme } from "@/styles/theme";
 import type { ShortcutKey } from "@/utils/format-shortcut";
 import { usePluginHostNavigation } from "./host-navigation";
 import { PluginIconView } from "./icons";
 import { toPluginTheme } from "./theme";
-import { useInstalledPlugin } from "./registry";
+import { useInstalledPlugin, usePluginCatalogStatus } from "./registry";
 import { pluginScreenParamsFromRoute } from "./routes";
 import { SurfaceErrorBoundary } from "./surface-error-boundary";
 import { PluginInstallationProvider } from "./installation-provider";
 import {
   resolvePluginScreenTitle,
   resolvePluginSurfaceContribution,
+  resolvePluginSurfacePlaceholder,
   type PluginSurfaceContributionIdentity,
+  type PluginSurfacePlaceholderStatus,
 } from "./surface-contribution";
 import { resolvePluginPlatform } from "./platform";
 
@@ -34,6 +41,28 @@ const pluginThemeMapping = (theme: Theme) => ({
   theme: toPluginTheme(theme),
 });
 const ThemedX = withUnistyles(X);
+const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
+const SURFACE_ERRORS = {
+  offline: "Plugin host is offline.",
+  error: "Could not load plugins. Reconnect to try again.",
+  unavailable: "This plugin surface is unavailable.",
+} as const;
+
+function PluginSurfacePlaceholder({ status }: { status: PluginSurfacePlaceholderStatus }) {
+  if (status === "loading") {
+    return (
+      <View
+        testID="plugin-surface-loading"
+        accessibilityRole="progressbar"
+        accessibilityLabel="Loading plugin"
+        style={styles.loading}
+      >
+        <ThemedLoadingSpinner size="large" uniProps={mutedColorMapping} />
+      </View>
+    );
+  }
+  return <Text style={styles.errorText}>{SURFACE_ERRORS[status]}</Text>;
+}
 
 function routeParam(value: string | string[] | undefined): string {
   return typeof value === "string" ? value : "";
@@ -91,6 +120,9 @@ export function PluginSurfaceScreen() {
   const plugin = useInstalledPlugin(serverId, pluginId);
   const hosts = useHosts();
   const client = useHostRuntimeClient(serverId);
+  const connectionStatus = useHostRuntimeConnectionStatus(serverId);
+  const catalogStatus = usePluginCatalogStatus(serverId);
+  const placeholderStatus = resolvePluginSurfacePlaceholder({ connectionStatus, catalogStatus });
   const compact = useIsCompactFormFactor();
   const { sidebarItem, surface } = useMemo(
     () => resolvePluginSurfaceContribution(plugin, identity),
@@ -170,9 +202,7 @@ export function PluginSurfaceScreen() {
             />
           </SurfaceErrorBoundary>
         ) : (
-          <Text style={styles.errorText}>
-            {plugin && surface ? "Plugin host is offline." : "This plugin surface is unavailable."}
-          </Text>
+          <PluginSurfacePlaceholder status={placeholderStatus} />
         )}
       </View>
     </View>
@@ -186,6 +216,11 @@ const styles = StyleSheet.create((theme) => ({
   },
   body: {
     flex: 1,
+  },
+  loading: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
   },
   errorText: {
     color: theme.colors.statusDanger,

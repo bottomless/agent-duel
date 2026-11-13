@@ -30,6 +30,10 @@ interface SeedProjectDescriptor {
  */
 export interface SeedDaemonClient {
   getDirectorySuggestions: DaemonClient["getDirectorySuggestions"];
+  patchDaemonConfig(
+    config: import("@getpaseo/protocol/messages").MutableDaemonConfigPatch,
+  ): Promise<{ config: import("@getpaseo/protocol/messages").MutableDaemonConfig }>;
+  getDaemonConfig(): Promise<{ config: import("@getpaseo/protocol/messages").MutableDaemonConfig }>;
   connect(): Promise<void>;
   close(): Promise<void>;
   addProject(cwd: string): Promise<{
@@ -116,6 +120,7 @@ export interface SeedDaemonClient {
     featureValues?: Record<string, unknown>;
     initialPrompt?: string;
     labels?: Record<string, string>;
+    background?: boolean;
   }): Promise<{ id: string; status: string }>;
   fetchAgents(options?: { scope?: "active" }): Promise<{
     entries: Array<{
@@ -139,7 +144,14 @@ export interface SeedDaemonClient {
     timeout?: number,
   ): Promise<{ status: string }>;
   cancelAgent(agentId: string): Promise<void>;
-  sendAgentMessage(agentId: string, text: string): Promise<void>;
+  sendAgentMessage(
+    agentId: string,
+    text: string,
+    options?: { sourceAgentId?: string; activeTurnBehavior?: "interrupt" | "steer" | "queue" },
+  ): Promise<void>;
+  listAgentBackgroundWork(
+    agentId: string,
+  ): Promise<import("@getpaseo/client").PaseoAgentBackgroundWorkItem[]>;
   waitForFinish(
     agentId: string,
     timeout?: number,

@@ -5,7 +5,7 @@ import type { V2Api } from "./api.js";
 import {
   applyResumeOverrides,
   applySelection,
-  features,
+  controls,
   permissionRules,
   requiresDedicatedV2Server,
   arenaModelRef,
@@ -45,7 +45,14 @@ describe("OpenCode v2 helper isolation", () => {
     expect(
       requiresDedicatedV2Server(
         { provider: "opencode", cwd: "/tmp/project" },
-        { agentId: "agent", env: { PASEO_AGENT_ID: "agent", PASEO_AGENT_CWD: "/tmp/project" } },
+        {
+          agentId: "agent",
+          env: {
+            PASEO_AGENT_ID: "agent",
+            PASEO_AGENT_CWD: "/tmp/project",
+            PASEO_WORKSPACE_ID: "ws-1",
+          },
+        },
       ),
     ).toBe(false);
   });
@@ -70,18 +77,9 @@ describe("OpenCode v2 helper isolation", () => {
   });
 });
 
-describe("OpenCode v2 features", () => {
-  test("reports the auto-accept toggle from the session value", () => {
-    expect(features({ provider: "opencode", cwd: "/tmp/project" })).toEqual([
-      { type: "toggle", id: "auto_accept", label: "Auto-accept", value: false },
-    ]);
-    expect(
-      features({
-        provider: "opencode",
-        cwd: "/tmp/project",
-        featureValues: { auto_accept: true },
-      }),
-    ).toEqual([{ type: "toggle", id: "auto_accept", label: "Auto-accept", value: true }]);
+describe("OpenCode v2 controls", () => {
+  test("describes the auto-accept toggle over the auto_accept option", () => {
+    expect(controls).toEqual([{ type: "toggle", key: "auto_accept", label: "Auto-accept" }]);
   });
 });
 

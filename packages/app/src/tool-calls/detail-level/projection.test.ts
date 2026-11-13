@@ -36,7 +36,7 @@ function toolCall(
   };
 }
 
-function thought(id: string): Extract<StreamItem, { kind: "thought" }> {
+function thoughtItem(id: string): Extract<StreamItem, { kind: "thought" }> {
   return {
     kind: "thought",
     id,
@@ -74,7 +74,9 @@ function project(input: {
 
 describe("tool call detail-level projection", () => {
   it("keeps an applied Arena question between separate tool groups", () => {
+    // A lone call shows as itself, so each side needs two calls to form a group.
     const before = toolCall("1", { type: "shell", command: "git remote -v" });
+    const beforeNext = toolCall("2", { type: "shell", command: "git status" });
     const question: ToolCallItem = {
       kind: "tool_call",
       id: "question",
@@ -97,90 +99,129 @@ describe("tool call detail-level projection", () => {
       },
     };
     const after = toolCall("3", { type: "shell", command: "gh repo create" });
-    const result = project({ level: "overview", tail: [before, question, after] });
-    expect(result.tail).toEqual([before, question, after]);
-    expect(result.groupsByHostId.has(question.id)).toBe(false);
-    expect(result.groupsByHostId.get(before.id)?.run.calls).toEqual([before]);
-    expect(result.groupsByHostId.get(after.id)?.run.calls).toEqual([after]);
+    const afterNext = toolCall("4", { type: "shell", command: "git push" });
+    const tail = [before, beforeNext, question, after, afterNext];
+    const plain = project({ level: "overview", tail });
+    const arena = project({
+      level: "overview",
+      tail,
+      preparedHistory: prepareToolCallHistory("overview", tail, false, { arena: true }),
+    });
+    for (const result of [plain, arena]) {
+      expect(result.tail).toEqual([
+        expect.objectContaining({ id: before.id }),
+        question,
+        expect.objectContaining({ id: after.id }),
+      ]);
+      expect(result.groupsByHostId.has(question.id)).toBe(false);
+      expect(result.groupsByHostId.get(before.id)?.run.calls).toEqual([before, beforeNext]);
+      expect(result.groupsByHostId.get(after.id)?.run.calls).toEqual([after, afterNext]);
+    }
   });
   it("keeps a run together across the thinking between its calls", () => {
     const first = toolCall("1", { type: "read", filePath: "/repo/a.ts" });
-    const thinking = thought("t1");
+    const thinking = thoughtItem("t1");
     const second = toolCall("2", { type: "read", filePath: "/repo/b.ts" });
     const tail = [first, thinking, second];
 
-    const result = project({ level: "overview", tail });
-
-    expect(result.tail).toEqual([expect.objectContaining({ id: first.id })]);
-    expect(result.groupsByHostId.get(first.id)?.run).toMatchObject({
-      calls: [first, second],
-      items: [first, thinking, second],
+    const plain = project({ level: "overview", tail });
+    // A battle chat keeps the run together even with Expand thinking on.
+    const arena = project({
+      level: "overview",
+      tail,
+      preparedHistory: prepareToolCallHistory("overview", tail, true, { arena: true }),
     });
-    expect(result.groupsByHostId.get(first.id)?.summary.readFileCount).toBe(2);
+
+    for (const result of [plain, arena]) {
+      expect(result.tail).toEqual([expect.objectContaining({ id: first.id })]);
+      expect(result.groupsByHostId.get(first.id)?.run.calls).toEqual([first, thinking, second]);
+      expect(result.groupsByHostId.get(first.id)?.summary).toMatchObject({
+        readFileCount: 2,
+        thoughtCount: 1,
+      });
+    }
   });
 
   it("leaves thinking that stands on its own where it is", () => {
-    const thinking = thought("t1");
+    const thinking = thoughtItem("t1");
     const call = toolCall("1", { type: "read", filePath: "/repo/a.ts" });
-    const tail = [thinking, call, assistant("a1"), thought("t2")];
+    const message = assistant("a1");
+    const alone = thoughtItem("t2");
+    const tail = [thinking, call, message, alone];
 
-    const result = project({ level: "overview", tail });
+    const plain = project({ level: "overview", tail });
+    const arena = project({
+      level: "overview",
+      tail,
+      preparedHistory: prepareToolCallHistory("overview", tail, true, { arena: true }),
+    });
 
-    expect(result.tail).toEqual([
-      thinking,
-      expect.objectContaining({ id: call.id }),
-      expect.objectContaining({ kind: "assistant_message" }),
-      expect.objectContaining({ id: "t2" }),
-    ]);
+    for (const result of [plain, arena]) {
+      // Thinking that leads into a call opens its run; thinking no call follows stays a row.
+      expect(result.tail).toEqual([expect.objectContaining({ id: thinking.id }), message, alone]);
+      expect(result.groupsByHostId.get(thinking.id)?.run.calls).toEqual([thinking, call]);
+      expect(result.groupsByHostId.has(alone.id)).toBe(false);
+    }
   });
 
   it("folds thinking into the run it leads into when asked to, as a battle pane does", () => {
-    const opening = thought("t1");
+    const opening = thoughtItem("t1");
     const call = toolCall("1", { type: "read", filePath: "/repo/a.ts" });
     const message = assistant("a1");
-    const between = thought("t2");
+    const between = thoughtItem("t2");
     const next = toolCall("2", { type: "shell", command: "ls" });
-    const closing = thought("t3");
+    const closing = thoughtItem("t3");
     const tail = [opening, call, message, between, next, assistant("a2"), closing];
 
-    const prepared = prepareToolCallHistory("overview", tail, { arena: true });
+    // Expand thinking is on: a plain chat shows each thought as a row, a battle chat still folds it.
+    const prepared = prepareToolCallHistory("overview", tail, true, { arena: true });
     const result = project({ level: "overview", tail, preparedHistory: prepared });
+    const plain = project({
+      level: "overview",
+      tail,
+      preparedHistory: prepareToolCallHistory("overview", tail, true),
+    });
 
     expect(result.tail).toEqual([
-      expect.objectContaining({ id: call.id }),
+      expect.objectContaining({ id: opening.id }),
       message,
-      expect.objectContaining({ id: next.id }),
+      expect.objectContaining({ id: between.id }),
       expect.objectContaining({ id: "a2" }),
       closing,
     ]);
-    expect(result.groupsByHostId.get(call.id)?.run.items).toEqual([opening, call]);
-    expect(result.groupsByHostId.get(next.id)?.run.items).toEqual([between, next]);
+    expect(result.groupsByHostId.get(opening.id)?.run.calls).toEqual([opening, call]);
+    expect(result.groupsByHostId.get(between.id)?.run.calls).toEqual([between, next]);
+    expect(result.groupsByHostId.has(closing.id)).toBe(false);
+    expect(plain.tail).toEqual(tail);
+    expect(plain.groupsByHostId.size).toBe(0);
   });
 
   it("folds thinking into the run it leads into while the run is still live", () => {
     // A winner's answer copied in at the vote stays live, so its work reaches the chat in the head.
-    const opening = thought("t1");
+    const opening = thoughtItem("t1");
     const call = toolCall("1", { type: "read", filePath: "/repo/a.ts" });
     const next = toolCall("2", { type: "shell", command: "ls" });
-    const closing = thought("t3");
+    const closing = thoughtItem("t3");
     const head = [assistant("a1"), opening, call, next, assistant("a2"), closing];
 
     const live = projectToolCallDetailLevel({
       level: "overview",
       tail: [],
       head,
-      preparedHistory: prepareToolCallHistory("overview", [], { arena: true }),
+      preparedHistory: prepareToolCallHistory("overview", [], true, { arena: true }),
       isTurnActive: false,
       arena: true,
     });
     const committed = project({
       level: "overview",
       tail: head,
-      preparedHistory: prepareToolCallHistory("overview", head, { arena: true }),
+      preparedHistory: prepareToolCallHistory("overview", head, true, { arena: true }),
     });
 
     expect(live.head.map((item) => item.id)).toEqual(committed.tail.map((item) => item.id));
-    expect(live.groupsByHostId.get(call.id)?.run.items).toEqual([opening, call, next]);
+    expect(live.head.map((item) => item.id)).toEqual(["a1", opening.id, "a2", closing.id]);
+    expect(live.groupsByHostId.get(opening.id)?.run.calls).toEqual([opening, call, next]);
+    expect(live.groupsByHostId.has(closing.id)).toBe(false);
   });
 
   it("lets a subagent stand alone in a battle chat instead of joining a run", () => {
@@ -197,7 +238,7 @@ describe("tool call detail-level projection", () => {
     const arena = project({
       level: "overview",
       tail,
-      preparedHistory: prepareToolCallHistory("overview", tail, { arena: true }),
+      preparedHistory: prepareToolCallHistory("overview", tail, false, { arena: true }),
     });
     const plain = project({ level: "overview", tail });
 
@@ -211,14 +252,17 @@ describe("tool call detail-level projection", () => {
     const message = assistant("a1");
     const second = toolCall("2", { type: "read", filePath: "/repo/b.ts" });
 
-    const result = project({ level: "overview", tail: [first, thought("t1"), message, second] });
+    const result = project({
+      level: "overview",
+      tail: [first, thoughtItem("t1"), message, second],
+    });
 
     expect(result.tail).toEqual([
       expect.objectContaining({ id: first.id }),
       message,
       expect.objectContaining({ id: second.id }),
     ]);
-    expect(result.groupsByHostId.get(first.id)?.run.items).toEqual([
+    expect(result.groupsByHostId.get(first.id)?.run.calls).toEqual([
       first,
       expect.objectContaining({ id: "t1" }),
     ]);
@@ -226,7 +270,7 @@ describe("tool call detail-level projection", () => {
 
   it("carries thinking into a live run as it arrives", () => {
     const first = toolCall("1", { type: "read", filePath: "/repo/a.ts" });
-    const thinking = thought("t1");
+    const thinking = thoughtItem("t1");
     const prepared = prepareToolCallHistory("overview", [first]);
 
     const result = project({
@@ -238,7 +282,7 @@ describe("tool call detail-level projection", () => {
     });
 
     expect(result.head).toEqual([]);
-    expect(result.groupsByHostId.get(first.id)?.run.items).toEqual([first, thinking]);
+    expect(result.groupsByHostId.get(first.id)?.run.calls).toEqual([first, thinking]);
   });
 
   it.each(["detailed", "overview"] as const)(
@@ -288,11 +332,7 @@ describe("tool call detail-level projection", () => {
       preparedHistory: prepared,
     });
     expect(single.head).toEqual([firstCall]);
-    expect(single.groupsByHostId.get(firstCall.id)?.run).toMatchObject({
-      calls: [firstCall],
-      latest: firstCall,
-      isSealed: false,
-    });
+    expect(single.groupsByHostId.size).toBe(0);
 
     const grouped = project({
       level: "overview",
@@ -320,18 +360,11 @@ describe("tool call detail-level projection", () => {
     expect(result.groupsByHostId.get("1")?.isLoading).toBe(true);
   });
 
-  it("builds a loading aggregate for a one-call run", () => {
+  it("leaves a running lone call visible without an aggregate", () => {
     const call = toolCall("1", { type: "shell", command: "one" }, { status: "running" });
     const result = project({ level: "overview", head: [call], isTurnActive: true });
-    const group = result.groupsByHostId.get(call.id);
-    if (!group) {
-      throw new Error("Expected an overview group");
-    }
-
-    expect(group).toMatchObject({
-      isLoading: true,
-      summary: { commandCount: 1 },
-    });
+    expect(result.head).toEqual([call]);
+    expect(result.groupsByHostId.size).toBe(0);
   });
 
   it("keeps an active overview group on its latest call until a visible boundary arrives", () => {
@@ -433,12 +466,13 @@ describe("tool call detail-level projection", () => {
       run: expect.any(Object),
       isLoading: false,
       summary: {
+        thoughtCount: 0,
         editedFileCount: 1,
         commandCount: 1,
         readFileCount: 2,
         searchCount: 0,
         otherToolCount: 0,
-        paseoCallCount: 0,
+        paseoActions: {},
       },
     });
   });
@@ -506,7 +540,7 @@ describe("tool call detail-level projection", () => {
     const result = project({ level: "overview", head: calls });
 
     expect(result.groupsByHostId.get("1")).toMatchObject({
-      summary: { otherToolCount: 2, paseoCallCount: 2 },
+      summary: { otherToolCount: 2, paseoActions: { "Listed agents": 1, "List worktrees": 1 } },
     });
   });
 
@@ -524,7 +558,11 @@ describe("tool call detail-level projection", () => {
     const result = project({ level: "overview", head: calls });
 
     expect(result.groupsByHostId.get("1")).toMatchObject({
-      summary: { searchCount: 3, otherToolCount: 0, paseoCallCount: 3 },
+      summary: {
+        searchCount: 3,
+        otherToolCount: 0,
+        paseoActions: { "Listed providers": 1, "List worktrees": 2 },
+      },
     });
   });
 
@@ -654,7 +692,105 @@ describe("tool call detail-level projection", () => {
     const result = project({ level: "overview", head: [singleCall, plan, speak] });
 
     expect(result.head).toEqual([singleCall, plan, speak]);
-    expect(result.groupsByHostId.get(singleCall.id)?.run.calls).toEqual([singleCall]);
-    expect(result.groupsByHostId.size).toBe(1);
+    expect(result.groupsByHostId.size).toBe(0);
   });
+});
+
+it("keeps a heartbeat trigger visible outside grouped work", () => {
+  const trigger = toolCall(
+    "1",
+    { type: "plain_text", text: "Check progress" },
+    { name: "heartbeat" },
+  );
+  const work = toolCall("2", { type: "shell", command: "pwd" });
+  const result = project({ level: "overview", tail: [trigger, work] });
+  expect(result.tail.map((item) => item.id)).toEqual(["1", "2"]);
+  expect(result.groupsByHostId.has("1")).toBe(false);
+});
+
+it("does not merge tools from different canonical turns", () => {
+  const first = toolCall("1", { type: "shell", command: "pwd" });
+  first.turnId = "first";
+  const second = toolCall("2", { type: "shell", command: "ls" });
+  second.turnId = "second";
+  const result = project({ level: "overview", tail: [first, second] });
+  expect(result.tail.map((item) => item.id)).toEqual(["1", "2"]);
+});
+
+it.each([false, true])(
+  "handles streaming reasoning across retained history (Expand thinking %s)",
+  (autoExpandReasoning) => {
+    const call = { ...toolCall("1", { type: "shell", command: "echo ok" }), turnId: "run" };
+    const thought: StreamItem = {
+      kind: "thought",
+      id: "reasoning",
+      text: "Checking",
+      status: "loading",
+      timestamp: new Date(),
+      turnId: "run",
+    };
+    const tail = [call];
+    const result = project({
+      level: "overview",
+      tail,
+      head: [thought],
+      isTurnActive: true,
+      preparedHistory: prepareToolCallHistory("overview", tail, autoExpandReasoning),
+    });
+    expect(result.head).toEqual(autoExpandReasoning ? [thought] : []);
+    expect(result.groupsByHostId.get(call.id)?.run.calls).toEqual(
+      autoExpandReasoning ? undefined : [call, thought],
+    );
+    expect(result.groupsByHostId.get(call.id)?.summary).toEqual(
+      autoExpandReasoning
+        ? undefined
+        : expect.objectContaining({
+            commandCount: 1,
+            otherToolCount: 0,
+            thoughtCount: 1,
+          }),
+    );
+  },
+);
+
+it("turns a retained lone call into a group without replacing its row key", () => {
+  const first = toolCall("1", { type: "shell", command: "one" });
+  const second = toolCall("2", { type: "shell", command: "two" });
+  const tail = [assistant("before"), first];
+  const preparedHistory = prepareToolCallHistory("overview", tail);
+  const single = project({ level: "overview", tail, preparedHistory, isTurnActive: true });
+  const grouped = project({
+    level: "overview",
+    tail,
+    head: [second],
+    preparedHistory,
+    isTurnActive: true,
+  });
+  expect(single.groupsByHostId.size).toBe(0);
+  expect(single.tail).toBe(tail);
+  expect(grouped.tail).toBe(single.tail);
+  expect(grouped.head).toEqual([]);
+  expect(grouped.groupsByHostId.get(first.id)?.run.calls).toEqual([first, second]);
+  expect(grouped.historyGroupUpdatesByHostId.get(first.id)).toBe(
+    grouped.groupsByHostId.get(first.id),
+  );
+});
+
+it("shows one thought as itself until another groupable item arrives", () => {
+  const thought: StreamItem = {
+    kind: "thought",
+    id: "thought",
+    text: "Checking",
+    status: "ready",
+    timestamp: new Date(0),
+  };
+  const single = project({ level: "overview", tail: [thought] });
+  expect(single.tail).toEqual([thought]);
+  expect(single.groupsByHostId.size).toBe(0);
+  const grouped = project({
+    level: "overview",
+    tail: [thought, toolCall("1", { type: "shell", command: "one" })],
+  });
+  expect(grouped.tail.map((item) => item.id)).toEqual([thought.id]);
+  expect(grouped.groupsByHostId.get(thought.id)?.run.calls).toHaveLength(2);
 });

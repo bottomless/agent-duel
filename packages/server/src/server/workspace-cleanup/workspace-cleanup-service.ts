@@ -144,7 +144,7 @@ export class WorkspaceCleanupService {
   constructor(private readonly deps: CleanupDeps) {}
 
   async initialize(): Promise<void> {
-    const parents = groupWorkspaceParents(await this.deps.registry.list());
+    const parents = groupWorkspaceParents(await this.deps.registry.listAll());
     for (const parent of parents) {
       if (parent.workspaces.some((workspace) => workspace.cleanup))
         workspaceAccess.retain(parent.root);
@@ -327,7 +327,7 @@ export class WorkspaceCleanupService {
 
   /** The open workspaces' project roots that exist, most recently active first. */
   private async projectRoots(): Promise<string[]> {
-    const workspaces = (await this.deps.registry.list())
+    const workspaces = (await this.deps.registry.listAll())
       .filter((workspace) => !workspace.archivedAt && !workspace.cleanup)
       .sort((left, right) =>
         (right.lastChatActivityAt ?? right.createdAt).localeCompare(
@@ -344,7 +344,7 @@ export class WorkspaceCleanupService {
   }
 
   private async sweepParents(): Promise<void> {
-    const parents = groupWorkspaceParents(await this.deps.registry.list());
+    const parents = groupWorkspaceParents(await this.deps.registry.listAll());
     const materialized: WorkspaceParent[] = [];
     for (const parent of parents) {
       if (await pathExists(parent.root)) materialized.push(parent);
@@ -395,7 +395,7 @@ export class WorkspaceCleanupService {
   }
 
   private async evict(candidate: WorkspaceParent): Promise<boolean> {
-    const parent = groupWorkspaceParents(await this.deps.registry.list()).find(
+    const parent = groupWorkspaceParents(await this.deps.registry.listAll()).find(
       (item) => item.root === candidate.root,
     );
     if (!parent || parent.workspaces.some((workspace) => workspace.pinnedAt || workspace.cleanup))
@@ -489,7 +489,7 @@ export class WorkspaceCleanupService {
    */
   async preserveForArchive(worktreeRoot: string): Promise<ArchivePreservation | null> {
     const root = normalizePathForIdentity(worktreeRoot);
-    const parent = groupWorkspaceParents(await this.deps.registry.list()).find(
+    const parent = groupWorkspaceParents(await this.deps.registry.listAll()).find(
       (item) => item.root === root,
     );
     if (!parent || parent.workspaces.some((workspace) => workspace.cleanup)) return null;
@@ -541,7 +541,7 @@ export class WorkspaceCleanupService {
    * and no saved code, a record that something re-linked later would restore to the base commit.
    */
   async releaseProjectSnapshots(projectId: string): Promise<void> {
-    const parents = groupWorkspaceParents(await this.deps.registry.list()).filter((parent) =>
+    const parents = groupWorkspaceParents(await this.deps.registry.listAll()).filter((parent) =>
       parent.workspaces.some(
         (workspace) => workspace.projectId === projectId && workspace.cleanup?.phase === "cleaned",
       ),
@@ -560,7 +560,7 @@ export class WorkspaceCleanupService {
           await this.deps.deleteWorkspaceAgents?.(workspace.workspaceId);
           await this.deps.registry.remove(workspace.workspaceId);
         }
-        const stillUsed = (await this.deps.registry.list()).some(
+        const stillUsed = (await this.deps.registry.listAll()).some(
           (record) => record.cleanup?.snapshotId === snapshotId,
         );
         if (!stillUsed) {
@@ -577,7 +577,7 @@ export class WorkspaceCleanupService {
   async releaseRemovedWorkspaceSnapshot(workspace: PersistedWorkspaceRecord): Promise<void> {
     const snapshotId = workspace.cleanup?.snapshotId;
     if (!snapshotId || !workspace.mainRepoRoot) return;
-    const records = await this.deps.registry.list();
+    const records = await this.deps.registry.listAll();
     if (records.some((record) => record.cleanup?.snapshotId === snapshotId)) return;
     try {
       await this.releaseSnapshot(workspace.mainRepoRoot, snapshotId);
@@ -598,7 +598,7 @@ export class WorkspaceCleanupService {
   async restore(workspaceId: string): Promise<void> {
     const workspace = await this.deps.registry.get(workspaceId);
     if (!workspace?.cleanup) throw new Error("This workspace has no cleanup snapshot");
-    const parent = groupWorkspaceParents(await this.deps.registry.list()).find((item) =>
+    const parent = groupWorkspaceParents(await this.deps.registry.listAll()).find((item) =>
       item.workspaces.some((record) => record.workspaceId === workspaceId),
     );
     if (!parent) throw new Error("Workspace placement is unavailable");

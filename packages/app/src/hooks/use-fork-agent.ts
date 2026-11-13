@@ -89,7 +89,6 @@ async function createNativeForkAgent(input: {
         cwd: input.cwd,
         model: SINGLE_AGENT_MODELS[sourcePreferences.modelSize].model,
         thinkingOptionId: SINGLE_AGENT_MODELS[sourcePreferences.modelSize].thinking,
-        featureValues: {},
       }),
       title: input.title,
     },

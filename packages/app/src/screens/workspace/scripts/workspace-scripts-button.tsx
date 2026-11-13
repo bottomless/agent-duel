@@ -13,6 +13,7 @@ import {
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { useTranslation } from "react-i18next";
 import type { WorkspaceDescriptor } from "@/stores/session-store";
+import { useHostRuntimeClient } from "@/runtime/host-runtime";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -28,7 +29,7 @@ import type {
   WorkspaceScriptLinkTarget,
 } from "@/utils/workspace-script-links";
 import type { Theme } from "@/styles/theme";
-import { buttonControlHeight, HEADER_CONTROL_HEIGHT } from "@/components/ui/control-geometry";
+import { HEADER_CONTROL_HEIGHT } from "@/components/ui/control-geometry";
 import { extraMutedIconColorMapping } from "@/components/ui/icon-color";
 import { ExitCodeBadge, routeLabelKey, ScriptIcon } from "./script-marks";
 import { scriptToneColorMapping } from "./script-status";
@@ -49,7 +50,12 @@ export interface WorkspaceScriptsMenuItemsProps {
   onOpenUrlInBrowserTab?: (url: string) => void;
 }
 
-interface WorkspaceScriptsButtonProps extends WorkspaceScriptsMenuItemsProps {
+interface WorkspaceScriptsButtonProps {
+  actions: WorkspaceScriptActions;
+  scripts: WorkspaceDescriptor["scripts"];
+  liveTerminalIds?: readonly string[];
+  onViewTerminal?: (terminalId: string) => void;
+  onOpenUrlInBrowserTab?: (url: string) => void;
   hideLabels?: boolean;
 }
 
@@ -490,7 +496,9 @@ export function WorkspaceScriptsMenuItems({
   onViewTerminal,
   onOpenUrlInBrowserTab,
 }: WorkspaceScriptsMenuItemsProps): ReactElement | null {
+  const client = useHostRuntimeClient(serverId);
   const actions = useWorkspaceScriptActions({
+    client,
     serverId,
     workspaceId,
     scripts,
@@ -513,22 +521,14 @@ export function WorkspaceScriptsMenuItems({
 }
 
 export function WorkspaceScriptsButton({
-  serverId,
-  workspaceId,
+  actions,
   scripts,
   liveTerminalIds = [],
-  onScriptTerminalStarted,
   onViewTerminal,
   onOpenUrlInBrowserTab,
   hideLabels,
 }: WorkspaceScriptsButtonProps): ReactElement | null {
   const { t } = useTranslation();
-  const actions = useWorkspaceScriptActions({
-    serverId,
-    workspaceId,
-    scripts,
-    onScriptTerminalStarted,
-  });
   const triggerStyle = useCallback(
     ({ hovered, pressed, open }: { hovered: boolean; pressed: boolean; open: boolean }) => [
       styles.splitButtonPrimary,
@@ -591,10 +591,7 @@ const styles = StyleSheet.create((theme) => ({
     flexShrink: 0,
   },
   splitButton: {
-    height: {
-      xs: buttonControlHeight.xs,
-      md: HEADER_CONTROL_HEIGHT,
-    },
+    height: HEADER_CONTROL_HEIGHT,
     flexDirection: "row",
     alignItems: "stretch",
     borderRadius: theme.borderRadius.md,

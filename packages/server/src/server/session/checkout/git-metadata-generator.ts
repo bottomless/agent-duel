@@ -1,9 +1,8 @@
 import type pino from "pino";
-import { PaseoConfigSchema } from "@getpaseo/protocol/paseo-config-schema";
 import { validateBranchSlug } from "@getpaseo/protocol/branch-slug";
 import type { GitMetadataRequest, GitMetadataResult } from "../../agent/agent-sdk-types.js";
 import type { WorkspaceGitService } from "../../workspace-git-service.js";
-import { readPaseoConfigJson } from "../../../utils/paseo-config-file.js";
+import { readPaseoConfig } from "../../../utils/paseo-config-file.js";
 
 export interface PullRequestText {
   title: string;
@@ -207,8 +206,9 @@ async function readProjectInstructions(
 ): Promise<string | undefined> {
   try {
     const repoRoot = await workspaceGitService.resolveRepoRoot(cwd);
-    const config = PaseoConfigSchema.parse(readPaseoConfigJson(repoRoot));
-    return config.metadataGeneration?.[key]?.instructions?.trim() || undefined;
+    const result = await readPaseoConfig(repoRoot);
+    if (!result.ok) return undefined;
+    return result.config?.metadataGeneration?.[key]?.instructions?.trim() || undefined;
   } catch {
     return undefined;
   }

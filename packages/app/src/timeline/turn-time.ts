@@ -1,5 +1,5 @@
 import type { StreamItem } from "@/types/stream";
-import { startsNewTurn } from "@/agent-stream/turn-membership";
+import { startsNewTurn, isTurnTrigger } from "@/agent-stream/turn-membership";
 import type { ArenaHistoryItem } from "@getpaseo/protocol/arena/rpc-schemas";
 
 export interface TurnTiming {
@@ -8,7 +8,7 @@ export interface TurnTiming {
 }
 
 export interface StreamTurnTiming {
-  byAssistantId: Map<string, TurnTiming>;
+  byItemId: Map<string, TurnTiming>;
   runningStartedAt: Date | null;
 }
 
@@ -21,7 +21,7 @@ interface OpenTurn {
 
 interface HeadTurnTiming {
   additions: Map<string, TurnTiming>;
-  byAssistantId: Map<string, TurnTiming>;
+  byItemId: Map<string, TurnTiming>;
 }
 
 interface TailTurnTiming {
@@ -38,14 +38,18 @@ const EMPTY_OPEN_TURN: OpenTurn = {
 };
 
 function closeTurn(turn: OpenTurn, into: Map<string, TurnTiming>): void {
-  if (!turn.lastItemAt || turn.assistantIds.length === 0) {
+  if (!turn.lastItemAt) {
     return;
   }
   const timing: TurnTiming = {
     completedAt: turn.lastItemAt,
     durationMs: turn.userAt ? Math.max(0, turn.lastItemAt.getTime() - turn.userAt.getTime()) : null,
   };
-  for (const id of turn.assistantIds) {
+  let footerIds = turn.assistantIds;
+  if (footerIds.length === 0 && turn.previousItem?.kind === "tool_call") {
+    footerIds = [turn.previousItem.id];
+  }
+  for (const id of footerIds) {
     into.set(id, timing);
   }
 }
@@ -62,7 +66,7 @@ function walkTurns(
   for (const item of items) {
     if (startsNewTurn(item, previousItem)) {
       closeTurn({ userAt, lastItemAt, assistantIds, previousItem }, into);
-      userAt = item.kind === "user_message" ? item.timestamp : null;
+      userAt = isTurnTrigger(item) ? item.timestamp : null;
       lastItemAt = null;
       assistantIds = [];
     }
@@ -109,7 +113,7 @@ function getTailTurnTiming(tail: StreamItem[]): TailTurnTiming {
   return timing;
 }
 
-function resolveByAssistantId(
+function resolveByItemId(
   tail: TailTurnTiming,
   additions: Map<string, TurnTiming>,
 ): Map<string, TurnTiming> {
@@ -117,14 +121,14 @@ function resolveByAssistantId(
     return tail.completed;
   }
   if (tail.lastHead && areTimingsEqual(tail.lastHead.additions, additions)) {
-    return tail.lastHead.byAssistantId;
+    return tail.lastHead.byItemId;
   }
-  const byAssistantId = new Map(tail.completed);
+  const byItemId = new Map(tail.completed);
   for (const [id, timing] of additions) {
-    byAssistantId.set(id, timing);
+    byItemId.set(id, timing);
   }
-  tail.lastHead = { additions, byAssistantId };
-  return byAssistantId;
+  tail.lastHead = { additions, byItemId };
+  return byItemId;
 }
 
 const appliedBattleTimingCache = new WeakMap<
@@ -133,15 +137,15 @@ const appliedBattleTimingCache = new WeakMap<
 >();
 
 function applyBattleTiming(
-  byAssistantId: Map<string, TurnTiming>,
+  byItemId: Map<string, TurnTiming>,
   params: Parameters<typeof deriveStreamTurnTiming>[0],
 ): Map<string, TurnTiming> {
   const history = params.arenaHistory;
-  if (!history?.length) return byAssistantId;
-  let cached = appliedBattleTimingCache.get(byAssistantId);
+  if (!history?.length) return byItemId;
+  let cached = appliedBattleTimingCache.get(byItemId);
   const previous = cached?.get(history);
   if (previous) return previous;
-  let result = byAssistantId;
+  let result = byItemId;
   for (const turn of history) {
     const first = turn.canonicalUserMessageID;
     const last = turn.canonicalLastMessageID;
@@ -162,15 +166,15 @@ function applyBattleTiming(
     };
     const answer = params.head.findLast(isWinnerAnswer) ?? params.tail.findLast(isWinnerAnswer);
     if (!answer) continue;
-    const timing = byAssistantId.get(answer.id);
+    const timing = byItemId.get(answer.id);
     // An active canonical turn still belongs to its running timer.
     if (!timing) continue;
-    if (result === byAssistantId) result = new Map(byAssistantId);
+    if (result === byItemId) result = new Map(byItemId);
     result.set(answer.id, { ...timing, durationMs });
   }
   if (!cached) {
     cached = new WeakMap();
-    appliedBattleTimingCache.set(byAssistantId, cached);
+    appliedBattleTimingCache.set(byItemId, cached);
   }
   cached.set(history, result);
   return result;
@@ -190,7 +194,7 @@ export function deriveStreamTurnTiming(params: {
     closeTurn(openTurn, additions);
   }
   return {
-    byAssistantId: applyBattleTiming(resolveByAssistantId(tail, additions), params),
+    byItemId: applyBattleTiming(resolveByItemId(tail, additions), params),
     runningStartedAt: params.isTurnActive ? params.activeTurnStartedAt : null,
   };
 }

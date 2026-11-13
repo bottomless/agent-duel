@@ -184,6 +184,7 @@ export class TestOpenCodeClient {
     null;
   sessionPromptAsyncEvents: unknown[] = [idleEvent()];
   sessionPromptAsyncResponse: OpenCodeResponse = {};
+  ptyListResponse: OpenCodeResponse = { data: [] };
   sessionStatusResponse: OpenCodeResponse = { data: {} };
   sessionStatusImplementation:
     | ((parameters: unknown, options: unknown) => Promise<OpenCodeResponse>)
@@ -209,6 +210,7 @@ export class TestOpenCodeClient {
 
   asSdkClient(): OpencodeClient {
     return {
+      pty: { list: async () => this.ptyListResponse },
       app: {
         agents: async (parameters: unknown, options: unknown) => {
           this.calls.appAgents.push(parameters);

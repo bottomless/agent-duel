@@ -12,9 +12,11 @@ import { useWorkspaceFields } from "@/stores/session-store-hooks";
 import { useWorkspaceLayoutStore } from "@/stores/workspace-layout-store";
 import { confirmDialog } from "@/utils/confirm-dialog";
 import { buildWorkspaceTabPersistenceKey } from "@/workspace-tabs/model";
+import { archiveWorkspaceWithUndo, supportsWorkspaceArchiveUndo } from "@/workspace/archive-undo";
 import {
   archiveWorkspaceOptimistically,
   describeWorktreeKept,
+  type WorktreeKept,
 } from "@/workspace/workspace-archive";
 
 function purgeArchivedWorkspaceState(input: { serverId: string; workspaceId: string }): void {
@@ -67,19 +69,36 @@ export function useWorkspaceArchive(input: ArchiveWorkspaceInput): WorkspaceArch
       toast.error(t("sidebar.workspace.toasts.hostDisconnected"));
       return;
     }
+    const workspace = { serverId, workspaceId };
     onSetHiding?.(true);
     try {
       onArchiveStarted();
-      const outcome = await archiveWorkspaceOptimistically({
-        client,
-        workspace: {
-          serverId,
-          workspaceId,
-        },
-      });
-      purgeArchivedWorkspaceState({ serverId, workspaceId });
-      if (outcome.worktreeKept) {
-        toast.error(describeWorktreeKept(outcome.worktreeKept, i18n.resolvedLanguage, t));
+      const showWorktreeKept = (kept: WorktreeKept) => {
+        toast.error(describeWorktreeKept(kept, i18n.resolvedLanguage, t));
+      };
+      if (supportsWorkspaceArchiveUndo(serverId)) {
+        // Said once the archive stands, so the notice does not replace the toast that offers undo.
+        let worktreeKept: WorktreeKept | null = null;
+        await archiveWorkspaceWithUndo({
+          client,
+          workspace,
+          toast,
+          onWorktreeKept: (kept) => {
+            worktreeKept = kept;
+          },
+          onArchiveCommitted: () => {
+            purgeArchivedWorkspaceState(workspace);
+            if (worktreeKept) showWorktreeKept(worktreeKept);
+          },
+        });
+      } else {
+        // COMPAT(workspaceArchiveUndo): hosts before v0.15.3 cannot undo; remove after 2027-05-06.
+        await archiveWorkspaceOptimistically({
+          client,
+          workspace,
+          onWorktreeKept: showWorktreeKept,
+        });
+        purgeArchivedWorkspaceState(workspace);
       }
     } catch (error) {
       toast.error(
