@@ -189,24 +189,59 @@ function lastBattlePromptIndex(
   );
 }
 
+/**
+ * Where a decided battle's summary goes: right after the battle's own prompt, so the kept agent's
+ * heading (its model, its time, Show battle) sits above the answer it heads, the way each agent's
+ * name heads its answer while the battle runs.
+ */
 export function arenaSummaryAnchor(
   item: ArenaHistoryItem,
   streamItems: ReadonlyArray<ArenaAnchorItem>,
 ): string | null {
-  const promptIndex = lastBattlePromptIndex(item, streamItems);
-  if (promptIndex < 0) return null;
-  const nextUserOffset = streamItems
-    .slice(promptIndex + 1)
+  return streamItems.find((streamItem) => isCanonicalPrompt(item, streamItem))?.id ?? null;
+}
+
+/**
+ * The rows of a decided battle's kept answer: everything after its own prompt through the end of
+ * the battle, replies sent inside it included. Show battle stands the battle in for them.
+ */
+export function arenaKeptAnswerRowIds(
+  item: ArenaHistoryItem,
+  stream: ArenaPresentedStream,
+): Set<string> {
+  const items = orderArenaChat([...stream.tail, ...stream.head]);
+  const promptIndex = items.findIndex((streamItem) => isCanonicalPrompt(item, streamItem));
+  const lastPromptIndex = lastBattlePromptIndex(item, items);
+  if (promptIndex < 0 || lastPromptIndex < 0) return new Set();
+  const nextUserOffset = items
+    .slice(lastPromptIndex + 1)
     .findIndex((streamItem) => streamItem.kind === "user_message");
-  const endIndex = nextUserOffset < 0 ? streamItems.length - 1 : promptIndex + nextUserOffset;
-  return streamItems[endIndex]?.id ?? null;
+  const endIndex = nextUserOffset < 0 ? items.length - 1 : lastPromptIndex + nextUserOffset;
+  return new Set(items.slice(promptIndex + 1, endIndex + 1).map((streamItem) => streamItem.id));
+}
+
+/**
+ * The prompts that start a turn: every prompt in the chat, battles' and plain turns' alike, except
+ * the replies sent inside a battle, which belong to that battle's turn (`arenaKeptAnswerRowIds`).
+ * The chat draws its turn rule above each of them after its first row.
+ */
+export function arenaTurnStartRowIds(
+  history: readonly ArenaHistoryItem[],
+  stream: ArenaPresentedStream,
+): Set<string> {
+  const inside = new Set<string>();
+  for (const item of history) for (const id of arenaKeptAnswerRowIds(item, stream)) inside.add(id);
+  const ids = new Set<string>();
+  for (const row of [...stream.tail, ...stream.head]) {
+    if (row.kind === "user_message" && !inside.has(row.id)) ids.add(row.id);
+  }
+  return ids;
 }
 
 /**
  * Each summary's anchor, searched over tail and head. A grafted winner sends no turn completion,
  * so its turn can stay in the head until the next canonical event; in a chat whose history has
- * not loaded yet, the whole turn is there. The search runs in the order the chat shows
- * (`orderArenaChat`), so a summary follows the work its turn's answer moved above.
+ * not loaded yet, the whole turn is there.
  */
 export function arenaSummaryAnchors(
   history: readonly ArenaHistoryItem[],

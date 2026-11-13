@@ -10,7 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import { Text, View } from "react-native";
-import { Check, CircleStop, FileText, Users, Wrench } from "lucide-react-native";
+import { Brain, Check, CircleStop, FileText, Layers2, Users } from "lucide-react-native";
 import { StyleSheet } from "react-native-unistyles";
 import type { ArenaRun } from "@getpaseo/protocol/arena/rpc-schemas";
 import type { AgentPermissionResponse } from "@getpaseo/protocol/agent-types";
@@ -62,9 +62,21 @@ import {
   summarizeArenaWork,
   type ArenaActivityPart,
   type ArenaActivitySegment,
+  type ArenaWorkPresentation,
 } from "./work-summary";
 
 type UnknownRecord = Record<string, unknown>;
+
+/**
+ * A work row's icon, as the regular chat draws the same rows: the tool's own icon for one tool,
+ * the stack for a group of tools, the brain for thinking.
+ */
+function arenaWorkIcon(presentation: ArenaWorkPresentation) {
+  if (presentation.kind === "tool") {
+    return resolveToolCallIcon(presentation.toolName, presentation.detail);
+  }
+  return presentation.kind === "reasoning" ? Brain : Layers2;
+}
 
 function asRecord(value: unknown): UnknownRecord | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -95,10 +107,12 @@ function ArenaToolPart({
   part: shown,
   cwd,
   runId,
+  pending,
 }: {
   part: UnknownRecord;
   cwd?: string;
   runId?: string;
+  pending: boolean;
 }) {
   const [opened, setOpened] = useState(false);
   const part = useFullToolPart(shown, runId, opened);
@@ -107,10 +121,11 @@ function ArenaToolPart({
   const input = state?.input;
   const output = arenaToolOutput(state);
   const error = state?.error;
-  const status = useMemo(
-    () => normalizeArenaToolCallStatus(state?.status, error, output),
-    [error, output, state?.status],
-  );
+  // A call the run left unfinished settles once the run is over, rather than working forever.
+  const status = useMemo(() => {
+    const normalized = normalizeArenaToolCallStatus(state?.status, error, output);
+    return !pending && normalized === "running" ? "canceled" : normalized;
+  }, [error, output, pending, state?.status]);
   const detail = useMemo(
     () => deriveArenaToolCallDetail(tool, input, output),
     [tool, input, output],
@@ -126,6 +141,7 @@ function ArenaToolPart({
       cwd={cwd}
       disableOuterSpacing
       compactLabel
+      flushRow
       // A narrow window opens a call in a sheet that keeps the detail it opened with, so a shortened
       // call expands in place, where it loads whole.
       forceInline={arenaToolPartPreviewed(shown)}
@@ -208,7 +224,7 @@ function ArenaPart({
     if (questionResult) return <ArenaQuestionResultView result={questionResult} />;
     const tasks = arenaTodoWriteTasks(part);
     if (tasks !== null) return <ArenaTaskProgressCard tasks={tasks} state="snapshot" />;
-    return <ArenaToolPart part={part} cwd={cwd} runId={runId} />;
+    return <ArenaToolPart part={part} cwd={cwd} runId={runId} pending={pending} />;
   }
   return null;
 }
@@ -442,6 +458,13 @@ function ArenaActivitySegmentView({
   const detailEntries = workEntries.filter((entry) => stringField(entry.part, "type") === "tool");
   const hasWork = workEntries.length > 0;
   const hasDetails = detailEntries.length > 0;
+  // One tool is drawn as itself, opening onto its own output, not as a group that holds it. A
+  // subagent keeps its folded row: drawn as itself it would open its whole transcript in place.
+  const onlyTool = detailEntries.length === 1 ? detailEntries[0] : undefined;
+  const singleTool =
+    presentation.kind === "tool" && onlyTool && !context.subagents.has(onlyTool.part)
+      ? onlyTool
+      : undefined;
   const renderDetails = useCallback(
     () => (
       <View style={styles.workDetails}>
@@ -455,16 +478,13 @@ function ArenaActivitySegmentView({
   return (
     <View style={styles.activitySegment}>
       {segment.content ? <ArenaActivityPartView entry={segment.content} context={context} /> : null}
-      {hasWork || awaitingResponse ? (
+      {singleTool ? <ArenaActivityPartView entry={singleTool} context={context} /> : null}
+      {!singleTool && (hasWork || awaitingResponse) ? (
         <ExpandableBadge
           testID="arena-activity-group"
           label={presentation.label}
           secondaryLabel={presentation.kind === "tool" ? presentation.secondaryLabel : undefined}
-          icon={
-            presentation.kind === "tool"
-              ? resolveToolCallIcon(presentation.toolName, presentation.detail)
-              : Wrench
-          }
+          icon={arenaWorkIcon(presentation)}
           isLoading={presentation.active}
           isError={presentation.kind === "tool" && presentation.failed}
           isExpanded={hasDetails && expanded}
@@ -547,6 +567,7 @@ function ArenaEarlierActivity({
       <ExpandableBadge
         testID="arena-earlier-activity"
         label={label}
+        icon={Layers2}
         isExpanded={expanded}
         onToggle={toggle}
         renderDetails={renderDetails}
@@ -554,8 +575,6 @@ function ArenaEarlierActivity({
         borderlessWhenExpanded
         bandWhenExpanded
         compactLabel
-        labelTextStyle={styles.earlierActivityLabel}
-        alwaysShowChevron
         flushRow
       />
     </View>
@@ -573,10 +592,14 @@ function ArenaActivityGroup({
 }) {
   const segments = useMemo(
     () =>
-      projectArenaActivitySegments(messageIds, context.run.parts ?? {}, (part) =>
-        context.subagents.has(part),
+      projectArenaActivitySegments(
+        messageIds,
+        context.run.parts ?? {},
+        (part) => context.subagents.has(part),
+        // A group a later message followed is settled, as is every group once the run stops.
+        { settled: !isLatest || context.run.runState !== "pending" },
       ),
-    [context.run.parts, context.subagents, messageIds],
+    [context.run.parts, context.run.runState, context.subagents, isLatest, messageIds],
   );
   const awaitingResponse = isLatest && arenaRunIsAwaitingResponse(context.run);
   const visibleSegments =
@@ -665,8 +688,7 @@ function ArenaSubagent({
     pending && (work.length > 0 || awaitingResponse || responding || latest.active);
   const activityLabel = hasActivity ? latest.label : status;
   const showTool = hasActivity && latest.kind === "tool";
-  let activityIcon =
-    latest.kind === "tool" ? resolveToolCallIcon(latest.toolName, latest.detail) : Wrench;
+  let activityIcon = arenaWorkIcon(latest);
   if (!pending) activityIcon = childContext.run.runState === "complete" ? Check : CircleStop;
   return (
     <View testID="arena-subagent">
@@ -905,10 +927,9 @@ export function ArenaRunThread({
 }
 
 const styles = StyleSheet.create((theme) => ({
-  // One 12px rhythm down the thread: text, its work summary, the next text. The text's own
-  // trailing paragraph margin plus the summary row's slack is that distance, so the segment
-  // adds none, and the gap between steps is set so the summary sits the same distance from
-  // the text below it as from the text above. Uneven spacing here read as lopsided.
+  // One rhythm down the thread: a work row sits 13.5px between glyphs below its text and the
+  // next text 13.5px below the row. The segment's step sets the first, this gap the second.
+  // Uneven spacing here read as lopsided, and a row with no step above it read as glued on.
   thread: {
     gap: theme.spacing[3],
     padding: theme.spacing[3],
@@ -926,11 +947,8 @@ const styles = StyleSheet.create((theme) => ({
     paddingHorizontal: EXPANDABLE_BADGE_DETAIL_INSET,
     gap: theme.spacing[3],
   },
-  earlierActivityLabel: {
-    color: theme.colors.foreground,
-  },
   activitySegment: {
-    gap: 0,
+    gap: theme.spacing[2],
   },
   subagentActivity: {
     paddingLeft: theme.spacing[6],

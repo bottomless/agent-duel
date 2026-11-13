@@ -71,15 +71,16 @@ describe("getArenaGapBetweenStreamItems", () => {
     },
   };
 
-  it("keeps a text against the work it led into, as the pane does", () => {
-    expect(getArenaGapBetweenStreamItems(text("a"), work)).toBe(0);
-    expect(getArenaGapBetweenStreamItems(text("a"), thought)).toBe(0);
+  it("spaces a work row evenly between its text and the next, as the pane does", () => {
+    expect(getArenaGapBetweenStreamItems(text("a"), work)).toBe(SPACING[1.5]);
+    expect(getArenaGapBetweenStreamItems(text("a"), thought)).toBe(SPACING[1.5]);
+    expect(getArenaGapBetweenStreamItems(work, text("b"))).toBe(SPACING[2]);
+    expect(getArenaGapBetweenStreamItems(thought, text("b"))).toBe(SPACING[2]);
   });
 
   it("starts every other block one gap down", () => {
     expect(getArenaGapBetweenStreamItems(text("a"), text("b"))).toBe(SPACING[3]);
     expect(getArenaGapBetweenStreamItems(text("a"), subagent)).toBe(SPACING[3]);
-    expect(getArenaGapBetweenStreamItems(work, text("b"))).toBe(SPACING[3]);
     expect(getArenaGapBetweenStreamItems(work, subagent)).toBe(SPACING[3]);
     expect(getArenaGapBetweenStreamItems(subagent, text("b"))).toBe(SPACING[3]);
   });

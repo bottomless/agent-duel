@@ -1,4 +1,5 @@
 import { MongoClient, MongoServerError, type Db } from "mongodb"
+import { inheritTurns, MAX_FORK_DEPTH } from "./fork-lineage"
 import {
   isDuplicateKeyError,
   type ArenaClient,
@@ -43,6 +44,7 @@ import type {
   TurnDocument,
   ApplyBaseChoice,
   PortCursorDocument,
+  ForkLineageDocument,
 } from "./records"
 import type { PortCursor } from "./preview"
 
@@ -215,6 +217,7 @@ export class Store {
   readonly battleMetrics: ArenaCollection<BattleMetricsDocument>
   readonly singleAgentRatings: ArenaCollection<SingleAgentRatingDocument>
   readonly portCursors: ArenaCollection<PortCursorDocument>
+  readonly forkLineages: ArenaCollection<ForkLineageDocument>
   readonly artifactQueues = new Map<string, Promise<void>>()
 
   constructor(client: ArenaClient, db: ArenaDb | Db) {
@@ -234,6 +237,7 @@ export class Store {
     this.battleMetrics = this.db.collection<BattleMetricsDocument>("battleMetrics")
     this.singleAgentRatings = this.db.collection<SingleAgentRatingDocument>("singleAgentRatings")
     this.portCursors = this.db.collection<PortCursorDocument>("portCursors")
+    this.forkLineages = this.db.collection<ForkLineageDocument>("forkLineages")
   }
 
   async initialize() {
@@ -1761,13 +1765,35 @@ export class Store {
     })
   }
 
+  async recordForkLineage(lineage: ForkLineageDocument) {
+    await this.forkLineages.replaceOne({ _id: lineage._id }, lineage, { upsert: true })
+    this.changed()
+  }
+
+  /**
+   * The battles a forked chat copied from the chats it was forked from, under its own message IDs
+   * (`inheritTurns`), oldest fork first. A chat that was never forked inherits none.
+   */
+  async inheritedHistory(sessionID: string, depth = 0): Promise<readonly BattleHistoryTurn[]> {
+    if (depth >= MAX_FORK_DEPTH) return []
+    const lineage = await this.forkLineages.findOne({ _id: sessionID })
+    if (!lineage) return []
+    const source = await this.chatForSession(lineage.sourceSessionID)
+    const sourceTurns = [
+      ...(await this.inheritedHistory(lineage.sourceSessionID, depth + 1)),
+      ...(source ? await this.history(source._id) : []),
+    ]
+    return inheritTurns(sourceTurns, lineage)
+  }
+
   /** `afterSequence` reads the turn's stored events after it; by default none are read (see `project`). */
   async snapshot(chatID: string, afterSequence = Number.MAX_SAFE_INTEGER): Promise<BattleSnapshot> {
     const chat = await this.chats.findOne({ _id: chatID })
     if (!chat) throw new Error(`Arena chat not found: ${chatID}`)
     const singleAgentRating = await this.snapshotSingleAgentRating(chat.canonicalSessionID)
-    const history = await this.history(chatID)
-    const targetTurnID = chat.activeTurnID ?? history.at(-1)?._id
+    const own = await this.history(chatID)
+    const history = [...(await this.inheritedHistory(chat.canonicalSessionID)), ...own]
+    const targetTurnID = chat.activeTurnID ?? own.at(-1)?._id
     if (!targetTurnID)
       return { chat, history, runs: [], events: [], ...(singleAgentRating ? { singleAgentRating } : {}) }
     const [turn, runs, events, comparison] = await Promise.all([
@@ -1794,7 +1820,7 @@ export class Store {
   async snapshotTurn(turnID: string, afterSequence = Number.MAX_SAFE_INTEGER): Promise<BattleSnapshot> {
     const turn = await this.turns.findOne({ _id: turnID })
     if (!turn) throw new Error(`Arena turn not found: ${turnID}`)
-    const [chat, history, runs, events, comparison] = await Promise.all([
+    const [chat, own, runs, events, comparison] = await Promise.all([
       this.chats.findOne({ _id: turn.chatID }),
       this.history(turn.chatID),
       this.runs.find({ turnID }).sort({ side: 1 }).toArray(),
@@ -1806,6 +1832,7 @@ export class Store {
     ])
     if (!chat) throw new Error(`Arena chat not found: ${turn.chatID}`)
     const singleAgentRating = await this.snapshotSingleAgentRating(chat.canonicalSessionID)
+    const history = [...(await this.inheritedHistory(chat.canonicalSessionID)), ...own]
     return {
       chat,
       turn,

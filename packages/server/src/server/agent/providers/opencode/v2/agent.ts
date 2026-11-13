@@ -1,4 +1,5 @@
 import { OpenCodeV2Session } from "./session.js";
+import { exclusiveForkBoundary } from "./history.js";
 import { V2_CAPABILITIES } from "./capabilities.js";
 import {
   features,
@@ -295,6 +296,14 @@ export class OpenCodeV2AgentClient implements AgentClient {
     }
     let forkedId: string | undefined;
     try {
+      // The daemon names the last message the fork keeps; the engine forks up to an excluded one.
+      const boundary = input.throughMessageId
+        ? await exclusiveForkBoundary(
+            connection.client,
+            input.source.sessionId,
+            input.throughMessageId,
+          )
+        : undefined;
       const response = await fetch(
         new URL(
           `/arena/sessions/${encodeURIComponent(input.source.sessionId)}/fork`,
@@ -310,7 +319,7 @@ export class OpenCodeV2AgentClient implements AgentClient {
           },
           body: JSON.stringify({
             destination: input.config.cwd,
-            ...(input.throughMessageId ? { messageID: input.throughMessageId } : {}),
+            ...(boundary ? { messageID: boundary } : {}),
           }),
         },
       );

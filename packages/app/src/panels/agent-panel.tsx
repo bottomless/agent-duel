@@ -51,7 +51,6 @@ import {
   useComposerFullscreen,
   type ComposerEditingSession,
 } from "@/composer/editing-session";
-import { useWorkspaceHasDiffStat } from "@/composer/workspace-diff-stat";
 import {
   resolveComposerTrackControlClearance,
   resolveComposerTrackTailClearance,
@@ -152,6 +151,9 @@ import { ArenaDecisionPill } from "@/arena/decision-pill";
 import { useArenaBattleActions } from "@/arena/use-battle-actions";
 import { showsArenaDecisionBar } from "@/arena/decision-state";
 import { ArenaBattleSummary } from "@/arena/battle-summary";
+import { ArenaBattleResult, ArenaTurnHead } from "@/arena/turn-head";
+import { arenaTurnHeads } from "@/arena/turn-heads";
+import { useArenaShownBattle } from "@/arena/shown-battle";
 import { ArenaChatCallouts, hasArenaChatCallouts } from "@/arena/readiness-strip";
 import {
   ARENA_CONFLICT_RESOLUTION_PROMPT,
@@ -163,11 +165,14 @@ import {
 } from "@/arena/reply-state";
 import { useArenaReplyComposerControls } from "@/arena/reply-target-control";
 import {
+  arenaTurnStartRowIds,
+  arenaKeptAnswerRowIds,
   arenaChatCanStartBattle,
   arenaSummaryAnchors,
   arenaTurnFollowedUp,
   isArenaBattleOnScreen,
   partitionArenaSummaries,
+  type ArenaPresentedStream,
 } from "@/arena/summary-anchor";
 import { arenaAgentPreferenceKey } from "@/arena/constants";
 import { applyArenaPreferencePatch, useArenaPreferences } from "@/arena/preferences";
@@ -1645,9 +1650,7 @@ const AgentStreamSection = memo(function AgentStreamSection({
   onOpenWorkspaceFile?: (request: WorkspaceFileOpenRequest) => void;
 }) {
   const isCompactFormFactor = useIsCompactFormFactor();
-  const hasWorkspaceDiffStat = useWorkspaceHasDiffStat(serverId, workspaceId);
-  const hasVisibleComposerTracks =
-    hasActiveComposer && (hasVisibleAgentTracks || hasWorkspaceDiffStat);
+  const hasVisibleComposerTracks = hasActiveComposer && hasVisibleAgentTracks;
   const bottomOverlayTailClearance = hasVisibleComposerTracks
     ? resolveComposerTrackTailClearance(isCompactFormFactor)
     : 0;
@@ -1751,22 +1754,53 @@ const AgentStreamSection = memo(function AgentStreamSection({
     streamHead: streamHead ?? EMPTY_STREAM_ITEMS,
     hasAppliedAuthoritativeHistory,
   });
-  // The newest summary sits at the end of the chat, above the next battle while that one runs,
-  // until a later prompt follows its turn; then it stays under its own turn. Placed inline any
-  // earlier, it lands above that turn's footer, which the stream draws after its last row.
+  const battleHistory = arenaSession.data?.history;
+  // Each summary heads its battle's kept answer, right after the battle's prompt. The newest
+  // waits at the end of the chat only until that prompt is in the chat to anchor to.
   const latestSummary = useMemo(
-    () => partitionArenaSummaries(arenaSession.data?.history ?? [], false).live,
-    [arenaSession.data?.history],
+    () => partitionArenaSummaries(battleHistory ?? [], false).live,
+    [battleHistory],
   );
   const latestSummaryFollowedUp = useMemo(
-    () => latestSummary !== null && arenaTurnFollowedUp(latestSummary, presentedStream),
+    () =>
+      latestSummary !== null &&
+      (arenaTurnFollowedUp(latestSummary, presentedStream) ||
+        arenaSummaryAnchors([latestSummary], presentedStream)[0] !== null),
     [latestSummary, presentedStream],
+  );
+  // A battle opened with Show battle stands in for its kept answer.
+  const shownTurnId = useArenaShownBattle(agentId);
+  const shownStream = useMemo(() => {
+    const shown = shownTurnId ? battleHistory?.find((item) => item.id === shownTurnId) : undefined;
+    if (!shown) return presentedStream;
+    const hidden = arenaKeptAnswerRowIds(shown, presentedStream);
+    if (hidden.size === 0) return presentedStream;
+    return {
+      tail: presentedStream.tail.filter((item) => !hidden.has(item.id)),
+      head: presentedStream.head.filter((item) => !hidden.has(item.id)),
+    };
+  }, [battleHistory, presentedStream, shownTurnId]);
+  const chatHasRows = shownStream.tail.length + shownStream.head.length > 0;
+  // A fork's boundary that nothing follows yet is the rule a live battle starts under, so the
+  // battle draws none of its own (`ForkedChatBoundary`).
+  const forkBoundaryEndsChat = useMemo(() => {
+    if (!forkBoundaryAfterItemId) return false;
+    const rows = [...shownStream.tail, ...shownStream.head];
+    const index = rows.findIndex((row) => row.id === forkBoundaryAfterItemId);
+    return index >= 0 && !rows.slice(index + 1).some((row) => row.kind === "user_message");
+  }, [forkBoundaryAfterItemId, shownStream]);
+  const ruledRowIds = useRuledRows(battleHistory, presentedStream, shownStream);
+  const { turnHeads, turnFooterEnds, userRowIds } = useTurnHeads(
+    agent.id,
+    battleHistory,
+    shownStream,
+    turnPresentation.isActive,
   );
   // The feedback prompt stays at the end of the chat even after the summary moves up.
   const feedbackBattle = arenaBattleOnScreen ? null : latestSummary;
   const summaryPlacement = useMemo(
-    () => partitionArenaSummaries(arenaSession.data?.history ?? [], latestSummaryFollowedUp),
-    [arenaSession.data?.history, latestSummaryFollowedUp],
+    () => partitionArenaSummaries(battleHistory ?? [], latestSummaryFollowedUp),
+    [battleHistory, latestSummaryFollowedUp],
   );
   // Keyed by the anchors themselves, so a streaming head does not rebuild every row.
   const summaryAnchorKey = useMemo(
@@ -1812,10 +1846,20 @@ const AgentStreamSection = memo(function AgentStreamSection({
           agentId={agent.id}
           snapshot={snapshot}
           {...(startingBattle ? { startingPrompt: startingBattle } : {})}
+          ruled={chatHasRows && !forkBoundaryEndsChat}
         />
       </View>
     );
-  }, [agent.id, arenaBattleOnScreen, arenaSession.data, serverId, startingBattle, workspaceId]);
+  }, [
+    agent.id,
+    arenaBattleOnScreen,
+    arenaSession.data,
+    chatHasRows,
+    forkBoundaryEndsChat,
+    serverId,
+    startingBattle,
+    workspaceId,
+  ]);
 
   const canStartAgain = arenaChatCanStartBattle(arenaSession.data, arenaBattleOnScreen);
   const latestBattleSummary = useMemo(
@@ -1951,8 +1995,8 @@ const AgentStreamSection = memo(function AgentStreamSection({
         agentId={agent.id}
         serverId={serverId}
         context={agent}
-        streamItems={presentedStream.tail}
-        streamHead={presentedStream.head}
+        streamItems={shownStream.tail}
+        streamHead={shownStream.head}
         pendingPermissions={pendingPermissions}
         routeBottomAnchorRequest={routeBottomAnchorRequest}
         isAuthoritativeHistoryReady={hasAppliedAuthoritativeHistory}
@@ -1961,13 +2005,17 @@ const AgentStreamSection = memo(function AgentStreamSection({
         turnPresentation={turnPresentation}
         onOpenWorkspaceFile={onOpenWorkspaceFile}
         afterItems={arenaAfterItems}
+        ruledItemIds={ruledRowIds}
+        turnHeads={turnHeads}
+        turnFooterEnds={turnFooterEnds}
+        userRowIds={userRowIds}
         forkBoundaryAfterItemId={forkBoundaryAfterItemId}
         liveContent={liveContentWithConnection}
         bottomOverlayHeight={bottomOverlayHeight}
         bottomOverlayTailClearance={bottomOverlayTailClearance}
         bottomOverlayControlClearance={bottomOverlayControlClearance}
         arenaChat={arenaSession.data !== undefined}
-        arenaHistory={arenaSession.data?.history}
+        arenaHistory={battleHistory}
       />
     </ArenaPartSourceContext.Provider>
   );
@@ -2075,6 +2123,88 @@ const AgentComposerSection = memo(function AgentComposerSection({
     </View>
   );
 });
+
+/**
+ * Each prompt that starts a turn after the chat's first row, a battle's or a plain turn's, has a
+ * rule above it (`arenaTurnStartRowIds`). Keyed by the ids, so a streaming head does not hand the
+ * stream a new set on every event.
+ */
+function useRuledRows(
+  history: ArenaSnapshot["history"] | undefined,
+  presentedStream: ArenaPresentedStream,
+  shownStream: ArenaPresentedStream,
+) {
+  const battlePromptRowKey = useMemo(
+    () => [...arenaTurnStartRowIds(history ?? [], presentedStream)].sort().join("\n"),
+    [history, presentedStream],
+  );
+  const battlePromptRowIds = useMemo(
+    () => new Set(battlePromptRowKey ? battlePromptRowKey.split("\n") : []),
+    [battlePromptRowKey],
+  );
+  const firstRowId = (shownStream.tail[0] ?? shownStream.head[0])?.id;
+  const ruledRowIds = useMemo(() => {
+    if (!firstRowId || !battlePromptRowIds.has(firstRowId)) return battlePromptRowIds;
+    const ruled = new Set(battlePromptRowIds);
+    ruled.delete(firstRowId);
+    return ruled;
+  }, [battlePromptRowIds, firstRowId]);
+  return ruledRowIds;
+}
+
+interface TurnHeads {
+  turnHeads: ReadonlyMap<string, React.ReactNode>;
+  turnFooterEnds: ReadonlyMap<string, React.ReactNode>;
+  userRowIds: ReadonlySet<string>;
+}
+
+/**
+ * Each answer's head, its author's avatar and name, keyed by the answer's first row; each battle's
+ * result, keyed by the last text of its kept answer, whose footer it ends; and the chat's prompt
+ * rows, which stay out of the avatar column. All are keyed by the rows themselves, so a streaming
+ * answer does not rebuild every row: they change when a turn starts, not as it grows.
+ */
+function useTurnHeads(
+  agentId: string,
+  history: ArenaSnapshot["history"] | undefined,
+  stream: ArenaPresentedStream,
+  lastTurnOpen: boolean,
+): TurnHeads {
+  const layoutKey = useMemo(() => {
+    const { heads, ends } = arenaTurnHeads(history ?? [], stream, lastTurnOpen);
+    const headPairs: [string, string | null][] = [...heads.entries()].map(([row, author]) => [
+      row,
+      author.kind === "battle" ? author.item.id : null,
+    ]);
+    const endPairs: [string, string][] = [...ends.entries()].map(([row, item]) => [row, item.id]);
+    return JSON.stringify({ heads: headPairs, ends: endPairs });
+  }, [history, lastTurnOpen, stream]);
+  const userKey = useMemo(
+    () =>
+      [...stream.tail, ...stream.head]
+        .filter((row) => row.kind === "user_message")
+        .map((row) => row.id)
+        .join("\n"),
+    [stream],
+  );
+  const { turnHeads, turnFooterEnds } = useMemo(() => {
+    const pairs: { heads: [string, string | null][]; ends: [string, string][] } =
+      JSON.parse(layoutKey);
+    const byTurn = new Map((history ?? []).map((item) => [item.id, item]));
+    const heads = new Map<string, React.ReactNode>();
+    for (const [row, turnId] of pairs.heads) {
+      heads.set(row, <ArenaTurnHead item={turnId ? byTurn.get(turnId) : undefined} />);
+    }
+    const ends = new Map<string, React.ReactNode>();
+    for (const [row, turnId] of pairs.ends) {
+      const item = byTurn.get(turnId);
+      if (item) ends.set(row, <ArenaBattleResult agentId={agentId} item={item} />);
+    }
+    return { turnHeads: heads, turnFooterEnds: ends };
+  }, [agentId, layoutKey, history]);
+  const userRowIds = useMemo(() => new Set(userKey ? userKey.split("\n") : []), [userKey]);
+  return { turnHeads, turnFooterEnds, userRowIds };
+}
 
 function useSingleAgentRatingDialog({
   serverId,

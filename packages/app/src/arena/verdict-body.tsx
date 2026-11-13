@@ -20,11 +20,7 @@ export function verdictFolds(proseHeight: number | null): boolean {
   return proseHeight !== null && proseHeight > FOLDS_FROM;
 }
 
-/**
- * The judge's verdict, shown whole when it is short and otherwise folded to
- * its opening until the reader asks for the rest, so a long report does not
- * push the changes and the vote out of view.
- */
+/** The judge's verdict as Markdown, inside the fold. */
 export function VerdictBody({
   turnId,
   output,
@@ -35,6 +31,21 @@ export function VerdictBody({
   output: string;
   children?: ReactNode;
 }) {
+  return (
+    <VerdictFold turnId={turnId}>
+      <MarkdownRenderer text={output} compact flatHeadings proseMeasure />
+      {children}
+    </VerdictFold>
+  );
+}
+
+/**
+ * The judge's verdict, shown whole when it is short and otherwise folded to
+ * its opening until the reader asks for the rest, so a long report does not
+ * push the changes and the vote out of view. Wraps either layout of the
+ * report: the Markdown, or the report split along the answers' columns.
+ */
+export function VerdictFold({ turnId, children }: { turnId: string; children: ReactNode }) {
   const { t } = useTranslation();
   const setVerdictExpanded = useArenaReviewStore((state) => state.setVerdictExpanded);
   const setVerdictFolded = useArenaReviewStore((state) => state.setVerdictFolded);
@@ -60,7 +71,6 @@ export function VerdictBody({
         {/* The prose keeps its natural height and the fold clips it; a bare
             max-height would let flex shrink every block until they overlap. */}
         <View style={styles.prose} onLayout={onProseLayout} testID="arena-verdict-prose">
-          <MarkdownRenderer text={output} compact flatHeadings proseMeasure />
           {children}
         </View>
       </View>

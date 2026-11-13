@@ -27,19 +27,31 @@ function map<A, R>(effect: Effect.Effect<A, Error, R>) {
   )
 }
 
-const forkSession = Effect.fn("ArenaHttpApi.forkSession")(function* (ctx: {
-  params: { sessionID: string }
-  payload: typeof ForkSessionPayload.Type
-}) {
+const forkSession = Effect.fn("ArenaHttpApi.forkSession")(function* (
+  ctx: {
+    params: { sessionID: string }
+    payload: typeof ForkSessionPayload.Type
+  },
+  arena: ArenaService.Interface,
+) {
   const sessionID = SessionID.make(ctx.params.sessionID)
   yield* assertSessionForkAllowed(sessionID).pipe(
     Effect.mapError(() => new Error("An unresolved contestant session cannot be forked")),
   )
+  let messages: ReadonlyMap<string, string> = new Map()
   const forked = yield* forkSessionInto({
     sessionID,
     destination: ctx.payload.destination,
     ...(ctx.payload.messageID ? { messageID: MessageID.make(ctx.payload.messageID) } : {}),
+    onMessageMapping(mapping) {
+      messages = new Map(mapping)
+    },
   }).pipe(Effect.mapError((cause) => (cause instanceof Error ? cause : new Error(String(cause)))))
+  // The copy works without its lineage; a fork that could not record it only shows its copied
+  // battles as the plain agent's turns.
+  yield* arena
+    .recordFork({ sessionID: forked.id, sourceSessionID: sessionID, messages })
+    .pipe(Effect.catchCause((cause) => Effect.logWarning("Arena could not record a fork's lineage", { cause })))
   return { sessionID: forked.id }
 })
 
@@ -71,7 +83,7 @@ export const arenaHandlers = HttpApiBuilder.group(ArenaApi, "arena", (handlers) 
       )
       .handle("archiveSession", (ctx) => map(arena.archiveSession(ctx.params.sessionID)))
       .handle("unarchiveSession", (ctx) => map(arena.unarchiveSession(ctx.params.sessionID)))
-      .handle("forkSession", (ctx) => map(forkSession(ctx)))
+      .handle("forkSession", (ctx) => map(forkSession(ctx, arena)))
       .handle("snapshot", (ctx) => map(arena.snapshot(ctx.params.chatID, ctx.query.afterSequence)))
       .handle("turn", (ctx) => map(arena.turn(ctx.params.turnID, ctx.query.afterSequence)))
       .handle("runPart", (ctx) =>

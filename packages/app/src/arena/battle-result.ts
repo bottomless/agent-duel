@@ -30,6 +30,15 @@ export function battleWinnerSide(item: ArenaHistoryItem): ArenaSide | undefined 
 }
 
 /**
+ * The side whose answer became the chat's history: the winner, or the side a tie, an early pick or
+ * Stop then Keep applied. Only a winner counts as winning (`battleWinnerSide`), but every kept side
+ * gets the kept answer's footer; ties fell back to the old summary card without it.
+ */
+export function battleKeptSide(item: ArenaHistoryItem): ArenaSide | undefined {
+  return battleWinnerSide(item) ?? item.appliedSide;
+}
+
+/**
  * Whether the battle failed while it was being created. Neither side ran, so the engine ends it
  * without naming them: an abort with no identities.
  */

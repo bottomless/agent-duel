@@ -1,7 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { memo, useCallback } from "react";
 import { View } from "react-native";
-import { Wrench } from "lucide-react-native";
+import { Brain } from "lucide-react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { MarkdownRenderer } from "@/components/markdown/renderer";
 import { EXPANDABLE_BADGE_DETAIL_INSET, ExpandableBadge } from "@/components/message";
@@ -40,7 +40,7 @@ export const ArenaChatReasoning = memo(function ArenaChatReasoning({
     <ExpandableBadge
       testID="arena-chat-reasoning"
       label={active ? t("arena.reasoning") : t("arena.reasoned")}
-      icon={Wrench}
+      icon={Brain}
       isLoading={active}
       isExpanded={expanded}
       onToggle={toggle}

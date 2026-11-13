@@ -2,12 +2,18 @@
  * @vitest-environment jsdom
  */
 import React from "react";
-import { cleanup, fireEvent, render, within } from "@testing-library/react";
+import { cleanup, fireEvent, render as renderInDom, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ArenaRun } from "@getpaseo/protocol/arena/rpc-schemas";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 vi.stubGlobal("React", React);
+
+// Named icons, so a row can say which one it drew.
+vi.mock("lucide-react-native", async (importOriginal) => {
+  const named = (displayName: string) => Object.assign(() => null, { displayName });
+  return { ...(await importOriginal()), Brain: named("Brain"), Layers2: named("Layers2") };
+});
 
 vi.mock("@/components/thinking-block", () => ({
   ThinkingBlock: () => <div data-testid="paseo-thinking" />,
@@ -27,9 +33,11 @@ vi.mock("@/components/message", () => ({
     isError?: boolean;
     onToggle?: () => void;
     renderDetails?: () => React.ReactNode;
+    icon?: { displayName?: string };
   }) => (
     <div
       data-testid={props.testID}
+      data-icon={props.icon?.displayName}
       data-loading={props.isLoading}
       data-error={props.isError}
       data-label-style={props.labelTextStyle ? "custom" : undefined}
@@ -42,7 +50,11 @@ vi.mock("@/components/message", () => ({
       {props.isExpanded ? props.renderDetails?.() : null}
     </div>
   ),
-  ToolCall: () => null,
+  ToolCall: (props: { toolName: string; status: string }) => (
+    <div data-testid="tool-call" data-status={props.status}>
+      {props.toolName}
+    </div>
+  ),
   UserMessage: ({ message }: { message: string }) => <p data-testid="user-message">{message}</p>,
 }));
 
@@ -75,6 +87,11 @@ afterEach(cleanup);
 function TestQueryProvider({ children }: { children: React.ReactNode }) {
   const [client] = React.useState(() => new QueryClient());
   return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+}
+
+// A tool drawn as itself loads its full output through the query client.
+function render(ui: React.ReactElement, options?: Parameters<typeof renderInDom>[1]) {
+  return renderInDom(ui, { wrapper: TestQueryProvider, ...options });
 }
 
 const PENDING_REASONING_RUN = {
@@ -370,11 +387,12 @@ describe("ArenaRunThread", () => {
 
     expect(view.queryByText("Check `grid-template-columns`.")).toBeNull();
     expect(view.getByTestId("arena-activity-group").getAttribute("data-loading")).toBe("true");
+    // Thinking takes the regular chat's brain, not the wrench of a group of tools.
+    expect(view.getByTestId("arena-activity-group").getAttribute("data-icon")).toBe("Brain");
     expect(view.queryByTestId("paseo-thinking")).toBeNull();
     expect(view.queryByTestId("paseo-turn-footer")).toBeNull();
 
     view.rerender(<ArenaRunThread run={MIXED_REASONING_RUN} />);
-    fireEvent.click(view.getByRole("button", { name: "Read" }));
     expect(view.queryByText("Check `grid-template-columns`.")).toBeNull();
     expect(view.queryByText("Private thought")).toBeNull();
     expect(view.getByText("The file is ready.").textContent).toBe("The file is ready.");
@@ -407,14 +425,23 @@ describe("ArenaRunThread", () => {
     expect(view.getByText("First update")).toBeTruthy();
     expect(view.getByText("Second update")).toBeTruthy();
     expect(view.queryByTestId("arena-earlier-activity")).toBeNull();
+    // A step with one tool is that tool, not a group that holds it.
+    expect(view.queryByTestId("arena-activity-group")).toBeNull();
+    expect(view.getAllByTestId("tool-call").map((call) => call.textContent)).toEqual([
+      "read",
+      "edit",
+    ]);
 
     view.rerender(thread(completedRun));
     expect(view.queryByText("First update")).toBeNull();
     expect(view.queryByText("Second update")).toBeNull();
     expect(view.getByText("Final answer")).toBeTruthy();
     const earlier = view.getByTestId("arena-earlier-activity");
-    expect(earlier.getAttribute("data-label-style")).toBe("custom");
-    expect(earlier.getAttribute("data-chevron")).toBe("always");
+    // The fold of a finished answer's history is drawn like a group of tool calls: the stack,
+    // with the chevron only on hover or while open.
+    expect(earlier.getAttribute("data-icon")).toBe("Layers2");
+    expect(earlier.getAttribute("data-label-style")).toBeNull();
+    expect(earlier.getAttribute("data-chevron")).toBeNull();
     expect(earlier.textContent).not.toContain("Earlier activity");
     expect(earlier.textContent).toContain("Read 1 file · Edited 1 file");
 
@@ -438,14 +465,14 @@ describe("ArenaRunThread", () => {
     expect(within(activity).getByTestId("arena-subagent-latest").getAttribute("data-loading")).toBe(
       "true",
     );
-    expect(view.getByTestId("arena-activity-group").textContent).toContain("Read");
-    expect(view.getByTestId("arena-activity-group").getAttribute("data-loading")).toBe("false");
+    const parentRead = view.getAllByTestId("tool-call").find((call) => call.textContent === "read");
+    expect(parentRead?.getAttribute("data-status")).not.toBe("running");
     expect(view.queryByText("Child finding")).toBeNull();
     expect(view.queryByTestId("paseo-turn-footer")).toBeNull();
 
     fireEvent.click(within(heading).getByRole("button"));
     expect(within(child).getByText("Child finding").textContent).toBe("Child finding");
-    expect(within(child).getByTestId("arena-activity-group").textContent).toContain("Shell");
+    expect(within(child).getByTestId("tool-call").textContent).toBe("bash");
 
     const completedRun = subagentRun("completed");
     view.rerender(<ArenaRunThread run={completedRun} />);
@@ -457,8 +484,8 @@ describe("ArenaRunThread", () => {
     expect(
       within(completed).getByTestId("arena-subagent-latest").getAttribute("data-loading"),
     ).toBe("false");
-    expect(within(completed).getByTestId("arena-activity-group").getAttribute("data-loading")).toBe(
-      "false",
+    expect(within(completed).getByTestId("tool-call").getAttribute("data-status")).not.toBe(
+      "running",
     );
   });
 

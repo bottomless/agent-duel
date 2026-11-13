@@ -1,5 +1,13 @@
 import { useTranslation } from "react-i18next";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MutableRefObject,
+  type ReactNode,
+} from "react";
 import {
   ScrollView,
   Text,
@@ -8,11 +16,12 @@ import {
   type LayoutChangeEvent,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
+  type ViewStyle,
 } from "react-native";
-import { ArrowDown, Maximize2, Minimize2 } from "lucide-react-native";
-import { StyleSheet, withUnistyles } from "react-native-unistyles";
+import { isWeb } from "@/constants/platform";
+import { ArrowDown } from "lucide-react-native";
+import { StyleSheet } from "react-native-unistyles";
 import type {
-  ArenaComparisonDiff,
   ArenaHistoryItem,
   ArenaRun,
   ArenaSide,
@@ -20,14 +29,10 @@ import type {
 } from "@getpaseo/protocol/arena/rpc-schemas";
 import type { AgentPermissionResponse } from "@getpaseo/protocol/agent-types";
 import { ARENA_MAX_CONTENT_WIDTH } from "@/constants/layout";
-import { ICON_SIZE, type Theme } from "@/styles/theme";
 import { useRetainedPanelActive } from "@/components/retained-panel";
 import { MessageOuterSpacingProvider, UserMessage } from "@/components/message";
-import { useSessionStore } from "@/stores/session-store";
-import { useFetchQuery } from "@/data/query";
 import { inlineUnistylesStyle } from "@/styles/unistyles-inline-style";
 import { ArenaRunThread } from "./run-thread";
-import { arenaSizeErrorOr, isArenaSizeError } from "./chat-too-large";
 import { ArenaRunTaskFooter } from "./task-progress-card";
 import { openArenaWorktreeChanges } from "./explorer-selection";
 import { ARENA_RUN_META_HEIGHT, ArenaRunMeta } from "./run-meta";
@@ -38,31 +43,23 @@ import {
 } from "./run-turns";
 import type { ArenaTurnAction } from "./use-arena-session";
 import { useArenaBattleActions } from "./use-battle-actions";
-import { arenaChangesRows } from "./changes-rows";
 import { ArenaBattleOutcome } from "./battle-summary";
-import { BattleReview } from "./battle-review";
 import { useArenaReviewTelemetry } from "./review-telemetry";
+import { ArenaLiveReview } from "./battle-judging";
 import { isStoppedByEarlyPick } from "./battle-result";
-import {
-  arenaDiffQueryKey,
-  battleReviewPhase,
-  battleSummaryStatus,
-  type BattleReviewPhase,
-} from "./comparison-visibility";
 import type { ArenaPendingQuestion } from "./question";
 import type { ArenaPendingPermission, ArenaPermissionReply } from "./permission";
 import { Button } from "@/components/ui/button";
 import { useContainerWidth } from "@/hooks/use-container-width";
 import { Alert } from "@/components/ui/alert";
-import { ArenaServicesStrip } from "./services-strip";
 import { ArenaQueuedSteers } from "./queued-steers";
 import { ArenaRunRetry } from "./run-retry";
 import { ArenaTransitionRow, arenaTransitionRowVisible } from "./transition-row";
 import { ArenaTransitionTimeline } from "./transition-timeline";
 import { arenaResolutionStatus, arenaSetupStatus } from "./transition-progress";
-import { ArenaWorktreeMenuButton } from "./worktree-menu";
 import { useArenaCardBleed } from "./content-column";
-import { PaneIconAction } from "./pane-icon-action";
+import { ArenaPaneActions, ArenaPanePreview } from "./pane-actions";
+import { BATTLE_GUTTER, BATTLE_RAIL } from "./battle-layout";
 import { isArenaBattleOnScreen } from "./summary-anchor";
 import { arenaPromptAttachmentPills } from "./prompt-attachment-pills";
 import { arenaPromptImages } from "./prompt-images";
@@ -76,9 +73,6 @@ const STACKED_PANES_BREAKPOINT = 520;
 
 // Room above a message the turns menu scrolls to, so it does not sit against the pane header.
 const JUMP_TO_MESSAGE_INSET = 12;
-const ThemedMaximize2 = withUnistyles(Maximize2);
-const ThemedMinimize2 = withUnistyles(Minimize2);
-const foregroundColorMapping = (theme: Theme) => ({ color: theme.colors.foreground });
 
 function useArenaPaneView(turnIndex: number | undefined) {
   const [paneView, setPaneView] = useState<ArenaPaneView>("both");
@@ -138,6 +132,169 @@ function useOpenRunChanges(input: {
   return browsable ? open : undefined;
 }
 
+type JumpToMessage = (messageId: string | null) => void;
+
+// ViewStyle has no "sticky", hence the cast, as in split-view.tsx.
+const stickyHeaderStyle = isWeb
+  ? ({ position: "sticky", top: 0, zIndex: 2 } as unknown as ViewStyle)
+  : null;
+
+/**
+ * An answer's heading: its side's rule, the agent's name and state, and its tools. Side by side,
+ * both headings share one row that sticks to the top of the chat for the whole battle, so the
+ * names stay in view while reading the answers' ends and the review on their columns.
+ */
+function BattlePaneHeader({
+  serverId,
+  workspaceId,
+  agentId,
+  turnId,
+  side,
+  run,
+  paneView,
+  onPaneViewChange,
+  onJumpToMessage,
+  statusBelow,
+  onFitChange,
+}: {
+  serverId: string;
+  workspaceId: string;
+  agentId: string;
+  turnId: string;
+  side: ArenaSide;
+  run: ArenaRun | undefined;
+  paneView: ArenaPaneView;
+  onPaneViewChange: (value: ArenaPaneView) => void;
+  onJumpToMessage: JumpToMessage;
+  /** Set by the side-by-side headings so both put the status under the name together. */
+  statusBelow?: boolean;
+  onFitChange?: (side: ArenaSide, fit: PaneHeadingFit) => void;
+}) {
+  const { t } = useTranslation();
+  const active = useRetainedPanelActive();
+  const dispatched = run?.startedAt ? run : undefined;
+  const openChanges = useOpenRunChanges({ serverId, workspaceId, side, run });
+  const expanded = paneView === side;
+  const handleExpand = useCallback(() => {
+    onPaneViewChange(side);
+  }, [onPaneViewChange, side]);
+  const handleRestore = useCallback(() => {
+    onPaneViewChange("both");
+  }, [onPaneViewChange]);
+  const fit = usePaneHeadingFit();
+  useEffect(() => {
+    onFitChange?.(side, fit.fit);
+  }, [fit.fit, onFitChange, side]);
+  // Preview on the status line implies the status line, whatever the other heading does.
+  const below = (statusBelow ?? false) || fit.fit !== "inline";
+  const previewInline = fit.fit !== "preview_below";
+  const status = (
+    <View style={styles.paneStatus} onLayout={fit.onStatus}>
+      {dispatched ? (
+        <ArenaRunMeta
+          run={dispatched}
+          side={side}
+          active={active}
+          onOpenChanges={openChanges}
+          showChangeSize={false}
+        />
+      ) : (
+        <Text style={styles.status}>{t("arena.preparing")}</Text>
+      )}
+      {dispatched ? (
+        <ArenaRunTurnsMenu run={dispatched} side={side} onJumpToMessage={onJumpToMessage} />
+      ) : null}
+    </View>
+  );
+  const preview = (
+    <View style={styles.paneActionsSlot} onLayout={fit.onPreview}>
+      <ArenaPanePreview turnId={turnId} side={side} run={run} />
+    </View>
+  );
+  return (
+    <View style={styles.paneHeader} testID={`arena-pane-header-${side}`}>
+      <View style={[styles.paneRule, side === "a" ? styles.paneRuleA : styles.paneRuleB]} />
+      <View style={styles.paneHeaderRow} onLayout={fit.onRow}>
+        <View style={styles.paneHeading}>
+          <Text style={styles.agentName} onLayout={fit.onName}>
+            {t("arena.agent")} {side.toUpperCase()}
+          </Text>
+          {below ? null : status}
+        </View>
+        {previewInline ? preview : null}
+        <View style={styles.paneActionsSlot} onLayout={fit.onActions}>
+          <ArenaPaneActions
+            serverId={serverId}
+            workspaceId={workspaceId}
+            agentId={agentId}
+            side={side}
+            run={run}
+            expanded={expanded}
+            onToggleExpanded={expanded ? handleRestore : handleExpand}
+          />
+        </View>
+      </View>
+      {below ? (
+        <View style={styles.paneStatusLine}>
+          {status}
+          {previewInline ? null : <View style={styles.paneStatusLinePreview}>{preview}</View>}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+const PANE_HEADER_GAP = 8;
+const PANE_HEADING_GAP = 10;
+
+/**
+ * How a pane's heading fits its line. `inline`: the name, status, Preview and icons all fit.
+ * `status_below`: the status takes its own line under the name; Preview stays beside the icons.
+ * `preview_below`: even the name, Preview and icons do not fit, so Preview joins the status line
+ * at its right end.
+ */
+export type PaneHeadingFit = "inline" | "status_below" | "preview_below";
+
+const FIT_ORDER: Record<PaneHeadingFit, number> = { inline: 0, status_below: 1, preview_below: 2 };
+
+function usePaneHeadingFit() {
+  const [widths, setWidths] = useState({ row: 0, name: 0, status: 0, preview: 0, actions: 0 });
+  const measure = useCallback(
+    (key: keyof typeof widths) => (event: LayoutChangeEvent) => {
+      const width = Math.ceil(event.nativeEvent.layout.width);
+      setWidths((current) => (current[key] === width ? current : { ...current, [key]: width }));
+    },
+    [],
+  );
+  const handlers = useMemo(
+    () => ({
+      onRow: measure("row"),
+      onName: measure("name"),
+      onStatus: measure("status"),
+      onPreview: measure("preview"),
+      onActions: measure("actions"),
+    }),
+    [measure],
+  );
+  return { ...handlers, fit: paneHeadingFit(widths) };
+}
+
+function paneHeadingFit(widths: {
+  row: number;
+  name: number;
+  status: number;
+  preview: number;
+  actions: number;
+}): PaneHeadingFit {
+  if (widths.row === 0) return "inline";
+  const end = (widths.preview > 0 ? widths.preview + PANE_HEADER_GAP : 0) + widths.actions;
+  if (widths.row >= widths.name + PANE_HEADING_GAP + widths.status + PANE_HEADER_GAP + end) {
+    return "inline";
+  }
+  if (widths.row >= widths.name + PANE_HEADER_GAP + end) return "status_below";
+  return widths.preview > 0 ? "preview_below" : "status_below";
+}
+
 function BattlePane({
   serverId,
   workspaceId,
@@ -156,6 +313,8 @@ function BattlePane({
   stacked = false,
   paneView,
   onPaneViewChange,
+  inlineHeader,
+  jumpRef,
 }: {
   serverId: string;
   workspaceId: string;
@@ -164,6 +323,9 @@ function BattlePane({
   turnId: string;
   side: ArenaSide;
   run: ArenaRun | undefined;
+  /** Stacked panes head themselves; side by side, the sticky row above both heads them. */
+  inlineHeader: boolean;
+  jumpRef: MutableRefObject<JumpToMessage | null>;
   stoppedByEarlyPick: boolean;
   maxHeight: number;
   respondingQuestionId: string | null;
@@ -185,7 +347,6 @@ function BattlePane({
   onPaneViewChange: (value: ArenaPaneView) => void;
 }) {
   const { t } = useTranslation();
-  const active = useRetainedPanelActive();
   const threadScrollRef = useRef<ScrollView>(null);
   const autoScrollEnabledRef = useRef(true);
   const userScrollActiveRef = useRef(false);
@@ -343,65 +504,28 @@ function BattlePane({
       dispatched ? <ArenaRunRetry run={dispatched} serverId={serverId} agentId={agentId} /> : null,
     [dispatched, serverId, agentId],
   );
-  const openChanges = useOpenRunChanges({ serverId, workspaceId, side, run });
-  const expanded = paneView === side;
-  const handleExpand = useCallback(() => {
-    onPaneViewChange(side);
-  }, [onPaneViewChange, side]);
-  const handleRestore = useCallback(() => {
-    onPaneViewChange("both");
-  }, [onPaneViewChange]);
+  // The sticky header row above both panes reaches this pane's thread through the ref.
+  useEffect(() => {
+    jumpRef.current = jumpToMessage;
+    return () => {
+      jumpRef.current = null;
+    };
+  }, [jumpRef, jumpToMessage]);
   return (
     <View style={paneStyle} testID={`arena-pane-${side}`}>
-      <View style={styles.paneHeader}>
-        <View style={styles.paneHeading}>
-          <View style={styles.agentNameRow}>
-            <Text style={styles.agentName}>
-              {t("arena.agent")} {side.toUpperCase()}
-            </Text>
-            {dispatched ? (
-              <ArenaRunTurnsMenu run={dispatched} side={side} onJumpToMessage={jumpToMessage} />
-            ) : null}
-          </View>
-          {dispatched ? (
-            <ArenaRunMeta
-              run={dispatched}
-              side={side}
-              active={active}
-              onOpenChanges={openChanges}
-            />
-          ) : (
-            <Text style={styles.status}>{t("arena.preparing")}</Text>
-          )}
-        </View>
-        <View style={styles.paneHeaderActions}>
-          {run?.worktree && run.worktreeActive ? (
-            <ArenaWorktreeMenuButton
-              serverId={serverId}
-              workspaceId={workspaceId}
-              agentId={agentId}
-              side={side}
-              worktree={run.worktree}
-              worktreeName={run.worktreeName}
-            />
-          ) : null}
-          <PaneIconAction
-            onPress={expanded ? handleRestore : handleExpand}
-            accessibilityLabel={
-              expanded
-                ? t("arena.restoreSplit")
-                : t("arena.expandAgent", { side: side.toUpperCase() })
-            }
-            testID={`arena-pane-expand-${side}`}
-          >
-            {expanded ? (
-              <ThemedMinimize2 size={ICON_SIZE.xs} uniProps={foregroundColorMapping} />
-            ) : (
-              <ThemedMaximize2 size={ICON_SIZE.xs} uniProps={foregroundColorMapping} />
-            )}
-          </PaneIconAction>
-        </View>
-      </View>
+      {inlineHeader ? (
+        <BattlePaneHeader
+          serverId={serverId}
+          workspaceId={workspaceId}
+          agentId={agentId}
+          turnId={turnId}
+          side={side}
+          run={run}
+          paneView={paneView}
+          onPaneViewChange={onPaneViewChange}
+          onJumpToMessage={jumpToMessage}
+        />
+      ) : null}
       <View style={styles.paneBody} testID={`arena-pane-body-${side}`}>
         {/* The jump button anchors to the thread, not the pane body, so it stays clear of the task
             footer and services strip below the thread. */}
@@ -457,123 +581,8 @@ function BattlePane({
         {run?.runState === "pending" ? (
           <ArenaRunTaskFooter run={run} paneMaxHeight={maxHeight} />
         ) : null}
-        {run ? <ArenaServicesStrip turnId={turnId} run={run} /> : null}
       </View>
     </View>
-  );
-}
-
-// The same key the side panel and the summary fetch, so no view adds a request. The first
-// result alone is keyed apart, so the comparison is fetched again once the other side lands.
-function useBattleDiff(
-  serverId: string,
-  agentId: string,
-  turnId: string,
-  runA: ArenaRun | undefined,
-  runB: ArenaRun | undefined,
-  phase: BattleReviewPhase,
-) {
-  const { t } = useTranslation();
-  const client = useSessionStore((state) => state.sessions[serverId]?.client ?? null);
-  return useFetchQuery({
-    queryKey: [
-      ...arenaDiffQueryKey(serverId, agentId, turnId, runA, runB),
-      ...(phase.kind === "partial" ? [`partial:${phase.finished}`] : []),
-    ],
-    dataShape: "value",
-    staleTimeMs: 0,
-    queryFn: async () => {
-      if (!client) throw new Error(t("arena.connectionUnavailable"));
-      try {
-        return await client.arenaDiff(agentId, turnId);
-      } catch (error) {
-        throw arenaSizeErrorOr(error);
-      }
-    },
-    enabled: Boolean(client),
-    // A comparison too large to send is refused the same way every time.
-    retry: (failures, error) => failures < 2 && !isArenaSizeError(error),
-    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 4000),
-  });
-}
-
-interface ShownBattleDiff {
-  diff: ArenaComparisonDiff;
-  /** The side still working when this diff was fetched; its column is a placeholder. */
-  waitingFor: ArenaSide | null;
-}
-
-/**
- * The card once both results are in: the review region, fed from the same diff
- * query the summary uses.
- */
-function BattleJudging({
-  serverId,
-  agentId,
-  turnId,
-  comparison,
-  comparisonState,
-  decided,
-  runA,
-  runB,
-  phase,
-  retrying,
-  onRetry,
-}: {
-  serverId: string;
-  agentId: string;
-  turnId: string;
-  comparison: ArenaSnapshot["comparison"];
-  comparisonState: NonNullable<ArenaSnapshot["turn"]>["comparisonState"];
-  /** The turn has a resolution, which closes its summary's scope. */
-  decided: boolean;
-  runA: ArenaRun | undefined;
-  runB: ArenaRun | undefined;
-  phase: Exclude<BattleReviewPhase, { kind: "none" }>;
-  retrying: boolean;
-  onRetry: () => void;
-}) {
-  // A turn's comparison is pending from its creation, which while one side still works would
-  // read as a summary on its way; nothing starts until both sides finish.
-  const summary =
-    phase.kind === "partial"
-      ? { available: false, pending: false, failed: false }
-      : battleSummaryStatus(comparison, comparisonState, decided);
-  const diffQuery = useBattleDiff(serverId, agentId, turnId, runA, runB, phase);
-  const refetchDiff = diffQuery.refetch;
-  const retryDiff = useCallback(() => {
-    void refetchDiff();
-  }, [refetchDiff]);
-  // When the other side lands, the full comparison is fetched under a new key and arrives a moment
-  // later. Until it does, the review keeps the first result it was showing, with the placeholder
-  // column it was fetched with, rather than collapsing every open diff into a spinner.
-  const phaseWaitingFor = phase.kind === "partial" ? phase.waitingFor : null;
-  const live: ShownBattleDiff | null = diffQuery.data
-    ? { diff: diffQuery.data, waitingFor: phaseWaitingFor }
-    : null;
-  const [held, setHeld] = useState<ShownBattleDiff | null>(null);
-  if (live && (live.diff !== held?.diff || live.waitingFor !== held.waitingFor)) setHeld(live);
-  const shown = live ?? (held?.diff.turnID === turnId ? held : null);
-  const diff = shown?.diff;
-  const rows = useMemo(() => arenaChangesRows(diff), [diff]);
-  return (
-    <BattleReview
-      serverId={serverId}
-      agentId={agentId}
-      turnId={turnId}
-      summaryAvailable={summary.available}
-      summaryPending={summary.pending}
-      summaryFailed={summary.failed}
-      waitingFor={shown ? shown.waitingFor : phaseWaitingFor}
-      comparison={comparison}
-      retrying={retrying}
-      onRetry={onRetry}
-      diff={diff}
-      diffError={diffQuery.error}
-      rows={rows}
-      onRetryDiff={retryDiff}
-      retryingDiff={diffQuery.isFetching}
-    />
   );
 }
 
@@ -662,47 +671,89 @@ function BattlePanes({
 }) {
   const { width, onLayout } = useContainerWidth();
   const stacked = width > 0 && width < STACKED_PANES_BREAKPOINT;
+  const jumpRefA = useRef<JumpToMessage | null>(null);
+  const jumpRefB = useRef<JumpToMessage | null>(null);
+  const jumpA = useCallback<JumpToMessage>((messageId) => jumpRefA.current?.(messageId), []);
+  const jumpB = useCallback<JumpToMessage>((messageId) => jumpRefB.current?.(messageId), []);
+  const [fits, setFits] = useState<Record<ArenaSide, PaneHeadingFit>>({
+    a: "inline",
+    b: "inline",
+  });
+  const handleFitChange = useCallback((side: ArenaSide, fit: PaneHeadingFit) => {
+    setFits((current) => (current[side] === fit ? current : { ...current, [side]: fit }));
+  }, []);
+  // Side by side, both headings put the status under the name as soon as either needs to, so the
+  // two headings keep one shape. A hidden pane's heading does not count.
+  const visibleFits = paneView === "both" ? [fits.a, fits.b] : [paneView === "a" ? fits.a : fits.b];
+  const statusBelow = visibleFits.some((fit) => FIT_ORDER[fit] >= FIT_ORDER.status_below);
+  const headerProps = {
+    serverId,
+    workspaceId,
+    agentId,
+    turnId,
+    paneView,
+    onPaneViewChange,
+    statusBelow,
+    onFitChange: handleFitChange,
+  };
   return (
-    <View onLayout={onLayout} style={[styles.panes, stacked && styles.panesNarrow]}>
-      <BattlePane
-        serverId={serverId}
-        workspaceId={workspaceId}
-        agentId={agentId}
-        turnId={turnId}
-        side="a"
-        run={runA}
-        stoppedByEarlyPick={isStoppedByEarlyPick({ runState: runA?.runState, side: "a", turn })}
-        maxHeight={maxHeight}
-        stacked={stacked}
-        respondingQuestionId={respondingA.questionId}
-        respondingPermissionId={respondingA.permissionId}
-        onQuestionResponse={onQuestionResponse}
-        onPermissionResponse={onPermissionResponse}
-        hidden={paneView === "b"}
-        showDivider={false}
-        paneView={paneView}
-        onPaneViewChange={onPaneViewChange}
-      />
-      <BattlePane
-        serverId={serverId}
-        workspaceId={workspaceId}
-        agentId={agentId}
-        turnId={turnId}
-        side="b"
-        run={runB}
-        stoppedByEarlyPick={isStoppedByEarlyPick({ runState: runB?.runState, side: "b", turn })}
-        maxHeight={maxHeight}
-        stacked={stacked}
-        respondingQuestionId={respondingB.questionId}
-        respondingPermissionId={respondingB.permissionId}
-        onQuestionResponse={onQuestionResponse}
-        onPermissionResponse={onPermissionResponse}
-        hidden={paneView === "a"}
-        showDivider={paneView === "both"}
-        paneView={paneView}
-        onPaneViewChange={onPaneViewChange}
-      />
-    </View>
+    <>
+      {/* A child of the battle, not of the panes, so it stays stuck through the review below. */}
+      {stacked ? null : (
+        <View style={[styles.paneHeaders, stickyHeaderStyle]} testID="arena-pane-headers">
+          <View style={[styles.paneHeaderCell, paneView === "b" && styles.paneHidden]}>
+            <BattlePaneHeader {...headerProps} side="a" run={runA} onJumpToMessage={jumpA} />
+          </View>
+          <View style={[styles.paneHeaderCell, paneView === "a" && styles.paneHidden]}>
+            <BattlePaneHeader {...headerProps} side="b" run={runB} onJumpToMessage={jumpB} />
+          </View>
+        </View>
+      )}
+      <View onLayout={onLayout} style={[styles.panes, stacked && styles.panesNarrow]}>
+        <BattlePane
+          inlineHeader={stacked}
+          jumpRef={jumpRefA}
+          serverId={serverId}
+          workspaceId={workspaceId}
+          agentId={agentId}
+          turnId={turnId}
+          side="a"
+          run={runA}
+          stoppedByEarlyPick={isStoppedByEarlyPick({ runState: runA?.runState, side: "a", turn })}
+          maxHeight={maxHeight}
+          stacked={stacked}
+          respondingQuestionId={respondingA.questionId}
+          respondingPermissionId={respondingA.permissionId}
+          onQuestionResponse={onQuestionResponse}
+          onPermissionResponse={onPermissionResponse}
+          hidden={paneView === "b"}
+          showDivider={false}
+          paneView={paneView}
+          onPaneViewChange={onPaneViewChange}
+        />
+        <BattlePane
+          serverId={serverId}
+          workspaceId={workspaceId}
+          agentId={agentId}
+          turnId={turnId}
+          side="b"
+          run={runB}
+          stoppedByEarlyPick={isStoppedByEarlyPick({ runState: runB?.runState, side: "b", turn })}
+          maxHeight={maxHeight}
+          stacked={stacked}
+          respondingQuestionId={respondingB.questionId}
+          respondingPermissionId={respondingB.permissionId}
+          onQuestionResponse={onQuestionResponse}
+          onPermissionResponse={onPermissionResponse}
+          hidden={paneView === "a"}
+          showDivider={paneView === "both"}
+          paneView={paneView}
+          onPaneViewChange={onPaneViewChange}
+          inlineHeader={stacked}
+          jumpRef={jumpRefB}
+        />
+      </View>
+    </>
   );
 }
 
@@ -762,6 +813,7 @@ export function ArenaBattleView({
   agentId,
   snapshot,
   startingPrompt,
+  ruled = false,
 }: {
   serverId: string;
   workspaceId: string;
@@ -769,6 +821,8 @@ export function ArenaBattleView({
   snapshot: ArenaSnapshot;
   /** Keeps the submitted prompt visible until its turn arrives. */
   startingPrompt?: StartingArenaBattle;
+  /** The chat has turns above, so the battle starts a new one under a rule, as the chat's do. */
+  ruled?: boolean;
 }) {
   const { t } = useTranslation();
   // Only the battle this view owns. A ready chat still carries the last resolved turn; while
@@ -793,7 +847,6 @@ export function ArenaBattleView({
       ),
     [promptAttachments, promptImages.length],
   );
-  const reviewPhase = battleReviewPhase(turn, runA, runB);
   const [paneView, setPaneView] = useArenaPaneView(turn?.index);
   const bothFinal = runsAreFinal(runA, runB);
   // Observes the review stores and the window; emits nothing into React state,
@@ -842,14 +895,22 @@ export function ArenaBattleView({
   const resolving = arenaResolutionStatus(turn) !== null;
   return (
     <>
-      <BattleReadingColumn testID="arena-battle-prompt-column">
-        <UserMessage
-          message={turn.prompt}
-          images={promptImages}
-          attachmentPills={promptAttachmentPills}
-          timestamp={new Date(turn.createdAt).getTime()}
-        />
-      </BattleReadingColumn>
+      <View style={styles.prompt} testID="arena-battle-prompt-column">
+        <View style={ruled ? styles.promptRule : undefined}>
+          {/* The chat's own bubble at the battle's right edge, kept to the reading width, where
+              the prompt stays once the battle is history (`ArenaRow` `prompt`). */}
+          <View style={styles.promptBubble}>
+            <MessageOuterSpacingProvider disableOuterSpacing>
+              <UserMessage
+                message={turn.prompt}
+                images={promptImages}
+                attachmentPills={promptAttachmentPills}
+                timestamp={new Date(turn.createdAt).getTime()}
+              />
+            </MessageOuterSpacingProvider>
+          </View>
+        </View>
+      </View>
       {settingUp ? (
         <BattleReadingColumn>
           <ArenaTransitionTimeline phase="setup" turn={turn} />
@@ -898,23 +959,14 @@ export function ArenaBattleView({
               <ArenaTransitionRow transition={turn.transition} />
             </View>
           ) : null}
-          {reviewPhase.kind !== "none" ? (
-            <View style={styles.reviewSection}>
-              <BattleJudging
-                serverId={serverId}
-                agentId={agentId}
-                turnId={turn.id}
-                comparison={snapshot.comparison}
-                comparisonState={turn.comparisonState}
-                decided={turn.resolution !== undefined}
-                runA={runA}
-                runB={runB}
-                phase={reviewPhase}
-                retrying={pendingAction?.kind === "retry_comparison"}
-                onRetry={actions.retryComparison}
-              />
-            </View>
-          ) : null}
+          <View style={styles.reviewSection}>
+            <ArenaLiveReview
+              serverId={serverId}
+              agentId={agentId}
+              snapshot={snapshot}
+              actions={actions}
+            />
+          </View>
           <View accessible accessibilityLiveRegion="polite">
             {turn.resolution ? (
               <View style={styles.reviewSection}>
@@ -933,45 +985,74 @@ export function ArenaBattleView({
   );
 }
 
+// The height of a pane name's line, which the pane's actions centre on.
+const PANE_NAME_LINE = 32;
+
 const styles = StyleSheet.create((theme) => ({
   // The gap the stream's own row puts between a prompt and what answers it.
   preparingBattle: {
     gap: theme.spacing[3],
   },
-  // One card for the whole battle. Everything inside shares its width; only the prompt above
-  // and the composer below keep the chat's reading column. Sections inside separate with a
-  // single top border, the way rows in a card do.
+  // The whole battle, on one pair of rails: no frame, the answers side by side, the review
+  // rising from below them.
   root: {
     width: "100%",
     maxWidth: ARENA_MAX_CONTENT_WIDTH,
     alignSelf: "center",
-    overflow: "hidden",
+  },
+  rootBleed: {},
+  prompt: {
+    width: "100%",
+    maxWidth: ARENA_MAX_CONTENT_WIDTH,
+    alignSelf: "center",
+    paddingHorizontal: BATTLE_RAIL,
+    paddingTop: theme.spacing[2],
+    paddingBottom: theme.spacing[6],
+  },
+  promptBubble: {
+    alignSelf: "flex-end",
+    width: "100%",
+    maxWidth: theme.contentMaxWidth,
+  },
+  // The rule the chat draws above each turn's prompt (`ArenaRow`).
+  promptRule: {
+    paddingTop: theme.spacing[8],
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.border,
+  },
+  panesNarrow: { flexDirection: "column", rowGap: theme.spacing[6] },
+  // On the panes' rails, opaque so the answers and the review scroll under it.
+  paneHeaders: {
+    flexDirection: "row",
+    width: "100%",
+    paddingHorizontal: BATTLE_RAIL - theme.spacing[3],
+    columnGap: BATTLE_GUTTER - 2 * theme.spacing[3],
+    paddingBottom: theme.spacing[2],
     backgroundColor: theme.colors.surface0,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    borderRadius: theme.borderRadius.lg,
   },
-  rootBleed: {
-    borderLeftWidth: 0,
-    borderRightWidth: 0,
-    borderRadius: 0,
+  paneHeaderCell: {
+    flexGrow: 1,
+    flexShrink: 1,
+    flexBasis: "50%",
+    minWidth: 0,
   },
-  panesNarrow: { flexDirection: "column" },
+  // Each pane keeps the thread's own 12px inset, so the rails sit that much inside the panes.
   panes: {
     flexDirection: "row",
     alignItems: "stretch",
     width: "100%",
     overflow: "hidden",
+    paddingHorizontal: BATTLE_RAIL - theme.spacing[3],
+    columnGap: BATTLE_GUTTER - 2 * theme.spacing[3],
+    paddingBottom: theme.spacing[4],
   },
   rootSection: {
-    borderTopWidth: 1,
-    borderTopColor: theme.colors.border,
-    padding: theme.spacing[3],
+    paddingHorizontal: BATTLE_RAIL,
+    paddingVertical: theme.spacing[3],
   },
-  // The review owns its own inset: its tab strip runs the card's width.
+  // The review draws its own edge, on the answers' text edge.
   reviewSection: {
-    borderTopWidth: 1,
-    borderTopColor: theme.colors.border,
+    paddingHorizontal: BATTLE_RAIL,
   },
   battleReadingColumn: {
     width: "100%",
@@ -987,7 +1068,7 @@ const styles = StyleSheet.create((theme) => ({
     minHeight: 220,
   },
   paneStacked: { flexBasis: "auto" },
-  paneStackedDivider: { borderTopWidth: 1, borderTopColor: theme.colors.border },
+  paneStackedDivider: {},
   latestOverlay: {
     position: "absolute",
     bottom: theme.spacing[2],
@@ -1006,44 +1087,70 @@ const styles = StyleSheet.create((theme) => ({
     minHeight: 180,
     overflow: "hidden",
   },
-  paneDivider: {
-    borderLeftWidth: 1,
-    borderLeftColor: theme.colors.border,
-  },
+  paneDivider: {},
   paneHidden: {
     display: "none",
   },
   paneHeader: {
+    paddingHorizontal: theme.spacing[3],
+  },
+  // A rule in the side's colour heads each answer, the colour of its Choose button below.
+  paneRule: {
+    height: 2,
+  },
+  paneRuleA: {
+    backgroundColor: theme.colors.statusDotRunning,
+  },
+  paneRuleB: {
+    backgroundColor: theme.colors.statusDotWarning,
+  },
+  // On a narrow pane the status wraps under the name, so the row aligns to its top and the
+  // actions centre on the name's line rather than on the whole heading.
+  paneHeaderRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: PANE_HEADER_GAP,
+    marginTop: theme.spacing[4],
+  },
+  paneActionsSlot: {
+    height: PANE_NAME_LINE,
+    justifyContent: "center",
+  },
+  // The status under the name when the heading's line is full, with Preview at its right end
+  // when even that line had no room for it.
+  paneStatusLine: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    gap: theme.spacing[2],
-    paddingHorizontal: theme.spacing[3],
-    paddingVertical: theme.spacing[3],
-    borderBottomWidth: 1,
-    borderBottomColor: theme.colors.border,
+    flexWrap: "wrap",
+    gap: PANE_HEADER_GAP,
+  },
+  // Stays at the right end even when the line is too short for both and it wraps.
+  paneStatusLinePreview: {
+    marginLeft: "auto",
   },
   paneHeading: {
     flex: 1,
     minWidth: 0,
-    gap: theme.spacing[1],
-  },
-  paneHeaderActions: {
     flexDirection: "row",
-    alignItems: "center",
-    gap: theme.spacing[1],
-    flexShrink: 0,
+    alignItems: "baseline",
+    flexWrap: "wrap",
+    columnGap: PANE_HEADING_GAP,
   },
-  agentNameRow: {
+  paneStatus: {
     flexDirection: "row",
-    alignItems: "center",
-    gap: theme.spacing[2],
+    alignItems: "baseline",
+    columnGap: PANE_HEADING_GAP,
   },
-  // The contestants are the headline of the card, so their names are the largest type on it.
+  // The contestants are the headline of the battle, so their names are the largest type in it.
+  // Never shrinks or truncates: the heading measures its full width to decide what moves.
   agentName: {
+    flexShrink: 0,
+    lineHeight: PANE_NAME_LINE,
     color: theme.colors.foreground,
-    fontSize: theme.fontSize.xl,
+    fontSize: theme.fontSize["2xl"],
     fontWeight: theme.fontWeight.semibold,
+    letterSpacing: -0.4,
   },
   status: {
     color: theme.colors.foregroundMuted,

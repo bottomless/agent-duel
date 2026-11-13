@@ -1,3 +1,4 @@
+import { ArenaRow, ArenaRowLayoutProvider, useArenaRowLayout } from "./arena-row-layout";
 import { renderStreamRow } from "./row";
 import { ChatFind, ChatFindExpansion } from "@/agent-stream/chat-find";
 import type { ChatFindHistory } from "@/agent-stream/chat-find/types";
@@ -135,12 +136,15 @@ function renderLiveAuxiliaryNode(input: {
   liveContent: ReactNode;
   pendingPermissions: ReactNode;
   turnFooter: ReactNode;
+  /** The fork's boundary when it closes the turn this footer ends: it goes below the footer. */
+  forkBoundary: ReactNode;
   bottomOverlayInset: number;
 }): ReactNode {
   if (
     !input.liveContent &&
     !input.pendingPermissions &&
     !input.turnFooter &&
+    !input.forkBoundary &&
     input.bottomOverlayInset === 0
   ) {
     return null;
@@ -148,6 +152,7 @@ function renderLiveAuxiliaryNode(input: {
   return (
     <>
       {input.turnFooter}
+      {input.forkBoundary}
       {input.liveContent ? (
         <ArenaContentColumn fullBleed>
           <View style={stylesheet.listHeaderContent}>{input.liveContent}</View>
@@ -162,6 +167,43 @@ function renderLiveAuxiliaryNode(input: {
         <BottomOverlayInset height={input.bottomOverlayInset} />
       ) : null}
     </>
+  );
+}
+
+/**
+ * Where a forked chat's copied history ends and its own begins. A battle chat draws it as the rule
+ * that starts its next turn, the label on the line, so the turn after it draws none of its own.
+ */
+function ForkedChatBoundary() {
+  const { t } = useTranslation();
+  const arenaLayout = useArenaRowLayout();
+  if (arenaLayout) {
+    return (
+      <ArenaRow fullWidth style={stylesheet.forkedArenaBoundaryRow}>
+        <View
+          accessibilityLabel={t("message.actions.forkedFromChat")}
+          style={stylesheet.forkedArenaBoundary}
+          testID="forked-chat-boundary"
+        >
+          <View style={stylesheet.forkedChatBoundaryLine} />
+          <Text style={stylesheet.forkedArenaBoundaryText}>
+            {t("message.actions.forkedFromChat")}
+          </Text>
+          <View style={stylesheet.forkedChatBoundaryLine} />
+        </View>
+      </ArenaRow>
+    );
+  }
+  return (
+    <View
+      accessibilityLabel={t("message.actions.forkedFromChat")}
+      style={stylesheet.forkedChatBoundary}
+      testID="forked-chat-boundary"
+    >
+      <View style={stylesheet.forkedChatBoundaryLine} />
+      <Text style={stylesheet.forkedChatBoundaryText}>{t("message.actions.forkedFromChat")}</Text>
+      <View style={stylesheet.forkedChatBoundaryLine} />
+    </View>
   );
 }
 
@@ -200,6 +242,7 @@ function renderStreamItemWithTurnFooter(input: {
   const footerHost = input.layoutItem.completedFooter;
   const footer = footerHost ? (
     <CompletedTurnFooterRow
+      hostItemId={footerHost.itemId}
       strategy={input.strategy}
       items={footerHost.items}
       timing={footerHost.timing}
@@ -279,6 +322,14 @@ export interface AgentStreamViewProps {
   onOpenWorkspaceFile?: (request: WorkspaceFileOpenRequest) => void;
   /** Content inserted immediately after a canonical stream item (for durable in-stream markers). */
   afterItems?: ReadonlyMap<string, ReactNode>;
+  /** Rows that start a new turn in an Agent Duel chat, with a rule above them. */
+  ruledItemIds?: ReadonlySet<string>;
+  /** Each answer's head in an Agent Duel chat, keyed by the answer's first row. */
+  turnHeads?: ReadonlyMap<string, ReactNode>;
+  /** What ends a footer in an Agent Duel chat, a battle's result, keyed by the row it closes. */
+  turnFooterEnds?: ReadonlyMap<string, ReactNode>;
+  /** Every prompt row in an Agent Duel chat, steers included; the other rows are answers. */
+  userRowIds?: ReadonlySet<string>;
   /** Canonical stream item after which inherited fork history ends. */
   forkBoundaryAfterItemId?: string;
   /** Transient content rendered at the live end of the transcript. */
@@ -360,16 +411,23 @@ function useArenaChatOrder(
   arenaChat: boolean,
   tail: StreamItem[],
   head: StreamItem[] | undefined,
+  lastTurnOpen: boolean,
 ): { tail: StreamItem[]; head: StreamItem[] | undefined } {
-  const ordered = useMemo(() => (arenaChat ? orderArenaChat(tail) : tail), [arenaChat, tail]);
+  const ordered = useMemo(
+    () => (arenaChat ? orderArenaChat(tail, { lastTurnOpen }) : tail),
+    [arenaChat, lastTurnOpen, tail],
+  );
   const pendingWorkStart = useMemo(
     () => (arenaChat ? arenaChatPendingWorkStart(ordered) : ordered.length),
     [arenaChat, ordered],
   );
   const settled = useMemo(() => ordered.slice(0, pendingWorkStart), [ordered, pendingWorkStart]);
   const orderedHead = useMemo(
-    () => orderArenaChatHead(ordered.slice(pendingWorkStart), head ?? EMPTY_STREAM_HEAD),
-    [head, ordered, pendingWorkStart],
+    () =>
+      orderArenaChatHead(ordered.slice(pendingWorkStart), head ?? EMPTY_STREAM_HEAD, {
+        lastTurnOpen,
+      }),
+    [head, lastTurnOpen, ordered, pendingWorkStart],
   );
   return orderedHead ? { tail: settled, head: orderedHead } : { tail: ordered, head };
 }
@@ -381,6 +439,7 @@ function useRetainedValue<T>(value: T, active: boolean): T {
   }
   return active ? value : retainedRef.current;
 }
+const FORK_BOUNDARY_LABEL_HEIGHT = 20;
 const EMPTY_PENDING_MESSAGE_SUBMISSIONS: readonly PendingMessageSubmission[] = [];
 const GROUPED_TOOL_CALL_DETAIL_MAX_HEIGHT = 200;
 
@@ -441,6 +500,10 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       toast,
       onOpenWorkspaceFile,
       afterItems,
+      ruledItemIds,
+      turnHeads,
+      turnFooterEnds,
+      userRowIds,
       forkBoundaryAfterItemId,
       liveContent,
       bottomOverlayHeight,
@@ -619,13 +682,14 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
     // the component reads the current (fresh) streamItems/streamHead from props.
     const retainedStreamItems = useRetainedValue(streamItems, isActive);
     const retainedStreamHead = useRetainedValue(streamHead, isActive);
+    const effectiveTurnPresentation = useRetainedValue(turnPresentation, isActive);
+    const isTurnActive = effectiveTurnPresentation.isActive;
     const { tail: effectiveStreamItems, head: effectiveStreamHead } = useArenaChatOrder(
       arenaChat === true,
       retainedStreamItems,
       retainedStreamHead,
+      isTurnActive,
     );
-    const effectiveTurnPresentation = useRetainedValue(turnPresentation, isActive);
-    const isTurnActive = effectiveTurnPresentation.isActive;
     const presentStream = useMemo(() => createStreamPresentation(), []);
     const presentation = useMemo(
       () =>
@@ -942,6 +1006,8 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
               isLastInSequence={isLastInSequence}
               onOpenFilePath={handleToolCallOpenFile}
               maxDetailHeight={maxDetailHeight}
+              flushRow={arenaChat}
+              labelSizedIcon={arenaChat}
             />
           );
         }
@@ -958,6 +1024,8 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
             isLastInSequence={isLastInSequence}
             onOpenFilePath={handleToolCallOpenFile}
             maxDetailHeight={maxDetailHeight}
+            flushRow={arenaChat}
+            labelSizedIcon={arenaChat}
           />
         );
       },
@@ -986,7 +1054,9 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
         groups?: ToolCallGroupLookup<OverviewToolCallGroup>,
       ) => {
         const group = groups ? groups.get(item.id) : getToolCallGroup(item.id);
-        if (!group) {
+        // In a battle chat one call is drawn as itself, as the battle's panes draw it; a group of
+        // one would name the call and hold the same call again inside.
+        if (!group || (arenaChat && group.run.calls.length === 1)) {
           return renderSingleToolCallItem(item, layoutItem.isLastInToolSequence);
         }
         const expanded = expandedToolCallGroupIds.has(group.run.id);
@@ -1120,6 +1190,25 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
     subagentTranscriptRef.current = renderSubagentTranscript;
 
     const bottomTurnFooterHost = streamLayout.auxiliaryTurnFooter;
+    // The last turn's footer is drawn after every row, so a fork boundary in that turn goes after
+    // the footer rather than between the turn's last row and its footer.
+    // A battle chat's fork boundary is the rule of the turn after it (`ForkedChatBoundary`).
+    const arenaRuledIds = useMemo(() => {
+      if (!forkBoundaryAfterItemId || !ruledItemIds) return ruledItemIds;
+      const rows = [...presentation.tail, ...presentation.head];
+      const index = rows.findIndex((row) => row.id === forkBoundaryAfterItemId);
+      const next = rows.slice(index + 1).find((row) => row.kind === "user_message");
+      if (index < 0 || !next || !ruledItemIds.has(next.id)) return ruledItemIds;
+      const ruled = new Set(ruledItemIds);
+      ruled.delete(next.id);
+      return ruled;
+    }, [forkBoundaryAfterItemId, presentation.head, presentation.tail, ruledItemIds]);
+    const forkBoundaryAfterFooter = useMemo(() => {
+      if (!forkBoundaryAfterItemId || !bottomTurnFooterHost) return false;
+      const rows = [...presentation.tail, ...presentation.head];
+      const index = rows.findIndex((row) => row.id === forkBoundaryAfterItemId);
+      return index >= 0 && !rows.slice(index + 1).some((row) => row.kind === "user_message");
+    }, [bottomTurnFooterHost, forkBoundaryAfterItemId, presentation.head, presentation.tail]);
 
     // A summary anchored to an item that a work row holds draws after that row.
     const rowAfterItems = useMemo(
@@ -1143,37 +1232,26 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
           onForkAssistantTurn: readOnly ? undefined : handleForkAssistantTurn,
         });
         const after = rowAfterItems?.get(layoutItem.item.id);
-        const showForkBoundary = forkBoundaryAfterItemId === layoutItem.item.id;
+        const showForkBoundary =
+          !forkBoundaryAfterFooter && forkBoundaryAfterItemId === layoutItem.item.id;
         if (!after && !showForkBoundary) return streamItem;
         return (
           <>
             {streamItem}
             {after ? <ArenaContentColumn fullBleed>{after}</ArenaContentColumn> : null}
-            {showForkBoundary ? (
-              <View
-                accessibilityLabel={t("message.actions.forkedFromChat")}
-                style={stylesheet.forkedChatBoundary}
-                testID="forked-chat-boundary"
-              >
-                <View style={stylesheet.forkedChatBoundaryLine} />
-                <Text style={stylesheet.forkedChatBoundaryText}>
-                  {t("message.actions.forkedFromChat")}
-                </Text>
-                <View style={stylesheet.forkedChatBoundaryLine} />
-              </View>
-            ) : null}
+            {showForkBoundary ? <ForkedChatBoundary /> : null}
           </>
         );
       },
       [
         rowAfterItems,
+        forkBoundaryAfterFooter,
         forkBoundaryAfterItemId,
         handleForkAssistantTurn,
         readOnly,
         renderStreamItemContent,
         streamRenderStrategy,
         supportsAgentForkContextCursor,
-        t,
       ],
     );
 
@@ -1328,11 +1406,13 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
         liveContent,
         pendingPermissions: auxiliary.pendingPermissions,
         turnFooter: auxiliary.turnFooter,
+        forkBoundary: forkBoundaryAfterFooter ? <ForkedChatBoundary /> : null,
         bottomOverlayInset,
       });
     }, [
       auxiliary.pendingPermissions,
       auxiliary.turnFooter,
+      forkBoundaryAfterFooter,
       bottomOverlayTailClearance,
       liveContent,
     ]);
@@ -1390,29 +1470,37 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
         <ToolCallSheetProvider>
           <AssistantSelectionCopySurface style={stylesheet.container}>
             <MessageOuterSpacingProvider disableOuterSpacing>
-              {streamRenderStrategy.render({
-                agentId,
-                segments: renderModel.segments,
-                historyRowRevision,
-                liveHeadRowRevision,
-                boundary,
-                renderers,
-                listEmptyComponent,
-                viewportRef,
-                routeBottomAnchorRequest,
-                isAuthoritativeHistoryReady,
-                onNearBottomChange: setIsNearBottom,
-                onReadingPositionChange: handleReadingPositionChange,
-                onNearHistoryStart: loadOlder,
-                isLoadingOlderHistory: isLoadingOlder,
-                hasOlderHistory: hasOlder,
-                olderHistoryProgressKey: progressKey,
-                scrollEnabled: streamScrollEnabled,
-                listStyle: stylesheet.list,
-                baseListContentContainerStyle: stylesheet.listContentContainer,
-                forwardListContentContainerStyle: stylesheet.forwardListContentContainer,
-                contentMaxWidth,
-              })}
+              <ArenaRowLayoutProvider
+                enabled={arenaChat === true}
+                ruledIds={arenaRuledIds}
+                heads={turnHeads}
+                footerEnds={turnFooterEnds}
+                userRowIds={userRowIds}
+              >
+                {streamRenderStrategy.render({
+                  agentId,
+                  segments: renderModel.segments,
+                  historyRowRevision,
+                  liveHeadRowRevision,
+                  boundary,
+                  renderers,
+                  listEmptyComponent,
+                  viewportRef,
+                  routeBottomAnchorRequest,
+                  isAuthoritativeHistoryReady,
+                  onNearBottomChange: setIsNearBottom,
+                  onReadingPositionChange: handleReadingPositionChange,
+                  onNearHistoryStart: loadOlder,
+                  isLoadingOlderHistory: isLoadingOlder,
+                  hasOlderHistory: hasOlder,
+                  olderHistoryProgressKey: progressKey,
+                  scrollEnabled: streamScrollEnabled,
+                  listStyle: stylesheet.list,
+                  baseListContentContainerStyle: stylesheet.listContentContainer,
+                  forwardListContentContainerStyle: stylesheet.forwardListContentContainer,
+                  contentMaxWidth,
+                })}
+              </ArenaRowLayoutProvider>
             </MessageOuterSpacingProvider>
             <ChatOutlineRail
               prompts={chatOutline.prompts}
@@ -1537,6 +1625,10 @@ function collectArenaStreamViewPropDiffs(
 ): string[] {
   const reasons: string[] = [];
   if (left.afterItems !== right.afterItems) reasons.push("afterItems");
+  if (left.ruledItemIds !== right.ruledItemIds) reasons.push("ruledItemIds");
+  if (left.turnHeads !== right.turnHeads) reasons.push("turnHeads");
+  if (left.turnFooterEnds !== right.turnFooterEnds) reasons.push("turnFooterEnds");
+  if (left.userRowIds !== right.userRowIds) reasons.push("userRowIds");
   if (left.forkBoundaryAfterItemId !== right.forkBoundaryAfterItemId) {
     reasons.push("forkBoundaryAfterItemId");
   }
@@ -2007,6 +2099,24 @@ const stylesheet = StyleSheet.create((theme) => ({
     height: 1,
     backgroundColor: theme.colors.border,
   },
+  // A battle chat's boundary is its next turn's rule (`ArenaRow` `ruled`): the line sits where that
+  // rule would, the label centred on it, and the prompt starts the rule's gap below the line.
+  forkedArenaBoundaryRow: {
+    marginTop: theme.spacing[1] - FORK_BOUNDARY_LABEL_HEIGHT / 2,
+    paddingBottom: theme.spacing[8] - FORK_BOUNDARY_LABEL_HEIGHT / 2,
+  },
+  forkedArenaBoundary: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[3],
+    height: FORK_BOUNDARY_LABEL_HEIGHT,
+  },
+  forkedArenaBoundaryText: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.sm,
+    fontWeight: theme.fontWeight.medium,
+    lineHeight: FORK_BOUNDARY_LABEL_HEIGHT,
+  },
   forkedChatBoundaryText: {
     color: theme.colors.foregroundMuted,
     fontSize: theme.fontSize.sm,
@@ -2147,10 +2257,22 @@ interface StreamItemWrapperProps {
   children: ReactNode;
 }
 
-function StreamItemWrapper({ gapBelow, children }: StreamItemWrapperProps) {
-  const wrapperStyle = useMemo(
-    () => [stylesheet.streamItemWrapper, { marginBottom: gapBelow }],
-    [gapBelow],
-  );
+function StreamItemWrapper({ itemId, gapBelow, children }: StreamItemWrapperProps) {
+  const arenaLayout = useArenaRowLayout();
+  const gapStyle = useMemo(() => ({ marginBottom: gapBelow }), [gapBelow]);
+  const wrapperStyle = useMemo(() => [stylesheet.streamItemWrapper, gapStyle], [gapStyle]);
+  if (arenaLayout) {
+    return (
+      <ArenaRow
+        prompt={arenaLayout.userRowIds?.has(itemId) === true}
+        ruled={arenaLayout.ruledIds?.has(itemId) === true}
+        answer={arenaLayout.userRowIds?.has(itemId) === false}
+        head={arenaLayout.heads?.get(itemId)}
+        style={gapStyle}
+      >
+        {children}
+      </ArenaRow>
+    );
+  }
   return <View style={wrapperStyle}>{children}</View>;
 }

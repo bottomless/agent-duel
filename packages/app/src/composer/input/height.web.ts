@@ -6,6 +6,11 @@ interface ComposerHeightArgs {
   getText: () => string;
   textareaRef: RefObject<HTMLElement | null>;
   minHeight: number;
+  /**
+   * The empty input's height in lines of its own text. The content font size is a setting, so the
+   * minimum follows the measured line height; `minHeight` holds only until the first measure.
+   */
+  minLines?: number;
   maxHeight: number;
   onRenderedLinesChange?: (lines: number) => void;
   presentationKey?: boolean;
@@ -37,20 +42,24 @@ export function useComposerHeight({
   getText,
   textareaRef,
   minHeight,
+  minLines,
   maxHeight,
   onRenderedLinesChange,
   presentationKey,
 }: ComposerHeightArgs): ComposerHeightResult {
   const [height, setHeight] = useState(minHeight);
   const heightRef = useRef(minHeight);
-  const paramsRef = useRef({ getText, minHeight, maxHeight, onRenderedLinesChange });
-  paramsRef.current = { getText, minHeight, maxHeight, onRenderedLinesChange };
+  // The measured minimum when `minLines` is set, otherwise `minHeight`.
+  const [floor, setFloor] = useState(minHeight);
+  const floorRef = useRef(minHeight);
+  const paramsRef = useRef({ getText, minHeight, minLines, maxHeight, onRenderedLinesChange });
+  paramsRef.current = { getText, minHeight, minLines, maxHeight, onRenderedLinesChange };
   const mirrorRef = useRef<HTMLTextAreaElement | null>(null);
 
   const setBoundedHeight = useCallback((nextHeight: number) => {
-    const { minHeight: currentMin, maxHeight: currentMax } = paramsRef.current;
-    const bounded = Math.max(currentMin, Math.min(currentMax, nextHeight));
-    if (Math.abs(heightRef.current - bounded) < 1) return;
+    const currentMax = paramsRef.current.maxHeight;
+    const bounded = Math.max(floorRef.current, Math.min(currentMax, nextHeight));
+    if (Math.abs(heightRef.current - bounded) < 0.5) return;
     heightRef.current = bounded;
     setHeight(bounded);
   }, []);
@@ -72,6 +81,12 @@ export function useComposerHeight({
       const padding =
         parseFloat(computedStyle.paddingTop) + parseFloat(computedStyle.paddingBottom);
       const lineHeight = parseFloat(computedStyle.lineHeight);
+      const { minHeight: fixedMin, minLines: lines } = paramsRef.current;
+      const nextFloor = lines && lineHeight > 0 ? lines * lineHeight + padding : fixedMin;
+      if (Math.abs(floorRef.current - nextFloor) >= 0.5) {
+        floorRef.current = nextFloor;
+        setFloor(nextFloor);
+      }
       if (lineHeight > 0)
         paramsRef.current.onRenderedLinesChange?.(
           Math.round((mirror.scrollHeight - padding) / lineHeight),
@@ -112,7 +127,7 @@ export function useComposerHeight({
 
   useLayoutEffect(() => {
     measure(getText());
-  }, [maxHeight, minHeight, getText, measure, presentationKey]);
+  }, [maxHeight, minHeight, minLines, getText, measure, presentationKey]);
 
   useEffect(() => {
     const source = textareaRef.current;
@@ -132,8 +147,11 @@ export function useComposerHeight({
     (_previousText: string, nextText: string) => measure(nextText),
     [measure],
   );
-  const reset = useCallback(() => setBoundedHeight(minHeight), [minHeight, setBoundedHeight]);
-  const style = useMemo(() => ({ height, minHeight, maxHeight }), [height, maxHeight, minHeight]);
+  const reset = useCallback(() => setBoundedHeight(floorRef.current), [setBoundedHeight]);
+  const style = useMemo(
+    () => ({ height, minHeight: floor, maxHeight }),
+    [floor, height, maxHeight],
+  );
 
   return {
     mode: "measured",

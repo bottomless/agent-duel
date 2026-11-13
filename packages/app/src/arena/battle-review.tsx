@@ -1,10 +1,9 @@
 import { i18n } from "@/i18n/i18next";
 import { useTranslation } from "react-i18next";
-import { useCallback, useEffect, useMemo } from "react";
-import { Text, View } from "react-native";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Text, View, type LayoutChangeEvent } from "react-native";
 import { useContainerWidth } from "@/hooks/use-container-width";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
-import { ChevronDown, ChevronUp } from "lucide-react-native";
 import type {
   ArenaComparisonDiff,
   ArenaSide,
@@ -12,25 +11,24 @@ import type {
 } from "@getpaseo/protocol/arena/rpc-schemas";
 import { Button } from "@/components/ui/button";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
-import { ICON_SIZE, type Theme } from "@/styles/theme";
+import type { Theme } from "@/styles/theme";
 import { toErrorMessage } from "@/utils/error-messages";
 import { IdenticalBattleResult, SummaryOmissionNotice } from "./battle-summary";
-import { ArenaChangesList } from "./changes-list";
+import { ArenaChangesList, ArenaNoChangesColumns } from "./changes-list";
 import type { ArenaChangesRow } from "./changes-rows";
 import { useArenaDiffLayout, type ArenaDiffLayout } from "./diff-layout";
 import { DiffLayoutControl } from "./diff-layout-control";
 import { comparisonRevision } from "./comparison-visibility";
 import { useArenaFileDiff } from "./file-diff-query";
 import { InlineFileDiff, openChangesFiles, toggleChangesFile } from "./inline-file-diff";
-import { PaneIconAction } from "./pane-icon-action";
 import { useArenaReviewState, useArenaReviewStore, type ArenaReviewTab } from "./review-state";
-import { VerdictBody } from "./verdict-body";
+import { VerdictBody, VerdictFold } from "./verdict-body";
+import { ArenaSegmentedSwitch } from "./segmented-switch";
+import { parseSummaryColumns } from "./summary-columns";
+import { SummaryColumnsView } from "./summary-columns-view";
 
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
-const ThemedChevronDown = withUnistyles(ChevronDown);
-const ThemedChevronUp = withUnistyles(ChevronUp);
 const mutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
-const foregroundColorMapping = (theme: Theme) => ({ color: theme.colors.foreground });
 
 function Verdict({
   turnId,
@@ -50,6 +48,7 @@ function Verdict({
   onRetry: () => void;
 }) {
   const { t } = useTranslation();
+  const columns = useMemo(() => (output ? parseSummaryColumns(output) : null), [output]);
   return (
     <View style={styles.section}>
       {pending ? (
@@ -61,7 +60,13 @@ function Verdict({
       {output ? (
         <>
           <SummaryOmissionNotice comparison={comparison} />
-          <VerdictBody turnId={turnId} output={output} />
+          {columns ? (
+            <VerdictFold turnId={turnId}>
+              <SummaryColumnsView columns={columns} />
+            </VerdictFold>
+          ) : (
+            <VerdictBody turnId={turnId} output={output} />
+          )}
         </>
       ) : null}
       {failed ? (
@@ -77,7 +82,6 @@ function Verdict({
 }
 
 const sideName = (side: ArenaSide) => i18n.t("arena.agentSide", { side: side.toUpperCase() });
-const otherSide = (side: ArenaSide): ArenaSide => (side === "a" ? "b" : "a");
 
 /** The summary tab while one side still works: nothing to compare yet, and it says so. */
 function WaitingSummary({ waitingFor }: { waitingFor: ArenaSide }) {
@@ -123,7 +127,7 @@ function ChangesTab({
   const { t } = useTranslation();
   const revision = diff ? comparisonRevision(diff) : undefined;
   const renderDiff = useCallback(
-    (file: string) => (
+    (file: string, onColumns: boolean) => (
       <InlineFileDiff
         serverId={serverId}
         agentId={agentId}
@@ -133,6 +137,7 @@ function ChangesTab({
         waitingFor={waitingFor ?? undefined}
         revision={revision}
         embedded
+        onColumns={onColumns}
       />
     ),
     [agentId, layout, revision, serverId, turnId, waitingFor],
@@ -154,15 +159,7 @@ function ChangesTab({
         </Button>
       </View>
     );
-  if (waitingFor && diff && rows.length === 0) {
-    return (
-      <Text style={styles.status} testID="arena-changes-none">
-        {sideName(otherSide(waitingFor))} {t("arena.noChangesWhile")} {sideName(waitingFor)}{" "}
-        {t("arena.workingStill")}{" "}
-      </Text>
-    );
-  }
-  if (diff?.treesEqual && rows.length === 0) return <IdenticalBattleResult />;
+  if (diff?.treesEqual && rows.length === 0) return <ArenaNoChangesColumns />;
   if (rows.length === 0 || !diff) {
     return <Text style={styles.status}>{t("arena.baseUnavailable")}</Text>;
   }
@@ -180,132 +177,129 @@ function ChangesTab({
   );
 }
 
-function ReviewTab({
-  value,
-  label,
-  selected,
-  onSelect,
-  testID,
-}: {
-  value: ArenaReviewTab;
-  label: string;
-  selected: boolean;
-  onSelect: (tab: ArenaReviewTab) => void;
-  testID: string;
-}) {
-  const handlePress = useCallback(() => onSelect(value), [onSelect, value]);
-  const accessibilityState = useMemo(() => ({ selected }), [selected]);
-  return (
-    <View style={styles.tab}>
-      <Button
-        variant="ghost"
-        size="sm"
-        accessibilityRole="tab"
-        accessibilityState={accessibilityState}
-        aria-selected={selected}
-        textStyle={selected ? styles.tabTextSelected : undefined}
-        onPress={handlePress}
-        testID={testID}
-      >
-        {label}
-      </Button>
-      <View
-        style={[styles.tabIndicator, selected && styles.tabIndicatorSelected]}
-        pointerEvents="none"
-      />
-    </View>
-  );
-}
-
 /**
- * Two text tabs: the selected one in foreground at medium weight, the other muted, the same
- * reading as a selected sidebar item. A filled segmented control here outweighed the agent
- * headings above it, and the review is the complement, not the headline.
+ * The review's segmented switch: Difference summary and Files changed, the file count as a badge.
+ * The two tabs share one width, so the seam between them sits on the centre line over Tie rather
+ * than leaning toward the longer label. Without a summary the switch holds Files changed alone, so
+ * the review keeps the same head.
  */
 function ReviewTabs({
+  tabs,
   tab,
-  changesLabel,
+  changesCount,
   onChange,
 }: {
+  /** Whether the summary has a tab; without one, Files changed heads the review alone. */
+  tabs: boolean;
   tab: ArenaReviewTab;
-  changesLabel: string;
+  /** Files listed under Files changed; none shows no badge. */
+  changesCount: number;
   onChange: (tab: ArenaReviewTab) => void;
 }) {
   const { t } = useTranslation();
+  const summaryOption = {
+    value: "verdict" as const,
+    label: t("arena.summary"),
+    testID: "arena-review-tab-verdict",
+  };
+  const changesOption = {
+    value: "changes" as const,
+    label: t("arena.changes"),
+    ...(changesCount > 0 ? { count: changesCount } : {}),
+    testID: "arena-review-tab-changes",
+  };
   return (
-    <View style={styles.tabs} accessibilityRole="tablist" testID="arena-review-tabs">
-      <ReviewTab
-        value="verdict"
-        label={t("arena.summary")}
-        selected={tab === "verdict"}
-        onSelect={onChange}
-        testID="arena-review-tab-verdict"
-      />
-      <ReviewTab
-        value="changes"
-        label={changesLabel}
-        selected={tab === "changes"}
-        onSelect={onChange}
-        testID="arena-review-tab-changes"
-      />
-    </View>
+    <ArenaSegmentedSwitch
+      options={tabs ? [summaryOption, changesOption] : [changesOption]}
+      value={tabs ? tab : "changes"}
+      onChange={onChange}
+      role="tablist"
+      equalWidths={tabs}
+      testID="arena-review-tabs"
+    />
   );
 }
 
-/**
- * The section's heading row: its tabs, the diff layout control, and the fold. Folding hands the
- * screen back to both agents' messages without losing the tab.
- */
+/** The section's heading row: its switch (or label), then the diff layout control. */
 function ReviewHeader({
   tabs,
   tab,
-  changesLabel,
+  changesCount,
   onTabChange,
   layoutControl,
   agentId,
   width,
-  collapsed,
-  onToggleCollapsed,
 }: {
   /** Whether there is a summary tab to show beside Changes; a stopped battle has only Changes. */
   tabs: boolean;
   tab: ArenaReviewTab;
-  changesLabel: string;
+  changesCount: number;
   onTabChange: (tab: ArenaReviewTab) => void;
   /** Whether the diff layout control belongs in the row; it has nothing to lay out otherwise. */
   layoutControl: boolean;
   agentId: string;
   width: number | null;
-  collapsed: boolean;
-  onToggleCollapsed: () => void;
 }) {
-  const { t } = useTranslation();
-
-  const sectionName = tabs ? t("arena.reviewSections") : t("arena.reviewChanges");
-  return (
-    <View style={styles.header} testID="arena-review-header">
-      {tabs ? (
-        <ReviewTabs tab={tab} changesLabel={changesLabel} onChange={onTabChange} />
-      ) : (
-        <Text style={styles.title}>{changesLabel}</Text>
-      )}
-      <View style={styles.spacer} />
-      {layoutControl ? <DiffLayoutControl agentId={agentId} width={width} /> : null}
-      <PaneIconAction
-        accessibilityLabel={t(collapsed ? "arena.showReview" : "arena.hideReview", {
-          section: sectionName,
-        })}
-        onPress={onToggleCollapsed}
-        testID="arena-review-collapse"
-      >
-        {collapsed ? (
-          <ThemedChevronDown size={ICON_SIZE.sm} uniProps={foregroundColorMapping} />
-        ) : (
-          <ThemedChevronUp size={ICON_SIZE.sm} uniProps={foregroundColorMapping} />
-        )}
-      </PaneIconAction>
+  const [tabsWidth, setTabsWidth] = useState(0);
+  const [controlWidth, setControlWidth] = useState(0);
+  const onTabsLayout = useCallback((event: LayoutChangeEvent) => {
+    setTabsWidth(Math.ceil(event.nativeEvent.layout.width));
+  }, []);
+  const onControlLayout = useCallback((event: LayoutChangeEvent) => {
+    setControlWidth(Math.ceil(event.nativeEvent.layout.width));
+  }, []);
+  // The switch is about both answers, so it sits on the centre line between them, as Stop does.
+  // That needs room for the layout control's width on both sides; without it the row keeps the
+  // switch on the left rail and lets the control wrap, rather than covering one with the other.
+  const sideNeeded = layoutControl ? controlWidth + REVIEW_HEADER_GAP : 0;
+  const centred = width === null || width >= tabsWidth + 2 * sideNeeded;
+  const tabsNode = (
+    <View onLayout={onTabsLayout}>
+      <ReviewTabs tabs={tabs} tab={tab} changesCount={changesCount} onChange={onTabChange} />
     </View>
   );
+  const control = layoutControl ? (
+    <View onLayout={onControlLayout}>
+      <DiffLayoutControl agentId={agentId} width={width} />
+    </View>
+  ) : null;
+  if (centred) {
+    return (
+      <View style={[styles.header, styles.headerCentred]} testID="arena-review-header">
+        <View style={styles.headerSide} />
+        {tabsNode}
+        <View style={[styles.headerSide, styles.headerSideEnd]}>{control}</View>
+      </View>
+    );
+  }
+  return (
+    <View style={styles.header} testID="arena-review-header">
+      {tabsNode}
+      <View style={styles.spacer} />
+      {control}
+    </View>
+  );
+}
+
+const REVIEW_HEADER_GAP = 16;
+
+/**
+ * Whether the review has nothing to show, so it stays out of the chat. While one side still works
+ * and the other changed nothing, there is no summary yet and no file to open, so both tabs would only
+ * say "nothing yet"; the decision row already says who is still working. Once both are in with no
+ * file changed by either, the engine writes no summary (identical results), so a Changes tab over
+ * "No changes" under each answer would be all there is. A failed read still shows, with its retry.
+ */
+function reviewHasNothingToShow(input: {
+  waitingFor: ArenaSide | null;
+  summaryAvailable: boolean;
+  treesEqual: boolean;
+  rowCount: number;
+  failed: boolean;
+}): boolean {
+  if (input.failed || input.rowCount > 0) return false;
+  if (input.waitingFor !== null) return true;
+  return !input.summaryAvailable && input.treesEqual;
 }
 
 /**
@@ -349,7 +343,7 @@ export function BattleReview({
   onRetryDiff: () => void;
   retryingDiff: boolean;
 }) {
-  const { t } = useTranslation();
+  useTranslation();
   // The reader's choices live in the review store so review telemetry can
   // observe them without this component knowing telemetry exists. Absent means
   // no choice yet and the default below stands.
@@ -359,8 +353,6 @@ export function BattleReview({
   const setShownFile = useArenaReviewStore((state) => state.setShownFile);
   const openStoreFile = useArenaReviewStore((state) => state.openFile);
   const setShownTab = useArenaReviewStore((state) => state.setShownTab);
-  const setStoreCollapsed = useArenaReviewStore((state) => state.setCollapsed);
-  const collapsed = chosen.collapsed === true;
   // The summary tab exists while one side works, so the voter knows the summary is coming.
   const tabs = summaryAvailable || waitingFor !== null;
   // The summary is the first tab whenever there is one; a reader's pick stands.
@@ -380,17 +372,9 @@ export function BattleReview({
     file: openFiles[0] ?? null,
     revision: diff ? comparisonRevision(diff) : undefined,
   });
-  // Picking a tab on a folded section opens it on that tab.
   const setTab = useCallback(
-    (next: ArenaReviewTab) => {
-      setStoreTab(turnId, next);
-      if (collapsed) setStoreCollapsed(turnId, false);
-    },
-    [collapsed, setStoreCollapsed, setStoreTab, turnId],
-  );
-  const toggleCollapsed = useCallback(
-    () => setStoreCollapsed(turnId, !collapsed),
-    [collapsed, setStoreCollapsed, turnId],
+    (next: ArenaReviewTab) => setStoreTab(turnId, next),
+    [setStoreTab, turnId],
   );
   // A file the reader opens is the one they are reading now, even when they opened it before;
   // closing one records nothing.
@@ -415,12 +399,18 @@ export function BattleReview({
   // rather than anything the reader picked. Telemetry counts these, so a reader
   // who never touches a control is still recorded as having read something.
   const shownTab: ArenaReviewTab = tab === "verdict" && tabs ? "verdict" : "changes";
-  // A folded section shows nothing, so telemetry records nothing as read while it is folded.
-  const showChanges = shownTab === "changes" && !collapsed;
+  const showChanges = shownTab === "changes";
   const showLayoutControl = showChanges;
+  const hidden = reviewHasNothingToShow({
+    waitingFor,
+    summaryAvailable,
+    treesEqual: diff?.treesEqual === true,
+    rowCount: rows.length,
+    failed: Boolean(diffError),
+  });
   useEffect(() => {
-    if (!collapsed) setShownTab(turnId, shownTab);
-  }, [collapsed, setShownTab, shownTab, turnId]);
+    if (!hidden) setShownTab(turnId, shownTab);
+  }, [hidden, setShownTab, shownTab, turnId]);
   // The default diff counts as read the first time Changes shows it. Files the reader opens
   // afterwards are recorded by the toggle above.
   const arrivalFile = chosen.shownFile === undefined ? openFiles[openFiles.length - 1] : undefined;
@@ -433,11 +423,6 @@ export function BattleReview({
       );
     }
   }, [arrivalFile, rows, setShownFile, showChanges, turnId]);
-  const changesLabel =
-    rows.length > 0 ? t("arena.changesCount", { total: rows.length }) : t("arena.changes");
-  // Review telemetry listens to scrolls on the whole document; this tells it which diffs are
-  // this battle's.
-  const reviewData = useMemo(() => ({ reviewTurn: turnId }), [turnId]);
   let content;
   if (shownTab === "verdict" && waitingFor !== null) {
     content = <WaitingSummary waitingFor={waitingFor} />;
@@ -472,6 +457,36 @@ export function BattleReview({
     );
   }
 
+  if (hidden) return null;
+  return (
+    <ReviewFrame onLayout={onLayout} turnId={turnId}>
+      <ReviewHeader
+        tabs={tabs}
+        tab={tab}
+        changesCount={rows.length}
+        onTabChange={setTab}
+        layoutControl={showLayoutControl && rows.length > 0}
+        agentId={agentId}
+        width={measured}
+      />
+      <View style={styles.content}>{content}</View>
+    </ReviewFrame>
+  );
+}
+
+/** The review in the chat under the answers, on their text edge. */
+function ReviewFrame({
+  onLayout,
+  turnId,
+  children,
+}: {
+  onLayout: (event: LayoutChangeEvent) => void;
+  turnId: string;
+  children: ReactNode;
+}) {
+  // Review telemetry listens to scrolls on the whole document; this tells it which diffs are
+  // this battle's.
+  const reviewData = useMemo(() => ({ reviewTurn: turnId }), [turnId]);
   return (
     <View
       style={styles.review}
@@ -479,79 +494,46 @@ export function BattleReview({
       testID="arena-battle-comparison"
       dataSet={reviewData}
     >
-      <ReviewHeader
-        tabs={tabs}
-        tab={tab}
-        changesLabel={changesLabel}
-        onTabChange={setTab}
-        layoutControl={showLayoutControl && rows.length > 0}
-        agentId={agentId}
-        width={measured}
-        collapsed={collapsed}
-        onToggleCollapsed={toggleCollapsed}
-      />
-      {collapsed ? null : <View style={styles.content}>{content}</View>}
+      {children}
     </View>
   );
 }
 
 const styles = StyleSheet.create((theme) => ({
-  review: {},
+  // In the chat under the answers, on their text edge, with no rule across both of them.
+  review: {
+    paddingTop: theme.spacing[4] + theme.spacing[1],
+    paddingBottom: theme.spacing[3],
+  },
   block: {
     gap: theme.spacing[2],
   },
-  // A tab strip across the whole section, with a baseline the selected tab's underline sits
-  // on, so the tabs read as the heading of what follows rather than a control floating in it.
+  // The switch, then the diff layout control at the end of the row.
   header: {
     flexDirection: "row",
     alignItems: "center",
-    // The layout control and the panel button drop to a second line when the
-    // card narrows, rather than clipping.
+    // The layout control drops to a second line when the battle narrows, rather than clipping.
     flexWrap: "wrap",
-    gap: theme.spacing[2],
-    // Tall enough for the ghost button, so a header without one sits at the
-    // same height as one with it.
+    columnGap: theme.spacing[6],
+    rowGap: theme.spacing[2],
     minHeight: 32,
-    paddingVertical: theme.spacing[2],
-    paddingHorizontal: theme.spacing[3],
-    borderBottomWidth: 1,
-    borderBottomColor: theme.colors.border,
+  },
+  headerCentred: {
+    flexWrap: "nowrap",
+    columnGap: REVIEW_HEADER_GAP,
+  },
+  // The two ends share the row evenly, so the switch between them sits on the battle's centre line.
+  headerSide: {
+    flex: 1,
+    flexBasis: 0,
+    minWidth: 0,
+    flexDirection: "row",
+  },
+  headerSideEnd: {
+    justifyContent: "flex-end",
   },
   content: {
-    padding: theme.spacing[3],
-  },
-  title: {
-    color: theme.colors.foreground,
-    fontSize: theme.fontSize.base,
-    fontWeight: theme.fontWeight.medium,
-  },
-  // The ghost button's padding is the hit area; pulling the row back by it puts the first
-  // label's glyphs on the section's rail.
-  tabs: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginLeft: -theme.spacing[3],
-  },
-  tab: {
-    alignItems: "stretch",
-  },
-  tabTextSelected: {
-    color: theme.colors.foreground,
-    fontWeight: theme.fontWeight.medium,
-  },
-  // The underline spans the whole tab, padding included, so the first tab's line meets the
-  // card's edge; it hangs below the button by the strip's bottom padding plus one pixel to sit
-  // on the strip's baseline.
-  tabIndicator: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    bottom: -(theme.spacing[2] + 1),
-    height: 2,
-    backgroundColor: "transparent",
-  },
-  tabIndicatorSelected: {
-    backgroundColor: theme.colors.foreground,
+    paddingTop: theme.spacing[4],
   },
   spacer: {
     flex: 1,

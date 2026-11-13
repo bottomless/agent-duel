@@ -139,7 +139,6 @@ export function useArenaReviewTelemetry({
     // Seed from what is there rather than waiting for a change that never fires.
     const initial = reviewState(useArenaReviewStore.getState().byTurn, turnId);
     if (initial.shownTab) current.push({ type: "tab.viewed", tab: initial.shownTab });
-    if (initial.collapsed === true) current.push({ type: "review.collapsed", on: true });
     if (initial.shownFile) {
       current.push({
         type: "file.selected",
@@ -158,11 +157,6 @@ export function useArenaReviewTelemetry({
       previousReview = next;
       if (next.shownTab && next.shownTab !== previous.shownTab)
         current.push({ type: "tab.viewed", tab: next.shownTab });
-      // Folding leaves `shownTab` alone, so the rollup needs this to stop counting
-      // the folded time as time on that tab.
-      if ((next.collapsed === true) !== (previous.collapsed === true)) {
-        current.push({ type: "review.collapsed", on: next.collapsed === true });
-      }
       // `shownFile`, not `files`: the diff on arrival is the card's default and
       // the reader reads it without clicking anything. `fileOpens` catches the
       // reader opening the file they opened last once more.

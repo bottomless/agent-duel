@@ -7,28 +7,14 @@ import { useArenaStream } from "./use-arena-stream";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { Text, View } from "react-native";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
-import Animated, {
-  Easing,
-  useAnimatedStyle,
-  useSharedValue,
-  withTiming,
-} from "react-native-reanimated";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import {
-  CheckSquare,
-  ChevronDown,
-  ChevronRight,
-  GitBranch,
-  GitCompareArrows,
-  Info,
-} from "lucide-react-native";
+import { GitBranch, GitCompareArrows, Info } from "lucide-react-native";
 import type {
   ArenaComparisonDiff,
   ArenaHistoryItem,
   ArenaRun,
   ArenaSnapshot,
 } from "@getpaseo/protocol/arena/rpc-schemas";
-import { useRetainedPanelActive } from "@/components/retained-panel";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
@@ -36,13 +22,13 @@ import { useToast } from "@/contexts/toast-context";
 import { useSessionStore } from "@/stores/session-store";
 import { useWorkspaceDirectory } from "@/stores/session-store-hooks";
 import { WorkspaceOpenInEditorButton } from "@/workspace/open-in-editor/button";
-import { resolveContentMaxWidth, useAppSettings } from "@/hooks/use-settings";
 import { toErrorMessage } from "@/utils/error-messages";
 import { useFetchQuery } from "@/data/query";
 import { ARENA_MAX_CONTENT_WIDTH, ARENA_PANE_BASIS_WIDTH } from "@/constants/layout";
 import { ICON_SIZE, type Theme } from "@/styles/theme";
 import {
   battleFailedToStart,
+  battleKeptSide,
   battleWinnerSide,
   gitApplicationNotice,
   isStoppedByEarlyPick,
@@ -56,27 +42,26 @@ import { DiffLayoutControl } from "./diff-layout-control";
 import { InlineFileDiff, openChangesFiles, toggleChangesFile } from "./inline-file-diff";
 import { VerdictBody } from "./verdict-body";
 import { ArenaChangesList } from "./changes-list";
+import { ArenaPastDecision, type ArenaPastChoice } from "./decision-bar";
 import { arenaChangesCountLabel, arenaChangesRows } from "./changes-rows";
 import { arenaDiffQueryKey, hasBattleDiff } from "./comparison-visibility";
 import { arenaModelDisplayName } from "./side-label";
 import { ArenaModelVendorIcon } from "./model-vendor-icon";
+import { ArenaUnkeptResult } from "./turn-head";
 import { describeSummaryOmissions } from "./summary-omissions";
-import { ArenaRunMeta } from "./run-meta";
 import { ArenaRunThread } from "./run-thread";
 import { arenaSessionQueryKey, useArenaStartMutation } from "./use-arena-session";
 import { ArenaTransitionRow } from "./transition-row";
-import { PressHighlight } from "@/components/ui/press-highlight";
-import { useArenaCardBleed } from "./content-column";
+import { formatDuration } from "@/utils/time";
+import { BattleReview } from "./battle-review";
+import { BATTLE_GUTTER, BATTLE_RAIL } from "./battle-layout";
+import { useArenaShownBattle, useArenaShownBattleStore } from "./shown-battle";
 
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
-const ThemedChevronDown = withUnistyles(ChevronDown);
-const ThemedChevronRight = withUnistyles(ChevronRight);
 const ThemedGitCompareArrows = withUnistyles(GitCompareArrows);
-const ThemedCheckSquare = withUnistyles(CheckSquare);
 const ThemedGitBranch = withUnistyles(GitBranch);
 const ThemedInfo = withUnistyles(Info);
 const mutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
-const successColorMapping = (theme: Theme) => ({ color: theme.colors.success });
 // The info accent shared with <Alert variant="info"> and info toasts.
 const infoColorMapping = (theme: Theme) => ({ color: theme.colors.palette.blue[300] });
 
@@ -137,7 +122,7 @@ function ArchivedChanges({
     [openFiles],
   );
   const renderDiff = useCallback(
-    (file: string) => (
+    (file: string, onColumns: boolean) => (
       <InlineFileDiff
         serverId={serverId}
         agentId={agentId}
@@ -145,6 +130,7 @@ function ArchivedChanges({
         file={file}
         layout={layout}
         embedded
+        onColumns={onColumns}
       />
     ),
     [agentId, layout, serverId, turnId],
@@ -190,39 +176,17 @@ export function IdenticalBattleResult({ hasChanges = false }: { hasChanges?: boo
       </Text>
     );
   }
+  // One quiet line, as the summary's shared sentence reads: there is nothing to compare.
   return (
-    <View style={styles.identicalResult} testID="arena-identical-results">
-      <ThemedGitCompareArrows size={16} uniProps={successColorMapping} />
-      <View style={styles.identicalCopy}>
-        <Text style={styles.sectionTitle}>{t("arena.identicalFiles")}</Text>
-        <Text style={styles.muted}>{t("arena.neitherChanged")}</Text>
-      </View>
-    </View>
+    <Text style={styles.muted} testID="arena-identical-results">
+      <Text style={styles.identicalTitle}>{t("arena.identicalFiles")}</Text>
+      {` · ${t("arena.neitherChanged")}`}
+    </Text>
   );
 }
 
 function runsAreFinal(runA: ArenaRun | undefined, runB: ArenaRun | undefined): boolean {
   return Boolean(runA && runB && runA.runState !== "pending" && runB.runState !== "pending");
-}
-
-/** A thread's title: the side, and its model once the battle has named it. */
-function ThreadTitle({ side, model }: { side: "a" | "b"; model: string | undefined }) {
-  const { t } = useTranslation();
-  if (!model)
-    return (
-      <Text style={styles.threadTitle}>
-        {t("arena.agent")} {side.toUpperCase()}
-      </Text>
-    );
-  return (
-    <View style={styles.threadTitleGroup}>
-      <Text style={styles.threadTitle}>
-        {t("arena.agent")} {side.toUpperCase()} ·
-      </Text>
-      <ArenaModelVendorIcon model={model} size={ICON_SIZE.sm} />
-      <Text style={styles.threadTitle}>{arenaModelDisplayName(model)}</Text>
-    </View>
-  );
 }
 
 /** One side's model, as revealed by the vote: its vendor's mark and its name. */
@@ -313,35 +277,70 @@ export function ArenaBattleOutcome({ item }: { item: ArenaHistoryItem }) {
   );
 }
 
-function BattleSummaryHeader({
-  expanded,
-  item,
-  onToggle,
-}: {
-  expanded: boolean;
-  item: ArenaHistoryItem;
-  onToggle: () => void;
-}) {
-  const { t } = useTranslation();
-  const accessibilityState = useMemo(() => ({ expanded }), [expanded]);
+/**
+ * A decided battle that kept no answer, discarded at the vote, after Stop, after a restart or from
+ * the archive: its result alone, at the chat's right edge where a kept answer's footer ends with
+ * its battle (`ArenaUnkeptResult`). No avatar, since no model's answer is kept.
+ */
+function ArenaUnkeptLine({ agentId, item }: { agentId: string; item: ArenaHistoryItem }) {
   return (
-    <PressHighlight
-      onPress={onToggle}
-      style={styles.cardHeader}
-      accessibilityRole="button"
-      accessibilityState={accessibilityState}
-      accessibilityLabel={t(expanded ? "arena.collapseSummary" : "arena.expandSummary", {
-        outcome: chosenLabel(item),
-        reason: item.voteDiscardedReason ? t("arena.voteFailedReason") : "",
-      })}
-    >
-      {expanded ? (
-        <ThemedChevronDown size={17} uniProps={mutedColorMapping} />
+    <View style={[styles.resultEdge, styles.unkeptSpacing]}>
+      <ArenaUnkeptResult agentId={agentId} item={item} label={chosenLabel(item)} />
+    </View>
+  );
+}
+
+/** The model a decided battle kept, when one was kept and named. */
+function keptModel(item: ArenaHistoryItem): string | undefined {
+  const kept = battleKeptSide(item);
+  return kept ? item.identities?.[kept].name : undefined;
+}
+
+/** The row a decided battle's choice was made in, and which button it took. */
+function pastChoice(item: ArenaHistoryItem): ArenaPastChoice | null {
+  const resolution = item.resolution;
+  if (resolution?.kind === "vote") {
+    return { kind: "vote", chosen: resolution.vote === "tie" ? "middle" : resolution.vote };
+  }
+  if (resolution?.kind === "early") return { kind: "vote", chosen: resolution.vote };
+  if (resolution?.kind === "stopped") {
+    if (resolution.resolution === "apply_a") return { kind: "keep", chosen: "a" };
+    if (resolution.resolution === "apply_b") return { kind: "keep", chosen: "b" };
+    return { kind: "keep", chosen: "middle" };
+  }
+  return null;
+}
+
+/**
+ * The end of a shown battle, in the chat under its review: the decision row as it was left, the
+ * button taken marked, and Hide battle at the row's end.
+ */
+function ShownBattleEnd({ agentId, item }: { agentId: string; item: ArenaHistoryItem }) {
+  const { t } = useTranslation();
+  const choice = pastChoice(item);
+  const hide = useArenaShownBattleStore((state) => state.hide);
+  const onHideBattle = useCallback(() => hide(agentId), [agentId, hide]);
+  return (
+    <View style={styles.shownFooter} testID="arena-shown-battle-footer">
+      <View style={styles.shownFooterEnd} />
+      {choice ? (
+        <ArenaPastDecision kind={choice.kind} chosen={choice.chosen} />
       ) : (
-        <ThemedChevronRight size={17} uniProps={mutedColorMapping} />
+        <Text style={styles.shownFooterResult}>{chosenLabel(item)}</Text>
       )}
-      <BattleOutcome item={item} />
-    </PressHighlight>
+      <View style={[styles.shownFooterEnd, styles.shownFooterEndRight]}>
+        <Button
+          variant="outline"
+          size="md"
+          style={styles.hideBattle}
+          textStyle={styles.hideBattleText}
+          onPress={onHideBattle}
+          testID={`arena-hide-battle-${item.id}`}
+        >
+          {t("arena.hideBattle")}
+        </Button>
+      </View>
+    </View>
   );
 }
 
@@ -427,6 +426,48 @@ function GitApplicationCallout({
   );
 }
 
+function ThreadPane({
+  side,
+  run,
+  item,
+  kept,
+}: {
+  side: "a" | "b";
+  run: ArenaRun;
+  item: ArenaHistoryItem;
+  kept: boolean;
+}) {
+  const { t } = useTranslation();
+  const model = item.identities?.[side].name;
+  const appliedSide = item.gitApplication?.state === "discarded" ? undefined : item.appliedSide;
+  const meta = [
+    kept
+      ? t("arena.keptAgent", { side: side.toUpperCase() })
+      : `${t("arena.agent")} ${side.toUpperCase()}`,
+    run.durationMs !== null ? formatDuration(run.durationMs) : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  return (
+    <View style={styles.threadPane} testID={`arena-shown-pane-${side}`}>
+      <View style={styles.threadHeader}>
+        <View style={[styles.threadRule, side === "a" ? styles.threadRuleA : styles.threadRuleB]} />
+        <View style={styles.threadTitleRow}>
+          <Text style={styles.threadTitle}>
+            {model ? arenaModelDisplayName(model) : `${t("arena.agent")} ${side.toUpperCase()}`}
+          </Text>
+          {model ? <Text style={styles.threadMeta}>{meta}</Text> : null}
+        </View>
+      </View>
+      <ArenaRunThread
+        run={run}
+        applied={appliedSide === side}
+        stoppedByEarlyPick={isStoppedByEarlyPick({ runState: run.runState, side, turn: item })}
+      />
+    </View>
+  );
+}
+
 function BattleThreads({
   runA,
   runB,
@@ -436,58 +477,45 @@ function BattleThreads({
   runB: ArenaRun | undefined;
   item: ArenaHistoryItem;
 }) {
-  const { t } = useTranslation();
-  const active = useRetainedPanelActive();
   if (!runA || !runB) return null;
   const winner = battleWinnerSide(item);
-  const appliedSide = item.gitApplication?.state === "discarded" ? undefined : item.appliedSide;
   return (
     <View style={styles.threads}>
-      <View style={styles.threadPane}>
-        <View style={styles.threadHeader}>
-          <View style={styles.threadTitleRow}>
-            <ThreadTitle side="a" model={item.identities?.a.name} />
-            {winner === "a" ? (
-              <View accessible accessibilityLabel={t("arena.agentWinner", { side: "A" })}>
-                <ThemedCheckSquare size={16} uniProps={successColorMapping} />
-              </View>
-            ) : null}
-          </View>
-          <ArenaRunMeta run={runA} side="a" active={active} />
-        </View>
-        <ArenaRunThread
-          run={runA}
-          applied={appliedSide === "a"}
-          stoppedByEarlyPick={isStoppedByEarlyPick({
-            runState: runA?.runState,
-            side: "a",
-            turn: item,
-          })}
-        />
-      </View>
-      <View style={styles.threadPane}>
-        <View style={styles.threadHeader}>
-          <View style={styles.threadTitleRow}>
-            <ThreadTitle side="b" model={item.identities?.b.name} />
-            {winner === "b" ? (
-              <View accessible accessibilityLabel={t("arena.agentWinner", { side: "B" })}>
-                <ThemedCheckSquare size={16} uniProps={successColorMapping} />
-              </View>
-            ) : null}
-          </View>
-          <ArenaRunMeta run={runB} side="b" active={active} />
-        </View>
-        <ArenaRunThread
-          run={runB}
-          applied={appliedSide === "b"}
-          stoppedByEarlyPick={isStoppedByEarlyPick({
-            runState: runB?.runState,
-            side: "b",
-            turn: item,
-          })}
-        />
-      </View>
+      <ThreadPane side="a" run={runA} item={item} kept={winner === "a"} />
+      <ThreadPane side="b" run={runB} item={item} kept={winner === "b"} />
     </View>
+  );
+}
+
+const noop = () => {};
+
+/**
+ * A shown battle's review: the same section the battle had while it ran, once there is a summary
+ * or a change to show. Until then, the archive's own loading and failure lines.
+ */
+function ShownBattleComparison(props: Parameters<typeof ArchivedBattleComparison>[0]) {
+  const { comparison, diff, bothComplete } = props;
+  const reviewable =
+    bothComplete && !diff?.treesEqual && (comparison?.output || hasBattleDiff(diff));
+  if (!reviewable) return <ArchivedBattleComparison {...props} />;
+  return (
+    <BattleReview
+      serverId={props.serverId}
+      agentId={props.agentId}
+      turnId={props.turnId}
+      summaryAvailable={Boolean(comparison?.output)}
+      summaryPending={comparison?.state === "pending" || comparison?.state === "running"}
+      summaryFailed={comparison?.state === "failed" && !props.decided}
+      waitingFor={null}
+      comparison={comparison}
+      retrying={props.retrying}
+      onRetry={props.onRetry}
+      diff={diff}
+      diffError={props.diffError}
+      rows={arenaChangesRows(diff)}
+      onRetryDiff={noop}
+      retryingDiff={false}
+    />
   );
 }
 
@@ -590,6 +618,50 @@ function ExpandedBattleSummary({
   item: ArenaHistoryItem;
 }) {
   const { t } = useTranslation();
+  const turnQuery = useArenaStream(serverId, agentId, item.id);
+  const snapshot = turnQuery.data;
+  const runA = snapshot?.runs.find((run) => run.side === "a");
+  const runB = snapshot?.runs.find((run) => run.side === "b");
+  return (
+    <View style={styles.expanded}>
+      {turnQuery.isLoading ? (
+        <View style={styles.loadingRow}>
+          <ThemedLoadingSpinner size="small" uniProps={mutedColorMapping} />
+          <Text style={styles.muted}>{t("arena.loadingArchive")}</Text>
+        </View>
+      ) : null}
+      <ArenaStreamStatus error={turnQuery.error} retry={turnQuery.refetch} />
+      <View style={styles.expandedNotices}>
+        <ArenaTransitionRow transition={snapshot?.turn?.transition ?? item.transition} />
+        <GitApplicationCallout
+          serverId={serverId}
+          workspaceId={workspaceId}
+          item={snapshot?.turn ?? item}
+        />
+      </View>
+      <BattleThreads runA={settledHistoryRun(runA)} runB={settledHistoryRun(runB)} item={item} />
+      <View style={styles.shownReview}>
+        <ShownBattleReview serverId={serverId} agentId={agentId} item={item} />
+      </View>
+      <ShownBattleEnd agentId={agentId} item={item} />
+    </View>
+  );
+}
+
+/**
+ * A shown battle's review, in the chat under its answers. Only a battle waiting for a vote pins its
+ * review under the chat: once decided, the review is part of the record and scrolls with its turn.
+ */
+function ShownBattleReview({
+  serverId,
+  agentId,
+  item,
+}: {
+  serverId: string;
+  agentId: string;
+  item: ArenaHistoryItem;
+}) {
+  const { t } = useTranslation();
   const toast = useToast();
   const queryClient = useQueryClient();
   const client = useSessionStore((state) => state.sessions[serverId]?.client ?? null);
@@ -650,36 +722,20 @@ function ExpandedBattleSummary({
     void retryComparisonRequest().catch((error) => toast.error(toErrorMessage(error)));
   }, [retryComparisonRequest, toast]);
   return (
-    <View style={styles.expanded}>
-      {turnQuery.isLoading ? (
-        <View style={styles.loadingRow}>
-          <ThemedLoadingSpinner size="small" uniProps={mutedColorMapping} />
-          <Text style={styles.muted}>{t("arena.loadingArchive")}</Text>
-        </View>
-      ) : null}
-      <ArenaStreamStatus error={turnQuery.error} retry={turnQuery.refetch} />
-      <ArenaTransitionRow transition={snapshot?.turn?.transition ?? item.transition} />
-      <GitApplicationCallout
-        serverId={serverId}
-        workspaceId={workspaceId}
-        item={snapshot?.turn ?? item}
-      />
-      <BattleThreads runA={settledHistoryRun(runA)} runB={settledHistoryRun(runB)} item={item} />
-      <ArchivedBattleComparison
-        serverId={serverId}
-        agentId={agentId}
-        turnId={item.id}
-        selectedEarly={item.selectedEarly === true}
-        bothComplete={bothFinal}
-        comparison={snapshot?.comparison}
-        decided={(snapshot?.turn ?? item).resolution !== undefined}
-        retrying={retryComparison.isPending}
-        onRetry={handleRetry}
-        diffLoading={diffQuery.isLoading}
-        diff={diffQuery.data}
-        diffError={diffQuery.error}
-      />
-    </View>
+    <ShownBattleComparison
+      serverId={serverId}
+      agentId={agentId}
+      turnId={item.id}
+      selectedEarly={item.selectedEarly === true}
+      bothComplete={bothFinal}
+      comparison={snapshot?.comparison}
+      decided={(snapshot?.turn ?? item).resolution !== undefined}
+      retrying={retryComparison.isPending}
+      onRetry={handleRetry}
+      diffLoading={diffQuery.isLoading}
+      diff={diffQuery.data}
+      diffError={diffQuery.error}
+    />
   );
 }
 
@@ -728,22 +784,26 @@ function FailedBattleStart({
       });
   }, [agentId, client, item.id, startArena, toast, t]);
   return (
-    <View style={[styles.card, styles.failedStart]} testID={`arena-summary-${item.id}`}>
-      <View style={styles.headerText}>
-        <Text style={styles.gitNoticeTitle}>{t("arena.couldntStart")}</Text>
-        <Text style={styles.gitNoticeDetail}>{t("arena.neitherRan")} </Text>
+    <View style={styles.keptNotice} testID={`arena-summary-${item.id}`}>
+      <View style={[styles.resultEdge, styles.unkeptSpacing]}>
+        <View style={styles.failedStart}>
+          <Text style={styles.failedStartText}>
+            <Text style={styles.unkeptResult}>{t("arena.couldntStart")}</Text>
+            <Text style={styles.bylineMeta}> · {t("arena.neitherRan")}</Text>
+          </Text>
+          {canStartAgain ? (
+            <Button
+              size="xs"
+              variant="outline"
+              loading={starting}
+              onPress={handleStartAgain}
+              testID="arena-failed-start-retry"
+            >
+              {t("arena.tryAgain")}{" "}
+            </Button>
+          ) : null}
+        </View>
       </View>
-      {canStartAgain ? (
-        <Button
-          size="xs"
-          variant="outline"
-          loading={starting}
-          onPress={handleStartAgain}
-          testID="arena-failed-start-retry"
-        >
-          {t("arena.tryAgain")}{" "}
-        </Button>
-      ) : null}
     </View>
   );
 }
@@ -793,65 +853,103 @@ function DecidedBattleSummary({
   agentId: string;
   item: ArenaHistoryItem;
 }) {
-  const [expanded, setExpanded] = useState(false);
-  const contentMaxWidth = resolveContentMaxWidth(useAppSettings().settings);
-  const cardMaxWidth = useSharedValue(contentMaxWidth);
-  const bleed = useArenaCardBleed(expanded ? ARENA_MAX_CONTENT_WIDTH : contentMaxWidth);
-  const handleToggle = useCallback(() => {
-    setExpanded((value) => {
-      const next = !value;
-      cardMaxWidth.value = withTiming(next ? ARENA_MAX_CONTENT_WIDTH : contentMaxWidth, {
-        duration: 260,
-        easing: Easing.bezier(0.2, 0.7, 0.3, 1),
-      });
-      return next;
-    });
-  }, [cardMaxWidth, contentMaxWidth]);
-  const cardAnimatedStyle = useAnimatedStyle(() => ({ maxWidth: cardMaxWidth.value }));
-
-  return (
-    <Animated.View
-      style={[styles.card, bleed && styles.cardBleed, cardAnimatedStyle]}
-      testID={`arena-summary-${item.id}`}
-    >
-      <BattleSummaryHeader expanded={expanded} item={item} onToggle={handleToggle} />
-      {expanded ? (
+  const shownTurnId = useArenaShownBattle(agentId);
+  // Shown, the battle stands in for its result unframed, as the live battle does.
+  if (shownTurnId === item.id) {
+    return (
+      <View style={styles.shownBattle} testID={`arena-summary-${item.id}`}>
         <ExpandedBattleSummary
           serverId={serverId}
           workspaceId={workspaceId}
           agentId={agentId}
           item={item}
         />
-      ) : (
-        <CollapsedGitConflicts serverId={serverId} workspaceId={workspaceId} item={item} />
-      )}
-    </Animated.View>
+      </View>
+    );
+  }
+  // A kept answer's own head names its model (`ArenaTurnHead`); a battle that kept none says so
+  // in a head of its own where that answer would be. Only what the chat must still be told
+  // follows, such as a merge conflict.
+  return (
+    <View style={styles.keptNotice} testID={`arena-summary-${item.id}`}>
+      {keptModel(item) ? null : <ArenaUnkeptLine agentId={agentId} item={item} />}
+      <CollapsedGitConflicts serverId={serverId} workspaceId={workspaceId} item={item} />
+    </View>
   );
 }
 
 const styles = StyleSheet.create((theme) => ({
-  card: {
+  // A shown battle: on the battle's rails at the battle's width, unframed, as the live battle is.
+  shownBattle: {
     width: "100%",
-    maxWidth: theme.contentMaxWidth,
+    maxWidth: ARENA_MAX_CONTENT_WIDTH,
     alignSelf: "center",
-    marginVertical: theme.spacing[2],
-    borderWidth: 1,
-    borderColor: theme.colors.borderAccent,
-    borderRadius: theme.borderRadius.lg,
-    backgroundColor: theme.colors.surface1,
-    overflow: "hidden",
   },
-  cardBleed: {
-    borderLeftWidth: 0,
-    borderRightWidth: 0,
-    borderRadius: 0,
+  bylineMeta: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.base,
+  },
+  // The chat's rows sit a step further in than this container on both sides: on the right, the
+  // edge a prompt and a kept answer's result end on.
+  resultEdge: {
+    paddingHorizontal: { xs: theme.spacing[2], md: theme.spacing[3] },
+  },
+  // A battle that kept no answer is a whole turn in one line: the next prompt starts a gap below.
+  unkeptSpacing: {
+    marginBottom: theme.spacing[6],
+  },
+  keptNotice: {
+    width: "100%",
+    maxWidth: ARENA_MAX_CONTENT_WIDTH,
+    alignSelf: "center",
+    paddingHorizontal: BATTLE_RAIL - theme.spacing[3],
+  },
+  // A shown battle's review and end sit on the answers' text edge, as the notices above do.
+  shownReview: {
+    paddingHorizontal: theme.spacing[3],
+  },
+  shownFooter: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[4],
+    paddingHorizontal: theme.spacing[3],
+  },
+  shownFooterEnd: {
+    flex: 1,
+    flexBasis: 0,
+    minWidth: 0,
+    flexDirection: "row",
+  },
+  shownFooterEndRight: {
+    justifyContent: "flex-end",
+  },
+  shownFooterResult: {
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.content,
+    fontWeight: theme.fontWeight.semibold,
+  },
+  hideBattle: {
+    borderRadius: theme.borderRadius.lg,
+  },
+  hideBattleText: {
+    fontWeight: theme.fontWeight.semibold,
   },
   failedStart: {
     flexDirection: "row",
+    flexWrap: "wrap",
     alignItems: "center",
+    justifyContent: "flex-end",
     gap: theme.spacing[3],
-    paddingHorizontal: theme.spacing[3],
-    paddingVertical: theme.spacing[3],
+  },
+  failedStartText: {
+    flexShrink: 1,
+    minWidth: 0,
+    lineHeight: 24,
+  },
+  unkeptResult: {
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.base,
+    fontWeight: theme.fontWeight.medium,
   },
   cardHeader: {
     minHeight: 58,
@@ -949,44 +1047,63 @@ const styles = StyleSheet.create((theme) => ({
   sectionSpacer: {
     flex: 1,
   },
+  // A shown battle, laid out as it was while it ran: both answers on the battle's rails.
+  // The bottom matches a kept answer's footer, so the next turn's rule sits as far below.
   expanded: {
     gap: theme.spacing[4],
-    padding: theme.spacing[3],
-    borderTopWidth: 1,
-    borderTopColor: theme.colors.border,
+    paddingTop: theme.spacing[2],
+    paddingBottom: theme.spacing[8],
+    paddingHorizontal: BATTLE_RAIL - theme.spacing[3],
+  },
+  // Notices above the answers sit on the answers' own text edge.
+  expandedNotices: {
+    paddingHorizontal: theme.spacing[3],
+    gap: theme.spacing[3],
   },
   threads: {
     flexDirection: "row",
     flexWrap: "wrap",
     alignContent: "flex-start",
     alignItems: "flex-start",
-    gap: theme.spacing[3],
+    columnGap: BATTLE_GUTTER - 2 * theme.spacing[3],
+    rowGap: theme.spacing[6],
   },
   threadPane: {
     flexGrow: 1,
     flexShrink: 1,
     flexBasis: ARENA_PANE_BASIS_WIDTH,
     minWidth: 0,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    borderRadius: theme.borderRadius.base,
-    paddingTop: theme.spacing[2],
-    backgroundColor: theme.colors.surface0,
   },
   // Sits on the thread's own rail so the title and the answer share a left edge.
   threadHeader: {
     paddingHorizontal: theme.spacing[3],
-    gap: 2,
+  },
+  threadRule: {
+    height: 2,
+  },
+  threadRuleA: {
+    backgroundColor: theme.colors.statusDotRunning,
+  },
+  threadRuleB: {
+    backgroundColor: theme.colors.statusDotWarning,
   },
   threadTitle: {
     color: theme.colors.foreground,
-    fontSize: theme.fontSize.base,
+    fontSize: theme.fontSize["2xl"],
     fontWeight: theme.fontWeight.semibold,
+    letterSpacing: -0.4,
+  },
+  threadMeta: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.base,
   },
   threadTitleRow: {
     flexDirection: "row",
-    alignItems: "center",
-    gap: theme.spacing[2],
+    alignItems: "baseline",
+    flexWrap: "wrap",
+    columnGap: theme.spacing[2] + theme.spacing[0.5],
+    minHeight: 32,
+    marginTop: theme.spacing[4],
   },
   threadTitleGroup: {
     flexDirection: "row",
@@ -1015,20 +1132,9 @@ const styles = StyleSheet.create((theme) => ({
     flexWrap: "wrap",
     gap: theme.spacing[2],
   },
-  identicalResult: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: theme.spacing[2],
-    padding: theme.spacing[3],
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    borderRadius: theme.borderRadius.base,
-    backgroundColor: theme.colors.surface0,
-  },
-  identicalCopy: {
-    flex: 1,
-    minWidth: 0,
-    gap: theme.spacing[1],
+  identicalTitle: {
+    color: theme.colors.foreground,
+    fontWeight: theme.fontWeight.medium,
   },
   muted: {
     color: theme.colors.foregroundMuted,
