@@ -96,11 +96,9 @@ start the complete Electron desktop stack. Do not interpret that request as
 In a fresh checkout or worktree, prepare it before starting:
 
 1. If `node_modules` is missing, run `npm install` at the repository root.
-2. If `arena-backend/node_modules` is missing, run `bun install` in
-   `arena-backend`.
-3. Run `npm run dev:desktop` (this repository has no control plane, so it runs
-   as a source build), wait for the `[dev] healthy:` line, and add an OpenRouter
-   key in Settings.
+2. Run `npm run dev:desktop`, wait for the `[dev] healthy:` line, and add an
+   OpenRouter key in Settings. It installs `arena-backend` from its lockfile, and
+   this repository has no control plane, so it runs as a source build.
 
 ```bash
 npm run dev                          # Start only the dev daemon

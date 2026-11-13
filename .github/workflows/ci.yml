@@ -39,6 +39,9 @@ jobs:
 
       # Typecheck reads the declarations the server-stack build emits.
       - name: Build server stack
+        env:
+          # This job runs no engine; the arena-backend job installs and checks it.
+          AGENT_DUEL_SKIP_ARENA_INSTALL: "1"
         run: npm run build:server
 
       - name: Typecheck

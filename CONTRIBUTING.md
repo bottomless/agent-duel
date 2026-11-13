@@ -15,13 +15,12 @@ issue.
 
 ## Development setup
 
-You need macOS or Linux, Node.js 22 with npm, Bun 1.3.14, and an OpenRouter API
-key. Install the npm and Bun workspaces, then start the desktop stack in
-bring-your-own-key mode:
+You need macOS or Linux, Node.js 22 with npm, Bun 1.4.4, and an OpenRouter API
+key. Install the npm workspaces, then start the desktop stack in
+bring-your-own-key mode. The launcher installs `arena-backend` from its lockfile:
 
 ```bash
 npm install
-cd arena-backend && bun install && cd ..
 npm run dev:desktop -- --byok
 ```
 

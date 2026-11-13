@@ -77,27 +77,26 @@ and votes are not uploaded.
 
 - macOS or Linux
 - Node.js 22 with npm
-- Bun 1.3.14
+- Bun 1.4.4
 - An OpenRouter API key
 
-Install both package graphs, then start the desktop stack in bring-your-own-key
+Install the npm workspaces, then start the desktop stack in bring-your-own-key
 mode from the repository root:
 
 ```bash
 npm install
-cd arena-backend && bun install && cd ..
 npm run dev:desktop -- --byok
 ```
 
-The launcher prepares an isolated checkout-local environment and starts the
-local daemon, the Electron-flavoured Expo server, and Electron. It reports
+The launcher installs `arena-backend` from its lockfile, prepares an isolated
+checkout-local environment, and starts the local daemon, the Electron-flavoured Expo server, and Electron. It reports
 `[dev] healthy:` when the stack is ready. Paste your OpenRouter key in Settings;
 battles run on that key.
 
 ### Troubleshooting
 
-- If a dependency is missing, run `npm install` at the root and `bun install` in
-  `arena-backend`.
+- If a dependency is missing, run `npm install` at the root. Building the daemon
+  installs `arena-backend` itself.
 - If a port is busy, leave the daemon, Expo, and debugger ports unset where
   supported so the launcher can choose free ports.
 - Inspect `.dev/paseo-home/daemon.log` for daemon failures.

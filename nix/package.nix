@@ -95,8 +95,9 @@ buildNpmPackage rec {
     # daemon closure by scripts/trace-daemon.mjs.
     npm rebuild node-pty
 
-    # Build all server packages in dependency order (defined in package.json)
-    npm run build:server
+    # Build all server packages in dependency order (defined in package.json). The package ships no
+    # Arena engine, and the sandbox has no network for its install.
+    AGENT_DUEL_SKIP_ARENA_INSTALL=1 npm run build:server
     npm run build:daemon-web-ui
 
     runHook postBuild
