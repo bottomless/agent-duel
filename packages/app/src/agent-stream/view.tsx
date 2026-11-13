@@ -1398,8 +1398,9 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
     const renderLiveAuxiliary = useCallback<StreamSegmentRenderers["renderLiveAuxiliary"]>(() => {
       const existingTailSpacing =
         auxiliary.turnFooter && !auxiliary.pendingPermissions ? TURN_FOOTER_BOTTOM_SPACING : 0;
+      // The floating decision row covers the chat's end, so the end keeps clear of it too.
       const bottomOverlayInset = resolveBottomOverlayTailInset({
-        requiredTailClearance: bottomOverlayTailClearance,
+        requiredTailClearance: bottomOverlayTailClearance + (bottomOverlayHeight ?? 0),
         existingTailSpacing,
       });
       return renderLiveAuxiliaryNode({
@@ -1413,6 +1414,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       auxiliary.pendingPermissions,
       auxiliary.turnFooter,
       forkBoundaryAfterFooter,
+      bottomOverlayHeight,
       bottomOverlayTailClearance,
       liveContent,
     ]);
