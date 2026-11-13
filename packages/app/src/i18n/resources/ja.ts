@@ -89,7 +89,6 @@ export const ja: TranslationResources = {
     versusModel: "対 {{model}}",
     resultWon: "勝利",
     resultEarly: "早期に選択",
-    resultKept: "採用",
     battleResolved: "バトルが解決しました",
     sameChanges: "両エージェントが同じ変更を行いました。元の内容からの変更を表示します。",
     identicalFiles: "ファイルの結果は同一です",

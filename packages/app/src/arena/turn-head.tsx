@@ -82,21 +82,22 @@ function BattleHead({ agentId, item }: { agentId: string; item: ArenaHistoryItem
   );
 }
 
-type KeptResult = "won" | "tie" | "early" | "kept";
+type KeptResult = "won" | "tie" | "early";
 
-/** How the kept side was kept: won the vote, tied, chosen early, or kept after a failure or Stop. */
+/**
+ * How the kept side was kept: tied, chosen early, or won. A side kept at a Stop or after the other
+ * failed is shown as won too, with "Vote not counted" beside it when the vote was discarded.
+ */
 function keptResult(item: ArenaHistoryItem): KeptResult {
   if (item.vote === "tie") return "tie";
   if (item.selectedEarly) return "early";
-  if ((item.vote === "a" || item.vote === "b") && !item.voteDiscardedReason) return "won";
-  return "kept";
+  return "won";
 }
 
 const RESULT_KEYS = {
   won: "arena.resultWon",
   tie: "arena.tie",
   early: "arena.resultEarly",
-  kept: "arena.resultKept",
 } as const;
 
 /** The result as a small tag after the name, tinted in the kept side's colour; a tie stays grey. */

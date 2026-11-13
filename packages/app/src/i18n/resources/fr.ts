@@ -93,7 +93,6 @@ export const fr: TranslationResources = {
     versusModel: "contre {{model}}",
     resultWon: "Gagnant",
     resultEarly: "Choisi tôt",
-    resultKept: "Conservé",
     battleResolved: "Bataille résolue",
     sameChanges:
       "Les deux agents ont effectué les mêmes modifications. Affichage des modifications par rapport à l’original.",

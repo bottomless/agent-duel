@@ -89,7 +89,6 @@ export const ko: TranslationResources = {
     versusModel: "대 {{model}}",
     resultWon: "승리",
     resultEarly: "조기 선택",
-    resultKept: "유지됨",
     battleResolved: "배틀 해결됨",
     sameChanges: "두 에이전트가 같은 변경을 했습니다. 원본 대비 변경 사항을 표시합니다.",
     identicalFiles: "파일 결과가 동일합니다",

@@ -1441,8 +1441,9 @@ Keep the battle open during application, then collapse it to the kept answer. Ev
 Agent Duel chat sits after an avatar column and opens with a head (`ArenaTurnHead`, placed by
 `arenaTurnHeads`): its author's avatar in the column and the name beside it, 16px above the answer.
 A kept answer's avatar is the winning model's vendor mark, alone; its line reads `Claude Opus 5.5
-[Won] vs GPT-6.1 Sol · Show battle`, the tag tinted in the kept side's colour, or `Tie`, `Chosen
-early`, or `Kept` with `Vote not counted` after a failure. Every kept side gets it
+[Won] vs GPT-6.1 Sol · Show battle`, the tag tinted in the kept side's colour, or `Tie` or `Chosen
+early`. A side kept at a Stop or after the other failed shows `Won` too, with `Vote not counted`
+when the vote was discarded. Every kept side gets it
 (`battleKeptSide`). A plain turn shows the agent glyph and `Agent`, so a battle turn is told apart by
 its logo before a word is read. Name both models: with only the winner the reveal was half a
 reveal, and the other contestant left no trace in the chat. Two stacked avatars, and the wording
