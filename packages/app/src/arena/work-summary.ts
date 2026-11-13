@@ -2,7 +2,11 @@ import { i18n } from "@/i18n/i18next";
 import type { ArenaRun } from "@getpaseo/protocol/arena/rpc-schemas";
 import type { ToolCallDetail } from "@getpaseo/protocol/agent-types";
 import { buildToolCallDisplayModel } from "@/utils/tool-call-display";
-import { deriveArenaToolCallDetail, normalizeArenaToolCallStatus } from "./tool-call-detail";
+import {
+  arenaToolCallDisplayCwd,
+  deriveArenaToolCallDetail,
+  normalizeArenaToolCallStatus,
+} from "./tool-call-detail";
 import { isArenaQuestionPart } from "./question";
 import { arenaReasoningPartIsActive } from "./run-thread-selection";
 
@@ -237,12 +241,12 @@ export function presentArenaWork({
   }
   const state = asRecord(record.state) ?? {};
   const toolName = typeof record.tool === "string" ? record.tool : "tool";
-  const detail = deriveArenaToolCallDetail(toolName, state.input, state.output);
+  const detail = deriveArenaToolCallDetail(toolName, state.input, state.output, cwd);
   const status = normalizeArenaToolCallStatus(state.status, state.error, state.output);
   const display = buildToolCallDisplayModel({
     name: toolName,
     status,
-    cwd,
+    cwd: arenaToolCallDisplayCwd(detail, cwd),
     metadata: { subAgentActivity: asRecord(state.input)?.description },
     error: state.error ?? null,
     detail: detail ?? {

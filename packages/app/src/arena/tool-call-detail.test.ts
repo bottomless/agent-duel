@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { deriveArenaToolCallDetail, normalizeArenaToolCallStatus } from "./tool-call-detail";
+import {
+  arenaToolCallDisplayCwd,
+  deriveArenaToolCallDetail,
+  normalizeArenaToolCallStatus,
+} from "./tool-call-detail";
 
 describe("deriveArenaToolCallDetail", () => {
   it("maps a bash tool part to a shell detail", () => {
@@ -10,6 +14,33 @@ describe("deriveArenaToolCallDetail", () => {
       type: "shell",
       command: "node -e \"console.log('hi')\"",
       output: "hi\n",
+    });
+  });
+
+  it("adds a readable summary to a command that opens an uploaded file, keeping the command whole", () => {
+    const command = `python3 - <<'PY'
+import json
+p='/home/user/.paseo/uploads/upload_00000000-0000-4000-8000-000000000000/data.json'
+d=json.load(open(p))
+print('COUNT',len(d))
+PY`;
+
+    expect(deriveArenaToolCallDetail("shell", { command }, "1\n")).toEqual({
+      type: "shell",
+      command,
+      summary: "data.json · COUNT: len(d)",
+      output: "1\n",
+    });
+  });
+
+  it("summarizes a command's worktree paths relative to the contestant worktree", () => {
+    const worktree = "/repo/.agent-duel/worktrees/turn/generation-1-a";
+    const command = `wc -l ${worktree}/src/index.ts`;
+
+    expect(deriveArenaToolCallDetail("shell", { command }, undefined, worktree)).toEqual({
+      type: "shell",
+      command,
+      summary: "wc -l src/index.ts",
     });
   });
 
@@ -121,13 +152,129 @@ describe("deriveArenaToolCallDetail", () => {
 
   it("returns undefined for unrecognized tools so ToolCall falls back to its own rendering", () => {
     expect(
-      deriveArenaToolCallDetail("glob", { pattern: "**/*.ts" }, { numFiles: 3 }),
+      deriveArenaToolCallDetail("webfetch", { url: "https://example.com" }, ""),
     ).toBeUndefined();
+  });
+
+  describe("glob and grep", () => {
+    const worktree = "/home/user/repo/.agent-duel/worktrees/turn/generation-1-a";
+
+    it("labels a search by its pattern and drops the worktree root folder", () => {
+      expect(
+        deriveArenaToolCallDetail(
+          "glob",
+          { pattern: "**/*.ts", path: worktree },
+          `${worktree}/src/a.ts\n${worktree}/src/b.ts`,
+          worktree,
+        ),
+      ).toEqual({
+        type: "search",
+        query: "**/*.ts",
+        toolName: "glob",
+        content: "src/a.ts\nsrc/b.ts",
+      });
+    });
+
+    it("names the include filter and the folder relative to the worktree", () => {
+      expect(
+        deriveArenaToolCallDetail(
+          "grep",
+          { pattern: "TODO|FIXME", include: "*.md", path: `${worktree}/docs` },
+          "",
+          worktree,
+        ),
+      ).toEqual({ type: "search", query: "TODO|FIXME *.md in docs", toolName: "grep" });
+    });
+
+    it("shows a folder outside the worktree under the home directory as ~", () => {
+      expect(
+        deriveArenaToolCallDetail(
+          "grep",
+          { pattern: "rocket", path: "/home/user/repo" },
+          "",
+          worktree,
+        ),
+      ).toMatchObject({ query: "rocket in ~/repo" });
+    });
   });
 
   it("returns undefined when the required path/command field is missing", () => {
     expect(deriveArenaToolCallDetail("edit", {}, "Edit applied successfully.")).toBeUndefined();
     expect(deriveArenaToolCallDetail("bash", {}, "")).toBeUndefined();
+  });
+});
+
+describe("arenaToolCallDisplayCwd", () => {
+  const worktree = "/repo/.agent-duel/worktrees/turn/generation-1-a";
+  const uploadDir = "/home/user/.paseo/uploads/upload_00000000-0000-4000-8000-000000000000";
+
+  it("shows an uploaded file relative to its own upload folder", () => {
+    expect(
+      arenaToolCallDisplayCwd({ type: "read", filePath: `${uploadDir}/data.json` }, worktree),
+    ).toBe(uploadDir);
+  });
+
+  it("shows saved shell output in a contestant temp folder by its short name", () => {
+    const tempDir = "/var/folders/xx/yy/T/opencode/arena/ses_abc123";
+    expect(
+      arenaToolCallDisplayCwd({ type: "read", filePath: `${tempDir}/sh_01.out` }, worktree),
+    ).toBe(tempDir);
+  });
+
+  it("shows a scratch file in the temp folder the contestants share by its short name", () => {
+    const shared = "/private/var/folders/xx/yy/T/opencode";
+    expect(
+      arenaToolCallDisplayCwd({ type: "write", filePath: `${shared}/convert.py` }, worktree),
+    ).toBe(shared);
+  });
+
+  it("keeps a worktree file relative to the worktree when the worktree is in a temp folder", () => {
+    const tempWorktree = "/tmp/opencode/repo/.agent-duel/worktrees/turn/generation-1-a";
+    expect(
+      arenaToolCallDisplayCwd({ type: "read", filePath: `${tempWorktree}/src/a.ts` }, tempWorktree),
+    ).toBe(tempWorktree);
+  });
+
+  it("marks the lines of a read that starts past the top of the file", () => {
+    const path = `${worktree}/docs/guide.md`;
+    const summaryOf = (input: Record<string, unknown>) => {
+      const detail = deriveArenaToolCallDetail("read", input, "", worktree);
+      return detail?.type === "read" ? detail.summary : undefined;
+    };
+
+    expect(summaryOf({ path, offset: 120, limit: 80 })).toBe("docs/guide.md:120-199");
+    expect(summaryOf({ path, offset: 120 })).toBe("docs/guide.md:120+");
+    expect(summaryOf({ path: `${uploadDir}/data.json`, offset: 80, limit: 150 })).toBe(
+      "data.json:80-229",
+    );
+    expect(summaryOf({ path, limit: 80 })).toBeUndefined();
+    expect(summaryOf({ path, offset: 1, limit: 80 })).toBeUndefined();
+  });
+
+  it("labels a loaded skill by its name and opens to its text", () => {
+    expect(deriveArenaToolCallDetail("skill", { id: "docx" }, "<skill_content>…")).toEqual({
+      type: "plain_text",
+      label: "docx",
+      icon: "sparkles",
+      text: "<skill_content>…",
+    });
+    expect(deriveArenaToolCallDetail("skill", {}, "")).toBeUndefined();
+  });
+
+  it("names the project for a read of the worktree root", () => {
+    expect(deriveArenaToolCallDetail("read", { path: worktree }, "", worktree)).toMatchObject({
+      type: "read",
+      filePath: worktree,
+      summary: "repo",
+    });
+  });
+
+  it("keeps the worktree for every other call", () => {
+    expect(
+      arenaToolCallDisplayCwd({ type: "read", filePath: `${worktree}/README.md` }, worktree),
+    ).toBe(worktree);
+    expect(arenaToolCallDisplayCwd({ type: "shell", command: "ls" }, worktree)).toBe(worktree);
+    expect(arenaToolCallDisplayCwd(undefined, worktree)).toBe(worktree);
   });
 });
 

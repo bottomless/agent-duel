@@ -43,7 +43,11 @@ import {
   type ArenaPendingPermission,
   type ArenaPermissionReply,
 } from "./permission";
-import { deriveArenaToolCallDetail, normalizeArenaToolCallStatus } from "./tool-call-detail";
+import {
+  arenaToolCallDisplayCwd,
+  deriveArenaToolCallDetail,
+  normalizeArenaToolCallStatus,
+} from "./tool-call-detail";
 import { arenaRunErrorToShow, stoppedByEarlyPickNote } from "./battle-result";
 import { arenaRunTasks, arenaTodoWriteTasks } from "./task-progress";
 import { ArenaTaskProgressCard } from "./task-progress-card";
@@ -114,8 +118,8 @@ function ArenaToolPart({
     [error, output, state?.status],
   );
   const detail = useMemo(
-    () => deriveArenaToolCallDetail(tool, input, output),
-    [tool, input, output],
+    () => deriveArenaToolCallDetail(tool, input, output, cwd),
+    [tool, input, output, cwd],
   );
   const itemId = `${runId ?? "run"}:${stringField(part, "callID") ?? stringField(part, "id") ?? tool}`;
   return (
@@ -128,7 +132,7 @@ function ArenaToolPart({
         error={error}
         status={status}
         detail={detail}
-        cwd={cwd}
+        cwd={arenaToolCallDisplayCwd(detail, cwd)}
         disableOuterSpacing
         compactLabel
         // A narrow window opens a call in a sheet that keeps the detail it opened with, so a shortened

@@ -114,6 +114,27 @@ describe("shared messages tool_call schema", () => {
     expect(legacyStatus.success).toBe(false);
   });
 
+  it("keeps a shell detail's summary through validation", () => {
+    const parsed = AgentTimelineItemPayloadSchema.parse({
+      ...canonicalBase(),
+      status: "completed",
+      error: null,
+      detail: {
+        type: "shell",
+        command: "python3 - <<'PY'\nprint(len(data))\nPY",
+        summary: "data.json · print(len(data))",
+      },
+    });
+
+    expect(parsed.type).toBe("tool_call");
+    if (parsed.type === "tool_call") {
+      expect(parsed.detail).toMatchObject({
+        type: "shell",
+        summary: "data.json · print(len(data))",
+      });
+    }
+  });
+
   it("parses canonical sub_agent detail payload", () => {
     const parsed = AgentTimelineItemPayloadSchema.parse({
       type: "tool_call",
