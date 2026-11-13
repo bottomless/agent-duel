@@ -437,7 +437,15 @@ Product decisions that are settled, so they do not get relitigated per feature:
   even after it finishes. An older unfinished task must not replace newer activity. Animate only
   the displayed activity while it is running. Show thinking when the next model request has started
   without content. Once newer conversation content puts a block into history, show its aggregate
-  work summary without animation. Tool details remain available by expanding either row.
+  work summary without animation. Tool details remain available by expanding either row. A row
+  never shows a daemon, temp or worktree path: an uploaded or scratch file reads by its file
+  name, a worktree path relative to the worktree, and other paths in the home directory with `~`.
+  Rows that would read alike say what sets them apart: a read past the top of a file carries its
+  lines (`notes.md:120-199`), a read of the worktree root names the project, and Glob, Grep and
+  Skill rows show their pattern or skill. A shell row drops `echo` banners and redirects to
+  `/dev/null`, and one that runs a multi-line script shows the comment or `echo` heading that
+  opens it, or else the headings and labels the script prints. A heredoc that writes a script
+  leads with its target file. The whole command stays one level deeper.
   Thinking content stays hidden, including inside expanded activity and subagent rows.
   Give each subagent a static, named, expandable heading with its latest activity on an indented
   line beneath it. Animate only the activity text. When the subagent ends, replace that activity

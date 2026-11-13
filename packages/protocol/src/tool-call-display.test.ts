@@ -21,6 +21,24 @@ describe("shared tool-call display mapping", () => {
     });
   });
 
+  it("prefers a shell detail's summary over its raw command", () => {
+    const display = buildToolCallDisplayModel({
+      name: "shell",
+      status: "completed",
+      error: null,
+      detail: {
+        type: "shell",
+        command: `python3 - <<'PY'\nimport json\np="/home/user/.paseo/uploads/upload_00000000-0000-4000-8000-000000000000/data.json"\nprint(len(json.load(open(p))))\nPY`,
+        summary: "data.json · print(len(json.load(open(p))))",
+      },
+    });
+
+    expect(display).toEqual({
+      displayName: "Shell",
+      summary: "data.json · print(len(json.load(open(p))))",
+    });
+  });
+
   it("does not infer summaries from unknown raw detail", () => {
     const display = buildToolCallDisplayModel({
       name: "exec_command",

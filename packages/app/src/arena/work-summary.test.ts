@@ -42,6 +42,33 @@ describe("presentArenaWork", () => {
     },
   );
 
+  it("names an uploaded file and what a command does with it", () => {
+    const command = `python3 - <<'PY'
+import json
+p='/home/user/.paseo/uploads/upload_00000000-0000-4000-8000-000000000000/data.json'
+d=json.load(open(p))
+print('COUNT',len(d))
+PY`;
+    const shell = {
+      type: "tool",
+      tool: "shell",
+      state: { status: "completed", input: { command } },
+    };
+
+    expect(
+      presentArenaWork({
+        parts: [shell],
+        runState: "pending",
+        isLatest: true,
+        awaitingResponse: false,
+      }),
+    ).toMatchObject({
+      kind: "tool",
+      label: "Shell",
+      secondaryLabel: "data.json · COUNT: len(d)",
+    });
+  });
+
   it("does not promote earlier unfinished reasoning over the latest tool", () => {
     expect(
       presentArenaWork({
@@ -269,6 +296,47 @@ describe("presentArenaWork", () => {
         cwd: worktree,
       }),
     ).toMatchObject({ kind: "tool", secondaryLabel: "test/dates.test.js" });
+  });
+
+  it("shows an uploaded file by its name", () => {
+    const worktree = "/repo/.agent-duel/worktrees/turn/generation-1-a";
+    const upload =
+      "/home/user/.paseo/uploads/upload_00000000-0000-4000-8000-000000000000/data.json";
+    expect(
+      presentArenaWork({
+        parts: [toolPart("read", { path: upload })],
+        runState: "pending",
+        isLatest: true,
+        awaitingResponse: false,
+        cwd: worktree,
+      }),
+    ).toMatchObject({ kind: "tool", label: "Read", secondaryLabel: "data.json" });
+  });
+
+  it("shows a command's worktree paths relative to the worktree", () => {
+    const worktree = "/repo/.agent-duel/worktrees/turn/generation-1-a";
+    expect(
+      presentArenaWork({
+        parts: [toolPart("shell", { command: `cd ${worktree} && ls ${worktree}/src` })],
+        runState: "pending",
+        isLatest: true,
+        awaitingResponse: false,
+        cwd: worktree,
+      }),
+    ).toMatchObject({ kind: "tool", label: "Shell", secondaryLabel: "ls src" });
+  });
+
+  it("names the project for a read of the worktree root", () => {
+    const worktree = "/repo/.agent-duel/worktrees/turn/generation-1-a";
+    expect(
+      presentArenaWork({
+        parts: [toolPart("read", { path: worktree })],
+        runState: "pending",
+        isLatest: true,
+        awaitingResponse: false,
+        cwd: worktree,
+      }),
+    ).toMatchObject({ kind: "tool", label: "Read", secondaryLabel: "repo" });
   });
 });
 
