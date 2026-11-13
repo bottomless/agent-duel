@@ -84,7 +84,6 @@ export const zhCN: TranslationResources = {
     winningDiscarded: "已放弃获胜更改",
     battleDiscarded: "已放弃对战",
     versus: "对",
-    versusModel: "对 {{model}}",
     resultWon: "胜出",
     resultEarly: "提前选定",
     battleResolved: "对战已解决",

@@ -85,7 +85,6 @@ export const ar: TranslationResources = {
     winningDiscarded: "أُهملت التغييرات الفائزة",
     battleDiscarded: "أُهملت المعركة",
     versus: "ضد",
-    versusModel: "ضد {{model}}",
     resultWon: "فاز",
     resultEarly: "اختير مبكرًا",
     battleResolved: "حُسمت المعركة",

@@ -37,12 +37,14 @@ export function ArenaAnswerColumn({ head, children }: { head?: ReactNode; childr
 
 /**
  * Who wrote an answer, above its first row: their avatar in the column and their name beside it.
- * A battle's kept answer (`item`) shows the model that won, a tag for how it was kept, the model
- * it was kept over and the way into the battle; a plain turn shows the agent.
+ * A battle's kept answer shows the model that won; how it won and against whom close the answer,
+ * at its footer's right end (`ArenaBattleResult`). A plain turn shows the agent.
  */
-export function ArenaTurnHead({ agentId, item }: { agentId: string; item?: ArenaHistoryItem }) {
+export function ArenaTurnHead({ item }: { item?: ArenaHistoryItem }) {
   const { t } = useTranslation();
-  if (!item) {
+  const kept = item ? battleKeptSide(item) : undefined;
+  const model = kept ? item?.identities?.[kept].name : undefined;
+  if (!item || !model) {
     return (
       <View style={styles.head} testID="arena-turn-head-agent">
         <ArenaAgentAvatar />
@@ -50,17 +52,6 @@ export function ArenaTurnHead({ agentId, item }: { agentId: string; item?: Arena
       </View>
     );
   }
-  return <BattleHead agentId={agentId} item={item} />;
-}
-
-function BattleHead({ agentId, item }: { agentId: string; item: ArenaHistoryItem }) {
-  const { t } = useTranslation();
-  const kept = battleKeptSide(item);
-  const identities = item.identities;
-  if (!kept || !identities) return null;
-  const opponent = identities[kept === "a" ? "b" : "a"].name;
-  const model = identities[kept].name;
-  const result = keptResult(item);
   return (
     <View style={styles.head} testID={`arena-turn-head-${item.id}`}>
       <View style={styles.avatar}>
@@ -69,10 +60,32 @@ function BattleHead({ agentId, item }: { agentId: string; item: ArenaHistoryItem
       <Text style={styles.name} numberOfLines={1}>
         {arenaModelDisplayName(model)}
       </Text>
-      <ResultTag result={result} side={kept} />
-      <Text style={styles.meta} numberOfLines={1} testID={`arena-turn-head-opponent-${item.id}`}>
-        {t("arena.versusModel", { model: arenaModelDisplayName(opponent) })}
-      </Text>
+    </View>
+  );
+}
+
+/**
+ * A battle's result where its kept answer ends, at the right end of the answer's footer: the model
+ * that won, a tag for how it was kept, the model it was kept over and the way into the battle.
+ */
+export function ArenaBattleResult({ agentId, item }: { agentId: string; item: ArenaHistoryItem }) {
+  const { t } = useTranslation();
+  const kept = battleKeptSide(item);
+  const identities = item.identities;
+  if (!kept || !identities) return null;
+  const model = identities[kept].name;
+  const opponent = identities[kept === "a" ? "b" : "a"].name;
+  return (
+    <View style={styles.result} testID={`arena-battle-result-${item.id}`}>
+      <View style={styles.model}>
+        <ArenaModelVendorIcon model={model} size={15} />
+        <Text style={styles.resultName} numberOfLines={1}>
+          {arenaModelDisplayName(model)}
+        </Text>
+      </View>
+      <ResultTag result={keptResult(item)} side={kept} />
+      <Text style={styles.meta}>{t("arena.versus")}</Text>
+      <UnkeptModel model={opponent} testID={`arena-battle-result-opponent-${item.id}`} />
       {item.voteDiscardedReason ? (
         <Text style={styles.meta}>· {t("arena.voteNotCounted")}</Text>
       ) : null}
@@ -105,17 +118,17 @@ function ResultTag({ result, side }: { result: KeptResult; side: ArenaSide }) {
   const { t } = useTranslation();
   const neutral = result === "tie";
   return (
-    <View style={[styles.tag, tagTone(neutral, side)]} testID={`arena-turn-head-result-${result}`}>
+    <View style={[styles.tag, tagTone(neutral, side)]} testID={`arena-battle-result-tag-${result}`}>
       <Text style={[styles.tagText, tagTextTone(neutral, side)]}>{t(RESULT_KEYS[result])}</Text>
     </View>
   );
 }
 
 /**
- * A battle that kept no answer, in the head's place: the plain agent avatar, since no model's
- * answer stayed, the result, both models and the way into the battle.
+ * A battle that kept no answer, in the place a battle's result takes at the right end of a kept
+ * answer: the result, both models and the way into the battle.
  */
-export function ArenaUnkeptHead({
+export function ArenaUnkeptResult({
   agentId,
   item,
   label,
@@ -127,9 +140,8 @@ export function ArenaUnkeptHead({
   const { t } = useTranslation();
   const identities = item.identities;
   return (
-    <View style={[styles.head, styles.headAlone]} testID={`arena-unkept-${item.id}`}>
-      <ArenaAgentAvatar />
-      <Text style={styles.name}>{label}</Text>
+    <View style={styles.result} testID={`arena-unkept-${item.id}`}>
+      <Text style={styles.unkeptLabel}>{label}</Text>
       {identities ? (
         <>
           <Text style={styles.meta}>·</Text>
@@ -144,9 +156,9 @@ export function ArenaUnkeptHead({
   );
 }
 
-function UnkeptModel({ model }: { model: string }) {
+function UnkeptModel({ model, testID }: { model: string; testID?: string }) {
   return (
-    <View style={styles.model}>
+    <View style={styles.model} testID={testID}>
       <ArenaModelVendorIcon model={model} size={14} tone="muted" />
       <Text style={styles.meta}>{arenaModelDisplayName(model)}</Text>
     </View>
@@ -220,9 +232,25 @@ const styles = StyleSheet.create((theme) => ({
     minHeight: 24,
     marginBottom: theme.spacing[4],
   },
-  // A head with no answer under it.
-  headAlone: {
-    marginBottom: 0,
+  // A battle's result: one line that wraps from the right, at the end of the answer's footer.
+  result: {
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
+    justifyContent: "flex-end",
+    columnGap: theme.spacing[1.5],
+    minHeight: 24,
+  },
+  resultName: {
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.base,
+    fontWeight: theme.fontWeight.medium,
+    flexShrink: 1,
+  },
+  unkeptLabel: {
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.base,
+    fontWeight: theme.fontWeight.medium,
   },
   model: {
     flexDirection: "row",

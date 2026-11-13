@@ -89,7 +89,6 @@ export const es: TranslationResources = {
     winningDiscarded: "Cambios ganadores descartados",
     battleDiscarded: "Batalla descartada",
     versus: "vs.",
-    versusModel: "vs. {{model}}",
     resultWon: "Ganó",
     resultEarly: "Elegido antes",
     battleResolved: "Batalla resuelta",

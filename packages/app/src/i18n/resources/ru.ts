@@ -86,7 +86,6 @@ export const ru: TranslationResources = {
     winningDiscarded: "Изменения победителя отклонены",
     battleDiscarded: "Битва отменена",
     versus: "против",
-    versusModel: "против {{model}}",
     resultWon: "Победа",
     resultEarly: "Выбрано досрочно",
     battleResolved: "Битва завершена",

@@ -86,7 +86,6 @@ export const ja: TranslationResources = {
     winningDiscarded: "勝者の変更を破棄しました",
     battleDiscarded: "バトルを破棄しました",
     versus: "対",
-    versusModel: "対 {{model}}",
     resultWon: "勝利",
     resultEarly: "早期に選択",
     battleResolved: "バトルが解決しました",

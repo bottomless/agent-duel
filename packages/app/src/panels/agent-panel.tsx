@@ -151,7 +151,7 @@ import { ArenaDecisionPill } from "@/arena/decision-pill";
 import { useArenaBattleActions } from "@/arena/use-battle-actions";
 import { showsArenaDecisionBar } from "@/arena/decision-state";
 import { ArenaBattleSummary } from "@/arena/battle-summary";
-import { ArenaTurnHead } from "@/arena/turn-head";
+import { ArenaBattleResult, ArenaTurnHead } from "@/arena/turn-head";
 import { arenaTurnHeads } from "@/arena/turn-heads";
 import { useArenaShownBattle } from "@/arena/shown-battle";
 import { ArenaChatCallouts, hasArenaChatCallouts } from "@/arena/readiness-strip";
@@ -1782,7 +1782,11 @@ const AgentStreamSection = memo(function AgentStreamSection({
   }, [battleHistory, presentedStream, shownTurnId]);
   const chatHasRows = shownStream.tail.length + shownStream.head.length > 0;
   const ruledRowIds = useRuledRows(battleHistory, presentedStream, shownStream);
-  const { turnHeads, userRowIds } = useTurnHeads(agent.id, battleHistory, shownStream);
+  const { turnHeads, turnFooterEnds, userRowIds } = useTurnHeads(
+    agent.id,
+    battleHistory,
+    shownStream,
+  );
   // The feedback prompt stays at the end of the chat even after the summary moves up.
   const feedbackBattle = arenaBattleOnScreen ? null : latestSummary;
   const summaryPlacement = useMemo(
@@ -1993,6 +1997,7 @@ const AgentStreamSection = memo(function AgentStreamSection({
         afterItems={arenaAfterItems}
         ruledItemIds={ruledRowIds}
         turnHeads={turnHeads}
+        turnFooterEnds={turnFooterEnds}
         userRowIds={userRowIds}
         forkBoundaryAfterItemId={forkBoundaryAfterItemId}
         liveContent={liveContentWithConnection}
@@ -2136,23 +2141,31 @@ function useRuledRows(
   return ruledRowIds;
 }
 
+interface TurnHeads {
+  turnHeads: ReadonlyMap<string, React.ReactNode>;
+  turnFooterEnds: ReadonlyMap<string, React.ReactNode>;
+  userRowIds: ReadonlySet<string>;
+}
+
 /**
- * Each answer's head, its author's avatar and name, keyed by the answer's first row, and the
- * chat's prompt rows, which stay out of the avatar column. Both are keyed by the rows themselves,
- * so a streaming answer does not rebuild every row: they change when a turn starts, not as it grows.
+ * Each answer's head, its author's avatar and name, keyed by the answer's first row; each battle's
+ * result, keyed by the last text of its kept answer, whose footer it ends; and the chat's prompt
+ * rows, which stay out of the avatar column. All are keyed by the rows themselves, so a streaming
+ * answer does not rebuild every row: they change when a turn starts, not as it grows.
  */
 function useTurnHeads(
   agentId: string,
   history: ArenaSnapshot["history"] | undefined,
   stream: ArenaPresentedStream,
-): { turnHeads: ReadonlyMap<string, React.ReactNode>; userRowIds: ReadonlySet<string> } {
-  const headKey = useMemo(() => {
-    const { heads } = arenaTurnHeads(history ?? [], stream);
-    const pairs: [string, string | null][] = [...heads.entries()].map(([row, author]) => [
+): TurnHeads {
+  const layoutKey = useMemo(() => {
+    const { heads, ends } = arenaTurnHeads(history ?? [], stream);
+    const headPairs: [string, string | null][] = [...heads.entries()].map(([row, author]) => [
       row,
       author.kind === "battle" ? author.item.id : null,
     ]);
-    return JSON.stringify(pairs);
+    const endPairs: [string, string][] = [...ends.entries()].map(([row, item]) => [row, item.id]);
+    return JSON.stringify({ heads: headPairs, ends: endPairs });
   }, [history, stream]);
   const userKey = useMemo(
     () =>
@@ -2162,18 +2175,23 @@ function useTurnHeads(
         .join("\n"),
     [stream],
   );
-  const turnHeads = useMemo(() => {
-    const pairs: [string, string | null][] = JSON.parse(headKey);
+  const { turnHeads, turnFooterEnds } = useMemo(() => {
+    const pairs: { heads: [string, string | null][]; ends: [string, string][] } =
+      JSON.parse(layoutKey);
     const byTurn = new Map((history ?? []).map((item) => [item.id, item]));
     const heads = new Map<string, React.ReactNode>();
-    for (const [row, turnId] of pairs) {
-      const item = turnId ? byTurn.get(turnId) : undefined;
-      heads.set(row, <ArenaTurnHead agentId={agentId} item={item} />);
+    for (const [row, turnId] of pairs.heads) {
+      heads.set(row, <ArenaTurnHead item={turnId ? byTurn.get(turnId) : undefined} />);
     }
-    return heads;
-  }, [agentId, headKey, history]);
+    const ends = new Map<string, React.ReactNode>();
+    for (const [row, turnId] of pairs.ends) {
+      const item = byTurn.get(turnId);
+      if (item) ends.set(row, <ArenaBattleResult agentId={agentId} item={item} />);
+    }
+    return { turnHeads: heads, turnFooterEnds: ends };
+  }, [agentId, layoutKey, history]);
   const userRowIds = useMemo(() => new Set(userKey ? userKey.split("\n") : []), [userKey]);
-  return { turnHeads, userRowIds };
+  return { turnHeads, turnFooterEnds, userRowIds };
 }
 
 function useSingleAgentRatingDialog({

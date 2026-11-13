@@ -86,7 +86,6 @@ export const ko: TranslationResources = {
     winningDiscarded: "승자 변경 사항 삭제됨",
     battleDiscarded: "배틀 삭제됨",
     versus: "대",
-    versusModel: "대 {{model}}",
     resultWon: "승리",
     resultEarly: "조기 선택",
     battleResolved: "배틀 해결됨",

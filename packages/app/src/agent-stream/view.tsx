@@ -201,6 +201,7 @@ function renderStreamItemWithTurnFooter(input: {
   const footerHost = input.layoutItem.completedFooter;
   const footer = footerHost ? (
     <CompletedTurnFooterRow
+      hostItemId={footerHost.itemId}
       strategy={input.strategy}
       items={footerHost.items}
       timing={footerHost.timing}
@@ -284,6 +285,8 @@ export interface AgentStreamViewProps {
   ruledItemIds?: ReadonlySet<string>;
   /** Each answer's head in an Agent Duel chat, keyed by the answer's first row. */
   turnHeads?: ReadonlyMap<string, ReactNode>;
+  /** What ends a footer in an Agent Duel chat, a battle's result, keyed by the row it closes. */
+  turnFooterEnds?: ReadonlyMap<string, ReactNode>;
   /** Every prompt row in an Agent Duel chat, steers included; the other rows are answers. */
   userRowIds?: ReadonlySet<string>;
   /** Canonical stream item after which inherited fork history ends. */
@@ -450,6 +453,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       afterItems,
       ruledItemIds,
       turnHeads,
+      turnFooterEnds,
       userRowIds,
       forkBoundaryAfterItemId,
       liveContent,
@@ -1410,6 +1414,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
                 enabled={arenaChat === true}
                 ruledIds={ruledItemIds}
                 heads={turnHeads}
+                footerEnds={turnFooterEnds}
                 userRowIds={userRowIds}
               >
                 {streamRenderStrategy.render({
@@ -1562,6 +1567,7 @@ function collectArenaStreamViewPropDiffs(
   if (left.afterItems !== right.afterItems) reasons.push("afterItems");
   if (left.ruledItemIds !== right.ruledItemIds) reasons.push("ruledItemIds");
   if (left.turnHeads !== right.turnHeads) reasons.push("turnHeads");
+  if (left.turnFooterEnds !== right.turnFooterEnds) reasons.push("turnFooterEnds");
   if (left.userRowIds !== right.userRowIds) reasons.push("userRowIds");
   if (left.forkBoundaryAfterItemId !== right.forkBoundaryAfterItemId) {
     reasons.push("forkBoundaryAfterItemId");

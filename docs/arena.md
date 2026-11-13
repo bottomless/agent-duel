@@ -1440,18 +1440,23 @@ including `application_failed` and `canonicalization_failed`.
 Keep the battle open during application, then collapse it to the kept answer. Every answer in an
 Agent Duel chat sits after an avatar column and opens with a head (`ArenaTurnHead`, placed by
 `arenaTurnHeads`): its author's avatar in the column and the name beside it, 16px above the answer.
-A kept answer's avatar is the winning model's vendor mark, alone; its line reads `Claude Opus 5.5
+A kept answer's avatar is the winning model's vendor mark, alone, with only its name beside it. The
+battle's result closes the answer instead, at the right end of its footer on the chat's right edge
+where the prompt ends (`ArenaBattleResult`, keyed by `arenaTurnHeads`' `ends`): `Claude Opus 5.5
 [Won] vs GPT-6.1 Sol · Show battle`, the tag tinted in the kept side's colour, or `Tie` or `Chosen
 early`. A side kept at a Stop or after the other failed shows `Won` too, with `Vote not counted`
-when the vote was discarded. Every kept side gets it
-(`battleKeptSide`). A plain turn shows the agent glyph and `Agent`, so a battle turn is told apart by
-its logo before a word is read. Name both models: with only the winner the reveal was half a
-reveal, and the other contestant left no trace in the chat. Two stacked avatars, and the wording
-`X over Y`, both read worse in review. Rows before the first loaded prompt get no head until their
-page loads, since nothing yet says whose answer they are. A battle that kept no answer (discarded
-at the vote, after Stop, after a restart or from the archive) takes a head of its own in the
-answer's place, with the agent glyph: **Battle discarded**, both models and Show battle
-(`ArenaUnkeptHead`); a battle that could not start says so the same way with **Try again**.
+when the vote was discarded. Every kept side gets it (`battleKeptSide`), on the footer of the kept
+answer's last text, so replies sent inside the battle share one result. On a narrow window it wraps
+under the footer, still at the right edge. The owner wanted the head to say who answered and the
+battle to show where the turn ends; the result in the head, above the answer, was turned down. A
+plain turn shows the agent glyph and `Agent`, so a battle turn is told apart by its logo before a
+word is read. Name both models: with only the winner the reveal was half a reveal, and the other
+contestant left no trace in the chat. Two stacked avatars, and the wording `X over Y`, both read
+worse in review. Rows before the first loaded prompt get no head and no result until their page
+loads, since nothing yet says whose answer they are. A battle that kept no answer (discarded at the
+vote, after Stop, after a restart or from the archive) is its result alone, at the same right
+edge, with no avatar: **Battle discarded**, both models and Show battle (`ArenaUnkeptResult`); a
+battle that could not start says so the same way with **Try again**.
 Neither is a card: the boxed summary main drew read as an object dropped between turns. The chat after a battle sits on the battle's rails (`agent-stream/arena-row-layout.tsx`):
 every prompt, a plain turn's and a steer's as well as a battle's, keeps its bubble at the battle's
 right edge (`ArenaRow` `prompt`), and the rest

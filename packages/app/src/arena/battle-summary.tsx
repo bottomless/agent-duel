@@ -47,7 +47,7 @@ import { arenaChangesCountLabel, arenaChangesRows } from "./changes-rows";
 import { arenaDiffQueryKey, hasBattleDiff } from "./comparison-visibility";
 import { arenaModelDisplayName } from "./side-label";
 import { ArenaModelVendorIcon } from "./model-vendor-icon";
-import { ArenaAgentAvatar, ArenaAnswerColumn, ArenaUnkeptHead } from "./turn-head";
+import { ArenaUnkeptResult } from "./turn-head";
 import { describeSummaryOmissions } from "./summary-omissions";
 import { ArenaRunThread } from "./run-thread";
 import { arenaSessionQueryKey, useArenaStartMutation } from "./use-arena-session";
@@ -279,15 +279,13 @@ export function ArenaBattleOutcome({ item }: { item: ArenaHistoryItem }) {
 
 /**
  * A decided battle that kept no answer, discarded at the vote, after Stop, after a restart or from
- * the archive: a head where its answer would be, in the avatar column, with the plain agent avatar
- * since no model's answer is kept (`ArenaUnkeptHead`).
+ * the archive: its result alone, at the chat's right edge where a kept answer's footer ends with
+ * its battle (`ArenaUnkeptResult`). No avatar, since no model's answer is kept.
  */
 function ArenaUnkeptLine({ agentId, item }: { agentId: string; item: ArenaHistoryItem }) {
   return (
-    <View style={[styles.answerInset, styles.unkeptSpacing]}>
-      <ArenaAnswerColumn>
-        <ArenaUnkeptHead agentId={agentId} item={item} label={chosenLabel(item)} />
-      </ArenaAnswerColumn>
+    <View style={[styles.resultEdge, styles.unkeptSpacing]}>
+      <ArenaUnkeptResult agentId={agentId} item={item} label={chosenLabel(item)} />
     </View>
   );
 }
@@ -787,27 +785,24 @@ function FailedBattleStart({
   }, [agentId, client, item.id, startArena, toast, t]);
   return (
     <View style={styles.keptNotice} testID={`arena-summary-${item.id}`}>
-      <View style={styles.answerInset}>
-        <ArenaAnswerColumn>
-          <View style={styles.failedStart}>
-            <ArenaAgentAvatar />
-            <Text style={styles.failedStartText}>
-              <Text style={styles.unkeptResult}>{t("arena.couldntStart")}</Text>
-              <Text style={styles.bylineMeta}> · {t("arena.neitherRan")}</Text>
-            </Text>
-            {canStartAgain ? (
-              <Button
-                size="xs"
-                variant="outline"
-                loading={starting}
-                onPress={handleStartAgain}
-                testID="arena-failed-start-retry"
-              >
-                {t("arena.tryAgain")}{" "}
-              </Button>
-            ) : null}
-          </View>
-        </ArenaAnswerColumn>
+      <View style={[styles.resultEdge, styles.unkeptSpacing]}>
+        <View style={styles.failedStart}>
+          <Text style={styles.failedStartText}>
+            <Text style={styles.unkeptResult}>{t("arena.couldntStart")}</Text>
+            <Text style={styles.bylineMeta}> · {t("arena.neitherRan")}</Text>
+          </Text>
+          {canStartAgain ? (
+            <Button
+              size="xs"
+              variant="outline"
+              loading={starting}
+              onPress={handleStartAgain}
+              testID="arena-failed-start-retry"
+            >
+              {t("arena.tryAgain")}{" "}
+            </Button>
+          ) : null}
+        </View>
       </View>
     </View>
   );
@@ -894,9 +889,10 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.foregroundMuted,
     fontSize: theme.fontSize.base,
   },
-  // The chat's rows sit a step further in than this container: the answers' own left edge.
-  answerInset: {
-    paddingLeft: theme.spacing[3],
+  // The chat's rows sit a step further in than this container on both sides: on the right, the
+  // edge a prompt and a kept answer's result end on.
+  resultEdge: {
+    paddingHorizontal: { xs: theme.spacing[2], md: theme.spacing[3] },
   },
   // A battle that kept no answer is a whole turn in one line: the next prompt starts a gap below.
   unkeptSpacing: {
@@ -940,11 +936,13 @@ const styles = StyleSheet.create((theme) => ({
   },
   failedStart: {
     flexDirection: "row",
+    flexWrap: "wrap",
     alignItems: "center",
+    justifyContent: "flex-end",
     gap: theme.spacing[3],
   },
   failedStartText: {
-    flex: 1,
+    flexShrink: 1,
     minWidth: 0,
     lineHeight: 24,
   },

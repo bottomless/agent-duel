@@ -82,7 +82,6 @@ export const en = {
     winningDiscarded: "Winning changes discarded",
     battleDiscarded: "Battle discarded",
     versus: "vs",
-    versusModel: "vs {{model}}",
     resultWon: "Won",
     resultEarly: "Chosen early",
     battleResolved: "Battle resolved",

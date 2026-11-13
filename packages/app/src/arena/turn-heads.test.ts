@@ -32,7 +32,7 @@ describe("arenaTurnHeads", () => {
       text("a3"),
     ];
     const kept = battle("turn-2", "msg_0100");
-    const { heads, answerRowIds } = arenaTurnHeads([kept], { tail, head: [] });
+    const { heads, answerRowIds, ends } = arenaTurnHeads([kept], { tail, head: [] });
     expect([...heads.entries()]).toEqual([
       ["a1", { kind: "agent" }],
       // The chat sets work under the text it led into (`orderArenaChat`), so the text opens it.
@@ -40,6 +40,8 @@ describe("arenaTurnHeads", () => {
       ["a3", { kind: "agent" }],
     ]);
     expect([...answerRowIds]).toEqual(["a1", "a2", "t2", "a3"]);
+    // The battle's result ends the footer of its answer's last text.
+    expect([...ends.entries()]).toEqual([["a2", kept]]);
   });
 
   it("keeps replies sent inside a battle in that battle's one answer", () => {
@@ -52,8 +54,10 @@ describe("arenaTurnHeads", () => {
       text("later"),
     ];
     const kept = battle("turn-1", "msg_0100", "msg_0199");
-    const { heads } = arenaTurnHeads([kept], { tail, head: [] });
+    const { heads, ends } = arenaTurnHeads([kept], { tail, head: [] });
     expect([...heads.keys()]).toEqual(["a1", "later"]);
+    // One result, after the last reply the battle answered.
+    expect([...ends.keys()]).toEqual(["a2"]);
   });
 
   it("gives no head to an answer whose prompt has not loaded yet", () => {

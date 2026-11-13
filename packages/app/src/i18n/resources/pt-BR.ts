@@ -90,7 +90,6 @@ export const ptBR: TranslationResources = {
     winningDiscarded: "Alterações vencedoras descartadas",
     battleDiscarded: "Batalha descartada",
     versus: "vs.",
-    versusModel: "vs. {{model}}",
     resultWon: "Venceu",
     resultEarly: "Escolhido antes",
     battleResolved: "Batalha resolvida",

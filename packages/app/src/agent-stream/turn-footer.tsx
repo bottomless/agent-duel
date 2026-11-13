@@ -69,6 +69,7 @@ export const TurnFooter = memo(function TurnFooter({
   }
   return (
     <CompletedTurnFooterRow
+      hostItemId={host.itemId}
       strategy={strategy}
       items={host.items}
       timing={host.timing}
@@ -80,6 +81,7 @@ export const TurnFooter = memo(function TurnFooter({
 });
 
 export const CompletedTurnFooterRow = memo(function CompletedTurnFooterRow({
+  hostItemId,
   strategy,
   items,
   timing,
@@ -87,6 +89,8 @@ export const CompletedTurnFooterRow = memo(function CompletedTurnFooterRow({
   supportsTimelineCursor,
   onForkAssistantTurn,
 }: {
+  /** The row the footer closes; an Agent Duel chat ends a kept answer's footer with its battle. */
+  hostItemId: string;
   strategy: TurnContentStrategy;
   items: StreamItem[];
   timing?: TurnTiming;
@@ -94,9 +98,11 @@ export const CompletedTurnFooterRow = memo(function CompletedTurnFooterRow({
   supportsTimelineCursor: boolean;
   onForkAssistantTurn?: AssistantTurnForkHandler;
 }) {
+  const end = useArenaRowLayout()?.footerEnds?.get(hostItemId);
   return (
-    <TurnFooterRow>
+    <TurnFooterRow end={end}>
       <CompletedTurnFooter
+        flush={end !== undefined}
         strategy={strategy}
         items={items}
         timing={timing}
@@ -153,6 +159,7 @@ export function RunningTurnFooter({
 }
 
 function CompletedTurnFooter({
+  flush = false,
   strategy,
   items,
   timing,
@@ -160,6 +167,8 @@ function CompletedTurnFooter({
   supportsTimelineCursor,
   onForkAssistantTurn,
 }: {
+  /** Leaves the space below the turn to the row, which a battle's result can wrap into. */
+  flush?: boolean;
   strategy: TurnContentStrategy;
   items: StreamItem[];
   timing?: TurnTiming;
@@ -191,7 +200,7 @@ function CompletedTurnFooter({
     [boundary, onForkAssistantTurn],
   );
   return (
-    <View style={stylesheet.turnFooterSlot}>
+    <View style={[stylesheet.turnFooterSlot, flush && stylesheet.turnFooterSlotFlush]}>
       <AssistantTurnFooter
         getContent={getContent}
         completedAt={timing?.completedAt}
@@ -202,10 +211,24 @@ function CompletedTurnFooter({
   );
 }
 
-/** An Agent Duel chat sets a footer after the avatar column, as the answer it closes. */
-function TurnFooterRow({ children }: { children: ReactNode }) {
+/**
+ * An Agent Duel chat sets a footer after the avatar column, as the answer it closes. A battle's kept
+ * answer ends its footer with the battle's result, at the chat's right edge where its prompt ends;
+ * when the two do not fit on one line the result wraps under the footer, still at that edge.
+ */
+function TurnFooterRow({ end, children }: { end?: ReactNode; children: ReactNode }) {
   const arenaLayout = useArenaRowLayout();
   const rowStyle = useMemo(() => [stylesheet.streamItemWrapper, stylesheet.turnFooterRow], []);
+  if (arenaLayout && end) {
+    return (
+      <ArenaRow answer fullWidth style={stylesheet.turnFooterRow}>
+        <View style={stylesheet.turnFooterWithEnd}>
+          {children}
+          <View style={stylesheet.turnFooterEnd}>{end}</View>
+        </View>
+      </ArenaRow>
+    );
+  }
   if (arenaLayout) {
     return (
       <ArenaRow answer style={stylesheet.turnFooterRow}>
@@ -225,6 +248,26 @@ const stylesheet = StyleSheet.create((theme) => ({
   },
   turnFooterRow: {
     marginTop: theme.spacing[2] + 5,
+  },
+  // The turn's space below is the row's, so a result that wraps under the footer keeps it.
+  turnFooterWithEnd: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "flex-start",
+    columnGap: theme.spacing[4],
+    rowGap: theme.spacing[2],
+    paddingBottom: TURN_FOOTER_BOTTOM_SPACING,
+  },
+  turnFooterSlotFlush: {
+    paddingBottom: 0,
+  },
+  // Pushed to the right end, and kept there when it wraps under the footer.
+  turnFooterEnd: {
+    marginLeft: "auto",
+    minHeight: 24,
+    flexShrink: 1,
+    flexDirection: "row",
+    alignItems: "center",
   },
   turnFooterSlot: {
     flexDirection: "row",
