@@ -7,6 +7,7 @@ import { existsSync } from "node:fs"
 import { mkdtemp, mkdir, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, dirname } from "node:path"
+import { fileURLToPath } from "node:url"
 import { fenceLegacyEngines, finishLegacyCleanup } from "@/arena/database-upgrade"
 import { removeImportedLegacyTables } from "@/arena/database-cleanup"
 import { databaseLease, engineDatabaseLease } from "@/arena/database-lease"
@@ -92,6 +93,11 @@ function state(input: { engineDatabase: string }) {
   return JSON.parse(
     read<{ value: string }>(input.engineDatabase, "SELECT value FROM kv WHERE key='arena.v1-cleanup'")[0].value,
   )
+}
+// Windows has no signals: a process that kills itself ends through TerminateProcess with exit code 1.
+function expectSelfKilled(child: { signalCode: string | null; exitCode: number | null }) {
+  if (process.platform === "win32") expect(child.exitCode).toBe(1)
+  else expect(child.signalCode).toBe("SIGKILL")
 }
 function expectKept(input: { engineDatabase: string }) {
   expect(tables(input)).toContain("message")
@@ -206,7 +212,7 @@ test("a complete audit drops without a saved database, even with an invalid Aren
 
 test("a real kill between drop and VACUUM leaves a durable pending step", async () => {
   const input = await fixture()
-  const module = new URL("../../src/arena/database-cleanup.ts", import.meta.url).pathname
+  const module = fileURLToPath(new URL("../../src/arena/database-cleanup.ts", import.meta.url))
   const child = Bun.spawn(
     [
       process.execPath,
@@ -222,7 +228,7 @@ test("a real kill between drop and VACUUM leaves a durable pending step", async 
   child.stdin.write(JSON.stringify(input))
   child.stdin.end()
   await child.exited
-  expect(child.signalCode).toBe("SIGKILL")
+  expectSelfKilled(child)
   expect(state(input).phase).toBe("vacuum")
   expect(tables(input)).not.toContain("message")
   await removeImportedLegacyTables(input)
@@ -332,7 +338,7 @@ test("maintenance time limit returns to startup and the next start can finish", 
 for (const point of ["beforeRename", "afterRename"] as const) {
   test(`a real kill ${point} leaves a complete database`, async () => {
     const input = await fixture()
-    const module = new URL("../../src/arena/database-cleanup.ts", import.meta.url).pathname
+    const module = fileURLToPath(new URL("../../src/arena/database-cleanup.ts", import.meta.url))
     const child = Bun.spawn(
       [
         process.execPath,
@@ -350,7 +356,7 @@ for (const point of ["beforeRename", "afterRename"] as const) {
     child.stdin.write(JSON.stringify(input))
     child.stdin.end()
     await child.exited
-    expect(child.signalCode).toBe("SIGKILL")
+    expectSelfKilled(child)
     expect(read(input.engineDatabase, "PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }])
     expect(read(input.engineDatabase, "SELECT id FROM session_v2")).toEqual([{ id: "ses_old" }])
     expect(read(input.engineDatabase, "SELECT id FROM session_message")).toEqual([{ id: "msg_old" }])
@@ -376,7 +382,7 @@ for (const point of ["beforeRename", "afterRename"] as const) {
 
 test("a real kill before DROP commits rolls back all DDL and the pending marker", async () => {
   const input = await fixture()
-  const module = new URL("../../src/arena/database-cleanup.ts", import.meta.url).pathname
+  const module = fileURLToPath(new URL("../../src/arena/database-cleanup.ts", import.meta.url))
   const child = Bun.spawn(
     [
       process.execPath,
@@ -394,7 +400,7 @@ test("a real kill before DROP commits rolls back all DDL and the pending marker"
   child.stdin.write(JSON.stringify(input))
   child.stdin.end()
   await child.exited
-  expect(child.signalCode).toBe("SIGKILL")
+  expectSelfKilled(child)
   expectKept(input)
   expect(state(input).phase).toBe("audit")
   expect(read(input.engineDatabase, "SELECT content FROM todo")).toEqual([{ content: "keep this task" }])
@@ -661,7 +667,7 @@ test("a SIGKILL during audit keeps source tables and resumes committed audit pro
   await child.exited
   await out
   await err
-  expect(child.signalCode).toBe("SIGKILL")
+  expectSelfKilled(child)
   expectKept(input)
   expect(state(input)).toMatchObject({ phase: "audit", cursor: "ses_old" })
   await removeImportedLegacyTables(input)

@@ -38,6 +38,8 @@ cd arena-backend && bun install
   robocopy (`copyDirectory` in `util/copy-tree.ts`).
 - The Win32 API stands in for `ps` and `lsof` (`arena/windows-processes.ts`). A "process group" is
   the tree under one command the engine started, and it keeps the pid of a parent that has exited.
+  The 1.x table cleanup uses `LockFileEx` for `flock` and a share-nothing open for `lsof`
+  (`arena/database-lease.ts`).
 - Tests that create symlinks, set sub-millisecond times, `chmod`, run a fake `git` script, or
   expect LF files under `core.autocrlf=true` fail on Windows; none of them is an engine failure.
   To leave line endings out, point `GIT_CONFIG_GLOBAL` at a config with `core.autocrlf = false`.
