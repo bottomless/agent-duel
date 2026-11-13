@@ -447,10 +447,13 @@ label between them, because as three separate buttons Tie read as a third answer
 transparent, click-through area around it. It stays reachable while reviewing either thread or
 the diff. A stopped battle uses the same pill for `Keep A`, `Discard`, and `Keep B`; an early
 choice while the battle runs sits there too. While neither result is selectable, show one `Stop`
-button. When one result becomes selectable, `Stop` moves to the exact centre between the answers
-and each side's place holds what applies to it: `Choose A early` or `Choose B early` on the
-finished side, and the working side's status (`Agent A is still working`, with its colour dot) on
-the other. A hint line above the buttons left the status unattached to either side. While both
+button. When one result becomes selectable, the row becomes the same gray pill as the vote, with
+`Stop` in the middle and each side's place holding what applies to it: `Choose A early` or
+`Choose B early` on the finished side, and the working side's status (`Agent A is still working`,
+with its colour dot) on the other, as the pill's quiet part, where `Tie` sits at the vote. The
+running row and the vote then read as one control in two states. A hint line above the buttons
+left the status unattached to either side, and a separate status chip looked like neither a button
+nor part of the row. The answers scroll behind the pill, so everything in it is opaque. While both
 run, keep `Stop` alone; there is nothing to put on either side. At the vote the pill reads `Choose A`, `Tie`, `Choose B`.
 `Tie` shows only when both results can be chosen. A failed side shows `Accept B` in its Choose's
 place when its result was saved, and nothing when it was not. Discard is not one of the vote's
