@@ -7,7 +7,6 @@ import {
   SettingsSelect,
   SettingsSwitch,
 } from "@/components/settings";
-import { isNative } from "@/constants/platform";
 import { useAppSettings, type AppSettings } from "@/hooks/use-settings";
 
 const TOOL_CALL_DETAIL_LEVELS: readonly AppSettings["toolCallDetailLevel"][] = [
@@ -37,10 +36,6 @@ export function ChatSection() {
     (autoExpandReasoning: boolean) => void updateSettings({ autoExpandReasoning }),
     [updateSettings],
   );
-  const changeChatOutline = useCallback(
-    (chatOutlineEnabled: boolean) => void updateSettings({ chatOutlineEnabled }),
-    [updateSettings],
-  );
 
   return (
     <View>
@@ -59,14 +54,6 @@ export function ChatSection() {
             options={toolCallDetailOptions}
             onValueChange={changeToolCallDetailLevel}
           />
-          {isNative ? null : (
-            <SettingsSwitch
-              label={t("settings.appearance.chatOutline.title")}
-              hint={t("settings.appearance.chatOutline.description")}
-              value={settings.chatOutlineEnabled}
-              onValueChange={changeChatOutline}
-            />
-          )}
         </SettingsCard>
       </SettingsSection>
     </View>
