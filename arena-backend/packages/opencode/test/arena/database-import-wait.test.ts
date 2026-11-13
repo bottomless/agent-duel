@@ -8,6 +8,7 @@ import { sql } from "drizzle-orm"
 import { mkdtemp, mkdir, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { fileURLToPath } from "node:url"
 import {
   prepareDatabaseUpgrade,
   prepareDatabaseMaintenance,
@@ -368,10 +369,16 @@ test("missing lease support still imports and fences", async () => {
   expect(rows(input.engineDatabase, "SELECT name FROM sqlite_master WHERE name='_arena_v1_session'")).toHaveLength(1)
 })
 
+// Windows has no signals: a process that kills itself ends through TerminateProcess with exit code 1.
+function expectSelfKilled(child: { signalCode: string | null; exitCode: number | null }) {
+  if (process.platform === "win32") expect(child.exitCode).toBe(1)
+  else expect(child.signalCode).toBe("SIGKILL")
+}
+
 test("a kill between the import and cleanup resumes with cleanup only", async () => {
   const input = await profile(3)
   const driver = path.join(input.root, "maintenance-driver.ts")
-  const module = new URL("../../src/arena/database-upgrade.ts", import.meta.url).pathname
+  const module = fileURLToPath(new URL("../../src/arena/database-upgrade.ts", import.meta.url))
   await Bun.write(
     driver,
     `
@@ -386,7 +393,7 @@ test("a kill between the import and cleanup resumes with cleanup only", async ()
   const out = new Response(child.stdout).text()
   const err = new Response(child.stderr).text()
   expect(await child.exited).not.toBe(0)
-  expect(child.signalCode).toBe("SIGKILL")
+  expectSelfKilled(child)
   await out
   await err
   expect(rows(input.engineDatabase, "SELECT COUNT(*) AS n FROM session_message")).toEqual([{ n: 3 }])

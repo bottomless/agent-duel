@@ -316,16 +316,19 @@ export async function removeImportedLegacyTables(input: CleanupInput, ports: Por
       // Publish completion in the copy: a kill after rename cannot trigger another copy.
       copy.query("UPDATE kv SET value=? WHERE key=?").run(JSON.stringify({ phase: "done" }), KEY)
     }
+    // Windows flushes only a writable handle.
     const sync = (file: string) => {
-      const fd = openSync(file, "r")
+      const fd = openSync(file, process.platform === "win32" ? "r+" : "r")
       try {
         fsyncSync(fd)
       } finally {
         closeSync(fd)
       }
     }
+    // Windows cannot open a directory to flush it; NTFS journals the rename itself.
+    const syncDirectory = (directory: string) => process.platform !== "win32" && sync(directory)
     sync(temporary)
-    sync(dirname(temporary))
+    syncDirectory(dirname(temporary))
     database.close()
     closed = true
     if (expired(5_000) || (await databaseHasHolders(input.engineDatabase))) {
@@ -335,11 +338,11 @@ export async function removeImportedLegacyTables(input: CleanupInput, ports: Por
     // Remove sidecars BEFORE rename. A kill after rename must never replay the old WAL on the copy.
     rmSync(`${input.engineDatabase}-wal`, { force: true })
     rmSync(`${input.engineDatabase}-shm`, { force: true })
-    sync(dirname(temporary))
+    syncDirectory(dirname(temporary))
     ports.beforeRename?.()
     renameSync(temporary, input.engineDatabase)
     ports.afterRename?.()
-    sync(dirname(input.engineDatabase))
+    syncDirectory(dirname(input.engineDatabase))
     console.log("[arena-upgrade] Removed imported 1.x tables and reclaimed database space")
   } catch (error) {
     if (!closed) save({ phase: "vacuum", retryAfter: now() + RETRY_MS, copyMs: now() - started })
