@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next";
 import { useCallback, useEffect } from "react";
 import { Text, View, type LayoutChangeEvent } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
-import { ARENA_MAX_CONTENT_WIDTH } from "@/constants/layout";
 import type { ArenaSide, ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
 import {
   ArenaRunningPillButton,
@@ -20,7 +19,6 @@ import {
 } from "./decision-state";
 import { isArenaBattleOnScreen } from "./summary-anchor";
 import { useArenaBattleActions, type ArenaBattleActions } from "./use-battle-actions";
-import { BATTLE_RAIL } from "./battle-layout";
 
 function BattlePaneDecision({
   side,
@@ -266,9 +264,10 @@ function WorkingStatus({ side }: { side: ArenaSide }) {
 }
 
 /**
- * Once one side has finished, Stop sits exactly between the answers and each side's place holds
- * what applies to it: its Choose early once it has finished, its status while it works. While both
- * run there is nothing to put either side, so the row keeps Stop alone.
+ * Once one side has finished, the row is one control, built like the vote's (`ArenaChoiceGroup`):
+ * each side's place holds what applies to it, its Choose early once it has finished, its status
+ * while it works, with Stop between them. The status is the group's quiet part, as Tie is at the
+ * vote, so the running row and the vote read as one control in two states.
  */
 function RunningSides({
   phase,
@@ -284,19 +283,11 @@ function RunningSides({
     return waiting === side ? <WorkingStatus side={side} /> : null;
   };
   return (
-    <View
-      style={[styles.row, styles.runningRow]}
-      pointerEvents="box-none"
-      testID="arena-battle-choice-row"
-    >
-      <View style={[styles.start, styles.end]} pointerEvents="box-none">
-        {slot("a")}
-      </View>
+    <ArenaChoiceGroup testID="arena-battle-choice-row">
+      {slot("a")}
       <BattleStopDecision phase={phase} actions={actions} />
-      <View style={styles.start} pointerEvents="box-none">
-        {slot("b")}
-      </View>
-    </View>
+      {slot("b")}
+    </ArenaChoiceGroup>
   );
 }
 
@@ -372,24 +363,6 @@ const styles = StyleSheet.create((theme) => ({
     paddingBottom: theme.spacing[2],
     gap: theme.spacing[2],
   },
-  row: {
-    width: "100%",
-    maxWidth: ARENA_MAX_CONTENT_WIDTH,
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: BATTLE_RAIL,
-  },
-  // The two ends share the space evenly, so the choices stay centred between the answers.
-  start: {
-    flex: 1,
-    flexBasis: 0,
-    minWidth: 0,
-    flexDirection: "row",
-    alignItems: "center",
-  },
-  end: {
-    justifyContent: "flex-end",
-  },
   choices: {
     flexDirection: "row",
     alignItems: "center",
@@ -408,21 +381,12 @@ const styles = StyleSheet.create((theme) => ({
     fontSize: theme.fontSize.sm,
     textAlign: "center",
   },
-  // Stop between the two sides' places, a button's width apart.
-  runningRow: {
-    gap: theme.spacing[2],
-  },
-  // A chip as solid as the buttons beside it, since the answers scroll behind the row.
+  // The group's quiet part, on the group's own fill, as Tie is at the vote.
   working: {
     flexDirection: "row",
     alignItems: "center",
     gap: theme.spacing[2],
-    minHeight: 32,
     paddingHorizontal: theme.spacing[3],
-    borderRadius: theme.borderRadius.full,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    backgroundColor: theme.colors.surface0,
   },
   // The side's colour, as on its pane's rule and its Choose button.
   workingDot: {
