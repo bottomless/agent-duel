@@ -1786,6 +1786,7 @@ const AgentStreamSection = memo(function AgentStreamSection({
     agent.id,
     battleHistory,
     shownStream,
+    turnPresentation.isActive,
   );
   // The feedback prompt stays at the end of the chat even after the summary moves up.
   const feedbackBattle = arenaBattleOnScreen ? null : latestSummary;
@@ -2157,16 +2158,17 @@ function useTurnHeads(
   agentId: string,
   history: ArenaSnapshot["history"] | undefined,
   stream: ArenaPresentedStream,
+  lastTurnOpen: boolean,
 ): TurnHeads {
   const layoutKey = useMemo(() => {
-    const { heads, ends } = arenaTurnHeads(history ?? [], stream);
+    const { heads, ends } = arenaTurnHeads(history ?? [], stream, lastTurnOpen);
     const headPairs: [string, string | null][] = [...heads.entries()].map(([row, author]) => [
       row,
       author.kind === "battle" ? author.item.id : null,
     ]);
     const endPairs: [string, string][] = [...ends.entries()].map(([row, item]) => [row, item.id]);
     return JSON.stringify({ heads: headPairs, ends: endPairs });
-  }, [history, stream]);
+  }, [history, lastTurnOpen, stream]);
   const userKey = useMemo(
     () =>
       [...stream.tail, ...stream.head]

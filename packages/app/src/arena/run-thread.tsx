@@ -592,10 +592,14 @@ function ArenaActivityGroup({
 }) {
   const segments = useMemo(
     () =>
-      projectArenaActivitySegments(messageIds, context.run.parts ?? {}, (part) =>
-        context.subagents.has(part),
+      projectArenaActivitySegments(
+        messageIds,
+        context.run.parts ?? {},
+        (part) => context.subagents.has(part),
+        // A group a later message followed is settled, as is every group once the run stops.
+        { settled: !isLatest || context.run.runState !== "pending" },
       ),
-    [context.run.parts, context.subagents, messageIds],
+    [context.run.parts, context.run.runState, context.subagents, isLatest, messageIds],
   );
   const awaitingResponse = isLatest && arenaRunIsAwaitingResponse(context.run);
   const visibleSegments =

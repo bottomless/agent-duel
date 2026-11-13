@@ -47,16 +47,22 @@ function partIsTextUpdate(part: unknown): boolean {
 
 /**
  * Questions stay in conversation order, including work before the first question.
- * Other leading work moves beneath the first contestant text update.
+ * Other leading work moves beneath the first contestant text update, unless that text is also the
+ * last thing the agent wrote: a final answer is not followed by the work that led to it
+ * (`settleFinalText`).
  */
 export function projectArenaActivitySegments(
   messageIds: readonly string[],
   partsByMessage: Readonly<Record<string, readonly unknown[] | undefined>>,
   isSubagent: (part: unknown) => boolean = () => false,
+  options: { settled?: boolean } = {},
 ): ArenaActivitySegment[] {
   const segments: ArenaActivitySegment[] = [];
   const leading: ArenaActivityPart[] = [];
   let current: ArenaActivitySegment | null = null;
+  // The first text, which took the work before it beneath it, and how much of that work.
+  let leadingOwner: ArenaActivitySegment | null = null;
+  let leadingCount = 0;
 
   for (const messageId of messageIds) {
     const parts = partsByMessage[messageId] ?? [];
@@ -77,6 +83,10 @@ export function projectArenaActivitySegments(
           content: entry,
           trailing: segments.length === 0 ? leading.splice(0) : [],
         };
+        if (segments.length === 0 && current.trailing.length > 0) {
+          leadingOwner = current;
+          leadingCount = current.trailing.length;
+        }
       } else if (current) {
         current.trailing.push(entry);
       } else {
@@ -93,7 +103,50 @@ export function projectArenaActivitySegments(
       trailing: leading,
     });
   }
-  return segments;
+  return settleFinalText(segments, leadingOwner, leadingCount, options.settled === true);
+}
+
+function partIsReasoning(part: unknown): boolean {
+  const type = partType(part);
+  return type === "reasoning" || type === "thought";
+}
+
+/**
+ * Nothing the agent did to reach its final text reads after it. When the agent's first text is its
+ * last, the work before it stays above it. Once the run is settled, reasoning written after the
+ * final text with nothing after it (a provider can send it after the answer) joins the work above
+ * the text instead of trailing it. Work that follows the final text otherwise stays beneath it:
+ * while the run works, the text may not be final yet.
+ */
+function settleFinalText(
+  segments: ArenaActivitySegment[],
+  leadingOwner: ArenaActivitySegment | null,
+  leadingCount: number,
+  settled: boolean,
+): ArenaActivitySegment[] {
+  const final = segments.at(-1);
+  if (!final?.content || !partIsTextUpdate(final.content.part)) return segments;
+  const before = final === leadingOwner ? final.trailing.slice(0, leadingCount) : [];
+  const after = final.trailing.slice(before.length);
+  const folded = settled && after.length > 0 && after.every((entry) => partIsReasoning(entry.part));
+  if (after.length > 0 && !folded) return segments;
+  const above = [...before, ...(folded ? after : [])];
+  if (above.length === 0) return segments;
+  const rest = segments.slice(0, -1);
+  const finalText = { ...final, trailing: [] };
+  const previous = rest.at(-1);
+  if (before.length === 0 && previous) {
+    return [
+      ...rest.slice(0, -1),
+      { ...previous, trailing: [...previous.trailing, ...above] },
+      finalText,
+    ];
+  }
+  return [
+    ...rest,
+    { key: `${above[0].messageId}:activity`, content: null, trailing: above },
+    finalText,
+  ];
 }
 
 export type ArenaActivityRow =

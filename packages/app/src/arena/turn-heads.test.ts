@@ -35,11 +35,11 @@ describe("arenaTurnHeads", () => {
     const { heads, answerRowIds, ends } = arenaTurnHeads([kept], { tail, head: [] });
     expect([...heads.entries()]).toEqual([
       ["a1", { kind: "agent" }],
-      // The chat sets work under the text it led into (`orderArenaChat`), so the text opens it.
-      ["a2", { kind: "battle", item: kept }],
+      // An answer that is its turn's only text keeps its work above it (`orderArenaChat`).
+      ["t2", { kind: "battle", item: kept }],
       ["a3", { kind: "agent" }],
     ]);
-    expect([...answerRowIds]).toEqual(["a1", "a2", "t2", "a3"]);
+    expect([...answerRowIds]).toEqual(["a1", "t2", "a2", "a3"]);
     // The battle's result ends the footer of its answer's last text.
     expect([...ends.entries()]).toEqual([["a2", kept]]);
   });

@@ -384,6 +384,57 @@ describe("arenaRunIsAwaitingResponse", () => {
 });
 
 describe("projectArenaActivitySegments", () => {
+  const thinking = { type: "reasoning", text: "thinking" };
+  const summarize = (segments: ReturnType<typeof projectArenaActivitySegments>) =>
+    segments.map((segment) => [
+      segment.content ? (segment.content.part as { text?: string }).text : null,
+      segment.trailing.map((entry) => (entry.part as { type: string }).type),
+    ]);
+
+  it("keeps the work above a final answer that is the run's first text", () => {
+    const grep = toolPart("grep", { pattern: "gtag" });
+    const segments = projectArenaActivitySegments(["work", "answer"], {
+      work: [thinking, grep],
+      answer: [thinking, { type: "text", text: "No analytics." }],
+    });
+
+    expect(summarize(segments)).toEqual([
+      [null, ["reasoning", "tool", "reasoning"]],
+      ["No analytics.", []],
+    ]);
+  });
+
+  it("still moves the work before a first text beneath it when work follows that text", () => {
+    const grep = toolPart("grep", { pattern: "gtag" });
+    const segments = projectArenaActivitySegments(["plan"], {
+      plan: [thinking, { type: "text", text: "I'll grep the layouts." }, grep],
+    });
+
+    expect(summarize(segments)).toEqual([["I'll grep the layouts.", ["reasoning", "tool"]]]);
+  });
+
+  it("folds reasoning written after the final answer into the work above it once settled", () => {
+    const grep = toolPart("grep", { pattern: "gtag" });
+    const parts = {
+      plan: [{ type: "text", text: "I'll check." }, grep],
+      answer: [{ type: "text", text: "No analytics." }, thinking],
+    };
+
+    expect(
+      summarize(
+        projectArenaActivitySegments(["plan", "answer"], parts, undefined, { settled: true }),
+      ),
+    ).toEqual([
+      ["I'll check.", ["tool", "reasoning"]],
+      ["No analytics.", []],
+    ]);
+    // While the run works, the text may not be its last.
+    expect(summarize(projectArenaActivitySegments(["plan", "answer"], parts))).toEqual([
+      ["I'll check.", ["tool"]],
+      ["No analytics.", ["reasoning"]],
+    ]);
+  });
+
   it("keeps a question between the work before and after it", () => {
     const before = toolPart("bash", { command: "git remote -v" });
     const question = toolPart("question", { questions: [{ question: "Create a repository?" }] });

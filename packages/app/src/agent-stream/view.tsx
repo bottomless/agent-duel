@@ -370,16 +370,23 @@ function useArenaChatOrder(
   arenaChat: boolean,
   tail: StreamItem[],
   head: StreamItem[] | undefined,
+  lastTurnOpen: boolean,
 ): { tail: StreamItem[]; head: StreamItem[] | undefined } {
-  const ordered = useMemo(() => (arenaChat ? orderArenaChat(tail) : tail), [arenaChat, tail]);
+  const ordered = useMemo(
+    () => (arenaChat ? orderArenaChat(tail, { lastTurnOpen }) : tail),
+    [arenaChat, lastTurnOpen, tail],
+  );
   const pendingWorkStart = useMemo(
     () => (arenaChat ? arenaChatPendingWorkStart(ordered) : ordered.length),
     [arenaChat, ordered],
   );
   const settled = useMemo(() => ordered.slice(0, pendingWorkStart), [ordered, pendingWorkStart]);
   const orderedHead = useMemo(
-    () => orderArenaChatHead(ordered.slice(pendingWorkStart), head ?? EMPTY_STREAM_HEAD),
-    [head, ordered, pendingWorkStart],
+    () =>
+      orderArenaChatHead(ordered.slice(pendingWorkStart), head ?? EMPTY_STREAM_HEAD, {
+        lastTurnOpen,
+      }),
+    [head, lastTurnOpen, ordered, pendingWorkStart],
   );
   return orderedHead ? { tail: settled, head: orderedHead } : { tail: ordered, head };
 }
@@ -633,13 +640,14 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
     // the component reads the current (fresh) streamItems/streamHead from props.
     const retainedStreamItems = useRetainedValue(streamItems, isActive);
     const retainedStreamHead = useRetainedValue(streamHead, isActive);
+    const effectiveTurnPresentation = useRetainedValue(turnPresentation, isActive);
+    const isTurnActive = effectiveTurnPresentation.isActive;
     const { tail: effectiveStreamItems, head: effectiveStreamHead } = useArenaChatOrder(
       arenaChat === true,
       retainedStreamItems,
       retainedStreamHead,
+      isTurnActive,
     );
-    const effectiveTurnPresentation = useRetainedValue(turnPresentation, isActive);
-    const isTurnActive = effectiveTurnPresentation.isActive;
     const presentStream = useMemo(() => createStreamPresentation(), []);
     const presentation = useMemo(
       () =>

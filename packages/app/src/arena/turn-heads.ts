@@ -30,8 +30,10 @@ export interface ArenaTurnHeads {
 export function arenaTurnHeads(
   history: readonly ArenaHistoryItem[],
   stream: ArenaPresentedStream,
+  /** The chat's last turn is still running; the chat orders it as the stream view does. */
+  lastTurnOpen = false,
 ): ArenaTurnHeads {
-  const rows = orderArenaChat([...stream.tail, ...stream.head]);
+  const rows = orderArenaChat([...stream.tail, ...stream.head], { lastTurnOpen });
   const battleOf = new Map<string, ArenaHistoryItem>();
   for (const item of history) {
     if (!battleKeptSide(item)) continue;

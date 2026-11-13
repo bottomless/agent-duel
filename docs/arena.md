@@ -501,7 +501,12 @@ Product decisions that are settled, so they do not get relitigated per feature:
   thinking control or timer below the transcript.
 - A battle chat reads the way its panes do, so a winner's transcript keeps its shape after the
   vote, and so does every later turn of that chat, single-agent ones included. Work before a
-  turn's first text sits beneath it (`orderArenaChat`); reasoning joins the work it leads into
+  turn's first text sits beneath it (`orderArenaChat`, `projectArenaActivitySegments`), unless that
+  text is the last thing the turn shows: a final answer is never followed by the work that led to
+  it, which users read as a stray `Reasoned` after the answer. For the same reason, once a turn or
+  run has ended, reasoning written after its last text with nothing after it (some providers send
+  it after the answer) moves above that text; while it runs, it stays where it came, since the
+  text may not be the last yet. Reasoning joins the work it leads into
   instead of standing as its own row; and a subagent is a row of its own, a heading with its status
   beneath, that opens its transcript in place, inline at full height as in the pane (`ArenaChatSubagent`). Rows carry the pane's words
   (`arenaChatWorkLabel`, `Reasoned`) and its proportions at the chat's 16px: rows take the prose's
