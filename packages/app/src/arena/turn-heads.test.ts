@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ArenaHistoryItem } from "@getpaseo/protocol/arena/rpc-schemas";
 import type { StreamItem } from "@/types/stream";
+import { arenaTurnStartRowIds } from "./summary-anchor";
 import { arenaTurnHeads } from "./turn-heads";
 
 const battle = (id: string, first: string, last?: string, vote = "b") =>
@@ -19,6 +20,23 @@ const battle = (id: string, first: string, last?: string, vote = "b") =>
 const prompt = (id: string) => ({ id, kind: "user_message", messageId: id }) as StreamItem;
 const text = (id: string) => ({ id, kind: "assistant_message" }) as StreamItem;
 const thought = (id: string) => ({ id, kind: "thought", status: "ready", text: "t" }) as StreamItem;
+const read = (id: string) =>
+  ({
+    id,
+    kind: "tool_call",
+    timestamp: new Date(0),
+    payload: {
+      source: "agent",
+      data: {
+        provider: "opencode",
+        callId: id,
+        name: "read",
+        status: "completed",
+        error: null,
+        detail: { type: "read", filePath: "index.html" },
+      },
+    },
+  }) as StreamItem;
 
 describe("arenaTurnHeads", () => {
   it("opens every answer with its author: the agent for a plain turn, the battle for a kept one", () => {
@@ -42,6 +60,14 @@ describe("arenaTurnHeads", () => {
     expect([...answerRowIds]).toEqual(["a1", "t2", "a2", "a3"]);
     // The battle's result ends the footer of its answer's last text.
     expect([...ends.entries()]).toEqual([["a2", kept]]);
+  });
+
+  it("opens an answer on the row the chat draws when reasoning leads into its calls", () => {
+    // The chat folds the reasoning into the run of the call after it, drawn as that call's row.
+    const tail = [prompt("msg_0100"), thought("t1"), read("c1"), read("c2"), text("a1")];
+    const kept = battle("turn-1", "msg_0100");
+    const { heads } = arenaTurnHeads([kept], { tail, head: [] });
+    expect([...heads.keys()]).toEqual(["c1"]);
   });
 
   it("keeps replies sent inside a battle in that battle's one answer", () => {
@@ -80,5 +106,26 @@ describe("arenaTurnHeads", () => {
     const tail = [prompt("msg_0100"), prompt("msg_0200"), text("a2")];
     const { heads } = arenaTurnHeads([discarded], { tail, head: [] });
     expect([...heads.entries()]).toEqual([["a2", { kind: "agent" }]]);
+  });
+});
+
+describe("arenaTurnStartRowIds", () => {
+  it("starts a turn at every prompt, plain or battle, but not at a reply inside a battle", () => {
+    const tail = [
+      prompt("msg_0050"),
+      text("a0"),
+      prompt("msg_0100"),
+      text("a1"),
+      prompt("msg_0120"),
+      text("a2"),
+      prompt("msg_0300"),
+      text("a3"),
+    ];
+    const kept = battle("turn-1", "msg_0100", "msg_0199");
+    expect([...arenaTurnStartRowIds([kept], { tail, head: [] })]).toEqual([
+      "msg_0050",
+      "msg_0100",
+      "msg_0300",
+    ]);
   });
 });

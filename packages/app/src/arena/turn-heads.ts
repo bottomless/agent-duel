@@ -2,6 +2,11 @@ import type { ArenaHistoryItem } from "@getpaseo/protocol/arena/rpc-schemas";
 import type { StreamItem } from "@/types/stream";
 import { battleKeptSide } from "./battle-result";
 import { orderArenaChat } from "./chat-order";
+import {
+  isGroupableReasoning,
+  isGroupableToolCall,
+  isSubagentCall,
+} from "@/tool-calls/detail-level/grouping";
 import { arenaKeptAnswerRowIds, type ArenaPresentedStream } from "./summary-anchor";
 
 /** Who answered a turn: a battle's kept side, or the chat's single agent. */
@@ -44,7 +49,7 @@ export function arenaTurnHeads(
   const lastText = new Map<ArenaHistoryItem, string>();
   // "unknown" until a prompt is seen: an answer cut off from its prompt by paging has no author yet.
   let opened: ArenaHistoryItem | "agent" | "unknown" | null = "unknown";
-  for (const row of rows) {
+  for (const [index, row] of rows.entries()) {
     if (isPrompt(row)) {
       // A reply inside a battle continues that battle's answer rather than opening a new one.
       if (!battleOf.has(row.id)) opened = null;
@@ -57,10 +62,28 @@ export function arenaTurnHeads(
     const author = battle ?? "agent";
     if (opened === author) continue;
     opened = author;
-    heads.set(row.id, battle ? { kind: "battle", item: battle } : { kind: "agent" });
+    heads.set(
+      renderedRowId(rows, index),
+      battle ? { kind: "battle", item: battle } : { kind: "agent" },
+    );
   }
   const ends = new Map([...lastText].map(([battle, row]) => [row, battle]));
   return { heads, answerRowIds, ends };
+}
+
+/**
+ * The row a battle chat draws for `rows[index]`. Reasoning that opens a stretch of work joins the
+ * run of the calls after it, and that run is drawn as the row of its first call
+ * (`prepareGroupedHistory` with the arena rules), so a head keyed by the reasoning would never show.
+ */
+function renderedRowId(rows: readonly StreamItem[], index: number): string {
+  let next = index;
+  while (next < rows.length && isGroupableReasoning(rows[next]!)) next += 1;
+  const call = rows[next];
+  if (next === index || !call || !isGroupableToolCall(call)) return rows[index]!.id;
+  // A subagent call stands alone, so the reasoning before it stays a row of its own.
+  const callId = call.id;
+  return isSubagentCall(call) ? rows[index]!.id : callId;
 }
 
 function isPrompt(row: StreamItem): boolean {

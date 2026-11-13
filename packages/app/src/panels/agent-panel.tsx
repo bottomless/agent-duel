@@ -165,7 +165,7 @@ import {
 } from "@/arena/reply-state";
 import { useArenaReplyComposerControls } from "@/arena/reply-target-control";
 import {
-  arenaBattlePromptRowIds,
+  arenaTurnStartRowIds,
   arenaKeptAnswerRowIds,
   arenaChatCanStartBattle,
   arenaSummaryAnchors,
@@ -2125,8 +2125,9 @@ const AgentComposerSection = memo(function AgentComposerSection({
 });
 
 /**
- * Each battle prompt after the chat's first row starts a new turn with a rule above it. Keyed by the
- * ids, so a streaming head does not hand the stream a new set on every event.
+ * Each prompt that starts a turn after the chat's first row, a battle's or a plain turn's, has a
+ * rule above it (`arenaTurnStartRowIds`). Keyed by the ids, so a streaming head does not hand the
+ * stream a new set on every event.
  */
 function useRuledRows(
   history: ArenaSnapshot["history"] | undefined,
@@ -2134,7 +2135,7 @@ function useRuledRows(
   shownStream: ArenaPresentedStream,
 ) {
   const battlePromptRowKey = useMemo(
-    () => [...arenaBattlePromptRowIds(history ?? [], presentedStream)].sort().join("\n"),
+    () => [...arenaTurnStartRowIds(history ?? [], presentedStream)].sort().join("\n"),
     [history, presentedStream],
   );
   const battlePromptRowIds = useMemo(
