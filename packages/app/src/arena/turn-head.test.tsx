@@ -38,7 +38,7 @@ describe("ArenaTurnHead", () => {
     expect(useArenaShownBattleStore.getState().byAgent.agent).toBe("turn-1");
   });
 
-  it("tags a tie, an early pick and a side kept after a failure for what they were", () => {
+  it("tags a tie and an early pick for what they were, and any other kept side as won", () => {
     const tie = render(
       <ArenaTurnHead agentId="agent" item={kept({ vote: "tie", appliedSide: "a" })} />,
     );
@@ -61,8 +61,16 @@ describe("ArenaTurnHead", () => {
         item={kept({ vote: "a", appliedSide: "a", voteDiscardedReason: "contestant_failed" })}
       />,
     );
-    expect(failed.getByTestId("arena-turn-head-result-kept")).toBeTruthy();
+    expect(failed.getByTestId("arena-turn-head-result-won").textContent).toBe("Won");
     expect(failed.getByTestId("arena-turn-head-turn-1").textContent).toContain("Vote not counted");
+    failed.unmount();
+
+    // Kept at a Stop: no vote at all.
+    const stopped = render(<ArenaTurnHead agentId="agent" item={kept({ appliedSide: "a" })} />);
+    expect(stopped.getByTestId("arena-turn-head-result-won").textContent).toBe("Won");
+    expect(stopped.getByTestId("arena-turn-head-turn-1").textContent).not.toContain(
+      "Vote not counted",
+    );
   });
 
   it("heads a plain turn with the agent", () => {
