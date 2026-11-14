@@ -1,16 +1,14 @@
 import { i18n } from "@/i18n/i18next";
-import {
-  buildLineDiffFromLines,
-  splitIntoLines,
-  type DiffLine,
-  type DiffSegment,
-} from "@/utils/tool-call-parsers";
+import { buildLineDiffFromLines, type DiffLine, type DiffSegment } from "@/utils/tool-call-parsers";
 import {
   buildBoundedLineDiff,
+  fileLines,
   THREE_WAY_ALIGNMENT_BUDGET,
   THREE_WAY_CONTEXT_LINES,
   type ThreeWayGapBlock,
 } from "./three-way-diff";
+
+export { fileLines };
 
 /**
  * One column for two results.
@@ -83,13 +81,6 @@ const OPEN = /^<{7,}(\s|$)/;
 const BASE = /^\|{7,}(\s|$)/;
 const SWITCH = /^={7,}$/;
 const CLOSE = /^>{7,}(\s|$)/;
-
-// A file's lines, without the phantom empty line a trailing newline would add.
-export function fileLines(text: string): string[] {
-  const lines = splitIntoLines(text);
-  if (lines.length > 0 && lines[lines.length - 1] === "" && /\r?\n$/.test(text)) lines.pop();
-  return lines;
-}
 
 /**
  * Cuts a merged file at its zdiff3 markers. A region that never closes is not a
