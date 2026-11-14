@@ -552,6 +552,28 @@ describe("windowed files", () => {
     expect(diff.rows[0]?.base?.lineNumber).toBe(1);
   });
 
+  it("does not draw a whole file's final newline as an extra empty row", () => {
+    const cells = (rows: readonly ThreeWayRow[]) =>
+      rows.map((row) => [row.a?.content, row.a?.lineNumber, row.b?.content, row.b?.lineNumber]);
+
+    // Agents add a second line to a one-line file; every side ends in a newline.
+    const edited = buildWindowedThreeWayDiff(side("L1\n"), side("L1\nL2\n"), side("L1\nL2.\n"));
+    expect(cells(edited.rows)).toEqual([
+      ["L1", 1, "L1", 1],
+      ["L2", 2, "L2.", 2],
+    ]);
+
+    // A new file: the base side is empty.
+    const created = buildWindowedThreeWayDiff(side(""), side("N1\r\n"), side("N1\r\n"));
+    expect(cells(created.rows)).toEqual([["N1", 1, "N1", 1]]);
+  });
+
+  it("keeps a real empty last line", () => {
+    const diff = buildWindowedThreeWayDiff(side("L1\n"), side("L1\n\n"), side("L1\n"));
+    expect(diff.rows).toHaveLength(2);
+    expect(diff.rows[1]?.a).toMatchObject({ type: "add", content: "", lineNumber: 2 });
+  });
+
   it("draws a side that does not have the file as having removed every windowed line", () => {
     const diff = buildWindowedThreeWayDiff(
       side("L10\nL11", [{ start: 10, lines: 2 }]),

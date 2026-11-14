@@ -201,6 +201,13 @@ export interface BoundedLineDiff {
   aligned: boolean;
 }
 
+// A file's lines, without the phantom empty line a trailing newline would add.
+export function fileLines(text: string): string[] {
+  const lines = splitIntoLines(text);
+  if (lines.length > 0 && lines[lines.length - 1] === "" && /\r?\n$/.test(text)) lines.pop();
+  return lines;
+}
+
 function unchangedLines(lines: readonly string[]): DiffLine[] {
   return lines.map((content) => ({ type: "context" as const, content: ` ${content}` }));
 }
@@ -363,7 +370,10 @@ export function buildWindowedThreeWayDiff(
   const axis = axisSide(base, a, b);
   const count = axis?.regions?.length ?? 0;
   if (!axis || count === 0) {
-    const diff = buildThreeWayDiff(base.content, a.content, b.content, budget);
+    // Whole files arrive as written, so a final newline would split into an empty last row
+    // that git does not number. Windows are cut on git's lines and never end in one.
+    const whole = (side: ThreeWaySide) => fileLines(side.content).join("\n");
+    const diff = buildThreeWayDiff(whole(base), whole(a), whole(b), budget);
     return { rows: diff.rows, aligned: diff.aligned, breaks: [] };
   }
 
