@@ -37,6 +37,11 @@ function port() {
 }
 
 process.env.OPENCODE_ARENA ??= "1"
+if (process.env.OPENCODE_ARENA === "1") {
+  // Arena owns its model metadata. A background catalog refresh can hold a shared
+  // OpenCode cache lock and prevent this short-lived engine from shutting down.
+  process.env.OPENCODE_DISABLE_MODELS_FETCH = "1"
+}
 
 if (args[0] !== "generate") {
   const { prepareEngineDatabases } = await import("./arena/database-upgrade")

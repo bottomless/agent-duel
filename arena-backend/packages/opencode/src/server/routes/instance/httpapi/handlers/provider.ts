@@ -40,6 +40,7 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
     const svc = yield* ProviderAuth.Service
 
     const list = Effect.fn("ProviderHttpApi.list")(function* () {
+      if (ArenaRuntime.enabled()) return { all: [], default: {}, connected: [] }
       const config = yield* cfg.get()
       const all = yield* ModelsDev.Service.use((s) => s.get())
       const disabled = new Set(config.disabled_providers ?? [])
