@@ -464,7 +464,9 @@ nor part of the row. The answers scroll behind the pill, so everything in it is 
 run, keep `Stop` alone; there is nothing to put on either side. At the vote the pill reads `Choose A`, `Tie`, `Choose B`.
 Once a choice is made, the pill stays on the decision just made with the revealed models in place
 of `Choose A` and `Choose B`, each with its logo, the one taken filled in its side's colour with a
-check (`ArenaPastDecision` with `identities`). It holds while the result is applied and for at least
+check (`ArenaPastDecision` with `identities`). A side not taken keeps a plain gray fill, here and
+in Show battle's footer: left blank beside the filled one, the pill read as a toggle's state, an
+input still to set, rather than a result. It holds while the result is applied and for at least
 five seconds (`ARENA_DECIDED_HOLD_MS`): the vote is when the models are revealed, and the pill is
 where the eye already is, while the battle folds into the chat around it. Only a decision seen
 being made holds; a chat opened on a decided battle shows none.
@@ -1502,7 +1504,7 @@ under the prompt it read as the previous answer belonging to the next prompt. Sh
 battle in place of its kept answer (`shown-battle.ts`, `arenaKeptAnswerRowIds`), with the vote's
 names in place of Agent A and B and its review under them. It ends with the decision row as it was
 left (`ArenaPastDecision` in `decision-bar.tsx`): the same three buttons, the one taken marked and
-the others quiet, with Hide battle at the row's end. It also retains the transition report.
+a side not taken gray, as in the pill held after a vote, with Hide battle at the row's end. It also retains the transition report.
 
 A battle chat's header names the project only, with no rule under it: the battle's prompt heads the
 page. Commit shows once a battle is decided, and the editor, environment, scripts and changes sit in

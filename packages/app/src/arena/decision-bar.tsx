@@ -179,9 +179,12 @@ export function arenaPastChoice(
 
 /**
  * A decided battle's choice, drawn as the row it was made in: the same three buttons, the one
- * taken marked and the others quiet. Nothing here acts; Show battle is for looking back. With the
- * revealed `identities`, each side's button reads as its model, its logo beside the name, so the choice
- * just made says which model was which.
+ * taken filled in its colour with a check. A side not taken keeps a button's gray fill rather than
+ * going blank: a filled half beside an empty one read as a toggle's state, an input still to set,
+ * where this is a result. Tie or Discard, a quiet label at the vote, stays one unless taken.
+ * Nothing here acts; Show battle is for looking back. With the revealed `identities`, each side's
+ * button reads as its model, its logo beside the name, so the choice just made says which model was
+ * which.
  */
 export function ArenaPastDecision({
   kind,
@@ -207,7 +210,7 @@ export function ArenaPastDecision({
         style={[
           styles.past,
           choice === "middle" ? styles.pastMiddle : styles.pastSide,
-          selected ? pastSelectedStyle(choice) : styles.pastQuiet,
+          pastItemStyle(choice, selected),
         ]}
         testID={`arena-past-decision-${choice}${selected ? "-chosen" : ""}`}
       >
@@ -216,16 +219,12 @@ export function ArenaPastDecision({
           <ArenaModelVendorIcon
             model={identities[choice].name}
             size={15}
-            tone={selected ? "onSolid" : "muted"}
+            tone={selected ? "onSolid" : "default"}
           />
         ) : null}
         <Text
           numberOfLines={1}
-          style={[
-            styles.choiceText,
-            styles.pastText,
-            selected ? pastSelectedTextStyle(choice) : styles.pastQuietText,
-          ]}
+          style={[styles.choiceText, styles.pastText, pastItemTextStyle(choice, selected)]}
         >
           {labels[choice]}
         </Text>
@@ -241,13 +240,15 @@ export function ArenaPastDecision({
   );
 }
 
-function pastSelectedStyle(choice: ArenaSide | "middle") {
+function pastItemStyle(choice: ArenaSide | "middle", selected: boolean) {
+  if (!selected) return choice === "middle" ? styles.pastQuiet : styles.pastNotTaken;
   if (choice === "a") return styles.pastChosenA;
   if (choice === "b") return styles.pastChosenB;
   return styles.pastChosenMiddle;
 }
 
-function pastSelectedTextStyle(choice: ArenaSide | "middle") {
+function pastItemTextStyle(choice: ArenaSide | "middle", selected: boolean) {
+  if (!selected) return choice === "middle" ? styles.pastQuietText : styles.pastNotTakenText;
   return choice === "middle" ? null : styles.sideSolidText;
 }
 
@@ -618,6 +619,14 @@ const styles = StyleSheet.create((theme) => ({
   },
   pastQuiet: {
     backgroundColor: "transparent",
+  },
+  // A side not taken: a plain gray button, so the row reads as a result rather than a toggle.
+  pastNotTaken: {
+    backgroundColor: theme.colors.surface3,
+    borderColor: theme.colors.surface3,
+  },
+  pastNotTakenText: {
+    color: theme.colors.foreground,
   },
   pastChosenA: {
     backgroundColor: sideSolid(theme, theme.colors.statusDotRunning),
