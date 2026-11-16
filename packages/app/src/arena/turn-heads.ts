@@ -66,10 +66,8 @@ export function arenaTurnHeads(
     const author = battle ?? "agent";
     if (opened === author) continue;
     opened = author;
-    heads.set(
-      renderedRowId(rows, index),
-      battle ? { kind: "battle", item: battle } : { kind: "agent" },
-    );
+    // A run of work is drawn under its first row's id (`prepareGroupedHistory`), reasoning included.
+    heads.set(row.id, battle ? { kind: "battle", item: battle } : { kind: "agent" });
   }
   const ends = new Map<string, ArenaHistoryItem>();
   for (const [battle, index] of lastRow) {
@@ -77,21 +75,6 @@ export function arenaTurnHeads(
     if (row) ends.set(row, battle);
   }
   return { heads, answerRowIds, ends };
-}
-
-/**
- * The row a battle chat draws for `rows[index]`. Reasoning that opens a stretch of work joins the
- * run of the calls after it, and that run is drawn as the row of its first call
- * (`prepareGroupedHistory` with the arena rules), so a head keyed by the reasoning would never show.
- */
-function renderedRowId(rows: readonly StreamItem[], index: number): string {
-  let next = index;
-  while (next < rows.length && isGroupableReasoning(rows[next]!)) next += 1;
-  const call = rows[next];
-  if (next === index || !call || !isGroupableToolCall(call)) return rows[index]!.id;
-  // A subagent call stands alone, so the reasoning before it stays a row of its own.
-  const callId = call.id;
-  return isSubagentCall(call) ? rows[index]!.id : callId;
 }
 
 /**

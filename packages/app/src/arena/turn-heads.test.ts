@@ -63,11 +63,12 @@ describe("arenaTurnHeads", () => {
   });
 
   it("opens an answer on the row the chat draws when reasoning leads into its calls", () => {
-    // The chat folds the reasoning into the run of the call after it, drawn as that call's row.
+    // The chat folds the reasoning into one run with the calls after it, drawn under the id of
+    // the run's first row: the reasoning.
     const tail = [prompt("msg_0100"), thought("t1"), read("c1"), read("c2"), text("a1")];
     const kept = battle("turn-1", "msg_0100");
     const { heads } = arenaTurnHeads([kept], { tail, head: [] });
-    expect([...heads.keys()]).toEqual(["c1"]);
+    expect([...heads.keys()]).toEqual(["t1"]);
   });
 
   it("keeps replies sent inside a battle in that battle's one answer", () => {
