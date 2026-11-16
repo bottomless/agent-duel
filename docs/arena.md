@@ -451,7 +451,9 @@ button. When one result becomes selectable, the row becomes the same gray pill a
 `Stop` in the middle and each side's place holding what applies to it: `Choose A early` or
 `Choose B early` on the finished side, and the working side's status (`Agent A is still working`,
 with its colour dot) on the other, as the pill's quiet part, where `Tie` sits at the vote. The
-running row and the vote then read as one control in two states. A hint line above the buttons
+running row and the vote then read as one control in two states. In every such pill both sides
+share a width, the wider side's (`ArenaBalancedChoiceGroup`), so its middle, `Stop`, then `Tie`,
+then `Tie` with the models' names around it, sits at the exact centre and never moves. A hint line above the buttons
 left the status unattached to either side, and a separate status chip looked like neither a button
 nor part of the row. The answers scroll behind the pill, so everything in it is opaque. While both
 run, keep `Stop` alone; there is nothing to put on either side. At the vote the pill reads `Choose A`, `Tie`, `Choose B`.

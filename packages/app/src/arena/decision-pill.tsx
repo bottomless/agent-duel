@@ -322,7 +322,7 @@ function WorkingStatus({ side }: { side: ArenaSide }) {
 /**
  * Once one side has finished, the row is one control, built like the vote's (`ArenaChoiceGroup`):
  * each side's place holds what applies to it, its Choose early once it has finished, its status
- * while it works, with Stop between them. The status is the group's quiet part, as Tie is at the
+ * while it works, with Stop between them at the exact centre. The status is the group's quiet part, as Tie is at the
  * vote, so the running row and the vote read as one control in two states.
  */
 function RunningSides({
@@ -338,12 +338,13 @@ function RunningSides({
     if (canPick) return <BattlePaneDecision side={side} phase={phase} actions={actions} />;
     return waiting === side ? <WorkingStatus side={side} /> : null;
   };
+  // The sides share a width, so Stop sits at the exact centre, where Tie will be at the vote.
   return (
-    <ArenaChoiceGroup testID="arena-battle-choice-row">
+    <ArenaBalancedChoiceGroup testID="arena-battle-choice-row">
       {slot("a")}
       <BattleStopDecision phase={phase} actions={actions} />
       {slot("b")}
-    </ArenaChoiceGroup>
+    </ArenaBalancedChoiceGroup>
   );
 }
 
@@ -449,6 +450,7 @@ const styles = StyleSheet.create((theme) => ({
   working: {
     flexDirection: "row",
     alignItems: "center",
+    justifyContent: "center",
     gap: theme.spacing[2],
     paddingHorizontal: theme.spacing[3],
   },
