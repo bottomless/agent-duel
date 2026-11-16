@@ -270,7 +270,10 @@ const stylesheet = StyleSheet.create((theme) => ({
     rowGap: theme.spacing[2],
     paddingBottom: TURN_FOOTER_BOTTOM_SPACING,
   },
+  // One line tall, so "Worked for" sits on the line of the result beside it rather than centred
+  // in the space below the turn.
   turnFooterSlotFlush: {
+    minHeight: TURN_FOOTER_CONTENT_HEIGHT,
     paddingBottom: 0,
   },
   // Pushed to the right end, and kept there when it wraps under the footer.
