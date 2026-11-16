@@ -347,9 +347,10 @@ review — so the page has two widths: the chat's reading column for the prompt 
 composer, and the card for the battle. Inside the card, sections separate with
 one top border each, the way rows in a settings card do, and text starts on one rail. A and B each
 occupy half the card, split by a divider; below 520px of available card width, they stack.
-The panes keep a fixed resting height and their threads scroll internally. A finished pane shrinks
-to fit, up to that height, so folding the work does not leave the answer above an empty box while
-the chat follows review below it. Scrolling away pauses following; reaching the bottom or choosing
+A pane grows with its thread up to a maximum height (55% of the window, at least 360px) and then
+scrolls internally, running or finished. A fixed height while a side ran left a short answer above
+an empty box, and the two panes share a row, so the finished side was stretched to the running
+side's height too. Scrolling away pauses following; reaching the bottom or choosing
 Jump to latest resumes it. Opening or closing activity also pauses following in the pane and holds
 the row's position in the chat (`agent-stream/hold-position.ts`), keeping it under the pointer as
 the pane grows or shrinks. Each agent header has an

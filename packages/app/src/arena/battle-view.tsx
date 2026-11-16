@@ -472,19 +472,17 @@ function BattlePane({
     [onPermissionResponse, run],
   );
   // The pane height follows the window, so it is an inline pixel value rather than a
-  // registered style (docs/unistyles.md, dynamic pixel styles on web). A settled run folds its
-  // work above the answer, so its pane shrinks to fit: at the resting height the answer would
-  // sit high in an empty pane, out of view when the chat follows the review below it.
-  const settled = runIsFinal(run);
+  // registered style (docs/unistyles.md, dynamic pixel styles on web). Running or settled, a pane
+  // grows with its thread up to that height and no further.
   const paneStyle = useMemo(
     () => [
       styles.pane,
       hidden && styles.paneHidden,
       stacked && styles.paneStacked,
       showDivider && (stacked ? styles.paneStackedDivider : styles.paneDivider),
-      inlineUnistylesStyle(settled ? { maxHeight } : { height: maxHeight }),
+      inlineUnistylesStyle({ maxHeight }),
     ],
-    [hidden, maxHeight, settled, showDivider, stacked],
+    [hidden, maxHeight, showDivider, stacked],
   );
   // The run exists from the moment its session is forked, which is before the worktrees are
   // ready and well before its prompt is dispatched. Treating that as started swaps the pane to
@@ -584,10 +582,6 @@ function BattlePane({
       </View>
     </View>
   );
-}
-
-function runIsFinal(run: ArenaRun | undefined): boolean {
-  return run !== undefined && run.runState !== "pending";
 }
 
 function runsAreFinal(runA: ArenaRun | undefined, runB: ArenaRun | undefined): boolean {
