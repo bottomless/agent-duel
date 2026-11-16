@@ -153,6 +153,7 @@ import {
   deriveArenaComposerQueueState,
   resolveArenaComposerSubmit,
 } from "@/arena/composer-state";
+import { announceArenaReplySent } from "@/arena/reply-sent";
 import { ArenaDecisionBar } from "@/arena/decision-bar";
 import { arenaSetupStatus } from "@/arena/transition-progress";
 import { ArenaDecisionPill } from "@/arena/decision-pill";
@@ -2855,6 +2856,7 @@ function ActiveAgentComposer({
         throw new Error("Enter a reply for the battle.");
       }
       const release = retainArenaPromptImages(payload.attachments);
+      announceArenaReplySent(replyableBattleTurn.id, action.target);
       try {
         await arenaReplyMutation.mutateAsync({
           kind: "reply",
@@ -2978,6 +2980,10 @@ function ActiveAgentComposer({
   const composerMaxImages = arenaComposerMaxImages(
     composerPresentation.onSubmitMessage !== undefined,
   );
+  // A reply to the battle adds no row at the chat's end: it shows in the panes, above the review.
+  const handleMessageSent = useCallback(() => {
+    if (!battleReplyEnabled) onMessageSent();
+  }, [battleReplyEnabled, onMessageSent]);
 
   return (
     <View style={animatedStaticStyles.inputAreaWrapper} onLayout={onInputAreaLayout}>
@@ -3023,7 +3029,7 @@ function ActiveAgentComposer({
           onAttentionInputFocus={onAttentionInputFocus}
           onAttentionPromptSend={onAttentionPromptSend}
           onComposerHeightChange={onComposerHeightChange}
-          onMessageSent={onMessageSent}
+          onMessageSent={handleMessageSent}
           onClientSlashCommand={handleClientSlashCommand}
           isCompactLayout={isCompactComposerLayout}
         />

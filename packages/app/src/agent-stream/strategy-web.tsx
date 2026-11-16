@@ -34,6 +34,7 @@ import { estimateStreamItemHeight } from "./web-virtualization";
 import { createReadingAnchor } from "./reading-anchor";
 import { createContentMutationCallback } from "./content-mutation";
 import { HoldStreamPositionProvider } from "./hold-position";
+import { RevealInStreamProvider, revealScrollDelta } from "./reveal-position";
 import type { StreamRenderInput, StreamStrategy, StreamViewportHandle } from "./strategy";
 import { useRevisedHistoryRows } from "./history-row-revision";
 import { createStreamStrategy } from "./strategy";
@@ -110,6 +111,16 @@ function isScrollContainerNearBottom(
   }
   const distanceFromBottom = scrollHeight - clientHeight - scrollTop;
   return distanceFromBottom <= threshold;
+}
+
+interface HoldRequest {
+  element: HTMLElement;
+  /** Reaching the end resumes following: true for a toggled row, false for a revealed one. */
+  rejoinsEnd: boolean;
+}
+
+interface HeldPosition extends HoldRequest {
+  viewportOffset: number;
 }
 
 function isScrollContainerAtBottom(
@@ -526,8 +537,8 @@ function WebStreamViewport(props: StreamRenderInput & { isMobileBreakpoint: bool
   );
   const finishInitialFill = useStableEvent(() => historyStartPagination.reveal());
   const rearmHistoryStartFromUserIntent = useStableEvent(() => historyStartPagination.rearm());
-  const heldPositionRef = useRef<{ element: HTMLElement; viewportOffset: number } | null>(null);
-  const holdPosition = useStableEvent((element: HTMLElement) => {
+  const heldPositionRef = useRef<HeldPosition | null>(null);
+  const holdElement = useStableEvent(({ element, rejoinsEnd }: HoldRequest) => {
     const scrollContainer = scrollContainerRef.current;
     if (!scrollContainer) {
       return;
@@ -540,7 +551,30 @@ function WebStreamViewport(props: StreamRenderInput & { isMobileBreakpoint: bool
       element,
       viewportOffset:
         element.getBoundingClientRect().top - scrollContainer.getBoundingClientRect().top,
+      rejoinsEnd,
     };
+  });
+  const holdPosition = useStableEvent((element: HTMLElement) =>
+    holdElement({ element, rejoinsEnd: true }),
+  );
+  const revealElement = useStableEvent((element: HTMLElement) => {
+    const scrollContainer = scrollContainerRef.current;
+    if (!isActiveRef.current || !scrollContainer || !isScrollContainerMeasurable(scrollContainer)) {
+      return;
+    }
+    const delta = revealScrollDelta({
+      viewport: scrollContainer.getBoundingClientRect(),
+      element: element.getBoundingClientRect(),
+    });
+    if (delta !== 0) {
+      scrollContainer.scrollTop += delta;
+      // The scroll event for this move must not read as the reader scrolling: that releases a hold.
+      lastKnownScrollTopRef.current = scrollContainer.scrollTop;
+    }
+    // Held even when it did not move: content below it comes and goes, and the transcript's end
+    // is not where the reader is looking. Rows this far from where the reader was are measured
+    // only now, and would move the element again.
+    holdElement({ element, rejoinsEnd: false });
   });
   const applyHeldPosition = useStableEvent(() => {
     const scrollContainer = scrollContainerRef.current;
@@ -557,8 +591,9 @@ function WebStreamViewport(props: StreamRenderInput & { isMobileBreakpoint: bool
     const delta = viewportOffset - held.viewportOffset;
     scrollContainer.scrollTop += delta;
     lastKnownScrollTopRef.current = scrollContainer.scrollTop;
-    // A row that closed again can leave the reader at the end, where the transcript follows.
-    if (Math.abs(delta) > 0.5 && isScrollContainerAtBottom(scrollContainer)) {
+    // A row that closed again can leave the reader at the end, where the transcript follows. A
+    // revealed element stays: content below it that shrinks away leaves the reader at the end too.
+    if (held.rejoinsEnd && Math.abs(delta) > 0.5 && isScrollContainerAtBottom(scrollContainer)) {
       heldPositionRef.current = null;
       setFollowOutput(true);
     }
@@ -1446,7 +1481,11 @@ function WebStreamViewport(props: StreamRenderInput & { isMobileBreakpoint: bool
       ) : null}
     </div>
   );
-  return <HoldStreamPositionProvider value={holdPosition}>{viewport}</HoldStreamPositionProvider>;
+  return (
+    <HoldStreamPositionProvider value={holdPosition}>
+      <RevealInStreamProvider value={revealElement}>{viewport}</RevealInStreamProvider>
+    </HoldStreamPositionProvider>
+  );
 }
 
 export function createWebStreamStrategy(input: CreateWebStreamStrategyInput): StreamStrategy {

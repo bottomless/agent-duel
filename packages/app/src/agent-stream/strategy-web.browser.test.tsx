@@ -5,11 +5,22 @@ import { DEFAULT_CONTENT_MAX_WIDTH } from "@/styles/theme";
 import type { StreamItem } from "@/types/stream";
 import type { DisclosureTriggerEdge, StreamRenderInput, StreamViewportHandle } from "./strategy";
 import { createWebStreamStrategy } from "./strategy-web";
+import { useRevealInStream, type RevealInStream } from "./reveal-position";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 const VIEWPORT_HEIGHT = 100;
 const ROW_HEIGHT = 40;
+// The room a revealed element keeps under the transcript's top edge.
+const REVEAL_TOP_INSET = 12;
+
+// The transcript provides the reveal to what it renders, so a row is where a test picks it up.
+let revealInStream: RevealInStream | null = null;
+
+function RevealCapture() {
+  revealInStream = useRevealInStream();
+  return null;
+}
 
 // A row's height comes from its text, so a disclosure that opens or grows a row is a new item
 // for that row, as it is in the app.
@@ -31,7 +42,12 @@ function renderRow(item: StreamItem) {
     style = { height };
     rowStyleByHeight.set(height, style);
   }
-  return <div style={style}>{item.id}</div>;
+  return (
+    <div style={style}>
+      {item.id}
+      <RevealCapture />
+    </div>
+  );
 }
 
 let root: Root;
@@ -93,6 +109,11 @@ function mountTimeline(historyMounted: StreamItem[]) {
     render: (segments: Partial<StreamRenderInput["segments"]>) => act(() => render(segments)),
     hold: (rowId: string, apply: () => void, triggerEdge: DisclosureTriggerEdge = "top") =>
       act(() => viewportRef.current!.holdRow(rowId, apply, triggerEdge)),
+    reveal: (id: string) => {
+      const reveal = revealInStream;
+      if (!reveal) throw new Error("Expected the transcript to provide a reveal");
+      act(() => reveal(rowElement(id)));
+    },
     rowTop: (id: string) =>
       rowElement(id).getBoundingClientRect().top - scrollContainer.getBoundingClientRect().top,
     rowBottom: (id: string) =>
@@ -206,5 +227,61 @@ describe("web disclosure hold", () => {
     timeline.render({ liveHead: [row(8)] });
     await timeline.settle();
     expect(timeline.distanceFromEnd()).toBeLessThanOrEqual(1);
+  });
+});
+
+// A reply to a battle shows in its panes, which sit above the review the chat ends on.
+describe("web reveal", () => {
+  it("leaves an element in view where it is", async () => {
+    const timeline = mountTimeline([1, 2, 3, 4, 5, 6].map((index) => row(index)));
+    await timeline.settle();
+    const top = timeline.rowTop("message-5");
+    expect(top).toBeGreaterThanOrEqual(0);
+
+    timeline.reveal("message-5");
+    await timeline.settle();
+
+    expect(timeline.rowTop("message-5")).toBe(top);
+  });
+
+  it("brings an element above the end to the top of the transcript", async () => {
+    const timeline = mountTimeline([1, 2, 3, 4, 5, 6].map((index) => row(index)));
+    await timeline.settle();
+    expect(timeline.rowBottom("message-3")).toBeLessThanOrEqual(0);
+
+    timeline.reveal("message-3");
+    await timeline.settle();
+
+    expect(timeline.rowTop("message-3")).toBe(REVEAL_TOP_INSET);
+  });
+
+  it("stays on the element when output arrives at the end", async () => {
+    const timeline = mountTimeline([1, 2, 3, 4, 5, 6].map((index) => row(index)));
+    await timeline.settle();
+    timeline.reveal("message-3");
+    await timeline.settle();
+
+    timeline.render({ liveHead: [row(8)] });
+    await timeline.settle();
+
+    expect(timeline.rowTop("message-3")).toBe(REVEAL_TOP_INSET);
+  });
+
+  // The review leaves while a reply runs and comes back when it finishes.
+  it("returns to the element when the content below it goes away and comes back", async () => {
+    const history = [1, 2, 3, 4, 5, 6].map((index) => row(index));
+    const timeline = mountTimeline(history);
+    await timeline.settle();
+    timeline.reveal("message-3");
+    await timeline.settle();
+
+    timeline.render({ historyMounted: history.slice(0, 3) });
+    await timeline.settle();
+    expect(timeline.distanceFromEnd()).toBeLessThanOrEqual(1);
+
+    timeline.render({ historyMounted: [...history, row(7, 200)] });
+    await timeline.settle();
+
+    expect(timeline.rowTop("message-3")).toBe(REVEAL_TOP_INSET);
   });
 });
