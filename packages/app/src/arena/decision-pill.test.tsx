@@ -302,3 +302,103 @@ const STOPPED_AFTER_FAILURE: ArenaSnapshot = (() => {
   );
   return { ...snapshot, turn: { ...snapshot.turn!, state: "awaiting_stop_resolution" } };
 })();
+
+describe("the decision just made", () => {
+  const runs = [run({}), run({ id: "run-b", side: "b" })];
+  const voting = awaitingVote(runs, { canTie: true, canDiscardBattle: false });
+  const identities = {
+    a: { name: "GLM 5.3 FlashX" },
+    b: { name: "Qwen 3.8 Max" },
+  };
+  const voted = (state: string, chatStatus: "battle_active" | "ready"): ArenaSnapshot => ({
+    ...voting,
+    chat: { ...voting.chat, status: chatStatus },
+    turn: {
+      ...voting.turn!,
+      state,
+      vote: "b",
+      resolution: { kind: "vote", vote: "b", appliedSide: "b" },
+      identities,
+      revealed: true,
+    } as ArenaSnapshot["turn"],
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  it("names the models and marks the choice while it applies, and at least five seconds", () => {
+    vi.useFakeTimers();
+    const view = render(
+      <ArenaDecisionPill serverId="s" agentId="agent" snapshot={voting} onHeightChange={noop} />,
+    );
+    view.rerender(
+      <ArenaDecisionPill
+        serverId="s"
+        agentId="agent"
+        snapshot={voted("applying", "battle_active")}
+        onHeightChange={noop}
+      />,
+    );
+    const decided = view.getByTestId("arena-past-decision");
+    expect(decided.textContent).toContain("GLM 5.3 FlashX");
+    expect(decided.textContent).toContain("Qwen 3.8 Max");
+    expect(view.getByTestId("arena-past-decision-b-chosen").textContent).toContain("Qwen 3.8 Max");
+
+    // Applied within a second: the chat is ready, but the result stays for the full hold.
+    view.rerender(
+      <ArenaDecisionPill
+        serverId="s"
+        agentId="agent"
+        snapshot={voted("complete", "ready")}
+        onHeightChange={noop}
+      />,
+    );
+    expect(view.queryByTestId("arena-past-decision")).not.toBeNull();
+    React.act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(view.queryByTestId("arena-decision-pill")).toBeNull();
+  });
+
+  it("stays past five seconds while the result is still being applied", () => {
+    vi.useFakeTimers();
+    const view = render(
+      <ArenaDecisionPill serverId="s" agentId="agent" snapshot={voting} onHeightChange={noop} />,
+    );
+    view.rerender(
+      <ArenaDecisionPill
+        serverId="s"
+        agentId="agent"
+        snapshot={voted("applying", "battle_active")}
+        onHeightChange={noop}
+      />,
+    );
+    React.act(() => {
+      vi.advanceTimersByTime(12_000);
+    });
+    expect(view.queryByTestId("arena-past-decision")).not.toBeNull();
+    view.rerender(
+      <ArenaDecisionPill
+        serverId="s"
+        agentId="agent"
+        snapshot={voted("complete", "ready")}
+        onHeightChange={noop}
+      />,
+    );
+    expect(view.queryByTestId("arena-decision-pill")).toBeNull();
+  });
+
+  it("holds nothing for a battle decided before the chat was opened", () => {
+    const view = render(
+      <ArenaDecisionPill
+        serverId="s"
+        agentId="agent"
+        snapshot={voted("complete", "ready")}
+        onHeightChange={noop}
+      />,
+    );
+    expect(view.queryByTestId("arena-decision-pill")).toBeNull();
+  });
+});

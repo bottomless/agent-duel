@@ -455,6 +455,12 @@ running row and the vote then read as one control in two states. A hint line abo
 left the status unattached to either side, and a separate status chip looked like neither a button
 nor part of the row. The answers scroll behind the pill, so everything in it is opaque. While both
 run, keep `Stop` alone; there is nothing to put on either side. At the vote the pill reads `Choose A`, `Tie`, `Choose B`.
+Once a choice is made, the pill stays on the decision just made with the revealed models in place
+of `Choose A` and `Choose B`, each with its logo, the one taken filled in its side's colour with a
+check (`ArenaPastDecision` with `identities`). It holds while the result is applied and for at least
+five seconds (`ARENA_DECIDED_HOLD_MS`): the vote is when the models are revealed, and the pill is
+where the eye already is, while the battle folds into the chat around it. Only a decision seen
+being made holds; a chat opened on a decided battle shows none.
 `Tie` shows only when both results can be chosen. A failed side shows `Accept B` in its Choose's
 place when its result was saved, and nothing when it was not. Discard is not one of the vote's
 choices: two results that can be chosen get a vote, so it shows only after a failure, as an

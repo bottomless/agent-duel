@@ -1,6 +1,6 @@
 import { i18n } from "@/i18n/i18next";
 import { useTranslation } from "react-i18next";
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Text, View, type LayoutChangeEvent } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import type { ArenaSide, ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
@@ -8,6 +8,8 @@ import {
   ArenaRunningPillButton,
   ArenaSideChoiceButton,
   ArenaChoiceGroup,
+  ArenaPastDecision,
+  arenaPastChoice,
   DiscardDecision,
   ResumeDecision,
   VoteDecision,
@@ -209,6 +211,48 @@ export function arenaDecisionRowVisible(snapshot: ArenaSnapshot): boolean {
   return isArenaBattleOnScreen(snapshot) && showChoices;
 }
 
+/** How long a just-decided battle's result stays in the pill at least. */
+export const ARENA_DECIDED_HOLD_MS = 5000;
+
+/**
+ * The battle just decided in front of the user, while its result holds in the pill: from the
+ * moment a turn the pill showed choices for gets its resolution, through its application, and for
+ * at least `ARENA_DECIDED_HOLD_MS`. The vote is when the models are revealed, and the pill is where
+ * the eye already is, so it names them there before the chat moves on. A chat opened on a decided
+ * battle holds nothing: only a decision seen being made does.
+ */
+function useDecidedHold(snapshot: ArenaSnapshot, live: boolean): ArenaSnapshot["turn"] | null {
+  const turn = snapshot.turn;
+  const turnId = turn?.id ?? null;
+  const resolved = turn?.resolution !== undefined;
+  const [liveTurnId, setLiveTurnId] = useState<string | null>(null);
+  const [decidedTurnId, setDecidedTurnId] = useState<string | null>(null);
+  const [expiredTurnId, setExpiredTurnId] = useState<string | null>(null);
+  useEffect(() => {
+    if (live && turnId) setLiveTurnId(turnId);
+  }, [live, turnId]);
+  useEffect(() => {
+    if (!live && resolved && turnId !== null && turnId === liveTurnId) setDecidedTurnId(turnId);
+  }, [live, liveTurnId, resolved, turnId]);
+  useEffect(() => {
+    if (decidedTurnId === null) return;
+    const timer = setTimeout(() => setExpiredTurnId(decidedTurnId), ARENA_DECIDED_HOLD_MS);
+    return () => clearTimeout(timer);
+  }, [decidedTurnId]);
+  if (!turn || !resolved || turnId !== decidedTurnId) return null;
+  const applying = isArenaBattleOnScreen(snapshot);
+  return applying || expiredTurnId !== turnId ? turn : null;
+}
+
+/** The decision just made, with the revealed models in place of Agent A and B. */
+function DecidedChoice({ turn }: { turn: NonNullable<ArenaSnapshot["turn"]> }) {
+  const choice = arenaPastChoice(turn);
+  if (!choice) return null;
+  return (
+    <ArenaPastDecision kind={choice.kind} chosen={choice.chosen} identities={turn.identities} />
+  );
+}
+
 /** The choices themselves, centred between the two answers. */
 function DecisionChoices({
   phase,
@@ -325,7 +369,9 @@ export function ArenaDecisionPill({
   useTranslation();
   const actions = useArenaBattleActions(serverId, agentId, snapshot.turn);
   const phase = arenaDecisionPhase(snapshot);
-  const visible = arenaDecisionRowVisible(snapshot);
+  const live = arenaDecisionRowVisible(snapshot);
+  const decided = useDecidedHold(snapshot, live);
+  const visible = live || decided !== null;
   const handleLayout = useCallback(
     (event: LayoutChangeEvent) => onHeightChange(event.nativeEvent.layout.height),
     [onHeightChange],
@@ -343,8 +389,14 @@ export function ArenaDecisionPill({
       pointerEvents="box-none"
       testID="arena-decision-pill"
     >
-      <DecisionHintRow phase={phase} actions={actions} />
-      <DecisionRow phase={phase} actions={actions} />
+      {decided && !live ? (
+        <DecidedChoice turn={decided} />
+      ) : (
+        <>
+          <DecisionHintRow phase={phase} actions={actions} />
+          <DecisionRow phase={phase} actions={actions} />
+        </>
+      )}
     </View>
   );
 }

@@ -4,7 +4,11 @@ import { Text, View, type LayoutChangeEvent } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { Check } from "lucide-react-native";
-import type { ArenaSide, ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
+import type {
+  ArenaHistoryItem,
+  ArenaSide,
+  ArenaSnapshot,
+} from "@getpaseo/protocol/arena/rpc-schemas";
 import { Button } from "@/components/ui/button";
 import { ArenaTransitionStatus } from "./transition-status";
 import { arenaSetupStatus } from "./transition-progress";
@@ -13,6 +17,8 @@ import { tint } from "@/styles/tint";
 import { createControlGeometry } from "@/components/ui/control-geometry";
 import type { Theme } from "@/styles/theme";
 import { ArenaContentColumn } from "./content-column";
+import { ArenaModelVendorIcon } from "./model-vendor-icon";
+import { arenaModelDisplayName } from "./side-label";
 import {
   arenaDecisionPhase,
   decisionBarShowsPhase,
@@ -111,24 +117,45 @@ export interface ArenaPastChoice {
   chosen: ArenaSide | "middle";
 }
 
+/** The row a decided battle's choice was made in, and which button it took. */
+export function arenaPastChoice(
+  item: Pick<ArenaHistoryItem, "resolution">,
+): ArenaPastChoice | null {
+  const resolution = item.resolution;
+  if (resolution?.kind === "vote") {
+    return { kind: "vote", chosen: resolution.vote === "tie" ? "middle" : resolution.vote };
+  }
+  if (resolution?.kind === "early") return { kind: "vote", chosen: resolution.vote };
+  if (resolution?.kind === "stopped") {
+    if (resolution.resolution === "apply_a") return { kind: "keep", chosen: "a" };
+    if (resolution.resolution === "apply_b") return { kind: "keep", chosen: "b" };
+    return { kind: "keep", chosen: "middle" };
+  }
+  return null;
+}
+
 /**
  * A decided battle's choice, drawn as the row it was made in: the same three buttons, the one
- * taken marked and the others quiet. Nothing here acts; Show battle is for looking back.
+ * taken marked and the others quiet. Nothing here acts; Show battle is for looking back. With the
+ * revealed `identities`, each side's button reads as its model, its logo beside the name, so the choice
+ * just made says which model was which.
  */
-export function ArenaPastDecision({ kind, chosen }: ArenaPastChoice) {
+export function ArenaPastDecision({
+  kind,
+  chosen,
+  identities,
+}: ArenaPastChoice & { identities?: ArenaHistoryItem["identities"] }) {
   const { t } = useTranslation();
-  const labels =
-    kind === "vote"
-      ? {
-          a: t("arena.choose", { side: "A" }),
-          middle: t("arena.tie"),
-          b: t("arena.choose", { side: "B" }),
-        }
-      : {
-          a: t("arena.keepSide", { side: "A" }),
-          middle: t("arena.discard"),
-          b: t("arena.keepSide", { side: "B" }),
-        };
+  const sideLabel = (side: ArenaSide) => {
+    const model = identities?.[side].name;
+    if (model) return arenaModelDisplayName(model);
+    return t(kind === "vote" ? "arena.choose" : "arena.keepSide", { side: side.toUpperCase() });
+  };
+  const labels = {
+    a: sideLabel("a"),
+    middle: kind === "vote" ? t("arena.tie") : t("arena.discard"),
+    b: sideLabel("b"),
+  };
   return (
     <ArenaChoiceGroup testID="arena-past-decision">
       {(["a", "middle", "b"] as const).map((choice) => {
@@ -145,6 +172,13 @@ export function ArenaPastDecision({ kind, chosen }: ArenaPastChoice) {
             testID={`arena-past-decision-${choice}${selected ? "-chosen" : ""}`}
           >
             {selected ? <ThemedCheck size={14} uniProps={checkColorMapping[choice]} /> : null}
+            {choice !== "middle" && identities ? (
+              <ArenaModelVendorIcon
+                model={identities[choice].name}
+                size={15}
+                tone={selected ? "onSolid" : "muted"}
+              />
+            ) : null}
             <Text
               style={[
                 styles.choiceText,

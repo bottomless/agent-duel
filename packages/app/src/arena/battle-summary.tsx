@@ -42,7 +42,7 @@ import { DiffLayoutControl } from "./diff-layout-control";
 import { InlineFileDiff, openChangesFiles, toggleChangesFile } from "./inline-file-diff";
 import { VerdictBody } from "./verdict-body";
 import { ArenaChangesList } from "./changes-list";
-import { ArenaPastDecision, type ArenaPastChoice } from "./decision-bar";
+import { ArenaPastDecision, arenaPastChoice } from "./decision-bar";
 import { arenaChangesCountLabel, arenaChangesRows } from "./changes-rows";
 import { arenaDiffQueryKey, hasBattleDiff } from "./comparison-visibility";
 import { arenaModelDisplayName } from "./side-label";
@@ -296,28 +296,13 @@ function keptModel(item: ArenaHistoryItem): string | undefined {
   return kept ? item.identities?.[kept].name : undefined;
 }
 
-/** The row a decided battle's choice was made in, and which button it took. */
-function pastChoice(item: ArenaHistoryItem): ArenaPastChoice | null {
-  const resolution = item.resolution;
-  if (resolution?.kind === "vote") {
-    return { kind: "vote", chosen: resolution.vote === "tie" ? "middle" : resolution.vote };
-  }
-  if (resolution?.kind === "early") return { kind: "vote", chosen: resolution.vote };
-  if (resolution?.kind === "stopped") {
-    if (resolution.resolution === "apply_a") return { kind: "keep", chosen: "a" };
-    if (resolution.resolution === "apply_b") return { kind: "keep", chosen: "b" };
-    return { kind: "keep", chosen: "middle" };
-  }
-  return null;
-}
-
 /**
  * The end of a shown battle, in the chat under its review: the decision row as it was left, the
  * button taken marked, and Hide battle at the row's end.
  */
 function ShownBattleEnd({ agentId, item }: { agentId: string; item: ArenaHistoryItem }) {
   const { t } = useTranslation();
-  const choice = pastChoice(item);
+  const choice = arenaPastChoice(item);
   const hide = useArenaShownBattleStore((state) => state.hide);
   const onHideBattle = useCallback(() => hide(agentId), [agentId, hide]);
   return (

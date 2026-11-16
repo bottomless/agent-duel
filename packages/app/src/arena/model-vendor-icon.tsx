@@ -11,6 +11,16 @@ const ThemedVendorMark = withUnistyles(SvgXml);
 const ThemedBot = withUnistyles(Bot);
 const foregroundColorMapping = (theme: Theme) => ({ color: theme.colors.foreground });
 const mutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
+// On a side's solid fill, the label's colour: the page on light, the text on dark.
+const onSolidColorMapping = (theme: Theme) => ({
+  color: theme.colorScheme === "dark" ? theme.colors.foreground : theme.colors.surface0,
+});
+
+const TONE_COLOR_MAPPINGS = {
+  default: foregroundColorMapping,
+  muted: mutedColorMapping,
+  onSolid: onSolidColorMapping,
+} as const;
 
 /**
  * The mark of whoever made a revealed contestant's model.
@@ -27,9 +37,9 @@ export function ArenaModelVendorIcon({
 }: {
   model: string | undefined;
   size: number;
-  tone?: "default" | "muted";
+  tone?: "default" | "muted" | "onSolid";
 }) {
-  const colorMapping = tone === "muted" ? mutedColorMapping : foregroundColorMapping;
+  const colorMapping = TONE_COLOR_MAPPINGS[tone];
   const vendor = arenaModelVendor(model);
   if (!vendor) return <ThemedBot size={size} uniProps={colorMapping} />;
   return (
