@@ -2016,16 +2016,14 @@ function ArenaAgentStream({
     const snapshot = arenaSession.data;
     if (!snapshot || !arenaBattleOnScreen) return null;
     return (
-      <View style={styles.activeBattleContent}>
-        <ArenaBattleView
-          serverId={serverId}
-          workspaceId={workspaceId}
-          agentId={agent.id}
-          snapshot={snapshot}
-          {...(startingBattle ? { startingPrompt: startingBattle } : {})}
-          ruled={chatHasRows && !forkBoundaryEndsChat}
-        />
-      </View>
+      <ArenaBattleView
+        serverId={serverId}
+        workspaceId={workspaceId}
+        agentId={agent.id}
+        snapshot={snapshot}
+        {...(startingBattle ? { startingPrompt: startingBattle } : {})}
+        ruled={chatHasRows && !forkBoundaryEndsChat}
+      />
     );
   }, [
     agent.id,
@@ -3202,10 +3200,6 @@ const styles = StyleSheet.create((theme) => ({
     textAlign: "center",
     fontSize: theme.fontSize.base,
     color: theme.colors.foregroundMuted,
-  },
-  // Scroll the last review lines above the floating vote, including its stopped-battle hint.
-  activeBattleContent: {
-    paddingBottom: theme.spacing[20],
   },
   arenaReadyContent: {
     gap: theme.spacing[3],

@@ -1453,9 +1453,10 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
     const renderLiveAuxiliary = useCallback<StreamSegmentRenderers["renderLiveAuxiliary"]>(() => {
       const existingTailSpacing =
         auxiliary.turnFooter && !auxiliary.pendingPermissions ? TURN_FOOTER_BOTTOM_SPACING : 0;
-      // The floating decision row covers the chat's end, so the end keeps clear of it too.
+      // The floating decision row covers the chat's end, so the end keeps clear of it. It sits on
+      // the composer where the track bar does, so the end clears the taller of the two, not both.
       const bottomOverlayInset = resolveBottomOverlayTailInset({
-        requiredTailClearance: bottomOverlayTailClearance + (bottomOverlayHeight ?? 0),
+        requiredTailClearance: Math.max(bottomOverlayTailClearance, bottomOverlayHeight ?? 0),
         existingTailSpacing,
       });
       return renderLiveAuxiliaryNode({
