@@ -8,6 +8,7 @@ import {
   assignProxyRoutes,
   captureOwnedServices,
   defaultServiceAdapter,
+  hasControllingTerminal,
   parseProcessTerminals,
   pauseOwnedProcessGroups,
   resumeProcessGroups,
@@ -367,6 +368,31 @@ test("reads a terminal session's own shell out of the process table", () => {
   )
 
   expect([...sessionShellPids(rows)]).toEqual([20275])
+})
+
+test("reads a terminal session's own shell out of a Linux process table", () => {
+  // Linux `ps` prints `?` where macOS prints `??` for a process with no controlling terminal.
+  const rows = parseProcessTerminals(
+    [
+      "   4210     4207 ?        ",
+      "   4388     4210 pts/3    ",
+      "   4412     4388 pts/3    ",
+      "      1        0 ?        ",
+      "   5100        1 pts/4    ",
+    ].join("\n"),
+  )
+
+  expect([...sessionShellPids(rows)]).toEqual([4388])
+  expect(rows.filter((row) => hasControllingTerminal(row.tty)).map((row) => row.pid)).toEqual([4388, 4412, 5100])
+})
+
+test("treats both macOS and Linux no-terminal markers as no terminal", () => {
+  expect(hasControllingTerminal("??")).toBe(false)
+  expect(hasControllingTerminal("?")).toBe(false)
+  expect(hasControllingTerminal("")).toBe(false)
+  expect(hasControllingTerminal("ttys027")).toBe(true)
+  expect(hasControllingTerminal("pts/3")).toBe(true)
+  expect(hasControllingTerminal("tty1")).toBe(true)
 })
 
 // The stop path races the thing it is stopping. A service that exits on its own between
