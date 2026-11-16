@@ -595,8 +595,10 @@ const styles = StyleSheet.create((theme) => ({
   measuring: {
     opacity: 0,
   },
+  // The live choices' height, so the pill keeps its size from the vote to the decision just made.
   past: {
     ...createControlGeometry(theme).buttonSm,
+    minHeight: CHOICE_HEIGHT,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
