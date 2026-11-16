@@ -637,7 +637,10 @@ function splitCommand(line: string) {
 
 export type TerminalProcessRow = { readonly pid: number; readonly ppid: number; readonly tty: string }
 
-const NO_TERMINAL = "??"
+/** `ps -o tty=` prints `??` on macOS and `?` on Linux for a process with no controlling terminal. */
+export function hasControllingTerminal(tty: string) {
+  return tty !== "" && tty !== "?" && tty !== "??"
+}
 
 export function parseProcessTerminals(output: string): readonly TerminalProcessRow[] {
   const rows: TerminalProcessRow[] = []
@@ -660,9 +663,10 @@ export function sessionShellPids(rows: readonly TerminalProcessRow[]): ReadonlyS
   const terminalByPid = new Map(rows.map((row) => [row.pid, row.tty] as const))
   const shells = new Set<number>()
   for (const row of rows) {
-    if (!row.tty || row.tty === NO_TERMINAL) continue
+    if (!hasControllingTerminal(row.tty)) continue
     if (row.ppid <= 1) continue
-    if (terminalByPid.get(row.ppid) !== NO_TERMINAL) continue
+    const parentTerminal = terminalByPid.get(row.ppid)
+    if (parentTerminal === undefined || hasControllingTerminal(parentTerminal)) continue
     shells.add(row.pid)
   }
   return shells
@@ -677,7 +681,7 @@ async function listRealProcesses(): Promise<readonly ProcessSnapshot[]> {
   const owners = parseOwnerProcesses(await commandOutput("ps", ["axeww", "-o", "pid=,command="]))
   const terminalRows = parseProcessTerminals(await commandOutput("ps", ["ax", "-o", "pid=,ppid=,tty="]))
   const shells = sessionShellPids(terminalRows)
-  const withTerminal = new Set(terminalRows.flatMap((row) => (row.tty && row.tty !== NO_TERMINAL ? [row.pid] : [])))
+  const withTerminal = new Set(terminalRows.flatMap((row) => (hasControllingTerminal(row.tty) ? [row.pid] : [])))
   const cwds = new Map(cwdRows.map((row) => [row.pid, row.cwd] as const))
   const pids = [...new Set([...cwdRows.map((row) => row.pid), ...owners.keys()])].sort((a, b) => a - b)
   if (pids.length === 0) return []
