@@ -11,10 +11,8 @@ const ThemedVendorMark = withUnistyles(SvgXml);
 const ThemedBot = withUnistyles(Bot);
 const foregroundColorMapping = (theme: Theme) => ({ color: theme.colors.foreground });
 const mutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
-// On a side's solid fill, the label's colour: the page on light, the text on dark.
-const onSolidColorMapping = (theme: Theme) => ({
-  color: theme.colorScheme === "dark" ? theme.colors.foreground : theme.colors.surface0,
-});
+// On a side's solid fill, the label's colour, the page colour (`onSideSolid` in decision-bar).
+const onSolidColorMapping = (theme: Theme) => ({ color: theme.colors.surface0 });
 
 const TONE_COLOR_MAPPINGS = {
   default: foregroundColorMapping,

@@ -562,17 +562,20 @@ const BAR_PADDING = 12;
 const CHOICE_HEIGHT = 38;
 
 /**
- * A side's solid fill: its colour deepened toward the theme's dark end, the text colour on light
- * and the page on dark, so the light label on it reads in both schemes.
+ * A side's solid fill: its colour mixed toward the text colour, deep on light and pale on dark, with
+ * its label in the page colour on top, so the two contrast in both schemes. No branch on
+ * `theme.colorScheme`: on web the stylesheet bakes non-colour theme values once, from the first
+ * theme, while colours follow the active theme as CSS variables, so a branch here took the light
+ * side in dark mode too, and the marks drawn through `uniProps`, which read the live theme, went
+ * the other way and disappeared against the fill.
  */
 function sideSolid(theme: Theme, color: string): string {
-  const dark = theme.colorScheme === "dark" ? theme.colors.surface0 : theme.colors.foreground;
-  return `color-mix(in srgb, ${color} 55%, ${dark})`;
+  return `color-mix(in srgb, ${color} 55%, ${theme.colors.foreground})`;
 }
 
-/** The label on a side's solid fill: the theme's light end, the page on light and the text on dark. */
+/** The label, check and logo on a side's solid fill: the page colour. */
 function onSideSolid(theme: Theme): string {
-  return theme.colorScheme === "dark" ? theme.colors.foreground : theme.colors.surface0;
+  return theme.colors.surface0;
 }
 
 const styles = StyleSheet.create((theme) => ({
