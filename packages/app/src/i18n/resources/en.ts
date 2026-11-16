@@ -89,6 +89,8 @@ export const en = {
     versus: "vs",
     resultWon: "Won",
     resultEarly: "Chosen early",
+    resultKept: "Kept",
+    battleStopped: "Battle stopped",
     battleResolved: "Battle resolved",
     sameChanges: "Both agents made the same changes. Showing changes from the original.",
     identicalFiles: "File results are identical",

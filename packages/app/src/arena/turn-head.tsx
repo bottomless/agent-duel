@@ -75,15 +75,22 @@ export function ArenaBattleResult({ agentId, item }: { agentId: string; item: Ar
   if (!kept || !identities) return null;
   const model = identities[kept].name;
   const opponent = identities[kept === "a" ? "b" : "a"].name;
+  const result = keptResult(item);
   return (
     <View style={styles.result} testID={`arena-battle-result-${item.id}`}>
+      {result === "kept" ? (
+        <>
+          <Text style={styles.meta}>{t("arena.battleStopped")}</Text>
+          <Text style={styles.meta}>·</Text>
+        </>
+      ) : null}
       <View style={styles.model}>
         <ArenaModelVendorIcon model={model} size={15} />
         <Text style={styles.resultName} numberOfLines={1}>
           {arenaModelDisplayName(model)}
         </Text>
       </View>
-      <ResultTag result={keptResult(item)} side={kept} />
+      <ResultTag result={result} side={kept} />
       <Text style={styles.meta}>{t("arena.versus")}</Text>
       <UnkeptModel model={opponent} testID={`arena-battle-result-opponent-${item.id}`} />
       {item.voteDiscardedReason ? (
@@ -95,15 +102,17 @@ export function ArenaBattleResult({ agentId, item }: { agentId: string; item: Ar
   );
 }
 
-type KeptResult = "won" | "tie" | "early";
+type KeptResult = "won" | "tie" | "early" | "kept";
 
 /**
- * How the kept side was kept: tied, chosen early, or won. A side kept at a Stop or after the other
- * failed is shown as won too, with "Vote not counted" beside it when the vote was discarded.
+ * How the kept side was kept: tied, chosen early, kept at a Stop, or won. A side kept at a Stop is
+ * tagged Kept, after "Battle stopped". A side kept after the other failed is shown as won, with
+ * "Vote not counted" beside it when the vote was discarded.
  */
 function keptResult(item: ArenaHistoryItem): KeptResult {
   if (item.vote === "tie") return "tie";
   if (item.selectedEarly) return "early";
+  if (item.resolution?.kind === "stopped") return "kept";
   return "won";
 }
 
@@ -111,6 +120,7 @@ const RESULT_KEYS = {
   won: "arena.resultWon",
   tie: "arena.tie",
   early: "arena.resultEarly",
+  kept: "arena.resultKept",
 } as const;
 
 /** The result as a small tag after the name, tinted in the kept side's colour; a tie stays grey. */

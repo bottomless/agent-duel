@@ -47,7 +47,7 @@ import { arenaChangesCountLabel, arenaChangesRows } from "./changes-rows";
 import { arenaDiffQueryKey, hasBattleDiff } from "./comparison-visibility";
 import { arenaModelDisplayName } from "./side-label";
 import { ArenaModelVendorIcon } from "./model-vendor-icon";
-import { ArenaUnkeptResult } from "./turn-head";
+import { ArenaBattleResult, ArenaUnkeptResult } from "./turn-head";
 import { describeSummaryOmissions } from "./summary-omissions";
 import { ArenaRunThread } from "./run-thread";
 import { arenaSessionQueryKey, useArenaStartMutation } from "./use-arena-session";
@@ -286,6 +286,18 @@ function ArenaUnkeptLine({ agentId, item }: { agentId: string; item: ArenaHistor
   return (
     <View style={[styles.resultEdge, styles.unkeptSpacing]}>
       <ArenaUnkeptResult agentId={agentId} item={item} label={chosenLabel(item)} />
+    </View>
+  );
+}
+
+/**
+ * A kept answer with no rows, kept at a Stop before its side did anything: no footer closes it, so
+ * its result stands alone in the same place a battle that kept nothing puts its own.
+ */
+function ArenaEmptyKeptLine({ agentId, item }: { agentId: string; item: ArenaHistoryItem }) {
+  return (
+    <View style={[styles.resultEdge, styles.unkeptSpacing]}>
+      <ArenaBattleResult agentId={agentId} item={item} />
     </View>
   );
 }
@@ -800,12 +812,15 @@ export function ArenaBattleSummary({
   workspaceId,
   agentId,
   item,
+  answered = true,
   canStartAgain = false,
 }: {
   serverId: string;
   workspaceId: string;
   agentId: string;
   item: ArenaHistoryItem;
+  /** Whether a footer in the chat ends with this battle's result (`arenaTurnHeads`' `ends`). */
+  answered?: boolean;
   /** Whether a battle that failed to start can be sent again now: nothing else is running. */
   canStartAgain?: boolean;
 }) {
@@ -825,6 +840,7 @@ export function ArenaBattleSummary({
       workspaceId={workspaceId}
       agentId={agentId}
       item={item}
+      answered={answered}
     />
   );
 }
@@ -834,11 +850,13 @@ function DecidedBattleSummary({
   workspaceId,
   agentId,
   item,
+  answered,
 }: {
   serverId: string;
   workspaceId: string;
   agentId: string;
   item: ArenaHistoryItem;
+  answered: boolean;
 }) {
   const shownTurnId = useArenaShownBattle(agentId);
   // Shown, the battle stands in for its result unframed, as the live battle does.
@@ -854,12 +872,13 @@ function DecidedBattleSummary({
       </View>
     );
   }
-  // A kept answer's own head names its model (`ArenaTurnHead`); a battle that kept none says so
-  // in a head of its own where that answer would be. Only what the chat must still be told
-  // follows, such as a merge conflict.
+  // A kept answer's footer ends with its result (`ArenaBattleResult`); a battle that kept none,
+  // or kept an answer with no rows to close, says so in a line of its own where that answer would
+  // be. Only what the chat must still be told follows, such as a merge conflict.
   return (
     <View style={styles.keptNotice} testID={`arena-summary-${item.id}`}>
       {keptModel(item) ? null : <ArenaUnkeptLine agentId={agentId} item={item} />}
+      {keptModel(item) && !answered ? <ArenaEmptyKeptLine agentId={agentId} item={item} /> : null}
       <CollapsedGitConflicts serverId={serverId} workspaceId={workspaceId} item={item} />
     </View>
   );

@@ -93,6 +93,8 @@ export const ru: TranslationResources = {
     versus: "против",
     resultWon: "Победа",
     resultEarly: "Выбрано досрочно",
+    resultKept: "Сохранено",
+    battleStopped: "Битва остановлена",
     battleResolved: "Битва завершена",
     sameChanges:
       "Оба агента внесли одинаковые изменения. Показаны изменения относительно оригинала.",

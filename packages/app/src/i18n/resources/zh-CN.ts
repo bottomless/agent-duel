@@ -91,6 +91,8 @@ export const zhCN: TranslationResources = {
     versus: "对",
     resultWon: "胜出",
     resultEarly: "提前选定",
+    resultKept: "已保留",
+    battleStopped: "对战已停止",
     battleResolved: "对战已解决",
     sameChanges: "两个智能体进行了相同更改。正在显示相对于原始内容的更改。",
     identicalFiles: "文件结果相同",

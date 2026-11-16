@@ -1472,9 +1472,13 @@ A kept answer's avatar is the winning model's vendor mark, alone, with only its 
 battle's result closes the answer instead, at the right end of its footer on the chat's right edge
 where the prompt ends (`ArenaBattleResult`, keyed by `arenaTurnHeads`' `ends`): `Claude Opus 5.5
 [Won] vs GPT-6.1 Sol · Show battle`, the tag tinted in the kept side's colour, or `Tie` or `Chosen
-early`. A side kept at a Stop or after the other failed shows `Won` too, with `Vote not counted`
-when the vote was discarded. Every kept side gets it (`battleKeptSide`), on the footer of the kept
-answer's last text, so replies sent inside the battle share one result. On a narrow window it wraps
+early`. A side kept at a Stop reads `Battle stopped · Claude Opus 5.5 [Kept] vs GPT-6.1 Sol · Show
+battle`: the owner turned down tagging it `Won` or `Stopped`. A side kept after the other failed
+shows `Won`, with `Vote not counted` when the vote was discarded. Every kept side gets it
+(`battleKeptSide`), on the footer of the kept answer's last text, so replies sent inside the battle
+share one result. An answer stopped before it wrote any text has its footer on its last run of work,
+so the result goes there; one stopped before it did anything has no rows, and its result stands
+alone under the prompt, where a battle that kept nothing puts its own. On a narrow window it wraps
 under the footer, still at the right edge. The owner wanted the head to say who answered and the
 battle to show where the turn ends; the result in the head, above the answer, was turned down. A
 plain turn shows the agent glyph and `Agent`, so a battle turn is told apart by its logo before a

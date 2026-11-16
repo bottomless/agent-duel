@@ -1967,7 +1967,7 @@ function ArenaAgentStream({
     return index >= 0 && !rows.slice(index + 1).some((row) => row.kind === "user_message");
   }, [forkBoundaryAfterItemId, shownStream]);
   const ruledRowIds = useRuledRows(battleHistory, presentedStream, shownStream);
-  const { turnHeads, turnFooterEnds, userRowIds } = useTurnHeads(
+  const { turnHeads, turnFooterEnds, answeredTurnIds, userRowIds } = useTurnHeads(
     agent.id,
     battleHistory,
     shownStream,
@@ -1999,6 +1999,7 @@ function ArenaAgentStream({
           workspaceId={workspaceId}
           agentId={agent.id}
           item={historyItem}
+          answered={answeredTurnIds.has(historyItem.id)}
         />,
       );
       groups.set(anchor, nodes);
@@ -2009,7 +2010,7 @@ function ArenaAgentStream({
         <View key={`arena-summaries-${anchor}`}>{nodes}</View>,
       ]),
     );
-  }, [agent.id, serverId, summaryAnchorKey, summaryPlacement.inline, workspaceId]);
+  }, [agent.id, answeredTurnIds, serverId, summaryAnchorKey, summaryPlacement.inline, workspaceId]);
 
   // The active battle owns setup progress and the contestant panes in the stream.
   const activeBattle = useMemo(() => {
@@ -2045,10 +2046,11 @@ function ArenaAgentStream({
           workspaceId={workspaceId}
           agentId={agent.id}
           item={summaryPlacement.live}
+          answered={answeredTurnIds.has(summaryPlacement.live.id)}
           canStartAgain={canStartAgain}
         />
       ) : null,
-    [agent.id, canStartAgain, serverId, summaryPlacement.live, workspaceId],
+    [agent.id, answeredTurnIds, canStartAgain, serverId, summaryPlacement.live, workspaceId],
   );
 
   const chatCallouts = useArenaChatCallouts({
@@ -2368,6 +2370,8 @@ function useRuledRows(
 interface TurnHeads {
   turnHeads: ReadonlyMap<string, React.ReactNode>;
   turnFooterEnds: ReadonlyMap<string, React.ReactNode>;
+  /** The battles whose result ends a footer in the chat; any other kept battle shows it alone. */
+  answeredTurnIds: ReadonlySet<string>;
   userRowIds: ReadonlySet<string>;
 }
 
@@ -2400,7 +2404,7 @@ function useTurnHeads(
         .join("\n"),
     [stream],
   );
-  const { turnHeads, turnFooterEnds } = useMemo(() => {
+  const { turnHeads, turnFooterEnds, answeredTurnIds } = useMemo(() => {
     const pairs: { heads: [string, string | null][]; ends: [string, string][] } =
       JSON.parse(layoutKey);
     const byTurn = new Map((history ?? []).map((item) => [item.id, item]));
@@ -2413,10 +2417,14 @@ function useTurnHeads(
       const item = byTurn.get(turnId);
       if (item) ends.set(row, <ArenaBattleResult agentId={agentId} item={item} />);
     }
-    return { turnHeads: heads, turnFooterEnds: ends };
+    return {
+      turnHeads: heads,
+      turnFooterEnds: ends,
+      answeredTurnIds: new Set(pairs.ends.map(([, turnId]) => turnId)),
+    };
   }, [agentId, layoutKey, history]);
   const userRowIds = useMemo(() => new Set(userKey ? userKey.split("\n") : []), [userKey]);
-  return { turnHeads, turnFooterEnds, userRowIds };
+  return { turnHeads, turnFooterEnds, answeredTurnIds, userRowIds };
 }
 
 function useSingleAgentRatingDialog({

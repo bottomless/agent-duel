@@ -1,5 +1,6 @@
 import type { ArenaHistoryItem } from "@getpaseo/protocol/arena/rpc-schemas";
 import type { StreamItem } from "@/types/stream";
+import { isTurnBoundary } from "@/agent-stream/turn-membership";
 import { battleKeptSide } from "./battle-result";
 import { orderArenaChat } from "./chat-order";
 import {
@@ -18,8 +19,9 @@ export interface ArenaTurnHeads {
   /** Every row an answer is made of, which the avatar column indents. Prompts are not in it. */
   answerRowIds: ReadonlySet<string>;
   /**
-   * The last text of each battle's kept answer, with its battle: the footer that closes that row
-   * ends with the battle's result (`ArenaBattleResult`).
+   * The row whose footer closes each battle's kept answer, with its battle: that footer ends with
+   * the battle's result (`ArenaBattleResult`). It is the answer's last text, or, in an answer with
+   * none, such as one stopped before writing any, the row that draws its last run of work.
    */
   ends: ReadonlyMap<string, ArenaHistoryItem>;
 }
@@ -47,6 +49,7 @@ export function arenaTurnHeads(
   const heads = new Map<string, ArenaTurnAuthor>();
   const answerRowIds = new Set<string>();
   const lastText = new Map<ArenaHistoryItem, string>();
+  const lastRow = new Map<ArenaHistoryItem, number>();
   // "unknown" until a prompt is seen: an answer cut off from its prompt by paging has no author yet.
   let opened: ArenaHistoryItem | "agent" | "unknown" | null = "unknown";
   for (const [index, row] of rows.entries()) {
@@ -57,6 +60,7 @@ export function arenaTurnHeads(
     }
     answerRowIds.add(row.id);
     const battle = battleOf.get(row.id);
+    if (battle) lastRow.set(battle, index);
     if (battle && row.kind === "assistant_message") lastText.set(battle, row.id);
     if (opened === "unknown") continue;
     const author = battle ?? "agent";
@@ -67,7 +71,11 @@ export function arenaTurnHeads(
       battle ? { kind: "battle", item: battle } : { kind: "agent" },
     );
   }
-  const ends = new Map([...lastText].map(([battle, row]) => [row, battle]));
+  const ends = new Map<string, ArenaHistoryItem>();
+  for (const [battle, index] of lastRow) {
+    const row = lastText.get(battle) ?? workRunRowId(rows, index);
+    if (row) ends.set(row, battle);
+  }
   return { heads, answerRowIds, ends };
 }
 
@@ -84,6 +92,25 @@ function renderedRowId(rows: readonly StreamItem[], index: number): string {
   // A subagent call stands alone, so the reasoning before it stays a row of its own.
   const callId = call.id;
   return isSubagentCall(call) ? rows[index]!.id : callId;
+}
+
+/**
+ * The row a battle chat draws for the run of work that ends at `rows[index]`: reasoning and the
+ * calls around it are one run (`prepareGroupedHistory` with the arena rules), drawn under the id of
+ * its first row. The footer of an answer with no text closes that row.
+ */
+function workRunRowId(rows: readonly StreamItem[], index: number): string | undefined {
+  const last = rows[index]!;
+  // A subagent call stands alone and is drawn as its own row.
+  if (!isWork(last)) return last.kind === "tool_call" ? last.id : undefined;
+  let first = index;
+  while (first > 0 && isWork(rows[first - 1]!) && !isTurnBoundary(rows[first - 1]!, rows[first]!))
+    first -= 1;
+  return rows[first]!.id;
+}
+
+function isWork(row: StreamItem): boolean {
+  return isGroupableReasoning(row) || (isGroupableToolCall(row) && !isSubagentCall(row));
 }
 
 function isPrompt(row: StreamItem): boolean {

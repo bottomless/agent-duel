@@ -96,6 +96,8 @@ export const es: TranslationResources = {
     versus: "vs.",
     resultWon: "Ganó",
     resultEarly: "Elegido antes",
+    resultKept: "Conservado",
+    battleStopped: "Batalla detenida",
     battleResolved: "Batalla resuelta",
     sameChanges:
       "Ambos agentes hicieron los mismos cambios. Se muestran los cambios respecto al original.",

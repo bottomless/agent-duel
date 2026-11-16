@@ -93,6 +93,8 @@ export const ja: TranslationResources = {
     versus: "対",
     resultWon: "勝利",
     resultEarly: "早期に選択",
+    resultKept: "保持",
+    battleStopped: "バトル停止",
     battleResolved: "バトルが解決しました",
     sameChanges: "両エージェントが同じ変更を行いました。元の内容からの変更を表示します。",
     identicalFiles: "ファイルの結果は同一です",

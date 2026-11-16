@@ -31,6 +31,13 @@ const discarded = {
   identities: { a: { name: "Qwen 3.8 Max" }, b: { name: "GLM 5.3 FlashX" } },
 } as unknown as ArenaHistoryItem;
 
+const keptEmpty = {
+  ...discarded,
+  state: "complete",
+  appliedSide: "a",
+  resolution: { kind: "stopped", resolution: "apply_a", appliedSide: "a" },
+} as unknown as ArenaHistoryItem;
+
 afterEach(() => {
   cleanup();
   useArenaShownBattleStore.setState({ byAgent: {} });
@@ -51,5 +58,34 @@ describe("a battle that kept no answer", () => {
 
     fireEvent.click(view.getByTestId("arena-show-battle-turn-1"));
     expect(useArenaShownBattleStore.getState().byAgent.agent).toBe("turn-1");
+  });
+});
+
+describe("a battle kept at a Stop before its side did anything", () => {
+  it("shows its result in a line of its own when no footer in the chat carries it", () => {
+    const view = render(
+      <ArenaBattleSummary
+        serverId="s"
+        workspaceId="w"
+        agentId="agent"
+        item={keptEmpty}
+        answered={false}
+      />,
+      { wrapper: TestQueryProvider },
+    );
+    const line = view.getByTestId("arena-battle-result-turn-1");
+    expect(line.textContent).toContain("Battle stopped");
+    expect(view.getByTestId("arena-battle-result-tag-kept").textContent).toBe("Kept");
+
+    fireEvent.click(view.getByTestId("arena-show-battle-turn-1"));
+    expect(useArenaShownBattleStore.getState().byAgent.agent).toBe("turn-1");
+  });
+
+  it("leaves its result to the footer of an answer that has one", () => {
+    const view = render(
+      <ArenaBattleSummary serverId="s" workspaceId="w" agentId="agent" item={keptEmpty} />,
+      { wrapper: TestQueryProvider },
+    );
+    expect(view.queryByTestId("arena-battle-result-turn-1")).toBeNull();
   });
 });

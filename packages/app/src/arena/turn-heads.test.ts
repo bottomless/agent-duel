@@ -97,6 +97,25 @@ describe("arenaTurnHeads", () => {
     expect(answerRowIds.has("a0")).toBe(true);
   });
 
+  it("ends a kept answer with no text on the row that draws its last run of work", () => {
+    // Stopped before writing text: the chat draws reasoning and the calls after it as one run,
+    // keyed by its first row, and closes the answer with that row's footer.
+    const kept = battle("turn-1", "msg_0100", undefined, "a");
+    const stopped = arenaTurnHeads([kept], {
+      tail: [prompt("msg_0100"), thought("t1"), read("c1"), read("c2")],
+      head: [],
+    });
+    expect([...stopped.ends.entries()]).toEqual([["t1", kept]]);
+    const single = arenaTurnHeads([kept], { tail: [prompt("msg_0100"), read("c1")], head: [] });
+    expect([...single.ends.keys()]).toEqual(["c1"]);
+    // Text before the work still splits the runs: the last run starts after it.
+    const afterText = arenaTurnHeads([kept], {
+      tail: [prompt("msg_0100"), read("c1"), text("a1"), read("c2"), read("c3")],
+      head: [],
+    });
+    expect([...afterText.ends.keys()]).toEqual(["a1"]);
+  });
+
   it("opens nothing for a battle that kept no answer", () => {
     const discarded = {
       ...battle("turn-1", "msg_0100"),

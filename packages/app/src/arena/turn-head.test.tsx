@@ -49,7 +49,7 @@ describe("ArenaBattleResult", () => {
     expect(useArenaShownBattleStore.getState().byAgent.agent).toBe("turn-1");
   });
 
-  it("tags a tie and an early pick for what they were, and any other kept side as won", () => {
+  it("tags a tie, an early pick and a side kept at a Stop for what they were, and any other kept side as won", () => {
     const tie = render(
       <ArenaBattleResult agentId="agent" item={kept({ vote: "tie", appliedSide: "a" })} />,
     );
@@ -79,8 +79,20 @@ describe("ArenaBattleResult", () => {
     failed.unmount();
 
     // Kept at a Stop: no vote at all.
-    const stopped = render(<ArenaBattleResult agentId="agent" item={kept({ appliedSide: "a" })} />);
-    expect(stopped.getByTestId("arena-battle-result-tag-won").textContent).toBe("Won");
+    const stopped = render(
+      <ArenaBattleResult
+        agentId="agent"
+        item={kept({
+          appliedSide: "a",
+          resolution: { kind: "stopped", resolution: "apply_a", appliedSide: "a" },
+        })}
+      />,
+    );
+    // The line says the battle was stopped, then tags the side it kept.
+    expect(stopped.getByTestId("arena-battle-result-tag-kept").textContent).toBe("Kept");
+    expect(stopped.getByTestId("arena-battle-result-turn-1").textContent).toMatch(
+      /^Battle stopped·GPT-6\.1 SolKeptvs/,
+    );
     expect(stopped.getByTestId("arena-battle-result-turn-1").textContent).not.toContain(
       "Vote not counted",
     );
