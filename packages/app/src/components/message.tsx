@@ -2708,27 +2708,31 @@ export const ToolCall = memo(function ToolCall({
   );
 }, areToolCallPropsEqual);
 
+// The inline-detail callbacks are left out: a new callback alone must not re-render the row.
+const TOOL_CALL_COMPARED_PROPS = [
+  "toolName",
+  "serverId",
+  "agentMessage",
+  "args",
+  "result",
+  "error",
+  "status",
+  "detail",
+  "cwd",
+  "metadata",
+  "isLastInSequence",
+  "disableOuterSpacing",
+  "onOpenFilePath",
+  "defaultExpanded",
+  "forceInline",
+  "maxDetailHeight",
+  "compactLabel",
+  "itemId",
+  "standalone",
+  "flushRow",
+  "labelSizedIcon",
+] as const satisfies readonly (keyof ToolCallProps)[];
+
 function areToolCallPropsEqual(previous: ToolCallProps, next: ToolCallProps) {
-  if (previous.toolName !== next.toolName) return false;
-  if (previous.serverId !== next.serverId) return false;
-  if (previous.agentMessage !== next.agentMessage) return false;
-  if (previous.args !== next.args) return false;
-  if (previous.result !== next.result) return false;
-  if (previous.error !== next.error) return false;
-  if (previous.status !== next.status) return false;
-  if (previous.detail !== next.detail) return false;
-  if (previous.cwd !== next.cwd) return false;
-  if (previous.metadata !== next.metadata) return false;
-  if (previous.isLastInSequence !== next.isLastInSequence) return false;
-  if (previous.disableOuterSpacing !== next.disableOuterSpacing) return false;
-  if (previous.onOpenFilePath !== next.onOpenFilePath) return false;
-  if (previous.defaultExpanded !== next.defaultExpanded) return false;
-  if (previous.forceInline !== next.forceInline) return false;
-  if (previous.maxDetailHeight !== next.maxDetailHeight) return false;
-  if (previous.compactLabel !== next.compactLabel) return false;
-  if (previous.itemId !== next.itemId) return false;
-  if (previous.standalone !== next.standalone) return false;
-  if (previous.flushRow !== next.flushRow) return false;
-  if (previous.labelSizedIcon !== next.labelSizedIcon) return false;
-  return true;
+  return TOOL_CALL_COMPARED_PROPS.every((key) => previous[key] === next[key]);
 }
