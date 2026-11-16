@@ -59,17 +59,13 @@ import { ArenaTransitionTimeline } from "./transition-timeline";
 import { arenaResolutionStatus, arenaSetupStatus } from "./transition-progress";
 import { useArenaCardBleed } from "./content-column";
 import { ArenaPaneActions, ArenaPanePreview } from "./pane-actions";
-import { BATTLE_GUTTER, BATTLE_RAIL } from "./battle-layout";
+import { BATTLE_GUTTER, BATTLE_RAIL, STACKED_PANES_BREAKPOINT } from "./battle-layout";
 import { isArenaBattleOnScreen } from "./summary-anchor";
 import { arenaPromptAttachmentPills } from "./prompt-attachment-pills";
 import { arenaPromptImages } from "./prompt-images";
 import type { StartingArenaBattle } from "./use-arena-session";
 
 type ArenaPaneView = ArenaSide | "both";
-
-// Keep both answers side by side until each pane would fall below roughly 30–35
-// characters of readable content at the default interface size.
-const STACKED_PANES_BREAKPOINT = 520;
 
 // Room above a message the turns menu scrolls to, so it does not sit against the pane header.
 const JUMP_TO_MESSAGE_INSET = 12;

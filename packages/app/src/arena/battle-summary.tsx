@@ -54,7 +54,8 @@ import { arenaSessionQueryKey, useArenaStartMutation } from "./use-arena-session
 import { ArenaTransitionRow } from "./transition-row";
 import { formatDuration } from "@/utils/time";
 import { BattleReview } from "./battle-review";
-import { BATTLE_GUTTER, BATTLE_RAIL } from "./battle-layout";
+import { BATTLE_GUTTER, BATTLE_RAIL, SHOWN_SUMMARY_STACKED_BREAKPOINT } from "./battle-layout";
+import { SummaryStackedBreakpoint } from "./summary-columns-view";
 import { useArenaShownBattle, useArenaShownBattleStore } from "./shown-battle";
 
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
@@ -640,7 +641,9 @@ function ExpandedBattleSummary({
       </View>
       <BattleThreads runA={settledHistoryRun(runA)} runB={settledHistoryRun(runB)} item={item} />
       <View style={styles.shownReview}>
-        <ShownBattleReview serverId={serverId} agentId={agentId} item={item} />
+        <SummaryStackedBreakpoint.Provider value={SHOWN_SUMMARY_STACKED_BREAKPOINT}>
+          <ShownBattleReview serverId={serverId} agentId={agentId} item={item} />
+        </SummaryStackedBreakpoint.Provider>
       </View>
       <ShownBattleEnd agentId={agentId} item={item} />
     </View>

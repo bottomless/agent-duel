@@ -264,7 +264,11 @@ columns sit under their answers.
 
 Everything about one side sits under that side, and only what is about both spans the columns. Each
 column opens with a hairline. The summary puts each side's sentences and its value in each row of
-the differences table under that side's answer (`summary-columns.ts`). Changes heads each column
+the differences table under that side's answer (`summary-columns.ts`), each row one cell with the
+aspect above the value: beside it, a fixed label column left a narrow answer's value a few words
+wide. The summary stacks A's part above B's exactly when the answers stack, which it works out from
+its own width (`summaryColumnsStacked` in `battle-layout.ts`); a shown battle wraps its answers on a
+different rule and sets its own breakpoint. Changes heads each column
 with that side's file count and total, then gives each file one row: what A did under A, what B did
 under B, "unchanged" on the side that left it alone (`SplitChangesRow` in `changes-list.tsx`).
 An opened file puts A's code in a box under A and B's in a box under B, across the same gutter, with
