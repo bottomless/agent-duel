@@ -111,6 +111,49 @@ export function ArenaChoiceGroup({ testID, children }: { testID: string; childre
   );
 }
 
+/**
+ * The choice group with its two sides one width, the wider side's, so the middle choice sits at the
+ * group's exact centre whatever the sides say. Tie then stays in one place from the vote to the
+ * decision just made, when the sides become the revealed models' names. The group stays invisible
+ * for the frame it takes to measure the sides, so the middle never shows off centre.
+ */
+export function ArenaBalancedChoiceGroup({
+  testID,
+  children,
+}: {
+  testID: string;
+  /** The start side, the middle choice and the end side, in that order. */
+  children: [ReactNode, ReactNode, ReactNode];
+}) {
+  const [start, middle, end] = children;
+  const [startWidth, setStartWidth] = useState<number | null>(null);
+  const [endWidth, setEndWidth] = useState<number | null>(null);
+  const handleStartLayout = useCallback(
+    (event: LayoutChangeEvent) => setStartWidth(event.nativeEvent.layout.width),
+    [],
+  );
+  const handleEndLayout = useCallback(
+    (event: LayoutChangeEvent) => setEndWidth(event.nativeEvent.layout.width),
+    [],
+  );
+  const width = startWidth !== null && endWidth !== null ? Math.max(startWidth, endWidth) : null;
+  const sideStyle = useMemo(
+    () => [styles.balancedSide, inlineUnistylesStyle({ minWidth: width ?? 0 })],
+    [width],
+  );
+  return (
+    <View style={[styles.choiceGroup, width === null && styles.measuring]} testID={testID}>
+      <View style={sideStyle} onLayout={handleStartLayout}>
+        {start}
+      </View>
+      {middle}
+      <View style={sideStyle} onLayout={handleEndLayout}>
+        {end}
+      </View>
+    </View>
+  );
+}
+
 /** What a decided battle's row offered, and which of its three it took. */
 export interface ArenaPastChoice {
   kind: "vote" | "keep";
@@ -156,42 +199,45 @@ export function ArenaPastDecision({
     middle: kind === "vote" ? t("arena.tie") : t("arena.discard"),
     b: sideLabel("b"),
   };
+  const item = (choice: ArenaSide | "middle") => {
+    const selected = choice === chosen;
+    return (
+      <View
+        accessibilityState={selected ? SELECTED : UNSELECTED}
+        style={[
+          styles.past,
+          choice === "middle" ? styles.pastMiddle : styles.pastSide,
+          selected ? pastSelectedStyle(choice) : styles.pastQuiet,
+        ]}
+        testID={`arena-past-decision-${choice}${selected ? "-chosen" : ""}`}
+      >
+        {selected ? <ThemedCheck size={14} uniProps={checkColorMapping[choice]} /> : null}
+        {choice !== "middle" && identities ? (
+          <ArenaModelVendorIcon
+            model={identities[choice].name}
+            size={15}
+            tone={selected ? "onSolid" : "muted"}
+          />
+        ) : null}
+        <Text
+          numberOfLines={1}
+          style={[
+            styles.choiceText,
+            styles.pastText,
+            selected ? pastSelectedTextStyle(choice) : styles.pastQuietText,
+          ]}
+        >
+          {labels[choice]}
+        </Text>
+      </View>
+    );
+  };
   return (
-    <ArenaChoiceGroup testID="arena-past-decision">
-      {(["a", "middle", "b"] as const).map((choice) => {
-        const selected = choice === chosen;
-        return (
-          <View
-            key={choice}
-            accessibilityState={selected ? SELECTED : UNSELECTED}
-            style={[
-              styles.past,
-              choice === "middle" ? styles.pastMiddle : styles.pastSide,
-              selected ? pastSelectedStyle(choice) : styles.pastQuiet,
-            ]}
-            testID={`arena-past-decision-${choice}${selected ? "-chosen" : ""}`}
-          >
-            {selected ? <ThemedCheck size={14} uniProps={checkColorMapping[choice]} /> : null}
-            {choice !== "middle" && identities ? (
-              <ArenaModelVendorIcon
-                model={identities[choice].name}
-                size={15}
-                tone={selected ? "onSolid" : "muted"}
-              />
-            ) : null}
-            <Text
-              style={[
-                styles.choiceText,
-                styles.pastText,
-                selected ? pastSelectedTextStyle(choice) : styles.pastQuietText,
-              ]}
-            >
-              {labels[choice]}
-            </Text>
-          </View>
-        );
-      })}
-    </ArenaChoiceGroup>
+    <ArenaBalancedChoiceGroup testID="arena-past-decision">
+      {item("a")}
+      {item("middle")}
+      {item("b")}
+    </ArenaBalancedChoiceGroup>
   );
 }
 
@@ -290,7 +336,7 @@ export function VoteDecision({
       accessibilityHint={t("arena.tieHelp")}
       testID="arena-choose-tie"
     >
-      {t("arena.tie")}{" "}
+      {t("arena.tie")}
     </Button>
   );
 }
@@ -351,7 +397,7 @@ export function DiscardDecision({
       testID="arena-stopped-discard"
     >
       {/* Alone on the failure line it names what it throws away; among the choices its neighbours do. */}
-      {placement === "pill" ? t("arena.discard") : t("arena.discardBattle")}{" "}
+      {placement === "pill" ? t("arena.discard") : t("arena.discardBattle")}
     </Button>
   );
 }
@@ -541,6 +587,14 @@ const styles = StyleSheet.create((theme) => ({
     borderRadius: theme.borderRadius.lg + theme.spacing[1],
     backgroundColor: theme.colors.surface2,
   },
+  // A side's place in a balanced group, its button stretched to the wider side's width and no
+  // wider than a long model name needs, which then ends in an ellipsis.
+  balancedSide: {
+    maxWidth: 240,
+  },
+  measuring: {
+    opacity: 0,
+  },
   past: {
     ...createControlGeometry(theme).buttonSm,
     flexDirection: "row",
@@ -574,6 +628,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   pastText: {
     fontSize: theme.fontSize.base,
+    flexShrink: 1,
   },
   pastQuietText: {
     color: theme.colors.foregroundMuted,

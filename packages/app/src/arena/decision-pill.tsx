@@ -1,12 +1,13 @@
 import { i18n } from "@/i18n/i18next";
 import { useTranslation } from "react-i18next";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Text, View, type LayoutChangeEvent } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import type { ArenaSide, ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
 import {
   ArenaRunningPillButton,
   ArenaSideChoiceButton,
+  ArenaBalancedChoiceGroup,
   ArenaChoiceGroup,
   ArenaPastDecision,
   arenaPastChoice,
@@ -271,25 +272,36 @@ function DecisionChoices({
   }
   const stopped = phase.kind === "awaiting_stop_resolution";
   const interrupted = phase.kind === "awaiting_vote" && phase.canResume;
+  if (interrupted) {
+    return (
+      <ArenaChoiceGroup testID="arena-battle-choice-row">
+        <ResumeDecision actions={actions} />
+        <DiscardDecision actions={actions} />
+      </ArenaChoiceGroup>
+    );
+  }
+  // A failed side shows Accept in its Choose's place, or nothing if its result was not saved, and
+  // each failed pane keeps its Retry.
+  const sideA = <BattlePaneDecision side="a" phase={phase} actions={actions} />;
+  const sideB = <BattlePaneDecision side="b" phase={phase} actions={actions} />;
+  let middle: ReactNode = null;
+  if (phase.kind === "awaiting_vote" && phase.canTie) middle = <VoteDecision actions={actions} />;
+  if (stopped) middle = <DiscardDecision actions={actions} />;
+  // With a middle choice the sides share a width, so Tie sits at the exact centre and stays there
+  // when the decision just made puts the models' names in the sides' places.
+  if (middle) {
+    return (
+      <ArenaBalancedChoiceGroup testID="arena-battle-choice-row">
+        {sideA}
+        {middle}
+        {sideB}
+      </ArenaBalancedChoiceGroup>
+    );
+  }
   return (
     <ArenaChoiceGroup testID="arena-battle-choice-row">
-      {interrupted ? (
-        <>
-          <ResumeDecision actions={actions} />
-          <DiscardDecision actions={actions} />
-        </>
-      ) : (
-        <>
-          {/* A failed side shows Accept in its Choose's place, or nothing if its result was not
-              saved, and each failed pane keeps its Retry. */}
-          <BattlePaneDecision side="a" phase={phase} actions={actions} />
-          {phase.kind === "awaiting_vote" && phase.canTie ? (
-            <VoteDecision actions={actions} />
-          ) : null}
-          {stopped ? <DiscardDecision actions={actions} /> : null}
-          <BattlePaneDecision side="b" phase={phase} actions={actions} />
-        </>
-      )}
+      {sideA}
+      {sideB}
     </ArenaChoiceGroup>
   );
 }
