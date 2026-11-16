@@ -356,6 +356,55 @@ describe("Arena OpenCode v2 native boundary", () => {
     expect(assignments.some((item) => item.action === "create" && item.modelSize === "frontier")).toBe(true)
   })
 
+  test("shows a used-up single-agent allowance in the daemon's words", async () => {
+    home = await mkdtemp(path.join(os.tmpdir(), "agent-duel-v2-allowance-"))
+    process.env.PASEO_HOME = home
+    process.env.OPENCODE_ARENA = "1"
+    // The daemon router's fixed answer to the control plane's `single_agent_allowance` refusal.
+    const message =
+      "Arena single-agent limit reached. Vote in battles to earn more single-agent use, or try again later."
+    let completions = 0
+    controlPlane = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: async (request) => {
+        const pathname = new URL(request.url).pathname
+        if (pathname === "/api/arena/assignments") {
+          return Response.json({ error: message, code: "single_agent_allowance" }, { status: 403 })
+        }
+        if (pathname.startsWith("/api/openrouter/")) completions++
+        return new Response("not found", { status: 404 })
+      },
+    })
+    setArenaCredentials({
+      mode: "hosted",
+      researchPartition: "test-research-partition",
+      researchAccountID: "test-account",
+      token: "test-token",
+      controlPlaneUrl: `http://127.0.0.1:${controlPlane.port}`,
+      controlTokenHash: hashArenaControlToken(controlToken),
+    })
+    listener = await Server.listen({ hostname: "127.0.0.1", port: 0, fs: { filewatcher: false } })
+    const get = (route: string, init?: RequestInit) => fetch(new URL(route, listener!.url), init)
+    const directory = await mkdtemp(path.join(home, "workspace-"))
+    const created = await get("/api/session", {
+      method: "POST",
+      headers: { ...headers(), "x-opencode-directory": directory },
+      body: JSON.stringify({ location: { directory }, model: { providerID: "arena", id: "medium" } }),
+    })
+    expect(created.status).toBe(200)
+    const session = (await created.json()).data as { id: string }
+
+    const prompt = await get(`/api/session/${session.id}/prompt`, {
+      method: "POST",
+      headers: { ...headers(), "x-opencode-directory": directory },
+      body: JSON.stringify({ text: "fix the test", resume: true }),
+    })
+    expect(prompt.status).toBe(409)
+    expect(await prompt.json()).toEqual({ _tag: "ArenaRefusal", message })
+    expect(completions).toBe(0)
+  })
+
   test("blocks an unresolved contestant mutation while allowing session reads", async () => {
     home = await mkdtemp(path.join(os.tmpdir(), "agent-duel-v2-guard-"))
     process.env.PASEO_HOME = home

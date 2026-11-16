@@ -2,6 +2,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import express from "express";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { SINGLE_AGENT_ALLOWANCE_MESSAGE } from "@getpaseo/protocol/accounts/schemas";
 import { createArenaRuntimeRouter } from "./arena-runtime-router.js";
 import {
   arenaTermsRefusals,
@@ -466,6 +467,24 @@ describe("Arena runtime proxy", () => {
     expect(outdated.status).toBe(403);
     expect(await outdated.json()).toEqual(update);
     expect(arenaUpdateRefusals()).toBe(updatesBefore + 1);
+
+    // A used-up single-agent allowance reaches the engine in the daemon's words, which start
+    // with "Arena " so the engine shows them; the control plane's own text stays out.
+    upstream.mockResolvedValueOnce(
+      Response.json(
+        { error: "control plane text", code: "single_agent_allowance" },
+        { status: 403 },
+      ),
+    );
+    const limited = await send("/api/arena/assignments");
+    expect(limited.status).toBe(403);
+    const limitedBody = (await limited.json()) as { error: string; code: string };
+    expect(limitedBody).toEqual({
+      error: SINGLE_AGENT_ALLOWANCE_MESSAGE,
+      code: "single_agent_allowance",
+    });
+    expect(limitedBody.error.startsWith("Arena ")).toBe(true);
+    expect(isControlPlaneFailure(new Error(limitedBody.error))).toBe(false);
 
     // The router's own failure on the assignment route is marked too.
     upstream.mockRejectedValueOnce(new Error("socket hang up"));

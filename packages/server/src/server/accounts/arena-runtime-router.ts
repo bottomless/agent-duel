@@ -2,7 +2,10 @@ import { once } from "node:events";
 import express from "express";
 import type { Logger } from "pino";
 import { clientHeaders } from "./config.js";
-import { ACCOUNT_SESSION_REJECTED_MESSAGE } from "@getpaseo/protocol/accounts/schemas";
+import {
+  ACCOUNT_SESSION_REJECTED_MESSAGE,
+  SINGLE_AGENT_ALLOWANCE_CODE,
+} from "@getpaseo/protocol/accounts/schemas";
 import {
   confirmArenaSessionRejection,
   isArenaSessionRejected,
@@ -14,6 +17,7 @@ import {
   controlPlaneFailedBody,
   noteArenaTermsRefusal,
   noteArenaUpdateRequired,
+  singleAgentAllowanceBody,
 } from "./control-plane-outcomes.js";
 
 const allowedRoutes = new Set([
@@ -57,7 +61,8 @@ function sendUnavailable(res: express.Response, path: string): void {
 
 /**
  * Settles a control-plane error answer to a user's action. A terms or update refusal is named by
- * its code and passes; a payment refusal carries fixed text and passes; any other assignment error
+ * its code and passes; a single-agent allowance refusal passes with the daemon's fixed text; a
+ * payment refusal carries fixed text and passes; any other assignment error
  * is replaced with fixed, marked text, and its own text goes to the log only. Returns the answer to
  * pass on.
  */
@@ -81,6 +86,9 @@ async function settleErrorAnswer(
   }
   if (path !== assignmentsRoute) {
     return new Response(body, { status: answered.status, headers: answered.headers });
+  }
+  if (code === SINGLE_AGENT_ALLOWANCE_CODE) {
+    return Response.json(singleAgentAllowanceBody, { status: answered.status });
   }
   logger.warn(
     { path, status: answered.status, body: body.slice(0, 500) },
