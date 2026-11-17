@@ -654,6 +654,8 @@ describe("battle shell writes are the forms that write (bench 2026-11-06)", () =
     `python3 -c "print('a/b'.split('/'))"`,
     "curl -s -o $TMPDIR/page.html https://example.com/",
     "tar -czf $TMPDIR/out.tgz src",
+    // Refused as "/f is outside them" (2026-11-12): `-rf` was read as the file `f` under `/`.
+    `D="$TMPDIR/neg"; rm -rf "$D"; mkdir -p "$D"; cd "$D" && printf 'a,b\\n' > signed.csv; cd /; rm -rf "$D"`,
   ]
   it.each(safe)("runs %s", async (command) => {
     using f = fixture()

@@ -160,6 +160,25 @@ const PATH_FLAGS: Record<string, string> = {
   cc: "o",
   clang: "o",
 }
+// File commands whose short options are switches (`rm -rf`) except the ones listed, which take a path.
+const FILE_PATH_FLAGS: Record<string, string> = {
+  chgrp: "",
+  chmod: "",
+  chown: "",
+  mkdir: "",
+  mkfifo: "",
+  mknod: "",
+  mktemp: "p",
+  mv: "t",
+  patch: "oidrB",
+  rm: "",
+  rmdir: "",
+  shred: "",
+  tee: "",
+  touch: "r",
+  truncate: "r",
+  unlink: "",
+}
 
 /** Device files a shell may name. They are not paths on disk; on Windows they would resolve to `C:\dev\...`. */
 export const DEVICE_PATH = /^\/dev\/(?:null|std(?:in|out|err)|fd\/\d+)$/
@@ -236,6 +255,12 @@ function wordParts(word: string, name: string) {
   if (word.startsWith("-") && !word.startsWith("--") && PATH_FLAGS[name]) {
     const at = [...word.slice(1)].findIndex((letter) => PATH_FLAGS[name].includes(letter))
     if (at >= 0) attached = word.slice(at + 2)
+  }
+  const fileFlags = FILE_PATH_FLAGS[name]
+  if (word.startsWith("-") && !word.startsWith("--") && fileFlags !== undefined) {
+    const switches = /^-([A-Za-z]*)/.exec(word)![1]
+    const at = Array.from(switches).findIndex((letter) => fileFlags.includes(letter))
+    attached = at >= 0 ? word.slice(at + 2) : undefined
   }
   const pieces = word.search(/[=,:]/) < 0 ? [] : word.split(/[=,:]/)
   return [word, ...(attached ? [attached] : []), ...pieces]
