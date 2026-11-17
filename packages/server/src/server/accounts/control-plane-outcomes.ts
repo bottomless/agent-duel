@@ -1,6 +1,8 @@
 import {
   ARENA_CONTROL_PLANE_FAILED_CODE,
   ARENA_CONTROL_PLANE_FAILED_MESSAGE,
+  SINGLE_AGENT_ALLOWANCE_CODE,
+  SINGLE_AGENT_ALLOWANCE_MESSAGE,
 } from "@getpaseo/protocol/accounts/schemas";
 
 /**
@@ -46,6 +48,15 @@ const failedMark = `[${ARENA_CONTROL_PLANE_FAILED_CODE}]`;
 export const controlPlaneFailedBody = {
   error: `${ARENA_CONTROL_PLANE_FAILED_MESSAGE} ${failedMark}`,
   code: ARENA_CONTROL_PLANE_FAILED_CODE,
+} as const;
+
+/**
+ * The answer that replaces a single-agent allowance refusal. The daemon words it, so the user
+ * learns what to do (vote in battles, or wait) and the control plane's own text stays out.
+ */
+export const singleAgentAllowanceBody = {
+  error: SINGLE_AGENT_ALLOWANCE_MESSAGE,
+  code: SINGLE_AGENT_ALLOWANCE_CODE,
 } as const;
 
 /** Whether an error, or one of its causes, carries a failed control-plane answer. */

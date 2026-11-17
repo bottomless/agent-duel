@@ -12,6 +12,7 @@ import {
   paymentMessage,
   requestTooLargeMessage,
   SESSION_REJECTED_RETRY_MESSAGE,
+  singleAgentAllowanceMessage,
 } from "@agent-duel/arena-service/request-error"
 import { ARENA_OFFLINE_MESSAGE } from "@/session/retry"
 
@@ -280,7 +281,11 @@ function contains(value: unknown, blocked: ReadonlySet<string>): boolean {
 }
 
 // Messages the engine writes itself, which name no model and tell the voter what to do.
-const neutralMessages = new Set<unknown>([ArenaResponseRecovery.IDLE_EXHAUSTED, requestTooLargeMessage])
+const neutralMessages = new Set<unknown>([
+  ArenaResponseRecovery.IDLE_EXHAUSTED,
+  requestTooLargeMessage,
+  singleAgentAllowanceMessage,
+])
 
 function apiError(input: ApiError): ApiError {
   return {

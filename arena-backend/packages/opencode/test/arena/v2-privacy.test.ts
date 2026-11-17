@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { REDACTED_THINKING } from "@agent-duel/arena-service/reasoning"
-import { requestTooLargeMessage } from "@agent-duel/arena-service/request-error"
+import { requestTooLargeMessage, singleAgentAllowanceMessage } from "@agent-duel/arena-service/request-error"
 import { sanitizeV2 } from "@/arena/v2-privacy"
 
 describe("sanitizeV2", () => {
@@ -194,5 +194,22 @@ test("keeps the neutral request-size refusal on native errors while hiding upstr
   expect(result).toEqual({
     type: "session.step.failed",
     data: { error: { type: "provider.invalid-request", message: requestTooLargeMessage } },
+  })
+})
+
+test("keeps the single-agent limit refusal on a failed step while hiding upstream details", () => {
+  const result = sanitizeV2({
+    type: "session.step.failed",
+    data: {
+      error: {
+        type: "provider.api",
+        message: singleAgentAllowanceMessage,
+        response: { body: "private control plane text" },
+      },
+    },
+  })
+  expect(result).toEqual({
+    type: "session.step.failed",
+    data: { error: { type: "provider.api", message: singleAgentAllowanceMessage } },
   })
 })

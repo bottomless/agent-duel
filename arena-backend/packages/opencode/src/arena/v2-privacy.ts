@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto"
-import { requestTooLargeMessage, paymentMessage } from "@agent-duel/arena-service/request-error"
+import {
+  requestTooLargeMessage,
+  paymentMessage,
+  singleAgentAllowanceMessage,
+} from "@agent-duel/arena-service/request-error"
 import { REDACTED_THINKING } from "@agent-duel/arena-service/reasoning"
 import { ARENA_OFFLINE_MESSAGE } from "@/session/retry"
 
@@ -57,6 +61,10 @@ function safeError(value: unknown) {
   const responseBody = data && typeof data.responseBody === "string" ? data.responseBody : undefined
   const message = (() => {
     if (text === requestTooLargeMessage || data?.message === requestTooLargeMessage) return requestTooLargeMessage
+    // Rebuilt by the engine proxy from the control plane's code; it names no model.
+    if (text === singleAgentAllowanceMessage || data?.message === singleAgentAllowanceMessage) {
+      return singleAgentAllowanceMessage
+    }
     if (statusCode === 402) return paymentMessage(statusCode, responseBody) ?? "The agent could not complete this run."
     const lower = text.toLowerCase()
     if (lower.includes("offline") || lower.includes("network") || lower.includes("connection refused")) {

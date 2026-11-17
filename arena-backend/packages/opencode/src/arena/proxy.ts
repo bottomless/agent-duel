@@ -9,8 +9,10 @@ import {
   readNetworkUnavailable,
   readPaymentError,
   readSessionRejected,
+  readSingleAgentAllowance,
   retryableStreamError,
   sessionRejectedError,
+  singleAgentAllowanceError,
 } from "@agent-duel/arena-service/request-error"
 import { COMPACTION_HEADER, COMPACTION_OFFER } from "@agent-duel/arena-service/request-budget"
 import { HEARTBEAT_HEADER, REPLAY_PATH, REPLAY_UNAVAILABLE_LINE } from "@agent-duel/arena-service/stream-recovery"
@@ -732,13 +734,14 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
     const type = response.headers.get("content-type") ?? ""
     if (!response.ok) {
       // Rebuild allowlisted control responses so upstream text and capability limits never escape.
-      const knownStatus = [401, 402, 413, 503].includes(response.status)
+      const knownStatus = [401, 402, 403, 413, 503].includes(response.status)
       const body = knownStatus ? await response.text() : undefined
       let payload = { error: { message: "Arena contestant request failed", type: "arena_upstream_error" } }
       if (response.status === 401 && readSessionRejected(body)) payload = sessionRejectedError()
       if (response.status === 402) payload = paymentError(readPaymentError(body) ?? "arena_payment_required")
       if (response.status === 503 && readNetworkUnavailable(body)) payload = networkUnavailableError()
       if (response.status === 413 && readCompactionRequired(body)) payload = compactionRequiredError()
+      if (response.status === 403 && readSingleAgentAllowance(body)) payload = singleAgentAllowanceError()
       if (body === undefined) await response.body?.cancel().catch(() => undefined)
       endWait?.()
       telemetry?.rawChunk?.(metadata, JSON.stringify(payload))

@@ -108,6 +108,30 @@ export function readPaymentError(body: string | undefined): PaymentErrorCode | u
 // A contestant request answers 503 with this when the user's machine has no network. The engine
 // waits for the network instead of spending the run's retry budget. The daemon's runtime proxy
 // writes the same body (`packages/server/src/server/accounts/network-unavailable.ts`).
+/**
+ * The control plane refuses a single-agent prompt's first model call with this code once the account
+ * has used its allowance. Twin of `SINGLE_AGENT_ALLOWANCE_*` in `packages/protocol/src/accounts/schemas.ts`,
+ * which words the same refusal when the prompt's assignment is created.
+ */
+export const singleAgentAllowanceCode = "single_agent_allowance"
+export const singleAgentAllowanceMessage =
+  "Arena single-agent limit reached. Review and vote on battles to add to it, or try again later."
+
+export function singleAgentAllowanceError() {
+  return { error: { message: singleAgentAllowanceMessage, type: singleAgentAllowanceCode } }
+}
+
+export function readSingleAgentAllowance(body: string | undefined) {
+  if (!body) return false
+  let payload: unknown
+  try {
+    payload = JSON.parse(body)
+  } catch {
+    return false
+  }
+  return isRecord(payload) && payload.code === singleAgentAllowanceCode
+}
+
 export const networkUnavailableType = "arena_network_unavailable"
 
 export function networkUnavailableError() {
