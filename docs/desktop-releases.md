@@ -3,7 +3,7 @@
 Merging to main runs CI; it does not publish an installer. The Desktop Release
 workflow only runs manually on main. It builds the exact commit captured when
 Run workflow is clicked and creates a draft GitHub release after verification.
-It builds a signed Apple Silicon (arm64) app and an unsigned Windows x64
+It builds a signed Apple Silicon (arm64) app and a signed Windows x64
 installer, and the draft is created only when both succeed.
 
 ## One-time setup
@@ -23,6 +23,26 @@ The certificate must be Developer ID Application: Bottomless Supply Inc
 (LGVJP2HNM2). Keep the private key and a secure backup outside the repository.
 Creating an Apple app-specific password and uploading credentials to GitHub are
 separate setup steps; this workflow does not provision them.
+
+Windows releases use Azure Artifact Signing. In the same environment, add
+`AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, and `AZURE_CLIENT_SECRET` as secrets. The
+client secret is its value, not its ID; replace it in Azure and GitHub before it
+expires. Give the release app the Artifact Signing Certificate Profile Signer
+role on the certificate profile only.
+
+Add these environment variables:
+
+- `AZURE_SIGNING_ENDPOINT`: `https://eus.codesigning.azure.net`
+- `AZURE_SIGNING_ACCOUNT`: `agentduelsigning`
+- `AZURE_SIGNING_PROFILE`: `agentduelpublic`
+- `WINDOWS_PUBLISHER_NAME`: `CN=Bottomless Inc, O=Bottomless Inc, L=Seattle, S=Washington, C=US`
+
+Copy the publisher from the profile's certificate subject preview, including all
+of its components. The workflow checks the app and installer's signatures,
+publisher and timestamps, and the app's update-verification publisher before
+creating a draft. Missing signing configuration fails the Windows job before
+dependencies are installed. Local Windows builds remain unsigned unless signing
+is configured explicitly.
 
 ## Start a release
 
@@ -63,9 +83,9 @@ Mac reads `latest-mac.yml` and the ZIP from the release; Windows reads
 - The update's code signature must match the installed app's, so only the
   signed Developer ID builds from this workflow can update each other. A local
   build can check and download an update, and macOS rejects the install.
-- Windows builds are unsigned, so the updater skips the signature check (it
-  runs only when `app-update.yml` names a publisher). Once Windows builds are
-  signed, every later build must be signed with the same publisher name.
+- Previously published unsigned Windows builds skip update signature checks.
+  Signed Windows builds record the publisher in `app-update.yml`, so every
+  later build must be signed with the same publisher name.
   `latest.yml` holds the exe's sha512: never rebuild or re-sign the exe after
   the workflow writes it.
 - The Windows installer is one-click and per user, in
