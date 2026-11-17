@@ -104,6 +104,7 @@ function render(input: {
   waitingFor?: "a" | "b";
   onOpenInPanel?: (file: string | null) => void;
   diff?: ReturnType<typeof shortConflict>;
+  comparison?: typeof COMPARISON;
 }) {
   const diff = input.diff ?? shortConflict();
   act(() => {
@@ -116,7 +117,7 @@ function render(input: {
         summaryPending={false}
         summaryFailed={false}
         waitingFor={input.waitingFor ?? null}
-        comparison={COMPARISON}
+        comparison={input.comparison ?? COMPARISON}
         retrying={false}
         onRetry={NOOP}
         onRetryDiff={NOOP}
@@ -196,17 +197,34 @@ describe("BattleReview", () => {
     expect(byTestId("arena-changes-diff-src/f1.py")).toBeNull();
   });
 
-  it("says so when the finished side changed nothing", () => {
+  it("waits to show anything while the finished side changed nothing", () => {
     render({
       summaryAvailable: false,
       waitingFor: "a",
       diff: comparisonDiff({ treesEqual: true, files: [], divergence: [] }),
     });
-    act(() => fireEvent.click(byTestId("arena-review-tab-changes") as HTMLElement));
-    expect(byTestId("arena-changes-none")?.textContent).toBe(
-      "Agent B made no changes · Agent A is still working",
-    );
-    expect(container.textContent).not.toContain("Results are identical");
+    // No summary yet and no file to open: no tabs that would only say "nothing yet".
+    expect(byTestId("arena-review-tabs")).toBeNull();
+    expect(container.textContent).toBe("");
+    expect(useArenaReviewStore.getState().byTurn["turn-1"]?.shownTab).toBeUndefined();
+
+    // Once both are in, the review shows as usual.
+    render({
+      summaryAvailable: true,
+      diff: comparisonDiff({ treesEqual: true, files: [], divergence: [] }),
+    });
+    expect(byTestId("arena-review-tabs")).not.toBeNull();
+  });
+
+  it("shows nothing once both are in when neither changed a file and there is no summary", () => {
+    render({
+      summaryAvailable: false,
+      diff: comparisonDiff({ treesEqual: true, files: [], divergence: [] }),
+    });
+    // Identical results get no summary, and every column would say "No changes".
+    expect(byTestId("arena-review-tabs")).toBeNull();
+    expect(container.textContent).toBe("");
+    expect(useArenaReviewStore.getState().byTurn["turn-1"]?.shownTab).toBeUndefined();
   });
 
   it("shows a short verdict whole, with nothing to unfold", () => {
@@ -232,6 +250,58 @@ describe("BattleReview", () => {
     });
     expect(byTestId("arena-verdict-more")).toBeNull();
     expect(container.textContent).toContain("The judge's report");
+  });
+
+  it("folds a long report laid out on the answers' columns the same way", () => {
+    const columnsReport = [
+      "What each agent did",
+      "Agent A created the draft and started the server. Agent B created the same draft.",
+      "",
+      "Where they differ",
+      "| Aspect | Agent A | Agent B |",
+      "| --- | --- | --- |",
+      "| Frontmatter timestamp | 10:30:46 | 10:30:55 |",
+    ].join("\n");
+    render({
+      summaryAvailable: true,
+      comparison: { state: "completed", output: columnsReport } as never,
+    });
+    expect(byTestId("arena-summary-columns")).not.toBeNull();
+    layoutProse(900);
+    expect(byTestId("arena-verdict-more")).not.toBeNull();
+    act(() => {
+      fireEvent.click(byTestId("arena-verdict-more") as HTMLElement);
+    });
+    expect(byTestId("arena-verdict-more")).toBeNull();
+    expect(byTestId("arena-summary-columns")).not.toBeNull();
+  });
+
+  it("lays each compared aspect out across both sides, so a longer cell keeps the row level", () => {
+    const columnsReport = [
+      "What each agent did",
+      "Agent A added a footer. Agent B added a footer with a link.",
+      "",
+      "Where they differ",
+      "| Aspect | Agent A | Agent B |",
+      "| --- | --- | --- |",
+      "| Footer text | A much longer value that wraps onto a second line | Short |",
+      "| Markup | Plain | Link |",
+    ].join("\n");
+    render({
+      summaryAvailable: true,
+      comparison: { state: "completed", output: columnsReport } as never,
+    });
+    const cellsOf = (aspect: string) =>
+      Array.from(container.querySelectorAll("div")).filter(
+        (cell) => cell.childElementCount === 2 && cell.firstElementChild?.textContent === aspect,
+      );
+    for (const aspect of ["Footer text", "Markup"]) {
+      const [a, b] = cellsOf(aspect);
+      // Both sides' cells sit in one row, which takes the taller one's height.
+      expect(a?.parentElement).toBe(b?.parentElement);
+    }
+    const sentenceA = byTestId("arena-summary-column-a");
+    expect(sentenceA?.parentElement).toBe(byTestId("arena-summary-column-b")?.parentElement);
   });
 
   it("folds only above the height a short report stays under", () => {
@@ -346,7 +416,11 @@ describe("BattleReview", () => {
 
   it("counts every file the battle changed, past the rows it shows", () => {
     render({ summaryAvailable: false, diff: manyFiles(30) });
-    expect(container.textContent).toContain("Changes (30)");
+    // The tab's count is a badge after its label.
+    const changesTab = (byTestId("arena-review-tab-changes") as HTMLElement).textContent;
+    expect(changesTab).toContain("Files changed");
+    expect(changesTab?.endsWith("30")).toBe(true);
+    expect(changesTab).not.toContain("(30)");
     expect((byTestId("arena-changes-more") as HTMLElement).textContent).toContain(
       "Show 22 more files",
     );
@@ -372,32 +446,11 @@ describe("BattleReview", () => {
     expect(rows()[8]).toBe("arena-changes-row-src/f20.py");
   });
 
-  it("folds the whole section away and opens it again from a tab", () => {
-    render({ summaryAvailable: true });
-    const collapse = () => byTestId("arena-review-collapse") as HTMLElement;
-    expect(collapse().getAttribute("aria-label")).toBe("Hide the difference summary and changes");
-    act(() => fireEvent.click(collapse()));
-    expect(container.textContent).not.toContain("The judge's report");
-    expect(byTestId("arena-review-tabs")).not.toBeNull();
-    expect(collapse().getAttribute("aria-label")).toBe("Show the difference summary and changes");
-
-    act(() => fireEvent.click(byTestId("arena-review-tab-changes") as HTMLElement));
-    expect(byTestId("arena-inline-diff")).not.toBeNull();
-    expect(useArenaReviewStore.getState().byTurn["turn-1"]?.collapsed).toBe(false);
-  });
-
-  it("records nothing as shown while the section is folded", () => {
-    useArenaReviewStore.setState({ byTurn: { "turn-1": { collapsed: true } } });
-    render({ summaryAvailable: false });
-    expect(byTestId("arena-inline-diff")).toBeNull();
-    const state = useArenaReviewStore.getState().byTurn["turn-1"];
-    expect(state?.shownFile).toBeUndefined();
-    expect(state?.shownTab).toBeUndefined();
-  });
-
   it("shows the changes alone when there is no verdict to read", () => {
     render({ summaryAvailable: false });
-    expect(byTestId("arena-review-tabs")).toBeNull();
+    // The switch holds Changes alone, so the review keeps the same head.
+    expect(byTestId("arena-review-tab-verdict")).toBeNull();
+    expect(byTestId("arena-review-tab-changes")).not.toBeNull();
     expect(byTestId("arena-inline-diff")).not.toBeNull();
   });
 

@@ -87,22 +87,14 @@ export function decisionBarShowsPhase(phase: ArenaDecisionPhase): boolean {
   return phase.kind === "retry_resolution" || phase.kind === "transitional";
 }
 
-/** Names the side still working once the other can be picked early, so the pick is not a guess. */
-export function arenaRunningDecisionHint(phase: ArenaDecisionPhase): string | null {
+/**
+ * The side still working once the other can be picked early, which the row names in that side's
+ * place so the pick is not a guess. Null while both run, before a pick is offered, or after.
+ */
+export function arenaRunningWaitingSide(phase: ArenaDecisionPhase): ArenaSide | null {
   if (phase.kind !== "running" || phase.waitingFor === null) return null;
   if (!phase.canPickA && !phase.canPickB) return null;
-  return i18n.t("arena.agentWaiting", { side: phase.waitingFor.toUpperCase() });
-}
-
-export function arenaRunningDecisionOrder({
-  canPickA,
-  canPickB,
-}: Pick<Extract<ArenaDecisionPhase, { kind: "running" }>, "canPickA" | "canPickB">): (
-  | ArenaSide
-  | "stop"
-)[] {
-  if (canPickA) return canPickB ? ["a", "stop", "b"] : ["a", "stop"];
-  return canPickB ? ["stop", "b"] : ["stop"];
+  return phase.waitingFor;
 }
 
 /**

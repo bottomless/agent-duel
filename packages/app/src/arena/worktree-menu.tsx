@@ -56,10 +56,10 @@ function OpenTerminalItem({
 }
 
 /**
- * The one place a contestant's location lives: a directory button whose menu names the
- * worktree, shows where it is, and offers the two things a voter does with it.
+ * What a voter does with a contestant's worktree: open a shell in it, copy its path. Shared by the
+ * folder menu and the battle pane's own terminal button and menu.
  */
-export function ArenaWorktreeMenuButton({
+export function useArenaWorktreeActions({
   serverId,
   workspaceId,
   agentId,
@@ -98,6 +98,71 @@ export function ArenaWorktreeMenuButton({
       .then(() => toast.copied(t("arena.worktreeCopied", { side: sideLabel })))
       .catch((error) => toast.error(toErrorMessage(error)));
   }, [sideLabel, toast, worktree, t]);
+
+  return { displayPath, openTerminal, canOpenTerminal: Boolean(persistenceKey), copyPath };
+}
+
+export function OpenTerminalMenuItem({
+  disabled,
+  side,
+  onSelect,
+}: {
+  disabled: boolean;
+  side: ArenaSide;
+  onSelect: () => void;
+}) {
+  return <OpenTerminalItem disabled={disabled} side={side} onSelect={onSelect} />;
+}
+
+export function CopyPathMenuItem({ side, onSelect }: { side: ArenaSide; onSelect: () => void }) {
+  const { t } = useTranslation();
+  const leading = useMemo(() => <ThemedCopy size={16} uniProps={mutedColorMapping} />, []);
+  return (
+    <DropdownMenuItem leading={leading} onSelect={onSelect} testID={`arena-copy-worktree-${side}`}>
+      {t("arena.copyPath")}
+    </DropdownMenuItem>
+  );
+}
+
+/** The worktree's path under the menu's label, wrapped at its separators. */
+export function WorktreePathLabel({ side, path }: { side: ArenaSide; path: string }) {
+  return (
+    <View style={styles.pathContainer}>
+      <WrappedPath path={path} style={styles.path} testID={`arena-worktree-path-${side}`} />
+    </View>
+  );
+}
+
+/**
+ * The one place a contestant's location lives: a directory button whose menu names the
+ * worktree, shows where it is, and offers the two things a voter does with it.
+ */
+export function ArenaWorktreeMenuButton({
+  serverId,
+  workspaceId,
+  agentId,
+  side,
+  worktree,
+  worktreeName,
+}: {
+  serverId: string;
+  workspaceId: string;
+  agentId: string;
+  side: ArenaSide;
+  worktree: string;
+  worktreeName?: string;
+}) {
+  const { t } = useTranslation();
+  const sideLabel = side.toUpperCase();
+  const { displayPath, openTerminal, canOpenTerminal, copyPath } = useArenaWorktreeActions({
+    serverId,
+    workspaceId,
+    agentId,
+    side,
+    worktree,
+    worktreeName,
+  });
+  const persistenceKey = canOpenTerminal;
   const copyIcon = useMemo(() => <ThemedCopy size={16} uniProps={mutedColorMapping} />, []);
 
   return (

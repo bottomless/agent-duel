@@ -39,8 +39,6 @@ export interface ArenaReviewState {
    */
   readonly fileOpens?: number;
   readonly verdictExpanded?: boolean;
-  /** The reader folded the difference summary and changes away. Absent means open. */
-  readonly collapsed?: boolean;
   /**
    * Whether the report was long enough to clip. Without it an unexpanded
    * verdict is indistinguishable from one that was never foldable.
@@ -59,7 +57,6 @@ interface ArenaReviewStore {
   setShownFile: (turnId: string, shownFile: string, shownIndex: number) => void;
   openFile: (turnId: string, file: string, index: number) => void;
   setVerdictExpanded: (turnId: string, expanded: boolean) => void;
-  setCollapsed: (turnId: string, collapsed: boolean) => void;
   setVerdictFolded: (turnId: string) => void;
   addPreviewOpened: (turnId: string, side: ArenaSide) => void;
 }
@@ -100,7 +97,6 @@ export const useArenaReviewStore = create<ArenaReviewStore>((set) => ({
       })(state),
     ),
   setVerdictExpanded: (turnId, verdictExpanded) => set(patch(turnId, { verdictExpanded })),
-  setCollapsed: (turnId, collapsed) => set(patch(turnId, { collapsed })),
   addPreviewOpened: (turnId, side) =>
     set((state) => {
       const opened = state.byTurn[turnId]?.previewsOpened ?? [];

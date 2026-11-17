@@ -98,12 +98,12 @@ export function ArenaQueuedSteers({
       </View>
       {interruptFailed ? (
         <Text style={styles.error} role="alert">
-          {t("arena.sendNowFailed")}{" "}
+          {t("arena.sendNowFailed")}
         </Text>
       ) : null}
       {discardFailed ? (
         <Text style={styles.error} role="alert">
-          {t("arena.deleteQueuedFailed")}{" "}
+          {t("arena.deleteQueuedFailed")}
         </Text>
       ) : null}
     </View>

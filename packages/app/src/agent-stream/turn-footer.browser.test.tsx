@@ -44,6 +44,7 @@ function renderCompletedFooter(timing: TurnTiming): void {
   act(() =>
     root.render(
       <CompletedTurnFooterRow
+        hostItemId={reply.id}
         strategy={createNativeStreamStrategy()}
         items={[reply]}
         timing={timing}

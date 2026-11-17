@@ -19,9 +19,7 @@
 
 ## Demo
 
-<p align="center">
-  <img src="docs/images/battle.png" alt="A battle: two agents' results side by side, with Choose A, Tie and Choose B below">
-</p>
+https://github.com/user-attachments/assets/6413a6f6-b8d6-47cb-bbd3-e1667b2cdf15
 
 The shipped product is the Electron desktop app. `packages/app` can run in a
 browser during development and automated QA, but there is no hosted browser

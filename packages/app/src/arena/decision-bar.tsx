@@ -1,15 +1,35 @@
 import { useTranslation } from "react-i18next";
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { Text, View, type LayoutChangeEvent } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { StyleSheet } from "react-native-unistyles";
-import type { ArenaSide, ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
+import { StyleSheet, withUnistyles } from "react-native-unistyles";
+import { Check } from "lucide-react-native";
+import { useReducedMotion } from "react-native-reanimated";
+import { isWeb } from "@/constants/platform";
+import type {
+  ArenaHistoryItem,
+  ArenaSide,
+  ArenaSnapshot,
+} from "@getpaseo/protocol/arena/rpc-schemas";
 import { Button } from "@/components/ui/button";
 import { ArenaTransitionStatus } from "./transition-status";
 import { arenaSetupStatus } from "./transition-progress";
 import { inlineUnistylesStyle } from "@/styles/unistyles-inline-style";
 import { tint } from "@/styles/tint";
+import { createControlGeometry } from "@/components/ui/control-geometry";
+import type { Theme } from "@/styles/theme";
 import { ArenaContentColumn } from "./content-column";
+import { ArenaModelVendorIcon } from "./model-vendor-icon";
+import { arenaModelDisplayName } from "./side-label";
 import {
   arenaDecisionPhase,
   decisionBarShowsPhase,
@@ -67,8 +87,9 @@ export function ArenaSideChoiceButton({
   return (
     <Button
       variant="secondary"
-      size="md"
+      size="sm"
       style={[styles.sideChoice, side === "a" ? styles.sideA : styles.sideB]}
+      textStyle={[styles.choiceText, styles.sideSolidText]}
       loading={loading}
       disabled={disabled}
       onPress={onPress}
@@ -79,9 +100,268 @@ export function ArenaSideChoiceButton({
   );
 }
 
+const ThemedCheck = withUnistyles(Check);
+const checkColorMapping = {
+  a: (theme: Theme) => ({ color: onSideSolid(theme) }),
+  b: (theme: Theme) => ({ color: onSideSolid(theme) }),
+  middle: (theme: Theme) => ({ color: theme.colors.foreground }),
+};
+
+const SELECTED = { selected: true };
+const UNSELECTED = { selected: false };
+
+/**
+ * The vote's choices as one control: the two sides' buttons at its ends and the middle choice, Tie
+ * or Discard, a quiet label between them. Separate buttons read Tie as a third answer to pick.
+ */
+export function ArenaChoiceGroup({ testID, children }: { testID: string; children: ReactNode }) {
+  return (
+    <View style={styles.choiceGroup} testID={testID}>
+      {children}
+    </View>
+  );
+}
+
+/**
+ * The choice group with its two sides one width, the wider side's, so the middle choice sits at the
+ * group's exact centre whatever the sides say. Tie then stays in one place from the vote to the
+ * decision just made, when the sides become the revealed models' names. The group stays invisible
+ * until the sides are measured, so the middle never shows off centre. On web it measures them
+ * before the first paint: `onLayout` arrives a frame or two later, and the pill blinked out between
+ * the vote's row and the decision just made.
+ */
+export function ArenaBalancedChoiceGroup({
+  testID,
+  children,
+}: {
+  testID: string;
+  /** The start side, the middle choice and the end side, in that order. */
+  children: [ReactNode, ReactNode, ReactNode];
+}) {
+  const [start, middle, end] = children;
+  const [startWidth, setStartWidth] = useState<number | null>(null);
+  const [endWidth, setEndWidth] = useState<number | null>(null);
+  const startRef = useRef<View>(null);
+  const endRef = useRef<View>(null);
+  useLayoutEffect(() => {
+    if (!isWeb) return;
+    // On web a View's ref is its DOM element.
+    const measure = (ref: typeof startRef) =>
+      (ref.current as unknown as HTMLElement | null)?.getBoundingClientRect().width ?? null;
+    setStartWidth(measure(startRef));
+    setEndWidth(measure(endRef));
+  }, []);
+  const handleStartLayout = useCallback(
+    (event: LayoutChangeEvent) => setStartWidth(event.nativeEvent.layout.width),
+    [],
+  );
+  const handleEndLayout = useCallback(
+    (event: LayoutChangeEvent) => setEndWidth(event.nativeEvent.layout.width),
+    [],
+  );
+  const width = startWidth !== null && endWidth !== null ? Math.max(startWidth, endWidth) : null;
+  const sideStyle = useMemo(
+    () => [styles.balancedSide, inlineUnistylesStyle({ minWidth: width ?? 0 })],
+    [width],
+  );
+  return (
+    <View style={[styles.choiceGroup, width === null && styles.measuring]} testID={testID}>
+      <View ref={startRef} style={sideStyle} onLayout={handleStartLayout}>
+        {start}
+      </View>
+      {middle}
+      <View ref={endRef} style={sideStyle} onLayout={handleEndLayout}>
+        {end}
+      </View>
+    </View>
+  );
+}
+
+/** What a decided battle's row offered, and which of its three it took. */
+export interface ArenaPastChoice {
+  kind: "vote" | "keep";
+  chosen: ArenaSide | "middle";
+}
+
+/** The row a decided battle's choice was made in, and which button it took. */
+export function arenaPastChoice(
+  item: Pick<ArenaHistoryItem, "resolution">,
+): ArenaPastChoice | null {
+  const resolution = item.resolution;
+  if (resolution?.kind === "vote") {
+    return { kind: "vote", chosen: resolution.vote === "tie" ? "middle" : resolution.vote };
+  }
+  if (resolution?.kind === "early") return { kind: "vote", chosen: resolution.vote };
+  if (resolution?.kind === "stopped") {
+    if (resolution.resolution === "apply_a") return { kind: "keep", chosen: "a" };
+    if (resolution.resolution === "apply_b") return { kind: "keep", chosen: "b" };
+    return { kind: "keep", chosen: "middle" };
+  }
+  return null;
+}
+
+/**
+ * A decided battle's choice, drawn as the row it was made in: the same three buttons, the one
+ * taken filled in its colour with a check. A side not taken keeps a button's gray fill rather than
+ * going blank: a filled half beside an empty one read as a toggle's state, an input still to set,
+ * where this is a result. Tie or Discard, a quiet label at the vote, stays one unless taken.
+ * Nothing here acts; Show battle is for looking back. With the revealed `identities`, each side's
+ * button reads as its model, its logo beside the name, so the choice just made says which model was
+ * which.
+ *
+ * With `reveal`, the row the choice was just made in turns into this one: it opens as the vote's
+ * buttons, then the side not taken fades to its gray while each side's label gives way to its model.
+ */
+export function ArenaPastDecision({
+  kind,
+  chosen,
+  identities,
+  reveal = false,
+}: ArenaPastChoice & { identities?: ArenaHistoryItem["identities"]; reveal?: boolean }) {
+  const { t } = useTranslation();
+  const phase = useRevealPhase(reveal);
+  const voteLabel = (side: ArenaSide) =>
+    t(kind === "vote" ? "arena.choose" : "arena.keepSide", { side: side.toUpperCase() });
+  const sideLabel = (side: ArenaSide) => {
+    const model = identities?.[side].name;
+    return model ? arenaModelDisplayName(model) : voteLabel(side);
+  };
+  const labels = {
+    a: sideLabel("a"),
+    middle: kind === "vote" ? t("arena.tie") : t("arena.discard"),
+    b: sideLabel("b"),
+  };
+  const item = (choice: ArenaSide | "middle") => {
+    const selected = choice === chosen;
+    const atVote = phase === "vote";
+    const side = choice === "middle" ? null : choice;
+    return (
+      <View
+        accessibilityState={selected ? SELECTED : UNSELECTED}
+        style={[
+          styles.past,
+          choice === "middle" ? styles.pastMiddle : styles.pastSide,
+          atVote ? voteItemStyle(choice) : pastItemStyle(choice, selected),
+          // The vote's buttons were dimmed while it was sent; the reveal starts from there.
+          atVote && styles.pastRevealDim,
+          phase !== "done" && styles.pastRevealFill,
+        ]}
+        testID={`arena-past-decision-${choice}${selected ? "-chosen" : ""}`}
+      >
+        <View style={[styles.pastContent, side && revealContentStyle(phase)]}>
+          {selected ? <ThemedCheck size={14} uniProps={checkColorMapping[choice]} /> : null}
+          {side && identities ? (
+            <ArenaModelVendorIcon
+              model={identities[side].name}
+              size={15}
+              tone={selected ? "onSolid" : "default"}
+            />
+          ) : null}
+          <Text
+            numberOfLines={1}
+            style={[
+              styles.choiceText,
+              styles.pastText,
+              atVote ? voteItemTextStyle(choice) : pastItemTextStyle(choice, selected),
+              phase !== "done" && styles.pastRevealText,
+            ]}
+          >
+            {labels[choice]}
+          </Text>
+        </View>
+        {side && phase !== "done" ? (
+          <View
+            pointerEvents="none"
+            style={[styles.pastVoteLabel, phase === "revealing" && styles.pastVoteLabelGone]}
+          >
+            <Text
+              numberOfLines={1}
+              style={[styles.choiceText, styles.pastVoteText, styles.sideSolidText]}
+            >
+              {voteLabel(side)}
+            </Text>
+          </View>
+        ) : null}
+      </View>
+    );
+  };
+  return (
+    <ArenaBalancedChoiceGroup testID="arena-past-decision">
+      {item("a")}
+      {item("middle")}
+      {item("b")}
+    </ArenaBalancedChoiceGroup>
+  );
+}
+
+/** How long the reveal runs, from the vote's buttons to the decision with its models. */
+const REVEAL_MS = 600;
+
+type RevealPhase = "vote" | "revealing" | "done";
+
+/**
+ * The reveal's steps: one painted frame as the vote's buttons, then the transitions to the result,
+ * then the result alone. CSS transitions carry it, so it runs on web only, and not at all when the
+ * system asks for reduced motion.
+ */
+function useRevealPhase(reveal: boolean): RevealPhase {
+  const reduceMotion = useReducedMotion();
+  const [phase, setPhase] = useState<RevealPhase>(
+    reveal && isWeb && !reduceMotion ? "vote" : "done",
+  );
+  useEffect(() => {
+    if (phase !== "vote") return;
+    // Two frames, so the vote's colours are painted before the result's replace them: in one, the
+    // browser never sees the first state and nothing transitions.
+    let second = 0;
+    const first = requestAnimationFrame(() => {
+      second = requestAnimationFrame(() => setPhase("revealing"));
+    });
+    return () => {
+      cancelAnimationFrame(first);
+      cancelAnimationFrame(second);
+    };
+  }, [phase]);
+  useEffect(() => {
+    if (phase !== "revealing") return;
+    const timer = setTimeout(() => setPhase("done"), REVEAL_MS);
+    return () => clearTimeout(timer);
+  }, [phase]);
+  return phase;
+}
+
+/** A button as the vote drew it: each side in its colour, Tie or Discard quiet. */
+function voteItemStyle(choice: ArenaSide | "middle") {
+  if (choice === "a") return styles.pastChosenA;
+  if (choice === "b") return styles.pastChosenB;
+  return styles.pastQuiet;
+}
+
+function voteItemTextStyle(choice: ArenaSide | "middle") {
+  return choice === "middle" ? styles.pastQuietText : styles.sideSolidText;
+}
+
+function revealContentStyle(phase: RevealPhase) {
+  if (phase === "vote") return styles.pastContentHidden;
+  if (phase === "revealing") return styles.pastContentShown;
+  return null;
+}
+
+function pastItemStyle(choice: ArenaSide | "middle", selected: boolean) {
+  if (!selected) return choice === "middle" ? styles.pastQuiet : styles.pastNotTaken;
+  if (choice === "a") return styles.pastChosenA;
+  if (choice === "b") return styles.pastChosenB;
+  return styles.pastChosenMiddle;
+}
+
+function pastItemTextStyle(choice: ArenaSide | "middle", selected: boolean) {
+  if (!selected) return choice === "middle" ? styles.pastQuietText : styles.pastNotTakenText;
+  return choice === "middle" ? null : styles.sideSolidText;
+}
+
 function runningHoverStyle(side: ArenaSide | null) {
-  if (side === "a") return styles.sideA;
-  if (side === "b") return styles.sideB;
+  if (side === "a") return styles.sideTintA;
+  if (side === "b") return styles.sideTintB;
   return styles.runningHovered;
 }
 
@@ -121,6 +401,7 @@ export function ArenaRunningPillButton({
       <Button
         variant="outline"
         size="md"
+        textStyle={styles.choiceText}
         style={[
           styles.sideChoice,
           styles.runningChoice,
@@ -153,8 +434,9 @@ export function VoteDecision({
   return (
     <Button
       variant="ghost"
-      size="md"
+      size="sm"
       style={styles.pillChoice}
+      textStyle={styles.choiceText}
       loading={pendingAction?.kind === "vote" && pendingAction.vote === "tie"}
       disabled={pending || disabled}
       onPress={tie}
@@ -162,7 +444,7 @@ export function VoteDecision({
       accessibilityHint={t("arena.tieHelp")}
       testID="arena-choose-tie"
     >
-      {t("arena.tie")}{" "}
+      {t("arena.tie")}
     </Button>
   );
 }
@@ -180,22 +462,23 @@ export function ResumeDecision({ actions }: { actions: ArenaBattleActions }) {
   return (
     <Button
       variant="default"
-      size="md"
+      size="sm"
       style={styles.pillChoice}
+      textStyle={styles.choiceText}
       loading={pendingAction?.kind === "resume_battle"}
       disabled={pending}
       onPress={resume}
       accessibilityLabel={t("arena.resumeBattle")}
       testID="arena-resume-interrupted"
     >
-      {t("arena.resume")}{" "}
+      {t("arena.resume")}
     </Button>
   );
 }
 
 /**
- * The choice to apply neither side: in the pill after a stop or beside Resume after the engine's
- * restart cut the battle off, and at the vote only on the line that says a side failed
+ * The choice to apply neither side: among the choices after a stop or beside Resume after the
+ * engine's restart cut the battle off, and at the vote only on the line that says a side failed
  * (`placement="hint"`), as a row action rather than one of the vote's choices.
  */
 export function DiscardDecision({
@@ -213,15 +496,16 @@ export function DiscardDecision({
   return (
     <Button
       variant={placement === "pill" ? "ghost" : "outline"}
-      size={placement === "pill" ? "md" : "sm"}
+      size="sm"
       style={placement === "pill" ? styles.pillChoice : undefined}
+      textStyle={placement === "pill" ? styles.choiceText : undefined}
       loading={pendingAction?.kind === "resolve_stop" && pendingAction.resolution === "discard"}
       disabled={pending}
       onPress={discard}
       testID="arena-stopped-discard"
     >
-      {/* Alone on the failure line it names what it throws away; in the pill its neighbours do. */}
-      {placement === "pill" ? t("arena.discard") : t("arena.discardBattle")}{" "}
+      {/* Alone on the failure line it names what it throws away; among the choices its neighbours do. */}
+      {placement === "pill" ? t("arena.discard") : t("arena.discardBattle")}
     </Button>
   );
 }
@@ -264,7 +548,7 @@ function RetryResolutionDecision({
         onPress={actions.retryResolution}
         testID="arena-retry-resolution"
       >
-        {t("arena.retryResolution")}{" "}
+        {t("arena.retryResolution")}
       </Button>
     </View>
   );
@@ -383,7 +667,159 @@ export const ArenaDecisionBar = memo(function ArenaDecisionBar({
 // plain number here.
 const BAR_PADDING = 12;
 
+const CHOICE_HEIGHT = 38;
+
+/**
+ * A side's solid fill: its colour mixed toward the text colour, deep on light and pale on dark, with
+ * its label in the page colour on top, so the two contrast in both schemes. No branch on
+ * `theme.colorScheme`: on web the stylesheet bakes non-colour theme values once, from the first
+ * theme, while colours follow the active theme as CSS variables, so a branch here took the light
+ * side in dark mode too, and the marks drawn through `uniProps`, which read the live theme, went
+ * the other way and disappeared against the fill.
+ */
+function sideSolid(theme: Theme, color: string): string {
+  return `color-mix(in srgb, ${color} 55%, ${theme.colors.foreground})`;
+}
+
+/** The label, check and logo on a side's solid fill: the page colour. */
+function onSideSolid(theme: Theme): string {
+  return theme.colors.surface0;
+}
+
 const styles = StyleSheet.create((theme) => ({
+  // The buttons' corners plus the group's padding, so the two curves run parallel.
+  choiceGroup: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[1],
+    padding: theme.spacing[1],
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    borderRadius: theme.borderRadius.lg + theme.spacing[1],
+    backgroundColor: theme.colors.surface2,
+  },
+  // A side's place in a balanced group, its button stretched to the wider side's width and no
+  // wider than a long model name needs, which then ends in an ellipsis.
+  balancedSide: {
+    maxWidth: 240,
+  },
+  measuring: {
+    opacity: 0,
+  },
+  // The live choices' height, so the pill keeps its size from the vote to the decision just made.
+  past: {
+    ...createControlGeometry(theme).buttonSm,
+    minHeight: CHOICE_HEIGHT,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: theme.borderRadius.lg,
+    borderWidth: 2,
+    borderColor: "transparent",
+  },
+  // The check, logo and label, which the reveal fades in as one.
+  pastContent: {
+    flexShrink: 1,
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[2],
+  },
+  // The vote's "Choose A" over the model's name while one gives way to the other.
+  pastVoteLabel: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    alignItems: "center",
+    justifyContent: "center",
+    ...(isWeb
+      ? {
+          transitionProperty: "opacity, transform",
+          transitionDuration: "150ms",
+          transitionTimingFunction: "ease-in",
+        }
+      : {}),
+  },
+  // The vote's own label size, so "Choose A" does not grow as the decision takes its place.
+  pastVoteText: {
+    ...createControlGeometry(theme).buttonTextSm,
+  },
+  pastVoteLabelGone: {
+    opacity: 0,
+    transform: [{ translateY: -4 }],
+  },
+  pastContentHidden: {
+    opacity: 0,
+    transform: [{ translateY: 4 }],
+  },
+  pastContentShown: {
+    opacity: 1,
+    transform: [{ translateY: 0 }],
+    ...(isWeb
+      ? {
+          transitionProperty: "opacity, transform",
+          transitionDuration: "320ms",
+          transitionDelay: "120ms",
+          transitionTimingFunction: "ease-out",
+        }
+      : {}),
+  },
+  // The side not taken settles from its colour to its gray as the models appear.
+  pastRevealDim: {
+    opacity: theme.opacity[50],
+  },
+  pastRevealFill: isWeb
+    ? {
+        transitionProperty: "background-color, border-color, opacity",
+        transitionDuration: "450ms",
+        transitionTimingFunction: "ease-out",
+      }
+    : {},
+  pastRevealText: isWeb
+    ? {
+        transitionProperty: "color",
+        transitionDuration: "450ms",
+        transitionTimingFunction: "ease-out",
+      }
+    : {},
+  pastSide: {
+    minWidth: 112,
+  },
+  pastMiddle: {
+    minWidth: 72,
+  },
+  pastQuiet: {
+    backgroundColor: "transparent",
+  },
+  // A side not taken: a plain gray button, so the row reads as a result rather than a toggle.
+  pastNotTaken: {
+    backgroundColor: theme.colors.surface3,
+    borderColor: theme.colors.surface3,
+  },
+  pastNotTakenText: {
+    color: theme.colors.foreground,
+  },
+  pastChosenA: {
+    backgroundColor: sideSolid(theme, theme.colors.statusDotRunning),
+    borderColor: sideSolid(theme, theme.colors.statusDotRunning),
+  },
+  pastChosenB: {
+    backgroundColor: sideSolid(theme, theme.colors.statusDotWarning),
+    borderColor: sideSolid(theme, theme.colors.statusDotWarning),
+  },
+  pastChosenMiddle: {
+    backgroundColor: theme.colors.surface3,
+    borderColor: theme.colors.foregroundMuted,
+  },
+  pastText: {
+    fontSize: theme.fontSize.base,
+    flexShrink: 1,
+  },
+  pastQuietText: {
+    color: theme.colors.foregroundMuted,
+  },
   bar: {
     width: "100%",
     borderTopWidth: 1,
@@ -402,26 +838,48 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.foregroundMuted,
     fontSize: theme.fontSize.base,
   },
+  // The decision's buttons: the landing page's shape, rectangular with semibold labels, between
+  // the compact and field heights so the group sits lighter than a field-height row.
   sideChoice: {
-    minWidth: 96,
-    borderRadius: theme.borderRadius.full,
+    minHeight: CHOICE_HEIGHT,
+    minWidth: 112,
+    borderRadius: theme.borderRadius.lg,
   },
   pillChoice: {
-    borderRadius: theme.borderRadius.full,
+    minHeight: CHOICE_HEIGHT,
+    minWidth: 72,
+    borderRadius: theme.borderRadius.lg,
+  },
+  choiceText: {
+    fontWeight: theme.fontWeight.semibold,
   },
   sideA: {
-    backgroundColor: tint(theme.colors.statusDotRunning, 22),
-    borderColor: tint(theme.colors.statusDotRunning, 48),
+    backgroundColor: sideSolid(theme, theme.colors.statusDotRunning),
+    borderColor: sideSolid(theme, theme.colors.statusDotRunning),
   },
   sideB: {
+    backgroundColor: sideSolid(theme, theme.colors.statusDotWarning),
+    borderColor: sideSolid(theme, theme.colors.statusDotWarning),
+  },
+  sideSolidText: {
+    color: onSideSolid(theme),
+  },
+  // The early pick's hover: a light wash of its side's colour on the neutral outline.
+  sideTintA: {
+    backgroundColor: tint(theme.colors.statusDotRunning, 22),
+    borderColor: tint(theme.colors.statusDotRunning, 22),
+  },
+  sideTintB: {
     backgroundColor: tint(theme.colors.statusDotWarning, 24),
-    borderColor: tint(theme.colors.statusDotWarning, 50),
+    borderColor: tint(theme.colors.statusDotWarning, 24),
   },
   hoverTarget: {
     position: "relative",
   },
+  // Opaque: it floats over the end of the answers, which scroll behind it.
   runningChoice: {
     borderColor: tint(theme.colors.foregroundMuted, 35),
+    backgroundColor: theme.colors.surface0,
   },
   runningHovered: {
     backgroundColor: theme.colors.surface3,

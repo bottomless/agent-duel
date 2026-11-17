@@ -91,7 +91,7 @@ export function ArenaPermissionCard({
           loading={responding && submitted === "reject"}
           onPress={deny}
         >
-          {t("arena.deny")}{" "}
+          {t("arena.deny")}
         </Button>
         <Button
           size="sm"
@@ -100,7 +100,7 @@ export function ArenaPermissionCard({
           loading={responding && submitted === "once"}
           onPress={allowOnce}
         >
-          {t("arena.allowOnce")}{" "}
+          {t("arena.allowOnce")}
         </Button>
         <Button
           size="sm"
@@ -108,7 +108,7 @@ export function ArenaPermissionCard({
           loading={responding && submitted === "always"}
           onPress={allowAlways}
         >
-          {t("arena.alwaysAllow")}{" "}
+          {t("arena.alwaysAllow")}
         </Button>
       </View>
     </View>
