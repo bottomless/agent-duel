@@ -64,6 +64,7 @@ const QuestionID = Form.ID
 import { hostRepoPath, isolatedRoot, Worktree } from "@/worktree"
 import { TRASH_DIRNAME } from "@/util/discard-tree"
 import { ArenaOrphanPools } from "./orphan-pools"
+import { ArenaUnvotedRelease } from "./unvoted-release"
 import { arenaDirectory } from "./database-upgrade"
 import { LOCAL_STATE_DIRNAME, localStatePath, PRIVATE_REF_PREFIXES } from "@/worktree/layout"
 import { ignoreForFileProviderSync } from "@/util/file-provider-ignore"
@@ -6921,6 +6922,58 @@ export const layer: Layer.Layer<
      * without one. The turn then finalizes again once every side has settled. A failure after the
      * claim parks the battle for Stop's resolution rather than leaving it waiting on a side forever.
      */
+    /**
+     * Write a released side's files again before its contestant works in them: its recorded result
+     * through the same sync every slot gets, the checkout's ignored content cloned anew, and the
+     * result refs its next finalize moves on from (`ArenaUnvotedRelease`).
+     */
+    const restoreReleasedRun = Effect.fn("Arena.restoreReleasedRun")(function* (
+      store: Store,
+      turn: TurnDocument,
+      run: RunDocument,
+    ) {
+      if (!run.filesReleasedAt) return
+      if (!run.rawHead || !run.finalCommit || !run.finalTree || !run.finalIndexTree || !run.permanentRef) {
+        return yield* Effect.fail(new Error(`Arena side ${run.side.toUpperCase()} has no recorded result to restore`))
+      }
+      const chat = yield* promise(() => store.chat(turn.chatID))
+      if (!chat) return yield* Effect.fail(new Error(`Arena chat not found: ${turn.chatID}`))
+      const manifest = yield* copyManifestForTurn(store, turn)
+      const started = performance.now()
+      yield* syncSlotContent({
+        chat,
+        directory: run.worktree,
+        ...(run.finalBranch ? { branch: run.finalBranch } : {}),
+        base: { frozenHead: run.rawHead, indexTree: run.finalIndexTree, workingTree: run.finalTree },
+        manifest,
+        observeSlot: Effect.succeed({
+          complete: false,
+          changed: new Set(),
+          reason: "its files were released while the battle waited for a vote",
+        }),
+        indexRebuilt: true,
+      })
+      // The sync takes Arena's refs out of the host, and the side's next finalize advances these
+      // from the recorded result.
+      for (const [ref, value] of [
+        [run.permanentRef, run.finalCommit],
+        [`${run.permanentRef}-index`, run.finalIndexTree],
+      ] as const) {
+        const written = yield* git.run(["update-ref", ref, value], { cwd: run.worktree })
+        if (written.exitCode !== 0) {
+          return yield* Effect.fail(
+            new Error(`Could not restore ${ref} in ${run.worktree}: ${written.stderr.toString("utf8").trim()}`),
+          )
+        }
+      }
+      yield* promise(() => store.updateRun(run._id, { filesReleasedAt: null }))
+      yield* Effect.logInfo("Arena restored a released contestant worktree", {
+        runID: run._id,
+        worktree: run.worktree,
+        durationMs: Math.round(performance.now() - started),
+      })
+    })
+
     const resumeSettledRuns = Effect.fn("Arena.resumeSettledRuns")(function* (
       store: Store,
       turn: TurnDocument,
@@ -6940,7 +6993,9 @@ export const layer: Layer.Layer<
         if (turn.state === "awaiting_vote") {
           yield* promise(() => store.clearComparison(turn._id, input.comparisonID))
         }
-        return yield* Effect.forEach(runs, (run) => input.reset(run).pipe(Effect.tap(bindRun)))
+        return yield* Effect.forEach(runs, (run) =>
+          restoreReleasedRun(store, turn, run).pipe(Effect.andThen(input.reset(run)), Effect.tap(bindRun)),
+        )
       }).pipe(
         Effect.catchCause((cause) =>
           Effect.gen(function* () {
@@ -7427,6 +7482,8 @@ export const layer: Layer.Layer<
 
     const retainedRunMatchesResult = Effect.fn("Arena.retainedRunMatchesResult")(function* (run: RunDocument) {
       if (!run.rawHead || !run.finalCommit || !run.finalTree || !run.finalIndexTree) return false
+      // Released while its battle waited for the vote: nothing in it is newer than its result.
+      if (run.filesReleasedAt) return true
       const current = yield* Effect.exit(
         withGit(snapshotBase({ canonical: run.worktree })).pipe(Effect.mapError(error)),
       )
@@ -7795,6 +7852,102 @@ export const layer: Layer.Layer<
     })
 
     /**
+     * Delete the files of a battle that has waited `unvotedReleaseMs` for its vote with its chat
+     * closed, keeping what the vote, a reply and a retry need (`ArenaUnvotedRelease`). The same
+     * things keep it as keep an idle chat's worktrees (`releaseChatEnvironments`), checked under
+     * the chat's start lock before anything is stopped and again before anything is deleted. Free
+     * worktrees in the pool, a spare or the previous winner's, go whole: the pair after the vote is
+     * built again.
+     */
+    const releaseUnvotedBattle = Effect.fn("Arena.releaseUnvotedBattle")(function* (store: Store, chatID: string) {
+      const outcome = yield* turnStartLock(chatID).withPermits(1)(
+        Effect.gen(function* () {
+          const kept = (reason: string) => ({ kind: "kept" as const, reason })
+          const wanted = () =>
+            watchedChats.has(chatID)
+              ? "the app shows the chat"
+              : waitingStarts.has(chatID)
+                ? "a send to the chat is waiting"
+                : undefined
+          const chat = yield* promise(() => store.chat(chatID))
+          if (!chat?.activeTurnID || chat.status === "archived" || chat.checkoutEvicted) {
+            return kept("the chat has no battle waiting")
+          }
+          const turn = yield* promise(() => store.turn(chat.activeTurnID!))
+          const since = turn ? ArenaUnvotedRelease.waitingSince(turn, unwatchedSince.get(chatID)) : undefined
+          if (!turn || since === undefined || Date.now() - since < ArenaUnvotedRelease.unvotedReleaseMs()) {
+            return kept("the battle has not waited long enough")
+          }
+          const shown = wanted()
+          if (shown) return kept(shown)
+          if (activeNormalTurns.active(chat.canonicalSessionID)) return kept("the chat's agent is working")
+          const runs = yield* promise(() => store.runsForTurn(turn._id))
+          if (runs.every((run) => run.filesReleasedAt)) return { kind: "absent" as const }
+          if (!ArenaUnvotedRelease.resultsRecorded(runs)) return kept("a side's result is not recorded whole")
+          const pool = slotPool(chat)
+          const identities = [
+            resolvePath(pool),
+            yield* Effect.promise(() => realpath(pool).catch(() => resolvePath(pool))),
+          ]
+          if (yield* Effect.promise(() => terminalOpenUnder(identities))) {
+            return kept("a terminal is open in one of its worktrees")
+          }
+          for (const run of runs) {
+            const stopped = yield* stopRunServices(store, run)
+            if (stopped.some((record) => record.status === "failed" || !record.verified)) {
+              return kept("its services could not be stopped")
+            }
+          }
+          yield* endSlotWork(chat._id)
+          const entries = yield* Effect.promise(() => readdir(pool).catch(() => [] as string[]))
+          const worktreesInPool = entries.flatMap((name) =>
+            name === TRASH_DIRNAME || hostedWorktree(name) !== undefined ? [] : [join(pool, name)],
+          )
+          for (const directory of worktreesInPool) {
+            yield* stopPreparation(directory)
+            yield* instances.disposeDirectory(directory)
+          }
+          const inPool = (listed: readonly WorkingProcess[]) =>
+            listed.some((entry) => identities.some((identity) => namesBelow(identity, entry.directory) !== undefined))
+          let listed = yield* Effect.promise(() => processDirectories())
+          if (listed && inPool(listed)) {
+            // A disposed instance's language server can still be exiting.
+            yield* Effect.sleep(Duration.millis(SLOT_PROCESS_RELIST_MS))
+            listed = yield* Effect.promise(() => processDirectories())
+          }
+          if (!listed) return kept("its processes could not be listed")
+          if (inPool(listed)) return kept("a process is still working in one of its worktrees")
+          const reached = wanted()
+          if (reached) return kept(reached)
+
+          const owned = new Set(runs.map((run) => directoryIdentity(run.worktree)))
+          const trash = join(pool, TRASH_DIRNAME)
+          const at = new Date()
+          for (const run of runs) {
+            if (run.filesReleasedAt) continue
+            yield* forgetSlot(run.worktree)
+            yield* Effect.promise(() => ArenaUnvotedRelease.emptyWorktree(run.worktree, trash))
+            yield* promise(() => store.updateRun(run._id, { filesReleasedAt: at }))
+          }
+          yield* retireLitter(
+            chat,
+            worktreesInPool.filter((directory) => !owned.has(directoryIdentity(directory))),
+            "Arena could not retire a free worktree of an unvoted battle",
+          )
+          return { kind: "released" as const, chat }
+        }),
+      )
+      if (outcome.kind !== "released") return outcome
+      yield* sweepSlotTrash(outcome.chat, { wait: true }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Arena could not delete an unvoted battle's files", { chatID, cause }),
+        ),
+      )
+      yield* Effect.logInfo("Arena released the files of a battle nobody voted on", { chatID })
+      return outcome
+    })
+
+    /**
      * Keep contestant worktrees for the `keep` chats with the latest battle activity and release
      * every other chat's, oldest first. The worktrees are what makes the next send start warm;
      * an older chat is more likely to hold disk than to be sent to. A chat that cannot release
@@ -7817,6 +7970,29 @@ export const layer: Layer.Layer<
         )
       const device = volumeOf === undefined ? undefined : yield* deviceOf(volumeOf)
       if (volumeOf !== undefined && device === undefined) return { chats: 0, released: 0, kept: 0 }
+      let released = 0
+      let kept = 0
+      // A battle that waited long enough for its vote gives up its files whatever the limit says:
+      // only ready chats are released below.
+      for (const chat of chats) {
+        if (!chat.activeTurnID) continue
+        const turn = yield* promise(() => store.turn(chat.activeTurnID!))
+        const since = turn ? ArenaUnvotedRelease.waitingSince(turn, unwatchedSince.get(chat._id)) : undefined
+        if (since === undefined || Date.now() - since < ArenaUnvotedRelease.unvotedReleaseMs()) continue
+        if (device !== undefined && (yield* deviceOf(slotPool(chat))) !== device) continue
+        const outcome = yield* releaseUnvotedBattle(store, chat._id).pipe(
+          Effect.catchCause((cause) =>
+            Effect.succeed({ kind: "kept" as const, reason: `its release failed: ${Cause.pretty(cause)}` }),
+          ),
+        )
+        if (outcome.kind === "released") released += 1
+        if (outcome.kind === "kept") {
+          yield* Effect.logInfo("Arena kept the files of a battle waiting for its vote", {
+            chatID: chat._id,
+            reason: outcome.reason,
+          })
+        }
+      }
       const holding: Array<{ readonly chat: ChatDocument; readonly activity: number }> = []
       for (const chat of chats) {
         const entries = yield* Effect.promise(() => readdir(slotPool(chat)).catch(() => [] as string[]))
@@ -7824,12 +8000,13 @@ export const layer: Layer.Layer<
         if (device !== undefined && (yield* deviceOf(slotPool(chat))) !== device) continue
         const turns = yield* promise(() => store.turnsForChat(chat._id))
         const runs = yield* promise(() => store.runsForChat(chat._id))
+        // A battle whose files are released holds only its hosts, and takes no place in the limit.
+        const active = runs.filter((run) => run.turnID === chat.activeTurnID)
+        if (active.length > 0 && active.every((run) => run.filesReleasedAt)) continue
         const activity = latestArenaChatActivity(turns, runs) ?? chat.createdAt
         holding.push({ chat, activity: activity.getTime() })
       }
       holding.sort((left, right) => right.activity - left.activity || left.chat._id.localeCompare(right.chat._id))
-      let released = 0
-      let kept = 0
       for (const { chat } of holding.slice(Math.max(0, keep)).reverse()) {
         const outcome = yield* releaseChatEnvironments(store, chat._id).pipe(
           Effect.catchCause((cause) =>

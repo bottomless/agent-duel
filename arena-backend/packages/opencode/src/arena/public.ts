@@ -402,7 +402,8 @@ export function project(snapshot: BattleSnapshot) {
         worktree: run.worktree,
         worktreeName: run.worktreeName ?? basename(run.worktree),
         ...(run.branchAtRun ? { branchAtRun: run.branchAtRun } : {}),
-        worktreeActive: !run.worktreeRemovedAt,
+        // A worktree whose files were released has nothing to open until a reply writes them again.
+        worktreeActive: !run.worktreeRemovedAt && !run.filesReleasedAt,
         ...(run.copyOmissions ? { copyOmissions: copyOmissions(run.copyOmissions) } : {}),
         ...(run.portAliases ? { portAliases: run.portAliases } : {}),
         ...(run.services

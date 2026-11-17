@@ -1,12 +1,4 @@
-import type {
-  BattleState,
-  DiscardReason,
-  DiscardStage,
-  Resolution,
-  Side,
-  Vote,
-  VoteDiscardedReason,
-} from "./domain"
+import type { BattleState, DiscardReason, DiscardStage, Resolution, Side, Vote, VoteDiscardedReason } from "./domain"
 import type { ArenaActiveOperation, ArenaOperationProgress } from "./operation-tracker"
 import type { RefChange, RefOutcome } from "./ref-types"
 import type { GenerationMetrics, UsageTotals } from "@agent-duel/arena-service/metrics"
@@ -585,6 +577,12 @@ export type RunDocument = {
   selectable?: boolean
   finalizedAt?: Date
   worktreeRemovedAt?: Date
+  /**
+   * When the worktree's files were deleted while its battle waited for a vote (`ArenaUnvotedRelease`).
+   * Its `.git` link and host stay, so the worktree is still this run's; a reply, retry or resume
+   * writes the files again from the recorded result and sets this back to null.
+   */
+  filesReleasedAt?: Date | null
   projectRegistrationRemovedAt?: Date
   readonly createdAt: Date
   updatedAt: Date

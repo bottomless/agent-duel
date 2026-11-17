@@ -851,6 +851,21 @@ a full disk fails the git writes every battle and vote depends on. Chats on othe
 limit, since releasing them frees nothing on the full one. The Storage page shows the fullest
 volume's free space and says when this applies.
 
+A battle waiting for its vote, or for a decision after Stop, is outside that rule, and users leave
+many there for weeks. Once one has waited 72 hours since it entered that state or its chat was last
+closed (`unvotedReleaseMs` in `arena/unvoted-release.ts`), each trim deletes its worktrees' files
+under the same checks as a release, whatever the limit, and its chat takes no place in the limit
+after. It keeps what the vote, a reply and a retry read: each side's result under `refs/battles/`,
+the contestant sessions the vote grafts, and each worktree's `.git` link and host. Do not rebuild a
+released side's host from the checkout: the checkout holds the other side's result from finalize,
+and a reply would let the contestant read it. The run records `filesReleasedAt`, and the app hides
+the side's terminal, files and worktree menu (`worktreeActive` is false). A reply, a retry or a
+resume first writes the side again from its recorded result and the checkout's ignored content
+(`restoreReleasedRun`), and restores the result refs its next finalize advances. Ignored files the
+contestant wrote, such as installed packages or a build, and its running servers are gone. After a
+vote, the released slots are adopted for the next pair like any free slot. A side that did not
+record its whole result keeps its files.
+
 The limit counts only the chats a store knows, and only the store whose chat owns a pool releases or
 archives it, at the path the chat recorded when it was made. Nothing updates that path. So a pool is
 left for good when its store is gone (its home was deleted or reset), when its checkout was moved or
