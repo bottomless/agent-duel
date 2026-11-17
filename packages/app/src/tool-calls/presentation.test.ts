@@ -76,6 +76,33 @@ describe("tool-call presentation", () => {
     });
   });
 
+  it("shows a shell call's short summary while keeping the whole command for its detail", () => {
+    const command = `python3 - <<'PY'
+import json
+p='/home/user/.paseo/uploads/upload_00000000-0000-4000-8000-000000000000/data.json'
+print(len(json.load(open(p))))
+PY`;
+    const presentation = buildToolCallPresentation({
+      toolName: "shell",
+      status: "completed",
+      error: null,
+      detail: {
+        type: "shell",
+        command,
+        summary: "data.json · print(len(json.load(open(p))))",
+      },
+      resolveIcon: fakeResolveIcon,
+    });
+
+    expect(presentation.summary).toBe("data.json · print(len(json.load(open(p))))");
+    expect(presentation.detail).toEqual({
+      type: "shell",
+      command,
+      summary: "data.json · print(len(json.load(open(p))))",
+    });
+    expect(presentation.canOpenDetails).toBe(true);
+  });
+
   it("marks running calls without meaningful detail as loading details", () => {
     const presentation = buildToolCallPresentation({
       toolName: "exec_command",

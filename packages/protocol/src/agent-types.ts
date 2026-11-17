@@ -237,6 +237,11 @@ export type ToolCallDetail =
   | {
       type: "shell";
       command: string;
+      /**
+       * A short row label for a command whose own text hides what it does, such as a heredoc that
+       * opens an uploaded file. The command stays whole for the detail view.
+       */
+      summary?: string;
       cwd?: string;
       output?: string;
       exitCode?: number | null;
@@ -244,6 +249,11 @@ export type ToolCallDetail =
   | {
       type: "read";
       filePath: string;
+      /**
+       * The row's label when the path alone reads poorly, as when it is a directory the path
+       * display would shorten to nothing.
+       */
+      summary?: string;
       content?: string;
       offset?: number;
       limit?: number;

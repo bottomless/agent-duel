@@ -437,7 +437,8 @@ Product decisions that are settled, so they do not get relitigated per feature:
   even after it finishes. An older unfinished task must not replace newer activity. Animate only
   the displayed activity while it is running. Show thinking when the next model request has started
   without content. Once newer conversation content puts a block into history, show its aggregate
-  work summary without animation. Tool details remain available by expanding either row.
+  work summary without animation. Tool details remain available by expanding either row. A row
+  never shows a daemon, temp or worktree path; the full command stays one level down.
   Thinking content stays hidden, including inside expanded activity and subagent rows.
   Give each subagent a static, named, expandable heading with its latest activity on an indented
   line beneath it. Animate only the activity text. When the subagent ends, replace that activity

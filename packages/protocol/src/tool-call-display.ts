@@ -72,10 +72,11 @@ function buildFilePathDisplay(
   displayName: string,
   filePath: string,
   cwd: string | undefined,
+  summary?: string,
 ): DetailDisplay {
   return {
     displayName,
-    summary: stripCwdPrefix(filePath, cwd),
+    summary: summary ?? stripCwdPrefix(filePath, cwd),
   };
 }
 
@@ -84,10 +85,10 @@ function buildCanonicalDetailDisplay(input: ToolCallDisplayInput): DetailDisplay
     case "shell":
       return {
         displayName: "Shell",
-        summary: input.detail.command,
+        summary: input.detail.summary ?? input.detail.command,
       };
     case "read":
-      return buildFilePathDisplay("Read", input.detail.filePath, input.cwd);
+      return buildFilePathDisplay("Read", input.detail.filePath, input.cwd, input.detail.summary);
     case "edit":
       return buildFilePathDisplay("Edit", input.detail.filePath, input.cwd);
     case "write":

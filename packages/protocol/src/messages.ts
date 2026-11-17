@@ -689,6 +689,7 @@ const ToolCallDetailPayloadSchema: z.ZodType<ToolCallDetail, unknown> = z.discri
     z.object({
       type: z.literal("shell"),
       command: z.string(),
+      summary: z.string().optional(),
       cwd: z.string().optional(),
       output: z.string().optional(),
       exitCode: z.number().nullable().optional(),
@@ -696,6 +697,7 @@ const ToolCallDetailPayloadSchema: z.ZodType<ToolCallDetail, unknown> = z.discri
     z.object({
       type: z.literal("read"),
       filePath: z.string(),
+      summary: z.string().optional(),
       content: z.string().optional(),
       offset: z.number().optional(),
       limit: z.number().optional(),

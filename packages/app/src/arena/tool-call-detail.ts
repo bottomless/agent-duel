@@ -1,4 +1,7 @@
 import type { ToolCallDetail } from "@getpaseo/protocol/agent-types";
+import { stripCwdPrefix } from "@getpaseo/protocol/path-utils";
+import { shortenHomePaths, summarizeShellCommand } from "./shell-command-summary";
+import { contestantTempDirectoryOf, isUploadDirectory, uploadDirectoryOf } from "./upload-path";
 
 // Mirrors packages/server/.../providers/tool-call-mapper-utils.ts#normalizeToolCallStatus,
 // scoped to Arena's OpenCode-only raw tool parts (no other provider vocab to handle).
@@ -116,13 +119,16 @@ function inputFilePath(inputRecord: UnknownRecord | undefined): string | undefin
 function deriveShellDetail(
   inputRecord: UnknownRecord | undefined,
   output: unknown,
+  cwd: string | undefined,
 ): ToolCallDetail | undefined {
   const command = nonEmptyString(inputRecord?.command);
   if (!command) return undefined;
   const commandOutput = nonEmptyString(output);
+  const summary = summarizeShellCommand(command, cwd);
   return {
     type: "shell",
     command,
+    ...(summary ? { summary } : {}),
     ...(commandOutput ? { output: commandOutput } : {}),
   };
 }
@@ -130,6 +136,7 @@ function deriveShellDetail(
 function deriveReadDetail(
   inputRecord: UnknownRecord | undefined,
   output: unknown,
+  cwd: string | undefined,
 ): ToolCallDetail | undefined {
   const filePath = inputFilePath(inputRecord);
   if (!filePath) return undefined;
@@ -140,12 +147,16 @@ function deriveReadDetail(
   const offset =
     gutterStripped?.startLine ??
     (typeof inputRecord?.offset === "number" ? inputRecord.offset : undefined);
+  const limit = typeof inputRecord?.limit === "number" ? inputRecord.limit : undefined;
+  const summary =
+    readRootSummary(filePath, cwd) ?? readRangeSummary(filePath, inputRecord?.offset, limit, cwd);
   return {
     type: "read",
     filePath,
+    ...(summary ? { summary } : {}),
     ...(content ? { content } : {}),
     ...(offset !== undefined ? { offset } : {}),
-    ...(typeof inputRecord?.limit === "number" ? { limit: inputRecord.limit } : {}),
+    ...(limit !== undefined ? { limit } : {}),
   };
 }
 
@@ -173,27 +184,129 @@ function deriveEditDetail(inputRecord: UnknownRecord | undefined): ToolCallDetai
   };
 }
 
+/**
+ * A read of the worktree root lists the whole project, and a path relative to the worktree would
+ * be a bare `.`, so the row names the project: the checkout the battle copied the worktree from.
+ */
+function readRootSummary(filePath: string, cwd: string | undefined): string | undefined {
+  const root = cwd ? trimTrailingSeparators(cwd) : undefined;
+  if (!root || trimTrailingSeparators(filePath) !== root) return undefined;
+  const checkout = /^(.*)[\\/]\.agent-duel(?:[\\/]|$)/.exec(root)?.[1];
+  const base = (checkout ?? root).split(/[\\/]/).pop();
+  return base && base !== "." ? base : undefined;
+}
+
+/**
+ * An agent pages through a long file, and every page would otherwise be the same row. A read that
+ * starts past the top carries its lines the way an editor link does: `notes.md:120-199`.
+ */
+function readRangeSummary(
+  filePath: string,
+  offset: unknown,
+  limit: number | undefined,
+  cwd: string | undefined,
+): string | undefined {
+  if (typeof offset !== "number" || !Number.isInteger(offset) || offset <= 1) return undefined;
+  const shown = stripCwdPrefix(filePath, displayDirectoryOf(filePath, cwd));
+  const pageEnd = limit !== undefined && limit > 0 ? offset + limit - 1 : undefined;
+  return pageEnd === undefined ? `${shown}:${offset}+` : `${shown}:${offset}-${pageEnd}`;
+}
+
+/**
+ * The directory a file's row is shown relative to. An uploaded file or a scratch file lives
+ * outside the worktree, under a long daemon or temp path, so it is shown relative to that folder
+ * and reads by its short name.
+ */
+function displayDirectoryOf(filePath: string, cwd: string | undefined): string | undefined {
+  const worktree = cwd ? trimTrailingSeparators(cwd) : undefined;
+  if (worktree && filePath.startsWith(`${worktree}/`)) return cwd;
+  return uploadDirectoryOf(filePath) ?? contestantTempDirectoryOf(filePath) ?? cwd;
+}
+
+function trimTrailingSeparators(path: string): string {
+  return path.replace(/[\\/]+$/, "");
+}
+
+// Mirrors the daemon's OpenCode mapping: a loaded skill reads as its name, and opens to its text.
+function deriveSkillDetail(
+  inputRecord: UnknownRecord | undefined,
+  output: unknown,
+): ToolCallDetail | undefined {
+  const name = (nonEmptyString(inputRecord?.id) ?? nonEmptyString(inputRecord?.name))?.trim();
+  if (!name) return undefined;
+  const text = nonEmptyString(output);
+  return { type: "plain_text", label: name, icon: "sparkles", ...(text ? { text } : {}) };
+}
+
+/**
+ * Glob and Grep rows read as `pattern include in folder`, with the folder relative to the worktree
+ * and left out when it is the worktree itself. Their output lists worktree files the same way.
+ */
+function deriveSearchDetail(
+  toolName: "glob" | "grep",
+  inputRecord: UnknownRecord | undefined,
+  output: unknown,
+  cwd: string | undefined,
+): ToolCallDetail | undefined {
+  const pattern = nonEmptyString(inputRecord?.pattern);
+  if (!pattern) return undefined;
+  const include = nonEmptyString(inputRecord?.include);
+  const folder = searchFolderLabel(nonEmptyString(inputRecord?.path), cwd);
+  const query = [pattern, include, folder && `in ${folder}`].filter(Boolean).join(" ");
+  const raw = nonEmptyString(output);
+  const worktree = cwd?.replace(/[\\/]+$/, "");
+  const content = raw && worktree ? raw.split(`${worktree}/`).join("") : raw;
+  return { type: "search", query, toolName, ...(content ? { content } : {}) };
+}
+
+function searchFolderLabel(path: string | undefined, cwd: string | undefined): string | undefined {
+  if (!path) return undefined;
+  const trimmed = path.replace(/[\\/]+$/, "");
+  const worktree = cwd?.replace(/[\\/]+$/, "");
+  if (trimmed === "." || trimmed === worktree) return undefined;
+  if (worktree && trimmed.startsWith(`${worktree}/`)) return trimmed.slice(worktree.length + 1);
+  if (isUploadDirectory(trimmed)) return "uploads/";
+  const upload = uploadDirectoryOf(trimmed);
+  return upload ? trimmed.slice(upload.length + 1) : shortenHomePaths(trimmed, cwd);
+}
+
 // Converts a raw OpenCode tool part (`{ tool, state: { input, output } }`) into the
 // same ToolCallDetail shape the main agent thread renders, for the tool types Arena
 // battles actually exercise. Unrecognized tools return undefined and fall back to
-// ToolCall's own generic input/output rendering.
+// ToolCall's own generic input/output rendering. `cwd` is the contestant's worktree; a shell
+// row's summary shows paths inside it relative to it.
 export function deriveArenaToolCallDetail(
   tool: string,
   input: unknown,
   output: unknown,
+  cwd?: string,
 ): ToolCallDetail | undefined {
   const inputRecord = asRecord(input);
   switch (tool) {
     case "bash":
     case "shell":
-      return deriveShellDetail(inputRecord, output);
+      return deriveShellDetail(inputRecord, output, cwd);
     case "read":
-      return deriveReadDetail(inputRecord, output);
+      return deriveReadDetail(inputRecord, output, cwd);
     case "write":
       return deriveWriteDetail(inputRecord);
     case "edit":
       return deriveEditDetail(inputRecord);
+    case "glob":
+    case "grep":
+      return deriveSearchDetail(tool, inputRecord, output, cwd);
+    case "skill":
+      return deriveSkillDetail(inputRecord, output);
     default:
       return undefined;
   }
+}
+
+/** The directory a call's row shows its file path relative to. */
+export function arenaToolCallDisplayCwd(
+  detail: ToolCallDetail | undefined,
+  cwd: string | undefined,
+): string | undefined {
+  if (detail?.type !== "read" && detail?.type !== "edit" && detail?.type !== "write") return cwd;
+  return displayDirectoryOf(detail.filePath, cwd);
 }
