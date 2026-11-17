@@ -466,7 +466,10 @@ Once a choice is made, the pill stays on the decision just made with the reveale
 of `Choose A` and `Choose B`, each with its logo, the one taken filled in its side's colour with a
 check (`ArenaPastDecision` with `identities`). A side not taken keeps a plain gray fill, here and
 in Show battle's footer: left blank beside the filled one, the pill read as a toggle's state, an
-input still to set, rather than a result. It holds while the result is applied and for at least
+input still to set, rather than a result. The held pill opens as the vote's buttons, still dimmed
+from sending, and turns into the decision: each side's label gives way to its model while the side
+not taken fades to its gray. An instant switch read as a flicker, and the vote's buttons blinking
+out between the two read as one too. It holds while the result is applied and for at least
 five seconds (`ARENA_DECIDED_HOLD_MS`): the vote is when the models are revealed, and the pill is
 where the eye already is, while the battle folds into the chat around it. Only a decision seen
 being made holds; a chat opened on a decided battle shows none.

@@ -240,7 +240,10 @@ function useDecidedHold(snapshot: ArenaSnapshot, live: boolean): ArenaSnapshot["
     const timer = setTimeout(() => setExpiredTurnId(decidedTurnId), ARENA_DECIDED_HOLD_MS);
     return () => clearTimeout(timer);
   }, [decidedTurnId]);
-  if (!turn || !resolved || turnId !== decidedTurnId) return null;
+  // Decided this render, before the effect above records it: waiting for the effect left one
+  // frame with no pill between the vote's row and its result.
+  const decidedNow = !live && resolved && turnId !== null && turnId === liveTurnId;
+  if (!turn || !resolved || (turnId !== decidedTurnId && !decidedNow)) return null;
   const applying = isArenaBattleOnScreen(snapshot);
   return applying || expiredTurnId !== turnId ? turn : null;
 }
@@ -250,7 +253,12 @@ function DecidedChoice({ turn }: { turn: NonNullable<ArenaSnapshot["turn"]> }) {
   const choice = arenaPastChoice(turn);
   if (!choice) return null;
   return (
-    <ArenaPastDecision kind={choice.kind} chosen={choice.chosen} identities={turn.identities} />
+    <ArenaPastDecision
+      kind={choice.kind}
+      chosen={choice.chosen}
+      identities={turn.identities}
+      reveal
+    />
   );
 }
 
