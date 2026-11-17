@@ -66,6 +66,7 @@ import { TRASH_DIRNAME } from "@/util/discard-tree"
 import { ArenaOrphanPools } from "./orphan-pools"
 import { ArenaUnvotedRelease } from "./unvoted-release"
 import { arenaDirectory } from "./database-upgrade"
+import { ArenaDiskSpace } from "./disk-space"
 import { LOCAL_STATE_DIRNAME, localStatePath, PRIVATE_REF_PREFIXES } from "@/worktree/layout"
 import { ignoreForFileProviderSync } from "@/util/file-provider-ignore"
 import { isRecord } from "@/util/record"
@@ -5103,6 +5104,48 @@ export const layer: Layer.Layer<
       return result
     })
 
+    /**
+     * Save a side, waiting for disk space when the disk is full rather than losing the result: the
+     * contestant's work is still in its worktree, and finalize moves the side's refs on from
+     * whatever an earlier attempt wrote. The battle shows it waits (`waitingForDiskSince`) and
+     * goes on by itself once a save goes through. A stop, a resolution or a discard ends the wait,
+     * and the side then fails as it did before.
+     */
+    const finalizeWhenDiskAllows = Effect.fn("Arena.finalizeWhenDiskAllows")(function* <A, E>(
+      store: Store,
+      turn: TurnDocument,
+      attempt: () => Effect.Effect<A, E>,
+    ) {
+      let outcome = yield* Effect.exit(attempt())
+      let waiting = false
+      while (Exit.isFailure(outcome) && ArenaDiskSpace.isDiskFull(Cause.pretty(outcome.cause))) {
+        const latest = yield* promise(() => store.turn(turn._id)).pipe(Effect.orElseSucceed(() => undefined))
+        if (
+          latest &&
+          (latest.resolution !== undefined || latest.state === "stopping" || latest.state === "discarded")
+        ) {
+          break
+        }
+        if (!waiting) {
+          waiting = true
+          yield* Effect.logWarning("Arena is waiting for disk space to save a battle", {
+            turnID: turn._id,
+            cause: Cause.pretty(outcome.cause),
+          })
+          // The store may be on the same full disk; the battle's own state still says it waits.
+          yield* promise(() => store.updateTurn(turn._id, { waitingForDiskSince: new Date() })).pipe(Effect.ignore)
+        }
+        yield* Effect.sleep(Duration.millis(ArenaDiskSpace.diskRetryMs()))
+        outcome = yield* Effect.exit(attempt())
+      }
+      if (waiting) {
+        yield* promise(() => store.updateTurn(turn._id, { waitingForDiskSince: null })).pipe(Effect.ignore)
+        if (Exit.isSuccess(outcome))
+          yield* Effect.logInfo("Arena saved a battle once disk space returned", { turnID: turn._id })
+      }
+      return outcome
+    })
+
     const settleSide = Effect.fn("Arena.settleSide")(function* (
       store: Store,
       turn: TurnDocument,
@@ -5159,7 +5202,9 @@ export const layer: Layer.Layer<
           ),
         )
       }
-      const outcome = yield* Effect.exit(finalizeSide(store, turn, run, promptExit, stopped))
+      const outcome = yield* finalizeWhenDiskAllows(store, turn, () =>
+        finalizeSide(store, turn, run, promptExit, stopped),
+      )
       // The run's state now routes a reply, so the closing mark has done its job.
       closingRuns.delete(run.runID)
       if (Exit.isSuccess(outcome)) {
@@ -6493,6 +6538,51 @@ export const layer: Layer.Layer<
       return yield* finalizeRuns(outcomeA, outcomeB)
     })
 
+    /**
+     * Whether the disk has room for a battle's new worktrees plus `diskHeadroomBytes`, after
+     * releasing other chats' worktrees on it when it does not (`ArenaDiskSpace`). Returns what the
+     * battle shows when it is still short; the battle starts anyway. Never fails the send.
+     */
+    const checkBattleDiskSpace = Effect.fn("Arena.checkBattleDiskSpace")(function* (input: {
+      readonly chat: ChatDocument
+      readonly root: string
+      readonly baseTree: string
+      readonly manifest: CopyManifest
+      readonly warmPath: TurnSetupTimings["warmPath"]
+    }) {
+      // A prepared pair is already on disk; one refreshed in place rewrites only what differs.
+      const worktrees = input.warmPath === "cold" ? 2 + (input.chat.turnCount === 0 ? 1 : 0) : 0
+      const copied = input.manifest.entries.filter((entry) => entry.state === "copied")
+      const cloned = copied.length > 0 ? copied.some((entry) => entry.method !== "copy") : process.platform === "darwin"
+      let estimate = 0
+      if (worktrees > 0) {
+        const listing = yield* git.run(["ls-tree", "-r", "-l", "-z", input.baseTree], { cwd: input.root })
+        const objects = cloned ? undefined : yield* git.run(["count-objects", "-v"], { cwd: input.root })
+        estimate = ArenaDiskSpace.battleWriteEstimate({
+          worktrees,
+          cloned,
+          trackedBytes: listing.exitCode === 0 ? ArenaDiskSpace.trackedBytesFromListing(listing.text()) : 0,
+          objectBytes: objects?.exitCode === 0 ? ArenaDiskSpace.objectBytesFromCount(objects.text()) : 0,
+          copiedIgnoredBytes: copied.reduce((total, entry) => total + (entry.logicalBytes ?? 0), 0),
+        })
+      }
+      const neededBytes = estimate + ArenaDiskSpace.diskHeadroomBytes()
+      const before = yield* Effect.promise(() => ArenaDiskSpace.freeBytes(input.root))
+      if (before === undefined || before >= neededBytes) return undefined
+      const trimmed = yield* trimEnvironments(0, input.root, input.chat._id)
+      const freeBytes = (yield* Effect.promise(() => ArenaDiskSpace.freeBytes(input.root))) ?? before
+      yield* Effect.logWarning("Arena is starting a battle with little disk space", {
+        chatID: input.chat._id,
+        freeBefore: before,
+        freeBytes,
+        neededBytes,
+        estimate,
+        cloned,
+        released: trimmed.released,
+      })
+      return freeBytes >= neededBytes ? undefined : { freeBytes, neededBytes }
+    })
+
     const startTurnUnlocked = Effect.fn("Arena.startTurnUnlocked")(function* (
       store: Store,
       id: string,
@@ -6673,6 +6763,19 @@ export const layer: Layer.Layer<
         ))
       const warmMs = Date.now() - warmStartedAt
       const warmPath: TurnSetupTimings["warmPath"] = reused ? "reused" : warmPreparation ? "refreshed" : "cold"
+      const lowDiskSpace = yield* checkBattleDiskSpace({
+        chat,
+        root: base.root,
+        baseTree: base.baseTree,
+        manifest: copyManifest,
+        warmPath,
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Arena could not check disk space before a battle", { chatID: chat._id, cause }).pipe(
+            Effect.as(undefined),
+          ),
+        ),
+      )
       // Before the pair is placed: nothing a contestant or a terminal left beside a worktree since
       // the pair was prepared reaches this turn's contestants.
       yield* sweepSlotPool(
@@ -6724,6 +6827,7 @@ export const layer: Layer.Layer<
           ignoredSeedID,
           resolvedPolicy: copyManifest.resolvedPolicy,
         },
+        ...(lowDiskSpace ? { lowDiskSpace } : {}),
         setupTimings: {
           preCreationMs: now.getTime() - sendStartedAt,
           admissionWaitMs,
@@ -7724,8 +7828,20 @@ export const layer: Layer.Layer<
     const releaseChatEnvironments = Effect.fn("Arena.releaseChatEnvironments")(function* (
       store: Store,
       chatID: string,
+      /** False when the caller holds another chat's start lock: a busy chat is skipped, not waited for. */
+      waitForLock = true,
     ) {
-      const outcome = yield* turnStartLock(chatID).withPermits(1)(
+      const locked = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        waitForLock
+          ? turnStartLock(chatID).withPermits(1)(effect)
+          : turnStartLock(chatID)
+              .withPermitsIfAvailable(1)(effect)
+              .pipe(
+                Effect.map((done) =>
+                  Option.getOrElse(done, () => ({ kind: "kept", reason: "a send to the chat is starting" }) as const),
+                ),
+              )
+      const outcome = yield* locked(
         Effect.gen(function* () {
           const kept = (reason: string): EnvironmentRelease => ({ kind: "kept", reason })
           const wanted = () =>
@@ -7956,10 +8072,15 @@ export const layer: Layer.Layer<
      * With `volumeOf`, only chats whose worktrees are on that path's volume count: a full disk is
      * freed only by releasing what is on it.
      */
-    const trimEnvironments = Effect.fn("Arena.trimEnvironments")(function* (keep: number, volumeOf?: string) {
+    const trimEnvironments = Effect.fn("Arena.trimEnvironments")(function* (
+      keep: number,
+      volumeOf?: string,
+      /** A send making room for itself: its own chat is left out, and busy chats are skipped. */
+      sending?: string,
+    ) {
       const store = yield* available()
       const chats = (yield* promise(() => store.chats.find({}).toArray())).filter(
-        (chat) => chat.status !== "archived" && !chat.checkoutEvicted,
+        (chat) => chat.status !== "archived" && !chat.checkoutEvicted && chat._id !== sending,
       )
       const deviceOf = (path: string) =>
         Effect.promise(() =>
@@ -8008,7 +8129,7 @@ export const layer: Layer.Layer<
       }
       holding.sort((left, right) => right.activity - left.activity || left.chat._id.localeCompare(right.chat._id))
       for (const { chat } of holding.slice(Math.max(0, keep)).reverse()) {
-        const outcome = yield* releaseChatEnvironments(store, chat._id).pipe(
+        const outcome = yield* releaseChatEnvironments(store, chat._id, sending === undefined).pipe(
           Effect.catchCause((cause) =>
             Effect.succeed<EnvironmentRelease>({ kind: "kept", reason: `its release failed: ${Cause.pretty(cause)}` }),
           ),

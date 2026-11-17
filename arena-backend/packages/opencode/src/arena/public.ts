@@ -360,6 +360,8 @@ export function project(snapshot: BattleSnapshot) {
               turn.state === "application_failed" &&
               ["review", "manual", "blocked", "failed"].includes(turn.gitApplication?.state ?? ""),
             revealed,
+            ...(turn.lowDiskSpace ? { lowDiskSpace: turn.lowDiskSpace } : {}),
+            ...(turn.waitingForDiskSince ? { waitingForDiskSince: turn.waitingForDiskSince } : {}),
             // Background cleanup can update updatedAt after ordinary chat resumes.
             endedAt: turn.transitionTimestamps.complete ?? turn.transitionTimestamps.discarded,
             createdAt: turn.createdAt,

@@ -387,6 +387,13 @@ export type TurnDocument = {
    * from `transitionTimestamps` because the battle is still `running` then.
    */
   firstResultAt?: Date
+  /**
+   * The disk had less free than this battle's estimated writes plus headroom when it started, after
+   * other chats' worktrees on it were released (`ArenaDiskSpace`). The battle runs anyway.
+   */
+  lowDiskSpace?: { readonly freeBytes: number; readonly neededBytes: number }
+  /** Since when saving this battle has waited for disk space; null once the save went through. */
+  waitingForDiskSince?: Date | null
   comparisonState: "pending" | "running" | "complete" | "skipped" | "failed"
   comparisonID?: Identifier
   failureReason?: string

@@ -1605,6 +1605,23 @@ is ready again. A turn startup finds in `creation_failed`, because the previous 
 while ending it, is ended the same way rather than parked for Keep or Discard, which would name the
 pair. `interrupted_recovery` is where a turn lands when the daemon dies mid-battle.
 
+A full disk does not end a battle (`arena/disk-space.ts`). Saving a side that meets one waits and
+tries again every 15 seconds (`finalizeWhenDiskAllows`): the contestant's work is still in its
+worktree, and finalize moves the side's refs on from whatever an earlier attempt wrote. Event writes
+it refused leave a gap marker, written once there is room, and the battle goes on; any other refused
+event write still fails the turn. While either waits, the turn has `waitingForDiskSince` and the app
+says the disk is full. A stop, a resolution or a discard ends the wait, and the side fails as it did
+before. Production saw full disks only on Linux, where every contestant worktree is a real copy.
+
+Before a battle builds its worktrees, the engine estimates what they will write. Each new worktree
+gets the tracked files fresh, and where the checkout cannot clone, also the object store and the
+copied ignored content. A prepared pair it reuses or refreshes counts as nothing. When the volume
+would keep less than 10 GB, the daemon's low-disk line, the engine first releases other idle chats'
+worktrees on it, skipping a chat whose start lock is busy so two short sends cannot wait on each
+other. If it is still short, the battle starts anyway with `lowDiskSpace` on the turn, and the app
+warns how much it needs. The headroom covers what contestants write, a build or an install, which
+nothing can estimate.
+
 A battle already awaiting its vote keeps its prompt, both results and vote controls after an engine
 restart. Reopen the workspace after signing back in; no daemon restart is required. Sign-out and
 account changes [restart the engine](accounts.md#how-the-session-travels), but the

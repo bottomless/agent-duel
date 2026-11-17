@@ -20,6 +20,8 @@ import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import type { Theme } from "@/styles/theme";
 import { ArenaCallout, type ArenaCalloutAction } from "./callout";
+import { isArenaBattleLive } from "./terminal-target";
+import { formatGigabytes } from "@/utils/format-gigabytes";
 import { useOpenArenaServiceUrl } from "./open-service-url";
 import { WorkspaceOpenInEditorButton } from "@/workspace/open-in-editor/button";
 import {
@@ -183,6 +185,36 @@ export function hasArenaChatCallouts(snapshot: ArenaSnapshot): boolean {
 }
 
 /**
+ * A battle that waits for disk space to save, or one that started with less free than it needs
+ * (`ArenaDiskSpace` in the engine). The wait clears itself once a save goes through.
+ */
+function ArenaDiskCallouts({ snapshot }: { snapshot: ArenaSnapshot }) {
+  const { t, i18n } = useTranslation();
+  const turn = snapshot.turn;
+  if (turn?.waitingForDiskSince) {
+    return (
+      <ArenaCallout
+        title={t("arena.diskFull")}
+        detail={t("arena.diskFullDetail")}
+        testID="arena-disk-full"
+      />
+    );
+  }
+  if (!turn?.lowDiskSpace || !isArenaBattleLive(snapshot)) return null;
+  return (
+    <ArenaCallout
+      title={t("arena.lowDisk")}
+      tone="warning"
+      detail={t("arena.lowDiskDetail", {
+        needed: formatGigabytes(turn.lowDiskSpace.neededBytes, i18n.language),
+        free: formatGigabytes(turn.lowDiskSpace.freeBytes, i18n.language),
+      })}
+      testID="arena-low-disk"
+    />
+  );
+}
+
+/**
  * Problems that need attention stay visible in the conversation, even with the inspector closed.
  */
 export function ArenaChatCallouts({
@@ -246,6 +278,7 @@ export function ArenaChatCallouts({
     : undefined;
   return (
     <View style={styles.callouts}>
+      <ArenaDiskCallouts snapshot={snapshot} />
       {snapshot.environment.warmPair?.error && !trunkConflicts ? (
         <ArenaCallout
           title={t("arena.nextFailed")}
