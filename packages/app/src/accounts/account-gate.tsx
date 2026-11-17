@@ -23,6 +23,7 @@ import {
 import { recheckAccountSession } from "./session-rejected";
 import { SignInScreen } from "./sign-in-screen";
 import { DaemonUnreachable } from "./daemon-unreachable";
+import { GateWindowChrome } from "./gate-window-chrome";
 import { TermsAcceptanceModal } from "./terms-acceptance-modal";
 import { UpdateRequired } from "./update-required";
 
@@ -196,7 +197,7 @@ interface AccountGateContentProps {
 
 const checkingStyle: ViewStyle = { flex: 1, alignItems: "center", justifyContent: "center" };
 
-function AccountGateContent({
+export function AccountGateContent({
   gate,
   endpoint,
   session,
@@ -219,6 +220,24 @@ function AccountGateContent({
   if (!endpoint) {
     return app;
   }
+  const screen = renderGateScreen({ gate, endpoint, session, expired, documents, onRetry });
+  if (!screen) {
+    return app;
+  }
+  return <GateWindowChrome>{screen}</GateWindowChrome>;
+}
+
+/** The screen shown in place of the app, or null when the app itself shows. */
+function renderGateScreen({
+  gate,
+  endpoint,
+  session,
+  expired,
+  documents,
+  onRetry,
+}: Omit<AccountGateContentProps, "children" | "endpoint"> & {
+  endpoint: AccountsEndpoint;
+}): ReactNode {
   if (gate.kind === "signed-out" && documents) {
     return (
       <SignInScreen
@@ -253,6 +272,5 @@ function AccountGateContent({
       />
     );
   }
-
-  return app;
+  return null;
 }
