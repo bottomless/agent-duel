@@ -770,20 +770,22 @@ const styles = StyleSheet.create((theme) => ({
   pastRevealDim: {
     opacity: theme.opacity[50],
   },
-  pastRevealFill: isWeb
-    ? {
-        transitionProperty: "background-color, border-color, opacity",
-        transitionDuration: "450ms",
-        transitionTimingFunction: "ease-out",
-      }
-    : {},
-  pastRevealText: isWeb
-    ? {
-        transitionProperty: "color",
-        transitionDuration: "450ms",
-        transitionTimingFunction: "ease-out",
-      }
-    : {},
+  // Transitions alone match none of React Native's style keys, so they go under `_web`, where
+  // Unistyles types CSS properties.
+  pastRevealFill: {
+    _web: {
+      transitionProperty: "background-color, border-color, opacity",
+      transitionDuration: "450ms",
+      transitionTimingFunction: "ease-out",
+    },
+  },
+  pastRevealText: {
+    _web: {
+      transitionProperty: "color",
+      transitionDuration: "450ms",
+      transitionTimingFunction: "ease-out",
+    },
+  },
   pastSide: {
     minWidth: 112,
   },
