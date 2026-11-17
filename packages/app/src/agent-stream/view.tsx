@@ -48,6 +48,7 @@ import { ThinkingBlock } from "@/components/thinking-block";
 import { PlanCard } from "@/components/plan-card";
 import { getStreamItemMessageId, type StreamItem } from "@/types/stream";
 import type { PendingMessageSubmission } from "@/composer/submission/model";
+import { resolveComposerTranscriptClearance } from "@/composer/pill-styles";
 import type { TurnPresentation } from "@/timeline/turn-liveness";
 import type { ArenaHistoryItem } from "@getpaseo/protocol/arena/rpc-schemas";
 import type { PendingPermission } from "@/types/shared";
@@ -101,7 +102,10 @@ import {
   type InFlightTurnForkHandler,
   type TurnContentStrategy,
 } from "./turn-footer";
-import { resolveBottomOverlayTailInset } from "./bottom-overlay-inset";
+import {
+  resolveBottomOverlayTailClearance,
+  resolveBottomOverlayTailInset,
+} from "./bottom-overlay-inset";
 import { layoutStream, type StreamLayoutItem } from "./layout";
 import {
   type BottomAnchorLocalRequest,
@@ -1453,10 +1457,13 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
     const renderLiveAuxiliary = useCallback<StreamSegmentRenderers["renderLiveAuxiliary"]>(() => {
       const existingTailSpacing =
         auxiliary.turnFooter && !auxiliary.pendingPermissions ? TURN_FOOTER_BOTTOM_SPACING : 0;
-      // The floating decision row covers the chat's end, so the end keeps clear of it. It sits on
-      // the composer where the track bar does, so the end clears the taller of the two, not both.
+      // The floating decision row covers the chat's end, so the end keeps clear of it.
       const bottomOverlayInset = resolveBottomOverlayTailInset({
-        requiredTailClearance: Math.max(bottomOverlayTailClearance, bottomOverlayHeight ?? 0),
+        requiredTailClearance: resolveBottomOverlayTailClearance({
+          trackClearance: bottomOverlayTailClearance,
+          overlayHeight: bottomOverlayHeight ?? 0,
+          transcriptClearance: resolveComposerTranscriptClearance(isMobile),
+        }),
         existingTailSpacing,
       });
       return renderLiveAuxiliaryNode({
@@ -1472,6 +1479,7 @@ const AgentStreamViewComponent = forwardRef<AgentStreamViewHandle, AgentStreamVi
       forkBoundaryAfterFooter,
       bottomOverlayHeight,
       bottomOverlayTailClearance,
+      isMobile,
       liveContent,
     ]);
 
