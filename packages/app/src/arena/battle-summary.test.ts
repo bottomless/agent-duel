@@ -118,7 +118,7 @@ describe("a discarded battle between two votes", () => {
       "answer-3",
     ]);
     expect(arenaSummaryAnchors([voted1, discarded], stream)).toEqual([
-      "answer-1",
+      "user-1",
       "arena-prompt:turn-2",
     ]);
   });
@@ -132,7 +132,7 @@ describe("a discarded battle between two votes", () => {
     );
     expect(arenaTurnFollowedUp(discarded, stream)).toBe(false);
     expect(arenaTurnFollowedUp(voted1, stream)).toBe(true);
-    expect(arenaSummaryAnchors([voted1], stream)).toEqual(["answer-1"]);
+    expect(arenaSummaryAnchors([voted1], stream)).toEqual(["user-1"]);
   });
 
   it("waits for its page when the loaded rows start after the discarded turn", () => {

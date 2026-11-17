@@ -364,7 +364,7 @@ export function ResumeDecision({ actions }: { actions: ArenaBattleActions }) {
       accessibilityLabel={t("arena.resumeBattle")}
       testID="arena-resume-interrupted"
     >
-      {t("arena.resume")}{" "}
+      {t("arena.resume")}
     </Button>
   );
 }
@@ -441,7 +441,7 @@ function RetryResolutionDecision({
         onPress={actions.retryResolution}
         testID="arena-retry-resolution"
       >
-        {t("arena.retryResolution")}{" "}
+        {t("arena.retryResolution")}
       </Button>
     </View>
   );

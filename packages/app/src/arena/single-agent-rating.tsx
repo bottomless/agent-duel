@@ -65,7 +65,7 @@ export function SingleAgentRatingDialog({
             onPress={voteUp}
             testID="arena-single-agent-thumbs-up"
           >
-            {t("arena.thumbsUp")}{" "}
+            {t("arena.thumbsUp")}
           </Button>
           <Button
             variant="secondary"
@@ -76,7 +76,7 @@ export function SingleAgentRatingDialog({
             onPress={voteDown}
             testID="arena-single-agent-thumbs-down"
           >
-            {t("arena.thumbsDown")}{" "}
+            {t("arena.thumbsDown")}
           </Button>
           {onSkip ? (
             <Button
@@ -86,7 +86,7 @@ export function SingleAgentRatingDialog({
               onPress={onSkip}
               testID="arena-single-agent-rating-skip"
             >
-              {t("arena.skip")}{" "}
+              {t("arena.skip")}
             </Button>
           ) : null}
         </View>
@@ -95,7 +95,7 @@ export function SingleAgentRatingDialog({
         ) : null}
         {rating.isError ? (
           <Text style={styles.error} accessibilityRole="alert">
-            {t("arena.ratingFailed")}{" "}
+            {t("arena.ratingFailed")}
           </Text>
         ) : null}
       </View>

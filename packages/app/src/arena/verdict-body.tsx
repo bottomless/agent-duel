@@ -78,7 +78,7 @@ export function VerdictFold({ turnId, children }: { turnId: string; children: Re
       {folded ? (
         <View style={styles.more}>
           <Button size="sm" variant="ghost" onPress={showAll} testID="arena-verdict-more">
-            {t("arena.fullSummary")}{" "}
+            {t("arena.fullSummary")}
           </Button>
         </View>
       ) : null}

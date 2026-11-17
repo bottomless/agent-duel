@@ -95,7 +95,7 @@ export const ArenaRunMeta = memo(function ArenaRunMeta({
         <>
           <Text style={styles.text}>·</Text>
           <Text style={styles.text} testID={`arena-run-diff-${side}`}>
-            {t("arena.noChanges")}{" "}
+            {t("arena.noChanges")}
           </Text>
         </>
       ) : null}

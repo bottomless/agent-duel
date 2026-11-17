@@ -73,7 +73,7 @@ function Verdict({
         <View style={styles.loading}>
           <Text style={styles.error}>{t("arena.summaryFailed")}</Text>
           <Button size="sm" variant="ghost" loading={retrying} onPress={onRetry}>
-            {t("arena.retrySummary")}{" "}
+            {t("arena.retrySummary")}
           </Button>
         </View>
       ) : null}
@@ -90,7 +90,7 @@ function WaitingSummary({ waitingFor }: { waitingFor: ArenaSide }) {
   return (
     <View style={styles.section} testID="arena-summary-waiting">
       <Text style={styles.status}>
-        {sideName(waitingFor)} {t("arena.waitingSummary")}{" "}
+        {sideName(waitingFor)} {t("arena.waitingSummary")}
       </Text>
     </View>
   );
@@ -155,7 +155,7 @@ function ChangesTab({
       <View style={styles.loading} accessibilityRole="alert">
         <Text style={styles.error}>{toErrorMessage(error)}</Text>
         <Button size="sm" variant="ghost" loading={retrying} onPress={onRetry}>
-          {t("arena.retryChanges")}{" "}
+          {t("arena.retryChanges")}
         </Button>
       </View>
     );

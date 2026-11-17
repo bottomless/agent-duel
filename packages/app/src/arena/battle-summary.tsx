@@ -173,7 +173,7 @@ export function IdenticalBattleResult({ hasChanges = false }: { hasChanges?: boo
   if (hasChanges) {
     return (
       <Text style={styles.muted} testID="arena-identical-results">
-        {t("arena.sameChanges")}{" "}
+        {t("arena.sameChanges")}
       </Text>
     );
   }
@@ -594,7 +594,7 @@ function ArchivedBattleComparison({
         <View style={styles.loadingRow}>
           <Text style={styles.warning}>{t("arena.summaryFailed")}</Text>
           <Button size="sm" variant="outline" loading={retrying} onPress={onRetry}>
-            {t("arena.retrySummary")}{" "}
+            {t("arena.retrySummary")}
           </Button>
         </View>
       ) : null}
@@ -801,7 +801,7 @@ function FailedBattleStart({
               onPress={handleStartAgain}
               testID="arena-failed-start-retry"
             >
-              {t("arena.tryAgain")}{" "}
+              {t("arena.tryAgain")}
             </Button>
           ) : null}
         </View>

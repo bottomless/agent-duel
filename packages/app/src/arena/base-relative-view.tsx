@@ -664,8 +664,8 @@ function ReadyDiff({
         onBack={back}
         onLayout={measureHeader}
       />
-      {!diff.aligned ? <Text style={styles.warning}>{t("arena.regionsReplaced")} </Text> : null}
-      {truncated ? <Text style={styles.warning}>{t("arena.notFullFile")} </Text> : null}
+      {!diff.aligned ? <Text style={styles.warning}>{t("arena.regionsReplaced")}</Text> : null}
+      {truncated ? <Text style={styles.warning}>{t("arena.notFullFile")}</Text> : null}
       {waitingFor && !stacked ? (
         // The working side's column is one placeholder for the whole file, the slot its diff
         // will fill, beside the finished side's regions.
@@ -681,7 +681,7 @@ function ReadyDiff({
                   <Text style={styles.pendingTitle}>
                     {labelFor(side)} {t("arena.workingStill")}
                   </Text>
-                  <Text style={styles.pendingHint}>{t("arena.workingVersion")} </Text>
+                  <Text style={styles.pendingHint}>{t("arena.workingVersion")}</Text>
                 </View>
               </View>
             ) : (
@@ -710,7 +710,7 @@ function ReadyDiff({
       {previewLimited ? (
         <View style={styles.pad}>
           <Button size="sm" variant="ghost" onPress={showAll}>
-            {t("arena.fullDiff")}{" "}
+            {t("arena.fullDiff")}
           </Button>
         </View>
       ) : null}
