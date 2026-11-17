@@ -54,6 +54,43 @@ describe("summarizeShellCommand", () => {
       expect(summarizeShellCommand(command)).toBe("type shot.png");
     });
 
+    it("reads a quoted Windows upload path with a space in the user name", () => {
+      const command = `type "C:\\Users\\John Doe\\.paseo\\uploads\\${UPLOAD_ID}\\data.json"`;
+
+      expect(summarizeShellCommand(command)).toBe("type data.json");
+    });
+
+    it("reads a quoted Windows temp path with a space in the user name", () => {
+      const command = `type "C:\\Users\\John Doe\\AppData\\Local\\Temp\\opencode\\arena\\ses_abc123\\out.txt"`;
+
+      expect(summarizeShellCommand(command)).toBe("type out.txt");
+    });
+
+    it("reads a quoted upload path with a space in any folder", () => {
+      const command = `cat "/Users/user/My Projects/repo/.dev/paseo-home/uploads/${UPLOAD_ID}/data.json"`;
+
+      expect(summarizeShellCommand(command)).toBe("cat data.json");
+    });
+
+    it("keeps the other words of a quoted command line that names an upload", () => {
+      expect(summarizeShellCommand(`bash -c "rm -rf ~/projects ${UPLOAD_DIR}/data.json"`)).toBe(
+        'bash -c "rm -rf ~/projects data.json"',
+      );
+      expect(summarizeShellCommand(`sh -c "/bin/cat notes ${UPLOAD_DIR}/data.json"`)).toBe(
+        'sh -c "/bin/cat notes data.json"',
+      );
+      expect(summarizeShellCommand(`bash -c "rm -rf ~/projects /tmp/opencode/notes.md"`)).toBe(
+        'bash -c "rm -rf ~/projects notes.md"',
+      );
+    });
+
+    it("leaves an upload path too long to match whole", () => {
+      const home = `/home/user/${"checkout/.agent-duel/worktrees/turn/".repeat(30)}.dev/paseo-home`;
+      const command = `cat ${home}/uploads/${UPLOAD_ID}/data.json`;
+
+      expect(summarizeShellCommand(command)).toBeUndefined();
+    });
+
     it("names the upload folder when a command lists it", () => {
       const command = `ls -la ${UPLOAD_DIR}/ && file ${UPLOAD_DIR}/data.json`;
 
@@ -127,13 +164,48 @@ describe("summarizeShellCommand", () => {
         "ls -la ~/repo | head -50",
       );
     });
+
+    // A base64 blob beside a path once made the prefix patterns quadratic. The output is pinned
+    // here; the cost is bounded by the cap and includes checks in upload-path.ts.
+    it("summarizes a command with a long token beside a path", () => {
+      const blob = "a/".repeat(16_000);
+      const clipped = `echo ${"a/".repeat(97)}…`;
+
+      expect(summarizeShellCommand(`echo ${blob} > ${UPLOAD_DIR}/blob.b64`)).toBe(clipped);
+      expect(summarizeShellCommand(`echo ${blob} > $TMPDIR/blob.b64`)).toBe(clipped);
+    });
   });
 
   describe("shell noise", () => {
     it("drops a cd with a silenced error and redirects to /dev/null", () => {
-      const command = `cd ${WORKTREE} 2>/dev/null && ls -la && git log -5 2>&1 | head`;
+      const command = `cd ${WORKTREE} 2>/dev/null && ls -la && git log -5 2>/dev/null | head`;
 
       expect(summarizeShellCommand(command, WORKTREE)).toBe("ls -la && git log -5 | head");
+    });
+
+    it("keeps a redirect that merges stderr into stdout", () => {
+      expect(summarizeShellCommand("npm test 2>&1 | tee test.log", WORKTREE)).toBeUndefined();
+      const command = `cd ${WORKTREE} && npm test 2>&1 | tee test.log`;
+      expect(summarizeShellCommand(command, WORKTREE)).toBe("npm test 2>&1 | tee test.log");
+    });
+
+    it("keeps a /dev/null redirect that the merge depends on", () => {
+      expect(
+        summarizeShellCommand("command -v jq >/dev/null 2>&1 && jq . data.json 2>/dev/null"),
+      ).toBe("command -v jq >/dev/null 2>&1 && jq . data.json");
+      expect(summarizeShellCommand("npm test 2>&1 >/dev/null")).toBeUndefined();
+    });
+
+    it("keeps a merge that a nearby redirect does not silence", () => {
+      expect(summarizeShellCommand("npm test >/dev/null && git log 2>&1 | head")).toBe(
+        "npm test && git log 2>&1 | head",
+      );
+    });
+
+    it("drops a cd into the worktree along with its own redirects", () => {
+      const command = `cd ${WORKTREE} >/dev/null 2>&1 && npm test`;
+
+      expect(summarizeShellCommand(command, WORKTREE)).toBe("npm test");
     });
 
     it("drops echo lines that only print a rule or a framed heading", () => {
@@ -147,14 +219,16 @@ describe("summarizeShellCommand", () => {
       expect(summarizeShellCommand('echo "=== x ===" > notes.md && ls')).toBeUndefined();
     });
 
-    it("names a script by the echo heading that opens its command", () => {
+    it("does not name a script by the echo heading that opens its command", () => {
       const command = `cd ${WORKTREE}/docs && echo "=== guide.md: chars vs bytes ===" && node -e "
 const fs = require('fs');
 const s = fs.readFileSync('guide.md', 'utf8');
 console.log('chars:', s.length);
 " && cat notes.md`;
 
-      expect(summarizeShellCommand(command, WORKTREE)).toBe("guide.md: chars vs bytes");
+      expect(summarizeShellCommand(command, WORKTREE)).toBe(
+        "guide.md · console.log('chars:', s.length);",
+      );
     });
   });
 
@@ -170,14 +244,16 @@ jq -r '.[0].id' $F | head -5`;
       );
     });
 
-    it("shows the comment that opens the commands", () => {
+    it("passes over a comment that opens the commands", () => {
       const command = `F="${UPLOAD_DIR}/data.json"
 # totals per vendor
 jq -r '.[] | .vendor' "$F" | sort | uniq -c
 echo "--- grand total ---"
 jq 'length' "$F"`;
 
-      expect(summarizeShellCommand(command)).toBe("data.json · totals per vendor");
+      expect(summarizeShellCommand(command)).toBe(
+        "data.json · jq -r '.[] | .vendor' | sort | uniq -c · jq 'length'",
+      );
     });
 
     it("joins a command continued onto the next line", () => {
@@ -206,7 +282,7 @@ Counts refunds once."`;
   });
 
   describe("scripts", () => {
-    it("leads with the uploaded file and names what a heredoc prints", () => {
+    it("leads with the uploaded file and shows a heredoc's first lines", () => {
       const command = `python3 - <<'PY'
 import json,collections
 p='${UPLOAD_DIR}/data.json'
@@ -216,7 +292,18 @@ print('KEYS',collections.Counter(k for r in d for k in r))
 print('DONE')
 PY`;
 
-      expect(summarizeShellCommand(command)).toBe("data.json · COUNT, KEYS, DONE");
+      expect(summarizeShellCommand(command)).toBe(
+        "data.json · print('COUNT',len(d)) · print('KEYS',collections.Counter(k for r in d for k in r))",
+      );
+    });
+
+    it("does not let an opening comment stand for what a script does", () => {
+      const command = `bash <<'SH'
+# Check the data
+rm -rf ~/projects
+SH`;
+
+      expect(summarizeShellCommand(command)).toBe("rm -rf ~/projects");
     });
 
     it("reads a multi-line script passed with -c after a cd into the upload folder", () => {
@@ -229,7 +316,9 @@ for r in rows:
     print(r['id'], r['name'])
 "`;
 
-      expect(summarizeShellCommand(command)).toBe("data.json · r['id'], r['name']");
+      expect(summarizeShellCommand(command)).toBe(
+        "data.json · for r in rows: · print(r['id'], r['name'])",
+      );
     });
 
     it("reads a multi-line script passed with -e", () => {
@@ -243,7 +332,9 @@ for (let i = 0; i < rows.length; i++) {
 }
 '`;
 
-      expect(summarizeShellCommand(command)).toBe("data.json · row: i, row.name");
+      expect(summarizeShellCommand(command)).toBe(
+        "data.json · for (let i = 0; i < rows.length; i++) { · const row = rows[i];",
+      );
     });
 
     it("tells apart scripts that share their setup", () => {
@@ -254,124 +345,12 @@ for r in rows:
     ${line}
 PY`;
 
-      expect(summarizeShellCommand(script("print(r['price'])"))).toBe("data.json · r['price']");
-      expect(summarizeShellCommand(script("print(r['stock'])"))).toBe("data.json · r['stock']");
-    });
-
-    it("shows an f-string's contents without its print call or quotes", () => {
-      const command = `python3 - <<'PY'
-rows=json.load(open('${UPLOAD_DIR}/data.json'))
-for i, r in enumerate(rows):
-    print(f"[{i}] created {r['createdAt']} run {r['runId']}")
-    print('more detail', r)
-PY`;
-
-      expect(summarizeShellCommand(command)).toBe(
-        "data.json · [{i}] created {r['createdAt']} run {r['runId']}",
+      expect(summarizeShellCommand(script("print(r['price'])"))).toBe(
+        "data.json · for r in rows: · print(r['price'])",
       );
-    });
-
-    it("lets a heading stand for the value printed under it", () => {
-      const command = `python3 - <<'PY'
-rows=json.load(open('${UPLOAD_DIR}/data.json'))
-for i, r in enumerate(rows):
-    print(f"[{i}] content:")
-    print(r['text'][:700])
-PY`;
-
-      expect(summarizeShellCommand(command)).toBe("data.json · [{i}] content");
-    });
-
-    it("lists the sections and labels of a script that prints several", () => {
-      const command = `python3 - <<'PY'
-rows=json.load(open('${UPLOAD_DIR}/data.json'))
-r=rows[0]
-print('--- pricing ---')
-print(json.dumps(r['pricing'], indent=1)[:1500])
-print('kind:', r['kind'], '| vendor:', r['vendor'])
-print('--- stock ---')
-print(r['stock'])
-print('  per warehouse', r['warehouses'])
-print('--- pricing ---')
-PY`;
-
-      expect(summarizeShellCommand(command)).toBe("data.json · pricing, kind, vendor, stock");
-    });
-
-    it("names the labeled values on a line that starts with a bare value", () => {
-      const command = `python3 - <<'PY'
-rows=json.load(open('${UPLOAD_DIR}/data.json'))
-for i, r in enumerate(rows):
-    print(i, 'row', r['id'][:8], '| product:', r['product'], '| weight:', r['weight'])
-    print('   notes:', r['notes'])
-PY`;
-
-      expect(summarizeShellCommand(command)).toBe("data.json · product, weight");
-    });
-
-    it("uses indented labels when a script prints no labels of its own", () => {
-      const command = `python3 - <<'PY'
-rows=json.load(open('${UPLOAD_DIR}/data.json'))
-for r in rows:
-    print('  status:', r['status'])
-    print('  shipped:', r['shipped'])
-    for s in r['scans']:
-        print('    ', str(s)[:80])
-PY`;
-
-      expect(summarizeShellCommand(command)).toBe("data.json · status, shipped");
-    });
-
-    it("does not list a bracketed section marker as a label", () => {
-      const command = `node << 'EOF'
-const rows = require("${UPLOAD_DIR}/data.json");
-console.log("FIRST", rows[0]);
-console.log("[middle]");
-console.log("LAST", rows[rows.length - 1]);
-EOF`;
-
-      expect(summarizeShellCommand(command)).toBe("data.json · FIRST, LAST");
-    });
-
-    it("cuts a long list of labels short", () => {
-      const command = `node << 'EOF'
-const rows = require("${UPLOAD_DIR}/data.json");
-console.log("a1", rows.a1);
-console.log("b2", rows.b2);
-console.log("c3", rows.c3);
-console.log("d4", rows.d4);
-console.log("e5", rows.e5);
-console.log("f6", rows.f6);
-console.log("g7", rows.g7);
-EOF`;
-
-      expect(summarizeShellCommand(command)).toBe("data.json · a1, b2, c3, d4, e5, f6, …");
-    });
-
-    it("names the fields of an f-string or template", () => {
-      const python = `python3 - <<'PY'
-rows=json.load(open('${UPLOAD_DIR}/data.json'))
-for i, r in enumerate(rows):
-    print(f"[{i}] created={r['createdAt']} vendor={r['vendor']}")
-PY`;
-      const node = `node -e '
-const rows = require("${UPLOAD_DIR}/data.json");
-console.log(\`total: \${rows.length} | first id: \${rows[0].id}\`);
-'`;
-
-      expect(summarizeShellCommand(python)).toBe("data.json · created, vendor");
-      expect(summarizeShellCommand(node)).toBe("data.json · total, first id");
-    });
-
-    it("reads a line break that the shell quoting escaped twice", () => {
-      const command = `node -e '
-const rows = require("${UPLOAD_DIR}/data.json");
-for (const [i, r] of rows.entries()) {
-  console.log("\\\\n===== ROW", i, "=====");
-}
-'`;
-
-      expect(summarizeShellCommand(command)).toBe("data.json · ROW i");
+      expect(summarizeShellCommand(script("print(r['stock'])"))).toBe(
+        "data.json · for r in rows: · print(r['stock'])",
+      );
     });
 
     it("names the copy a script in the temp folder reads", () => {
@@ -381,10 +360,12 @@ console.log("docs", docs.length);
 console.log("keys", Object.keys(docs[0]).length);
 '`;
 
-      expect(summarizeShellCommand(command)).toBe("aitracking.json · docs, keys");
+      expect(summarizeShellCommand(command)).toBe(
+        'aitracking.json · console.log("docs", docs.length); · console.log("keys", Object.keys(docs[0]).length);',
+      );
     });
 
-    it("shows the comment that opens a script", () => {
+    it("passes over the comment that opens a script", () => {
       const command = `python3 - <<'PY'
 import json
 rows=json.load(open('${UPLOAD_DIR}/data.json'))
@@ -394,10 +375,12 @@ for r in rows:
     print(r['vendor'], r['price'])
 PY`;
 
-      expect(summarizeShellCommand(command)).toBe("data.json · Price changes per vendor");
+      expect(summarizeShellCommand(command)).toBe(
+        "data.json · for r in rows: · print(r['vendor'], r['price'])",
+      );
     });
 
-    it("passes over a comment that is one word, a directive, or a helper's", () => {
+    it("passes over comments and helper definitions", () => {
       const command = `node << 'EOF'
 // eslint-disable no-console
 // setup
@@ -409,91 +392,7 @@ function show(row) {
 console.log("total", rows.length);
 EOF`;
 
-      expect(summarizeShellCommand(command)).toBe("data.json · total: rows.length");
-    });
-
-    it("drops the rules that frame a heading", () => {
-      const command = `python3 - <<'PY'
-rows=json.load(open('${UPLOAD_DIR}/data.json'))
-print("=== FIRST ROW ===")
-print(rows[0])
-print("...")
-PY`;
-
-      expect(summarizeShellCommand(command)).toBe("data.json · FIRST ROW");
-    });
-
-    it("prefers a labeled value over a rule printed around a counter", () => {
-      const command = `python3 - <<'PY'
-rows=json.load(open('${UPLOAD_DIR}/data.json'))
-for i, r in enumerate(rows):
-    print('===', i, '===')
-    print('keys:', list(r.keys()))
-PY`;
-
-      expect(summarizeShellCommand(command)).toBe("data.json · keys: list(r.keys())");
-    });
-
-    it("reads output printed inside a condition", () => {
-      const command = `python3 - <<'PY'
-rows=json.load(open('${UPLOAD_DIR}/data.json'))
-for r in rows:
-    if r['price'] is None: print('missing price', r['id'])
-PY`;
-
-      expect(summarizeShellCommand(command)).toBe("data.json · missing price: r['id']");
-    });
-
-    it("unquotes string literals mixed between printed values", () => {
-      const command = `python3 - <<'PY'
-rows=json.load(open('${UPLOAD_DIR}/data.json'))
-ids=[r['id'] for r in rows]
-print("unique ids:", len(set(ids)), "of", len(ids), flush=True)
-PY`;
-
-      expect(summarizeShellCommand(command)).toBe(
-        "data.json · unique ids: len(set(ids)) of len(ids)",
-      );
-    });
-
-    it("keeps a heading clean when the next line prints a bare loop variable", () => {
-      const command = `node -e '
-const rows = JSON.parse(fs.readFileSync("${UPLOAD_DIR}/data.json", "utf8"));
-console.log("--- overall tally ---");
-for (const line of format(rows)) console.log(line);
-'`;
-
-      expect(summarizeShellCommand(command)).toBe("data.json · overall tally");
-    });
-
-    it("summarizes a multi-line object dump by its keys", () => {
-      const command = `node << 'EOF'
-const rows = require("${UPLOAD_DIR}/data.json");
-for (const [i, r] of rows.entries()) {
-  console.log("\\n========== ROW", i, "==========");
-  console.log(JSON.stringify({
-    id: r.id,
-    name: r.name,
-    vendor: r.vendor,
-    price: r.price,
-    stock: r.stock,
-  }, null, 2));
-}
-EOF`;
-
-      expect(summarizeShellCommand(command)).toBe(
-        "data.json · ROW i: { id, name, vendor, price, … }",
-      );
-    });
-
-    it("skips a repeated rule before a second print on the same line", () => {
-      const command = `python3 - <<'PY'
-rows=json.load(open('${UPLOAD_DIR}/data.json'))
-for i, r in enumerate(rows):
-    print('='*80); print('row #', i)
-PY`;
-
-      expect(summarizeShellCommand(command)).toBe("data.json · row #: i");
+      expect(summarizeShellCommand(command)).toBe('data.json · console.log("total", rows.length);');
     });
 
     it("skips what a helper function prints", () => {
@@ -505,7 +404,7 @@ function show(row) {
 console.log("total", rows.length);
 EOF`;
 
-      expect(summarizeShellCommand(command)).toBe("data.json · total: rows.length");
+      expect(summarizeShellCommand(command)).toBe('data.json · console.log("total", rows.length);');
     });
 
     it("shows the first lines past the setup when a script prints nothing", () => {
@@ -531,7 +430,7 @@ import('./src/version.js').then(m => console.log(m.version()));
       );
     });
 
-    it("leads a file-writing heredoc with its target and script labels", () => {
+    it("leads a file-writing heredoc with its target and first lines", () => {
       const command = `mkdir -p scratch && cat > scratch/shape.mjs <<'EOF'
 import { readFileSync } from "node:fs";
 const rows = JSON.parse(readFileSync("${UPLOAD_DIR}/data.json", "utf8"));
@@ -539,7 +438,9 @@ console.log("count:", rows.length);
 console.log("vendors:", new Set(rows.map((row) => row.vendor)).size);
 EOF`;
 
-      expect(summarizeShellCommand(command)).toBe("scratch/shape.mjs · count, vendors");
+      expect(summarizeShellCommand(command)).toBe(
+        'scratch/shape.mjs · console.log("count:", rows.length); · console.log("vendors:", new Set(rows.map((row) => row.vendor)).size);',
+      );
     });
 
     it("drops echo and mkdir setup ahead of a file-writing heredoc", () => {
@@ -549,7 +450,9 @@ import { readFileSync } from "node:fs";
 console.log(readFileSync("orders.json", "utf8"));
 EOF`;
 
-      expect(summarizeShellCommand(command)).toBe("scratch/detail.mjs · Detail for each order");
+      expect(summarizeShellCommand(command)).toBe(
+        'scratch/detail.mjs · console.log(readFileSync("orders.json", "utf8"));',
+      );
     });
 
     it("drops an echoed temp directory ahead of a file-writing heredoc", () => {
@@ -559,7 +462,9 @@ console.log("orders:", 3);
 console.log("vendors:", 2);
 EOF`;
 
-      expect(summarizeShellCommand(command)).toBe("scratch/detail.mjs · Detail for each order");
+      expect(summarizeShellCommand(command)).toBe(
+        'scratch/detail.mjs · console.log("orders:", 3); · console.log("vendors:", 2);',
+      );
     });
 
     it("shows a written script's target relative to the worktree", () => {
@@ -569,7 +474,9 @@ console.log("total:", scans.length);
 console.log("failed:", scans.filter((scan) => scan.failed).length);
 EOF`;
 
-      expect(summarizeShellCommand(command, WORKTREE)).toBe("scratch/scans.mjs · total, failed");
+      expect(summarizeShellCommand(command, WORKTREE)).toBe(
+        'scratch/scans.mjs · const scans = []; · console.log("total:", scans.length);',
+      );
     });
 
     it("resolves a variable the command exports before the heredoc", () => {
@@ -579,7 +486,7 @@ EOF`;
 console.log("done");
 EOF`;
 
-      expect(summarizeShellCommand(command)).toBe("an/usage.py · Token usage per document");
+      expect(summarizeShellCommand(command)).toBe('an/usage.py · console.log("done");');
     });
 
     it("reads a variable holding $TMPDIR as the scratch folder", () => {
@@ -588,7 +495,7 @@ EOF`;
 console.log("done");
 EOF`;
 
-      expect(summarizeShellCommand(command)).toBe("usage.py · Token usage per document");
+      expect(summarizeShellCommand(command)).toBe('usage.py · console.log("done");');
     });
 
     it("does not discard work between an assignment and a file-writing heredoc", () => {
@@ -623,7 +530,7 @@ b=open('${UPLOAD_DIR}/b.json').read()
 print(a == b)
 PY`;
 
-    expect(summarizeShellCommand(command)).toBe("a.json, b.json · a == b");
+    expect(summarizeShellCommand(command)).toBe("a.json, b.json · print(a == b)");
   });
 
   it("cuts a long summary short", () => {

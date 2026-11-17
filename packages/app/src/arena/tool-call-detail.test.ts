@@ -28,7 +28,7 @@ PY`;
     expect(deriveArenaToolCallDetail("shell", { command }, "1\n")).toEqual({
       type: "shell",
       command,
-      summary: "data.json · COUNT: len(d)",
+      summary: "data.json · print('COUNT',len(d))",
       output: "1\n",
     });
   });

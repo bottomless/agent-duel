@@ -65,7 +65,7 @@ PY`;
     ).toMatchObject({
       kind: "tool",
       label: "Shell",
-      secondaryLabel: "data.json · COUNT: len(d)",
+      secondaryLabel: "data.json · print('COUNT',len(d))",
     });
   });
 
