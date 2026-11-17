@@ -4,6 +4,7 @@ import { StyleSheet } from "react-native-unistyles";
 import { useContainerWidth } from "@/hooks/use-container-width";
 import { LIVE_SUMMARY_STACKED_BREAKPOINT, summaryColumnsStacked } from "./battle-layout";
 import type { SummaryColumns } from "./summary-columns";
+import { CODE_SURFACE_DATASET } from "@/styles/code-surface";
 
 /**
  * The summary width below which it stacks, set by the battle around it so the summary stacks with
@@ -11,8 +12,19 @@ import type { SummaryColumns } from "./summary-columns";
  */
 export const SummaryStackedBreakpoint = createContext(LIVE_SUMMARY_STACKED_BREAKPOINT);
 
-/** Inline code and bold, the only markdown the judge puts inside a sentence or a table cell. */
-function InlineText({ text, style }: { text: string; style: object }) {
+/**
+ * Inline code and bold, the only markdown the judge puts inside a sentence or a table cell. Code
+ * is set a pixel under its text, which mono's wider glyphs need to sit level with it.
+ */
+function InlineText({
+  text,
+  style,
+  codeStyle,
+}: {
+  text: string;
+  style: object;
+  codeStyle: object;
+}) {
   const parts = useMemo(
     () =>
       text
@@ -26,7 +38,8 @@ function InlineText({ text, style }: { text: string; style: object }) {
       {parts.map(({ id, part }) => {
         if (part.startsWith("`") && part.endsWith("`")) {
           return (
-            <Text key={id} style={styles.code}>
+            // Without the code-surface marker the app-wide interface font replaces mono on web.
+            <Text key={id} dataSet={CODE_SURFACE_DATASET} style={[styles.code, codeStyle]}>
               {part.slice(1, -1)}
             </Text>
           );
@@ -55,11 +68,15 @@ function SideColumn({
 }) {
   return (
     <View style={styles.column} testID={`arena-summary-column-${side}`}>
-      <InlineText text={sentence} style={styles.sentence} />
+      <InlineText text={sentence} style={styles.sentence} codeStyle={styles.sentenceCode} />
       {rows.map((row) => (
         <View key={row.aspect} style={[styles.row, styles.stackedRow]}>
-          <InlineText text={row.aspect} style={styles.aspect} />
-          <InlineText text={side === "a" ? row.a : row.b} style={styles.value} />
+          <InlineText text={row.aspect} style={styles.aspect} codeStyle={styles.aspectCode} />
+          <InlineText
+            text={side === "a" ? row.a : row.b}
+            style={styles.value}
+            codeStyle={styles.valueCode}
+          />
         </View>
       ))}
     </View>
@@ -76,21 +93,21 @@ function SideBySideRows({ columns }: { columns: SummaryColumns }) {
     <View testID="arena-summary-rows">
       <View style={styles.pair}>
         <View style={[styles.cell, styles.sentenceCell]} testID="arena-summary-column-a">
-          <InlineText text={columns.a} style={styles.sentence} />
+          <InlineText text={columns.a} style={styles.sentence} codeStyle={styles.sentenceCode} />
         </View>
         <View style={[styles.cell, styles.sentenceCell]} testID="arena-summary-column-b">
-          <InlineText text={columns.b} style={styles.sentence} />
+          <InlineText text={columns.b} style={styles.sentence} codeStyle={styles.sentenceCode} />
         </View>
       </View>
       {columns.rows.map((row) => (
         <View key={row.aspect} style={[styles.pair, styles.rowPair]}>
           <View style={[styles.cell, styles.row]}>
-            <InlineText text={row.aspect} style={styles.aspect} />
-            <InlineText text={row.a} style={styles.value} />
+            <InlineText text={row.aspect} style={styles.aspect} codeStyle={styles.aspectCode} />
+            <InlineText text={row.a} style={styles.value} codeStyle={styles.valueCode} />
           </View>
           <View style={[styles.cell, styles.row]}>
-            <InlineText text={row.aspect} style={styles.aspect} />
-            <InlineText text={row.b} style={styles.value} />
+            <InlineText text={row.aspect} style={styles.aspect} codeStyle={styles.aspectCode} />
+            <InlineText text={row.b} style={styles.value} codeStyle={styles.valueCode} />
           </View>
         </View>
       ))}
@@ -109,7 +126,9 @@ export function SummaryColumnsView({ columns }: { columns: SummaryColumns }) {
   const stacked = summaryColumnsStacked(width, useContext(SummaryStackedBreakpoint));
   return (
     <View style={styles.root} onLayout={onLayout} testID="arena-summary-columns">
-      {columns.shared ? <InlineText text={columns.shared} style={styles.shared} /> : null}
+      {columns.shared ? (
+        <InlineText text={columns.shared} style={styles.shared} codeStyle={styles.sharedCode} />
+      ) : null}
       {stacked ? (
         <View style={styles.columnsStacked}>
           <SideColumn side="a" sentence={columns.a} rows={columns.rows} />
@@ -192,7 +211,18 @@ const styles = StyleSheet.create((theme) => ({
   },
   code: {
     fontFamily: theme.fontFamily.mono,
-    fontSize: theme.fontSize.code,
+  },
+  sentenceCode: {
+    fontSize: theme.fontSize.content - 1,
+  },
+  aspectCode: {
+    fontSize: Math.round((theme.fontSize.base * 13) / 14) - 1,
+  },
+  valueCode: {
+    fontSize: theme.fontSize.base - 1,
+  },
+  sharedCode: {
+    fontSize: theme.fontSize.base - 1,
   },
   strong: {
     fontWeight: theme.fontWeight.semibold,
