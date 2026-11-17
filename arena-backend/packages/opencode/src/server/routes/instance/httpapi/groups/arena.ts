@@ -169,6 +169,8 @@ export const EnvironmentTrimResult = Schema.Struct({
   released: Schema.Number,
   kept: Schema.Number,
 })
+export const OrphanPoolsPayload = Schema.Struct({ checkouts: Schema.Array(Schema.String) })
+export const OrphanPoolsResult = Schema.Struct({ removed: Schema.Number })
 export const QuestionReplyPayload = Schema.Struct({ answers: Schema.Array(Schema.Array(Schema.String)) })
 export const ForkSessionPayload = Schema.Struct({
   destination: Schema.String,
@@ -684,6 +686,21 @@ const group = HttpApiGroup.make("arena")
         summary: "Release idle chats' contestant worktrees",
         description:
           "Keep contestant worktrees for the chats with the latest battle activity and release the others' while they are idle. Covers every chat, whichever directory routes the request, or with `volumeOf` only the chats whose worktrees are on that path's volume.",
+      }),
+    ),
+  )
+  .add(
+    HttpApiEndpoint.post("removeOrphanPools", "/arena/environments/orphans", {
+      query: WorkspaceRoutingQuery,
+      payload: OrphanPoolsPayload,
+      success: OrphanPoolsResult,
+      error: ArenaApiError,
+    }).annotateMerge(
+      OpenApi.annotations({
+        identifier: "arena.environments.orphans",
+        summary: "Delete contestant worktree pools no Arena home owns",
+        description:
+          "Mark this home's chats' worktree pools as its own, then delete the pools under `checkouts` and those chats' checkouts that no home owns: a home's store is gone, or the checkout was moved or copied with them. A pool marked by another home that still exists, or one a process works in, stays.",
       }),
     ),
   )

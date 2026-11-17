@@ -63,6 +63,8 @@ import { Form } from "@opencode/schema/form"
 const QuestionID = Form.ID
 import { hostRepoPath, isolatedRoot, Worktree } from "@/worktree"
 import { TRASH_DIRNAME } from "@/util/discard-tree"
+import { ArenaOrphanPools } from "./orphan-pools"
+import { arenaDirectory } from "./database-upgrade"
 import { LOCAL_STATE_DIRNAME, localStatePath, PRIVATE_REF_PREFIXES } from "@/worktree/layout"
 import { ignoreForFileProviderSync } from "@/util/file-provider-ignore"
 import { isRecord } from "@/util/record"
@@ -1296,6 +1298,8 @@ export interface Interface {
   readonly prepareCheckout: (worktreeRoot: string) => Effect.Effect<void, Error>
   readonly releaseCheckout: (worktreeRoot: string) => Effect.Effect<void, Error>
   readonly trimEnvironments: (keep: number, volumeOf?: string) => Effect.Effect<ArenaEnvironmentTrim, Error>
+  /** Delete worktree pools no Arena home owns under these checkouts; see `removeOrphanPools`. */
+  readonly removeOrphanPools: (checkouts: readonly string[]) => Effect.Effect<{ readonly removed: number }, Error>
   /** Build a repository's spare pair for its first battle in the background; see `prewarmProject`. */
   readonly prewarmProject: (directory: string) => Effect.Effect<void, Error>
   readonly snapshot: (chatID: string, afterSequence?: number) => Effect.Effect<ReturnType<typeof project>, Error>
@@ -7851,6 +7855,47 @@ export const layer: Layer.Layer<
       return { chats: holding.length, released, kept } satisfies ArenaEnvironmentTrim
     })
 
+    /**
+     * Delete the worktree pools no Arena home owns under `checkouts` and this store's chats'
+     * checkouts, after marking every pool those chats keep as this home's so another home's sweep
+     * leaves them alone (`ArenaOrphanPools`).
+     */
+    const removeOrphanPools = Effect.fn("Arena.removeOrphanPools")(function* (checkouts: readonly string[]) {
+      const store = yield* available()
+      const chats = yield* promise(() => store.chats.find({}).toArray())
+      const sweep = yield* Effect.promise(() =>
+        ArenaOrphanPools.sweepOrphanPools({
+          home: resolvePath(arenaDirectory()),
+          chats: chats.map((chat) => ({
+            id: chat._id,
+            checkout: chat.repository.root,
+            archived: chat.status === "archived",
+          })),
+          checkouts,
+          working: processDirectories,
+        }),
+      )
+      if (sweep.unlisted) {
+        yield* Effect.logWarning("Arena left orphaned worktree pools: processes could not be listed", {
+          pools: sweep.pools.map((pool) => pool.directory).join(", "),
+        })
+      }
+      for (const pool of sweep.pools) {
+        const detail = {
+          pool: pool.directory,
+          reason: pool.reason,
+          ...(pool.owner ? { home: pool.owner.home, chatID: pool.owner.chatID } : {}),
+        }
+        if (pool.result === "removed") yield* Effect.logInfo("Arena removed an orphaned worktree pool", detail)
+        else if (pool.result === "stuck")
+          yield* Effect.logWarning("Arena could not move an orphaned worktree pool away", detail)
+        else if (!sweep.unlisted)
+          yield* Effect.logInfo("Arena kept an orphaned worktree pool a process works in", detail)
+      }
+      for (const directory of sweep.staged) yield* Effect.logInfo("Arena removed a clone left staged", { directory })
+      return { removed: sweep.pools.filter((pool) => pool.result === "removed").length }
+    })
+
     /** Whether the retained winner still accepts connections on a port it was given or opened. */
     const retainedWinnerServing = Effect.fn("Arena.retainedWinnerServing")(function* (
       store: Store,
@@ -11974,6 +12019,7 @@ export const layer: Layer.Layer<
       prepareCheckout,
       releaseCheckout,
       trimEnvironments,
+      removeOrphanPools,
       prewarmProject,
       snapshot,
       turn: turnSnapshot,

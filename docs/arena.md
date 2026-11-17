@@ -851,6 +851,23 @@ a full disk fails the git writes every battle and vote depends on. Chats on othe
 limit, since releasing them frees nothing on the full one. The Storage page shows the fullest
 volume's free space and says when this applies.
 
+The limit counts only the chats a store knows, and only the store whose chat owns a pool releases or
+archives it, at the path the chat recorded when it was made. Nothing updates that path. So a pool is
+left for good when its store is gone (its home was deleted or reset), when its checkout was moved or
+renamed and stays there (the pools travel with it, and the chat turns blocked), and when the
+checkout was copied with them. After every trim, with the limit off too, and from Free up, the
+daemon names every open workspace's checkouts and the engine deletes those pools
+(`arena/orphan-pools.ts`, `/arena/environments/orphans`). Deleting a checkout needs nothing: its
+pools go with it. A source build's dev home works in the same projects as the installed app, so a
+pool no chat of this store owns can still be another home's. Each engine therefore marks the pools
+of its own chats in `.agent-duel/worktrees/.owners/` with its home, and a pool marked by a home
+whose `arena.sqlite` still exists is never touched. A pool marked by this home or by a gone home goes
+once it is a day untouched, which leaves time to move a checkout back as its blocked chat asks. An
+unmarked pool goes after fourteen days: pools from before markers, and a home on an older build,
+which still renames its slots every turn it is used. A pool a process works in stays, and nothing
+goes when processes cannot be listed. The sweep also removes markers whose pool is gone and clones a
+stopped engine left in `.staging`.
+
 Cleanup runs in the background, oldest chat activity first. Viewing a workspace does not update that
 order. Pinned workspaces, foreground work, active agents or terminals, and unresolved battles stay
 protected. If no safe candidate exists, the count can remain above the limit without blocking creation.

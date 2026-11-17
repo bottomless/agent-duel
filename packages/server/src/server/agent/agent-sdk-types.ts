@@ -969,6 +969,11 @@ export interface ArenaCheckoutCleanupSource {
    * whose environments are on that path's volume.
    */
   trimEnvironments(keep: number, volumeOf?: string): Promise<ArenaEnvironmentTrim>;
+  /**
+   * Delete battle worktree pools no Arena home owns under these checkouts and the backend's own
+   * chats' checkouts. Returns how many pools went.
+   */
+  removeOrphanPools(checkouts: readonly string[]): Promise<number>;
   close(): Promise<void>;
 }
 
