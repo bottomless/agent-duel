@@ -351,7 +351,7 @@ review — so the page has two widths: the chat's reading column for the prompt 
 composer, and the card for the battle. Inside the card, sections separate with
 one top border each, the way rows in a settings card do, and text starts on one rail. A and B each
 occupy half the card, split by a divider; below 520px of available card width, they stack.
-A pane grows with its thread up to a maximum height (55% of the window, at least 360px) and then
+A pane grows with its thread, from no minimum up to a maximum height (55% of the window, at least 360px), and then
 scrolls internally, running or finished. A fixed height while a side ran left a short answer above
 an empty box, and the two panes share a row, so the finished side was stretched to the running
 side's height too. Scrolling away pauses following; reaching the bottom or choosing

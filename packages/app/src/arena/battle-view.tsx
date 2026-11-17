@@ -1055,7 +1055,6 @@ const styles = StyleSheet.create((theme) => ({
     flexShrink: 1,
     flexBasis: "50%",
     minWidth: 0,
-    minHeight: 220,
   },
   paneStacked: { flexBasis: "auto" },
   paneStackedDivider: {},
@@ -1074,7 +1073,6 @@ const styles = StyleSheet.create((theme) => ({
   paneBody: {
     flexGrow: 1,
     flexShrink: 1,
-    minHeight: 180,
     overflow: "hidden",
   },
   paneDivider: {},
@@ -1147,12 +1145,14 @@ const styles = StyleSheet.create((theme) => ({
     fontSize: theme.fontSize.base,
     lineHeight: ARENA_RUN_META_HEIGHT,
   },
+  // No floor once there is a thread: a short answer's pane fits it, so the review follows right
+  // under the answers.
   threadArea: {
     position: "relative",
     flexGrow: 1,
     flexShrink: 1,
-    minHeight: 120,
   },
+  // A side that has not started yet has nothing to size the pane by.
   runningThreadArea: {
     minHeight: 80,
   },
@@ -1161,6 +1161,5 @@ const styles = StyleSheet.create((theme) => ({
   },
   threadContent: {
     flexGrow: 1,
-    minHeight: 120,
   },
 }));
