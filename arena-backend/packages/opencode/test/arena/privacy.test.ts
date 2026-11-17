@@ -6,7 +6,7 @@ import { SessionEvent } from "@opencode/schema/session-event"
 import { setArenaCredentials } from "@/arena/credentials"
 import { ArenaAttachments } from "@/arena/attachments"
 import { ArenaResponseRecovery } from "@/arena/response-recovery"
-import { requestTooLargeMessage } from "@agent-duel/arena-service/request-error"
+import { requestTooLargeMessage, singleAgentAllowanceMessage } from "@agent-duel/arena-service/request-error"
 import { ArenaPrivacy } from "@/arena/privacy"
 import { SessionRetry } from "@/session/retry"
 import { MessageID, PartID, SessionID } from "@/session/schema"
@@ -151,6 +151,19 @@ describe("ArenaPrivacy", () => {
     }
     const result = ArenaPrivacy.messages([message])[0]!
     expect(result.info).toMatchObject({ error: { data: { message: requestTooLargeMessage, isRetryable: false } } })
+    expect(JSON.stringify(result)).not.toContain(hiddenSlug)
+  })
+
+  test("keeps the single-agent limit refusal while stripping the response body", () => {
+    enableArenaControl()
+    const message = contestantMessage()
+    if (message.info.role !== "assistant") throw new Error("Expected assistant fixture")
+    message.info.error = {
+      name: "APIError",
+      data: { message: singleAgentAllowanceMessage, isRetryable: false, statusCode: 403, responseBody: hiddenSlug },
+    }
+    const result = ArenaPrivacy.messages([message])[0]!
+    expect(result.info).toMatchObject({ error: { data: { message: singleAgentAllowanceMessage, statusCode: 403 } } })
     expect(JSON.stringify(result)).not.toContain(hiddenSlug)
   })
 

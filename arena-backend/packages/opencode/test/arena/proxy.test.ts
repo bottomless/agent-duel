@@ -17,6 +17,7 @@ import {
 import { SessionRetry } from "../../src/session/retry"
 import { createArenaService } from "@agent-duel/arena-service"
 import { isNetworkUnavailable } from "@agent-duel/arena-service/network"
+import { singleAgentAllowanceCode, singleAgentAllowanceError } from "@agent-duel/arena-service/request-error"
 import type { ArenaDb } from "@agent-duel/arena-service/collection"
 
 /**
@@ -479,6 +480,31 @@ describe("ArenaProxy", () => {
         ),
     })
     expect(bodyResponse.status).toBe(400)
+  })
+
+  test("words a used-up single-agent allowance without the control plane's text", async () => {
+    const registry = new AssignmentRegistry()
+    registry.assign("session-root", assignment)
+    const response = await proxy(
+      new Request("http://arena.invalid/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Session-Id": "session-child",
+          "x-parent-session-id": "session-root",
+          "x-arena-request-id": requestID,
+        },
+        body: JSON.stringify({ model: "contestant", messages: [] }),
+      }),
+      registry,
+      {
+        upstream: "https://unit.invalid",
+        fetch: async () =>
+          Response.json({ error: "untrusted control plane text", code: singleAgentAllowanceCode }, { status: 403 }),
+      },
+    )
+    expect(response.status).toBe(403)
+    expect(await response.json()).toEqual(singleAgentAllowanceError())
   })
 
   test("preserves a temporary payment failure for a child session", async () => {

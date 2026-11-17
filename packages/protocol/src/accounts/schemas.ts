@@ -170,12 +170,14 @@ export const ARENA_CONTROL_PLANE_FAILED_MESSAGE =
 
 /**
  * Code the control plane answers when an account has used its single-agent allowance, which
- * battle votes add to. The daemon passes the refusal with this fixed message; it starts with
- * "Arena " so the engine shows it as the turn's refusal instead of a generic one.
+ * reviewed battle votes add to. The daemon passes the refusal with this fixed message; it starts
+ * with "Arena " so the engine shows it as the turn's refusal instead of a generic one. Twin of
+ * `singleAgentAllowanceMessage` in `arena-backend/packages/arena-service/src/request-error.ts`,
+ * which words the same refusal on a prompt's first model call.
  */
 export const SINGLE_AGENT_ALLOWANCE_CODE = "single_agent_allowance";
 export const SINGLE_AGENT_ALLOWANCE_MESSAGE =
-  "Arena single-agent limit reached. Vote in battles to earn more single-agent use, or try again later.";
+  "Arena single-agent limit reached. Review and vote on battles to add to it, or try again later.";
 
 /** WebSocket subprotocol prefix carrying the same token on the socket handshake. */
 export const SESSION_WS_PROTOCOL_PREFIX = "paseo.session.";

@@ -2,7 +2,10 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import express from "express";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { SINGLE_AGENT_ALLOWANCE_MESSAGE } from "@getpaseo/protocol/accounts/schemas";
+import {
+  SINGLE_AGENT_ALLOWANCE_CODE,
+  SINGLE_AGENT_ALLOWANCE_MESSAGE,
+} from "@getpaseo/protocol/accounts/schemas";
 import { createArenaRuntimeRouter } from "./arena-runtime-router.js";
 import {
   arenaTermsRefusals,
@@ -472,7 +475,7 @@ describe("Arena runtime proxy", () => {
     // with "Arena " so the engine shows them; the control plane's own text stays out.
     upstream.mockResolvedValueOnce(
       Response.json(
-        { error: "control plane text", code: "single_agent_allowance" },
+        { error: "control plane text", code: SINGLE_AGENT_ALLOWANCE_CODE },
         { status: 403 },
       ),
     );
@@ -481,7 +484,7 @@ describe("Arena runtime proxy", () => {
     const limitedBody = (await limited.json()) as { error: string; code: string };
     expect(limitedBody).toEqual({
       error: SINGLE_AGENT_ALLOWANCE_MESSAGE,
-      code: "single_agent_allowance",
+      code: SINGLE_AGENT_ALLOWANCE_CODE,
     });
     expect(limitedBody.error.startsWith("Arena ")).toBe(true);
     expect(isControlPlaneFailure(new Error(limitedBody.error))).toBe(false);

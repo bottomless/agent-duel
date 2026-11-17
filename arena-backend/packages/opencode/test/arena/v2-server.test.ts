@@ -8,6 +8,7 @@ import { hashArenaControlToken, setArenaCredentials } from "@/arena/credentials"
 import { GlobalBus } from "@/bus/global"
 import type { ChatDocument } from "@/arena/records"
 import { Server } from "@/server/server"
+import { singleAgentAllowanceCode, singleAgentAllowanceMessage } from "@agent-duel/arena-service/request-error"
 
 const controlToken = "v2-native-smoke"
 const headers = () => ({
@@ -360,9 +361,8 @@ describe("Arena OpenCode v2 native boundary", () => {
     home = await mkdtemp(path.join(os.tmpdir(), "agent-duel-v2-allowance-"))
     process.env.PASEO_HOME = home
     process.env.OPENCODE_ARENA = "1"
-    // The daemon router's fixed answer to the control plane's `single_agent_allowance` refusal.
-    const message =
-      "Arena single-agent limit reached. Vote in battles to earn more single-agent use, or try again later."
+    // The daemon router's fixed answer to the control plane's refusal (its protocol twin).
+    const message = singleAgentAllowanceMessage
     let completions = 0
     controlPlane = Bun.serve({
       hostname: "127.0.0.1",
@@ -370,7 +370,7 @@ describe("Arena OpenCode v2 native boundary", () => {
       fetch: async (request) => {
         const pathname = new URL(request.url).pathname
         if (pathname === "/api/arena/assignments") {
-          return Response.json({ error: message, code: "single_agent_allowance" }, { status: 403 })
+          return Response.json({ error: message, code: singleAgentAllowanceCode }, { status: 403 })
         }
         if (pathname.startsWith("/api/openrouter/")) completions++
         return new Response("not found", { status: 404 })
