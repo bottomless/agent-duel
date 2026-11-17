@@ -9,6 +9,7 @@ import { getTopOverlayLayer } from "@/keyboard";
  * - Floating panel: parent layer + 10
  * - Modal: parent layer + 20
  * - Toast: 10,000
+ * - Window controls on the account screens: 15,000
  * - Tooltip: 20,000
  *
  * Floating panels and modals provide their resolved layer to descendants. A
@@ -38,6 +39,7 @@ export const OVERLAY_Z = {
   floating: 10,
   modal: 20,
   toast: 10_000,
+  windowChrome: 15_000,
   tooltip: 20_000,
 } as const;
 

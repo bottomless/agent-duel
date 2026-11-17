@@ -66,6 +66,14 @@ describe("AccountGateContent window chrome", () => {
   it("gives the account check spinner window controls", () => {
     const view = renderGate({ kind: "checking" });
     expect(view.getByTestId("window-controls")).toBeTruthy();
+    expect(view.getByTestId("drag-region")).toBeTruthy();
+  });
+
+  it("puts the controls in the overlay root, above the terms modal's backdrop", () => {
+    const view = renderGate({ kind: "acceptance-required" });
+    const overlayRoot = document.getElementById("overlay-root");
+    expect(overlayRoot?.contains(view.getByTestId("window-controls"))).toBe(true);
+    expect(view.container.contains(view.getByTestId("window-controls"))).toBe(false);
   });
 
   it("leaves the window controls to the app shell once signed in", () => {
