@@ -36,3 +36,20 @@ export function singleAgentControlsLocked(input: {
   if (singleAgentRatingRequired(input.singleAgent)) return true;
   return input.running && input.modelSize === "frontier";
 }
+
+type SingleAgentTurn = NonNullable<ArenaSnapshot["singleAgentTurns"]>[number];
+
+/**
+ * Each single-agent turn under every ID its prompt row can carry: the engine's, and the client's,
+ * which a prompt this daemon sent keeps in the chat until the daemon rereads the session.
+ */
+export function singleAgentTurnsByPrompt(
+  turns: ArenaSnapshot["singleAgentTurns"],
+): ReadonlyMap<string, SingleAgentTurn> {
+  const byPrompt = new Map<string, SingleAgentTurn>();
+  for (const turn of turns ?? []) {
+    byPrompt.set(turn.messageID, turn);
+    if (turn.clientMessageID) byPrompt.set(turn.clientMessageID, turn);
+  }
+  return byPrompt;
+}

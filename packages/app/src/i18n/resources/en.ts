@@ -50,7 +50,7 @@ export const en = {
     battle: "Battle",
     battleMode: "Battle mode",
     battleHint:
-      "On: two agents answer each prompt and you keep the better one. Their models stay hidden until you vote. Off: one agent answers.",
+      "On: two agents answer each prompt and you choose the better one. Their models stay hidden until you vote. Off: one agent answers.",
     autoAccept: "Auto Accept",
     askBeforeTools: "Ask before tools",
     toolPermissions: "Tool permissions",
@@ -89,8 +89,6 @@ export const en = {
     versus: "vs",
     resultWon: "Won",
     resultEarly: "Chosen early",
-    resultKept: "Kept",
-    battleStopped: "Battle stopped",
     battleResolved: "Battle resolved",
     sameChanges: "Both agents made the same changes. Showing changes from the original.",
     identicalFiles: "File results are identical",
@@ -114,7 +112,10 @@ export const en = {
     // After the kept model in its answer's footer: the model it was chosen over.
     showBattle: "Show battle",
     hideBattle: "Hide battle",
-    keptAgent: "Agent {{side}} · kept",
+    youChoseSide: "You chose {{side}}",
+    youChoseSideEarly: "You chose {{side}} early",
+    youCalledTie: "You called a tie",
+    tieSideApplied: "{{side}}'s changes applied",
     actionFailed: "Battle action failed",
     trunkUnavailable: "Trunk unavailable",
     fewerFiles: "Show fewer files",
@@ -135,14 +136,14 @@ export const en = {
     stopBattle: "Stop battle",
     tie: "Tie",
     tieBattle: "Tie battle",
-    tieHelp: "A tie keeps Agent A's work.",
+    tieHelp: "A tie applies Agent A's work.",
     resume: "Resume",
     resumeBattle: "Resume battle",
     discard: "Discard",
     retryResolution: "Retry resolution",
-    stoppedChoose: "Battle stopped · choose what to keep",
-    stoppedFailedSide: "Agent {{side}} failed · keeping either won't count as a vote",
-    stoppedBothFailed: "Both agents failed · keeping either won't count as a vote",
+    stoppedChoose: "Battle stopped · choose a result",
+    stoppedFailedSide: "Agent {{side}} failed · choosing either won't count as a vote",
+    stoppedBothFailed: "Both agents failed · choosing either won't count as a vote",
     closedBattle: "Agent Duel closed during the battle · resume or discard",
     bothFailedRetry: "Both agents failed · retry or discard",
     bothFailed: "Both agents failed",
@@ -190,7 +191,7 @@ export const en = {
     mergeConflicts: "Some files have merge conflicts",
     discardWinning: "Discard winning changes",
     winningNotApplied: "The winning changes were not applied",
-    winningKept: "The winning result is kept, but Arena could not apply it to this workspace.",
+    winningSaved: "The winning result is saved, but Arena could not apply it to this workspace.",
     restoreWorkspace: "Restore my workspace",
     partlyApplied: "Only part of the winning changes were applied",
     partialApplyHelp:
@@ -305,7 +306,6 @@ export const en = {
     worktreeCopied: "Agent {{side}} worktree path copied",
     chooseEarly: "Choose {{side}} early",
     choose: "Choose {{side}}",
-    keepSide: "Keep {{side}}",
     chooseEarlyTitle: "Choose {{side}} early?",
     chooseEarlyHelp:
       "Agent {{other}} stops immediately and its work is discarded. Agent {{side}}'s work so far becomes this turn's result.",
@@ -357,8 +357,7 @@ export const en = {
       "Applies to both contestants and becomes the default for new chats. Explicit deny rules still apply.",
     permissionsChat:
       "Applies to this chat and becomes the default for new chats. Explicit deny rules still apply.",
-    waitingSummary:
-      "is still working. The difference summary compares both results once it finishes.",
+    waitingSummary: "The summary appears once both agents finish.",
     regionsReplaced:
       "Some regions were too large to align precisely. They are shown as replacements from the original; shared-change labels are unavailable.",
     sideReplaced:

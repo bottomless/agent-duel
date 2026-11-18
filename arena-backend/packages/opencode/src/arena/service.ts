@@ -1339,6 +1339,8 @@ export interface Interface {
   readonly beginNormalTurn: (input: {
     sessionID: SessionID
     messageID: MessageID
+    /** The sender's own ID for the prompt (`paseoClientMessageId`), recorded on its turn. */
+    clientMessageID?: string
     model?: { readonly providerID: ProviderV2.ID; readonly modelID: ModelV2.ID }
   }) => Effect.Effect<NormalTurnStart | undefined, Error>
   readonly recordNormalTurn: (input: { sessionID: SessionID; messageID: MessageID }) => Effect.Effect<void>
@@ -2666,6 +2668,7 @@ export const layer: Layer.Layer<
       rawSessionID: string,
       messageID: MessageID,
       modelSize: SingleAgentModelSize,
+      clientMessageID?: string,
     ) {
       const store = yield* available()
       const existing = yield* promise(() => store.singleAgentRating(rawSessionID, messageID))
@@ -2691,6 +2694,7 @@ export const layer: Layer.Layer<
           ...(owner?.userId ? { userId: owner.userId } : {}),
           sessionID: rawSessionID,
           messageID,
+          ...(clientMessageID ? { clientMessageID } : {}),
           modelSize,
           assignment: assignment(selected, modelSize),
           createdAt: now,
@@ -4411,6 +4415,7 @@ export const layer: Layer.Layer<
     const beginNormalTurn = Effect.fn("Arena.beginNormalTurn")(function* (input: {
       sessionID: SessionID
       messageID: MessageID
+      clientMessageID?: string
       model?: { readonly providerID: ProviderV2.ID; readonly modelID: ModelV2.ID }
     }) {
       if (!enabled()) return undefined
@@ -4421,7 +4426,12 @@ export const layer: Layer.Layer<
           : "medium"
       const pending = yield* recoverInterruptedSingleAgentRating(store, input.sessionID)
       if (pending) return yield* Effect.fail(new Error("Arena frontier result must be rated before another turn"))
-      const assignModel = ensureSingleAgentRating(input.sessionID, input.messageID, requestedModelSize).pipe(
+      const assignModel = ensureSingleAgentRating(
+        input.sessionID,
+        input.messageID,
+        requestedModelSize,
+        input.clientMessageID,
+      ).pipe(
         Effect.map(
           (rating): NormalTurnStart => ({
             model: {
@@ -11530,7 +11540,7 @@ export const layer: Layer.Layer<
       if (resolved.appliedSide) {
         const side = resolved.appliedSide
         if (runs.find((run) => run.side === side)?.applicability === "blocked") {
-          return yield* Effect.fail(new Error("Arena side cannot be kept because its environment setup failed"))
+          return yield* Effect.fail(new Error("Arena side cannot be chosen because its environment setup failed"))
         }
         return yield* promote(store, turn, side, resolved)
       }

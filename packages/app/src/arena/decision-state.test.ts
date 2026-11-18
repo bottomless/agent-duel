@@ -491,6 +491,29 @@ describe("arenaRunningWaitingSide", () => {
     expect(arenaRunningWaitingSide(phase)).toBe("a");
   });
 
+  it("keeps naming a side that finished until its result can be picked", () => {
+    // The run settles a moment before the engine saves its result and makes it selectable.
+    const settling = arenaDecisionPhase(
+      snapshot({
+        state: "running",
+        runs: [run({ id: "run-a", side: "a", runState: "complete" }), finishedB],
+      }),
+    );
+    expect(arenaRunningWaitingSide(settling)).toBe("a");
+  });
+
+  it("names no side that failed or stopped while the other can be picked", () => {
+    for (const runState of ["error", "interrupted", "stopped"] as const) {
+      const phase = arenaDecisionPhase(
+        snapshot({
+          state: "running",
+          runs: [run({ id: "run-a", side: "a", runState }), finishedB],
+        }),
+      );
+      expect(arenaRunningWaitingSide(phase)).toBeNull();
+    }
+  });
+
   it("says nothing while both run, before a pick is offered, or once the vote is open", () => {
     expect(arenaRunningWaitingSide(arenaDecisionPhase(snapshot({ state: "running" })))).toBeNull();
     const copying = snapshot({

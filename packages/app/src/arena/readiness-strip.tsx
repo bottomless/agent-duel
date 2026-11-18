@@ -359,7 +359,7 @@ function ArenaStoppedCallout({
     <ArenaCallout
       title={t("arena.winningNotApplied")}
       tone="warning"
-      detail={parked.reason ?? t("arena.winningKept")}
+      detail={parked.reason ?? t("arena.winningSaved")}
       testID="arena-application-stopped"
       actions={actions}
     />

@@ -10,8 +10,13 @@ import {
 } from "@/tool-calls/detail-level/grouping";
 import { arenaKeptAnswerRowIds, type ArenaPresentedStream } from "./summary-anchor";
 
-/** Who answered a turn: a battle's kept side, or the chat's single agent. */
-export type ArenaTurnAuthor = { kind: "battle"; item: ArenaHistoryItem } | { kind: "agent" };
+/**
+ * Who answered a turn: a battle's kept side, or the chat's single agent, with the message ID of
+ * the prompt it answered (its single-agent turn is recorded under it).
+ */
+export type ArenaTurnAuthor =
+  | { kind: "battle"; item: ArenaHistoryItem }
+  | { kind: "agent"; promptMessageId?: string };
 
 export interface ArenaTurnHeads {
   /** The row that opens each answer, with who wrote it; the avatar and its name line go above it. */
@@ -52,10 +57,14 @@ export function arenaTurnHeads(
   const lastRow = new Map<ArenaHistoryItem, number>();
   // "unknown" until a prompt is seen: an answer cut off from its prompt by paging has no author yet.
   let opened: ArenaHistoryItem | "agent" | "unknown" | null = "unknown";
+  let promptMessageId: string | undefined;
   for (const [index, row] of rows.entries()) {
     if (isPrompt(row)) {
       // A reply inside a battle continues that battle's answer rather than opening a new one.
-      if (!battleOf.has(row.id)) opened = null;
+      if (!battleOf.has(row.id)) {
+        opened = null;
+        promptMessageId = row.messageId;
+      }
       continue;
     }
     answerRowIds.add(row.id);
@@ -67,7 +76,12 @@ export function arenaTurnHeads(
     if (opened === author) continue;
     opened = author;
     // A run of work is drawn under its first row's id (`prepareGroupedHistory`), reasoning included.
-    heads.set(row.id, battle ? { kind: "battle", item: battle } : { kind: "agent" });
+    heads.set(
+      row.id,
+      battle
+        ? { kind: "battle", item: battle }
+        : { kind: "agent", ...(promptMessageId ? { promptMessageId } : {}) },
+    );
   }
   const ends = new Map<string, ArenaHistoryItem>();
   for (const [battle, index] of lastRow) {
@@ -96,6 +110,6 @@ function isWork(row: StreamItem): boolean {
   return isGroupableReasoning(row) || (isGroupableToolCall(row) && !isSubagentCall(row));
 }
 
-function isPrompt(row: StreamItem): boolean {
+function isPrompt(row: StreamItem): row is Extract<StreamItem, { kind: "user_message" }> {
   return row.kind === "user_message";
 }

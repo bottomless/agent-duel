@@ -21,6 +21,7 @@ import type {
   ArenaSnapshot,
 } from "@getpaseo/protocol/arena/rpc-schemas";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ArenaTransitionStatus } from "./transition-status";
 import { arenaSetupStatus } from "./transition-progress";
 import { inlineUnistylesStyle } from "@/styles/unistyles-inline-style";
@@ -37,14 +38,14 @@ import {
 } from "./decision-state";
 import { useArenaBattleActions, type ArenaBattleActions } from "./use-battle-actions";
 
-function sideChoiceLabelKey(kind: "vote" | "keep" | "accept"): string {
-  if (kind === "keep") return "arena.keepSide";
-  if (kind === "accept") return "arena.acceptSide";
-  return "arena.choose";
+function sideChoiceLabelKey(kind: "vote" | "accept"): string {
+  return kind === "accept" ? "arena.acceptSide" : "arena.choose";
 }
 
 /**
- * The decision for one side: the vote, the early pick, or keeping that side after a stop.
+ * The decision for one side: the vote, the early pick, or the choice after a stop. A side chosen
+ * after a stop reads as it does at the vote, Choose or Accept: the person choosing should not
+ * have to tell how the battle ended.
  *
  * Two choices of equal weight, so neither can be the accent. The tint is the side's colour,
  * the blue and amber the diff's column headings use, so the button reads as picking that
@@ -61,7 +62,7 @@ export function ArenaSideChoiceButton({
   testID,
 }: {
   side: ArenaSide;
-  kind: "early" | "vote" | "keep" | "accept";
+  kind: "early" | "vote" | "accept";
   label?: string;
   loading?: boolean;
   disabled?: boolean;
@@ -179,7 +180,7 @@ export function ArenaBalancedChoiceGroup({
 
 /** What a decided battle's row offered, and which of its three it took. */
 export interface ArenaPastChoice {
-  kind: "vote" | "keep";
+  kind: "vote" | "stop";
   chosen: ArenaSide | "middle";
 }
 
@@ -193,9 +194,9 @@ export function arenaPastChoice(
   }
   if (resolution?.kind === "early") return { kind: "vote", chosen: resolution.vote };
   if (resolution?.kind === "stopped") {
-    if (resolution.resolution === "apply_a") return { kind: "keep", chosen: "a" };
-    if (resolution.resolution === "apply_b") return { kind: "keep", chosen: "b" };
-    return { kind: "keep", chosen: "middle" };
+    if (resolution.resolution === "apply_a") return { kind: "stop", chosen: "a" };
+    if (resolution.resolution === "apply_b") return { kind: "stop", chosen: "b" };
+    return { kind: "stop", chosen: "middle" };
   }
   return null;
 }
@@ -220,8 +221,7 @@ export function ArenaPastDecision({
 }: ArenaPastChoice & { identities?: ArenaHistoryItem["identities"]; reveal?: boolean }) {
   const { t } = useTranslation();
   const phase = useRevealPhase(reveal);
-  const voteLabel = (side: ArenaSide) =>
-    t(kind === "vote" ? "arena.choose" : "arena.keepSide", { side: side.toUpperCase() });
+  const voteLabel = (side: ArenaSide) => t("arena.choose", { side: side.toUpperCase() });
   const sideLabel = (side: ArenaSide) => {
     const model = identities?.[side].name;
     return model ? arenaModelDisplayName(model) : voteLabel(side);
@@ -356,7 +356,9 @@ function pastItemStyle(choice: ArenaSide | "middle", selected: boolean) {
 
 function pastItemTextStyle(choice: ArenaSide | "middle", selected: boolean) {
   if (!selected) return choice === "middle" ? styles.pastQuietText : styles.pastNotTakenText;
-  return choice === "middle" ? null : styles.sideSolidText;
+  // A taken Tie or Discard takes the foreground its check is drawn in; with no colour of its own,
+  // the label fell back to black, which vanished on the dark theme's gray.
+  return choice === "middle" ? styles.pastChosenMiddleText : styles.sideSolidText;
 }
 
 function runningHoverStyle(side: ArenaSide | null) {
@@ -431,21 +433,32 @@ export function VoteDecision({
   const tie = useCallback(() => {
     void actions.tie();
   }, [actions]);
+  // A tie keeps Agent A's work, which nothing on the button says; the tooltip says it before the
+  // vote. Hover rides a plain View (docs/hover.md): Button keeps its own hover handlers.
   return (
-    <Button
-      variant="ghost"
-      size="sm"
-      style={styles.pillChoice}
-      textStyle={styles.choiceText}
-      loading={pendingAction?.kind === "vote" && pendingAction.vote === "tie"}
-      disabled={pending || disabled}
-      onPress={tie}
-      accessibilityLabel={t("arena.tieBattle")}
-      accessibilityHint={t("arena.tieHelp")}
-      testID="arena-choose-tie"
-    >
-      {t("arena.tie")}
-    </Button>
+    <Tooltip delayDuration={250} enabledOnDesktop enabledOnMobile={false}>
+      <TooltipTrigger asChild>
+        <View>
+          <Button
+            variant="ghost"
+            size="sm"
+            style={styles.pillChoice}
+            textStyle={styles.choiceText}
+            loading={pendingAction?.kind === "vote" && pendingAction.vote === "tie"}
+            disabled={pending || disabled}
+            onPress={tie}
+            accessibilityLabel={t("arena.tieBattle")}
+            accessibilityHint={t("arena.tieHelp")}
+            testID="arena-choose-tie"
+          >
+            {t("arena.tie")}
+          </Button>
+        </View>
+      </TooltipTrigger>
+      <TooltipContent side="top" align="center" offset={8} testID="arena-tie-tooltip">
+        <Text style={styles.tooltipText}>{t("arena.tieHelp")}</Text>
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -687,6 +700,10 @@ function onSideSolid(theme: Theme): string {
 }
 
 const styles = StyleSheet.create((theme) => ({
+  tooltipText: {
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.sm,
+  },
   // The buttons' corners plus the group's padding, so the two curves run parallel.
   choiceGroup: {
     flexDirection: "row",
@@ -814,6 +831,9 @@ const styles = StyleSheet.create((theme) => ({
   pastChosenMiddle: {
     backgroundColor: theme.colors.surface3,
     borderColor: theme.colors.foregroundMuted,
+  },
+  pastChosenMiddleText: {
+    color: theme.colors.foreground,
   },
   pastText: {
     fontSize: theme.fontSize.base,

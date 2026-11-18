@@ -150,10 +150,11 @@ describe("BattleReview", () => {
   it("reviews the first result while the other side still works", () => {
     render({ summaryAvailable: false, waitingFor: "b" });
     expect(byTestId("arena-review-tabs")).not.toBeNull();
-    // The summary tab opens first and says who is still at it.
+    // The summary tab opens first and says when the summary comes; the decision pill below says
+    // who is still at it, so the tab does not repeat it.
     expect(useArenaReviewStore.getState().byTurn["turn-1"]?.shownTab).toBe("verdict");
     expect(byTestId("arena-summary-waiting")?.textContent).toBe(
-      "Agent B is still working. The difference summary compares both results once it finishes.",
+      "The summary appears once both agents finish.",
     );
 
     act(() => fireEvent.click(byTestId("arena-review-tab-changes") as HTMLElement));

@@ -1,5 +1,5 @@
 import { MongoClient, MongoServerError, type Db } from "mongodb"
-import { inheritTurns, MAX_FORK_DEPTH } from "./fork-lineage"
+import { inheritSingleAgentTurns, inheritTurns, MAX_FORK_DEPTH } from "./fork-lineage"
 import {
   isDuplicateKeyError,
   type ArenaClient,
@@ -1786,16 +1786,37 @@ export class Store {
     return inheritTurns(sourceTurns, lineage)
   }
 
+  /**
+   * Every single-agent turn of a session, the ones its fork sources had first
+   * (`inheritSingleAgentTurns`), so each answer can name the size and model it ran on.
+   */
+  async singleAgentTurns(sessionID: string, depth = 0): Promise<readonly SingleAgentRatingDocument[]> {
+    const own = await this.singleAgentRatings.find({ sessionID }).sort({ createdAt: 1, _id: 1 }).toArray()
+    if (depth >= MAX_FORK_DEPTH) return own
+    const lineage = await this.forkLineages.findOne({ _id: sessionID })
+    if (!lineage) return own
+    const source = await this.singleAgentTurns(lineage.sourceSessionID, depth + 1)
+    return [...inheritSingleAgentTurns(source, lineage), ...own]
+  }
+
   /** `afterSequence` reads the turn's stored events after it; by default none are read (see `project`). */
   async snapshot(chatID: string, afterSequence = Number.MAX_SAFE_INTEGER): Promise<BattleSnapshot> {
     const chat = await this.chats.findOne({ _id: chatID })
     if (!chat) throw new Error(`Arena chat not found: ${chatID}`)
     const singleAgentRating = await this.snapshotSingleAgentRating(chat.canonicalSessionID)
+    const singleAgentTurns = await this.singleAgentTurns(chat.canonicalSessionID)
     const own = await this.history(chatID)
     const history = [...(await this.inheritedHistory(chat.canonicalSessionID)), ...own]
     const targetTurnID = chat.activeTurnID ?? own.at(-1)?._id
     if (!targetTurnID)
-      return { chat, history, runs: [], events: [], ...(singleAgentRating ? { singleAgentRating } : {}) }
+      return {
+        chat,
+        history,
+        runs: [],
+        events: [],
+        singleAgentTurns,
+        ...(singleAgentRating ? { singleAgentRating } : {}),
+      }
     const [turn, runs, events, comparison] = await Promise.all([
       this.turns.findOne({ _id: targetTurnID }),
       this.runs.find({ turnID: targetTurnID }).sort({ side: 1 }).toArray(),
@@ -1812,6 +1833,7 @@ export class Store {
       history,
       runs,
       events,
+      singleAgentTurns,
       ...(singleAgentRating ? { singleAgentRating } : {}),
       ...(comparison ? { comparison } : {}),
     }
@@ -1832,6 +1854,7 @@ export class Store {
     ])
     if (!chat) throw new Error(`Arena chat not found: ${turn.chatID}`)
     const singleAgentRating = await this.snapshotSingleAgentRating(chat.canonicalSessionID)
+    const singleAgentTurns = await this.singleAgentTurns(chat.canonicalSessionID)
     const history = [...(await this.inheritedHistory(chat.canonicalSessionID)), ...own]
     return {
       chat,
@@ -1839,6 +1862,7 @@ export class Store {
       history,
       runs,
       events,
+      singleAgentTurns,
       ...(comparison ? { comparison } : {}),
       ...(singleAgentRating ? { singleAgentRating } : {}),
     }

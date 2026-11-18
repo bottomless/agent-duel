@@ -3,7 +3,11 @@ import { Text, View } from "react-native";
 import { useTranslation } from "react-i18next";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { Bot } from "lucide-react-native";
-import type { ArenaHistoryItem, ArenaSide } from "@getpaseo/protocol/arena/rpc-schemas";
+import type {
+  ArenaHistoryItem,
+  ArenaSide,
+  ArenaSnapshot,
+} from "@getpaseo/protocol/arena/rpc-schemas";
 import { PressHighlight } from "@/components/ui/press-highlight";
 import type { Theme } from "@/styles/theme";
 import { tint } from "@/styles/tint";
@@ -35,25 +39,37 @@ export function ArenaAnswerColumn({ head, children }: { head?: ReactNode; childr
   );
 }
 
+export type ArenaSingleAgentTurn = NonNullable<ArenaSnapshot["singleAgentTurns"]>[number];
+
 /**
  * Who wrote an answer, above its first row: their avatar in the column and their name beside it.
  * A battle's kept answer shows the model that won; how it won and against whom close the answer,
- * at its footer's right end (`ArenaBattleResult`). A plain turn shows the agent.
+ * at its footer's right end (`ArenaBattleResult`). A single-agent turn shows its model: Medium's
+ * always, a frontier model once its rating revealed it and "Frontier" until then. A turn with no
+ * record of either shows the agent.
  */
-export function ArenaTurnHead({ item }: { item?: ArenaHistoryItem }) {
+export function ArenaTurnHead({
+  item,
+  singleAgent,
+}: {
+  item?: ArenaHistoryItem;
+  singleAgent?: ArenaSingleAgentTurn;
+}) {
   const { t } = useTranslation();
   const kept = item ? battleKeptSide(item) : undefined;
-  const model = kept ? item?.identities?.[kept].name : undefined;
-  if (!item || !model) {
+  const model = kept ? item?.identities?.[kept].name : singleAgent?.identity?.name;
+  if (!model) {
     return (
       <View style={styles.head} testID="arena-turn-head-agent">
         <ArenaAgentAvatar />
-        <Text style={styles.name}>{t("arena.agent")}</Text>
+        <Text style={styles.name}>
+          {singleAgent?.modelSize === "frontier" ? t("arena.frontier") : t("arena.agent")}
+        </Text>
       </View>
     );
   }
   return (
-    <View style={styles.head} testID={`arena-turn-head-${item.id}`}>
+    <View style={styles.head} testID={`arena-turn-head-${item?.id ?? singleAgent?.messageID}`}>
       <View style={styles.avatar}>
         <ArenaModelVendorIcon model={model} size={17} />
       </View>
@@ -76,14 +92,27 @@ export function ArenaBattleResult({ agentId, item }: { agentId: string; item: Ar
   const model = identities[kept].name;
   const opponent = identities[kept === "a" ? "b" : "a"].name;
   const result = keptResult(item);
+  if (result === "tie") {
+    // A tie keeps A by rule, not as the better answer: the tag heads the pair, both models get the
+    // same weight, and the line says whose changes stayed.
+    return (
+      <View style={styles.result} testID={`arena-battle-result-${item.id}`}>
+        <ResultTag result="tie" side={kept} />
+        <UnkeptModel model={model} />
+        <Text style={styles.meta}>{t("arena.versus")}</Text>
+        <UnkeptModel model={opponent} testID={`arena-battle-result-opponent-${item.id}`} />
+        <Text style={styles.meta}>·</Text>
+        <Text style={styles.meta}>{t("arena.tieSideApplied", { side: kept.toUpperCase() })}</Text>
+        {item.voteDiscardedReason ? (
+          <Text style={styles.meta}>· {t("arena.voteNotCounted")}</Text>
+        ) : null}
+        <Text style={styles.meta}>·</Text>
+        <ArenaShowBattleLink agentId={agentId} turnId={item.id} />
+      </View>
+    );
+  }
   return (
     <View style={styles.result} testID={`arena-battle-result-${item.id}`}>
-      {result === "kept" ? (
-        <>
-          <Text style={styles.meta}>{t("arena.battleStopped")}</Text>
-          <Text style={styles.meta}>·</Text>
-        </>
-      ) : null}
       <View style={styles.model}>
         <ArenaModelVendorIcon model={model} size={15} />
         <Text style={styles.resultName} numberOfLines={1}>
@@ -102,33 +131,51 @@ export function ArenaBattleResult({ agentId, item }: { agentId: string; item: Ar
   );
 }
 
-type KeptResult = "won" | "tie" | "early" | "kept";
+export type KeptResult = "won" | "tie" | "early";
 
 /**
- * How the kept side was kept: tied, chosen early, kept at a Stop, or won. A side kept at a Stop is
- * tagged Kept, after "Battle stopped". A side kept after the other failed is shown as won, with
- * "Vote not counted" beside it when the vote was discarded.
+ * How the kept side was chosen: tied, chosen early, or won. A side chosen after a Stop reads as won,
+ * the same as at the vote: the person choosing should not have to tell how the battle ended. A side
+ * kept after the other failed is shown as won too, with "Vote not counted" beside it when the vote
+ * was discarded.
  */
 function keptResult(item: ArenaHistoryItem): KeptResult {
   if (item.vote === "tie") return "tie";
   if (item.selectedEarly) return "early";
-  if (item.resolution?.kind === "stopped") return "kept";
   return "won";
+}
+
+/**
+ * A shown battle's column tag: the kept side's result, on its column only. A tie tags both columns,
+ * so neither reads as the winner though one side's changes were kept.
+ */
+export function arenaColumnResult(item: ArenaHistoryItem, side: ArenaSide): KeptResult | undefined {
+  const kept = battleKeptSide(item);
+  if (!kept) return undefined;
+  const result = keptResult(item);
+  return result === "tie" || side === kept ? result : undefined;
 }
 
 const RESULT_KEYS = {
   won: "arena.resultWon",
   tie: "arena.tie",
   early: "arena.resultEarly",
-  kept: "arena.resultKept",
 } as const;
 
 /** The result as a small tag after the name, tinted in the kept side's colour; a tie stays grey. */
-function ResultTag({ result, side }: { result: KeptResult; side: ArenaSide }) {
+export function ResultTag({
+  result,
+  side,
+  testID = `arena-battle-result-tag-${result}`,
+}: {
+  result: KeptResult;
+  side: ArenaSide;
+  testID?: string;
+}) {
   const { t } = useTranslation();
   const neutral = result === "tie";
   return (
-    <View style={[styles.tag, tagTone(neutral, side)]} testID={`arena-battle-result-tag-${result}`}>
+    <View style={[styles.tag, tagTone(neutral, side)]} testID={testID}>
       <Text style={[styles.tagText, tagTextTone(neutral, side)]}>{t(RESULT_KEYS[result])}</Text>
     </View>
   );

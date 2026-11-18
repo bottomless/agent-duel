@@ -450,7 +450,8 @@ The vote lives in a centered sticky pill above the composer: `Choose A`, `Tie`, 
 They are one control (`ArenaChoiceGroup`): the sides' solid buttons at its ends and `Tie` a plain
 label between them, because as three separate buttons Tie read as a third answer. Anchor it over the transcript above the composer, with a gray surface inside the pill and a
 transparent, click-through area around it. It stays reachable while reviewing either thread or
-the diff. A stopped battle uses the same pill for `Keep A`, `Discard`, and `Keep B`; an early
+the diff. A stopped battle uses the same pill for `Choose A`, `Discard`, and `Choose B` (`Accept A`
+for a side that failed, as at the vote); an early
 choice while the battle runs sits there too. While neither result is selectable, show one `Stop`
 button. When one result becomes selectable, the row becomes the same gray pill as the vote, with
 `Stop` in the middle and each side's place holding what applies to it: `Choose A early` or
@@ -574,6 +575,11 @@ history then starts with the decided battles it copied, moved onto its own messa
 (`inheritTurns` in `arena/fork-lineage.ts`), through forks of forks; without that the fork showed
 every copied battle answer as the plain agent's. Show battle on a copied battle opens the source
 chat's battle. A fork made before lineage was recorded has none and stays that way.
+Core names each copy `<fork message ID>_<seq>`, in forked chats and in contestant forks alike, so
+copies stop sorting as strings past the tenth (`…_13` before `…_9`). Order copies by transcript
+position, or in the app by `compareMessageIds` (`packages/app/src/arena/message-order.ts`); a string
+comparison let a fork count the turn after an inherited battle, such as a conflict-resolving agent,
+as part of that battle.
 A battle needs Git 2.39 or newer, and a send refuses an older or missing Git with the command that
 fixes it (`requireBattleGit` in `arena/git.ts`). Many Macs still run Apple's Git 2.39 from older
 Command Line Tools, so the engine's merges pick their base by parenting wrapper commits on it rather
@@ -1462,8 +1468,11 @@ actually verified. Use one utility request; increase evidence quality before add
   retry. A discard grafts nothing, so the chat's session never holds its prompt: the history item
   carries it, and the app shows it as a prompt row with the discarded card under it
   (`projectDiscardedArenaPrompts`). The next battle's agents do not see the discarded turn.
-- **Stop** moves to `awaiting_stop_resolution`, where the choice is discard, keep A, or keep B
-  (`stop` in `arena/service.ts`). A stopped battle gets no summary, so the move to `stopping` marks
+- **Stop** moves to `awaiting_stop_resolution`, where the choice is discard, A, or B (`stop` in
+  `arena/service.ts`). The engine records a side chosen there as `stopped` with `apply_a` or
+  `apply_b`, but the app never shows the difference: the pill reads `Choose`, the result `Won`, as
+  at the vote. The owner wants a battle that was stopped to read like one that ran to the end; only
+  a discard reads differently. Do not bring back `Keep` or `Kept`. A stopped battle gets no summary, so the move to `stopping` marks
   it `skipped` in the same write (`transitionTurn` in `arena/mongo.ts`). Left `pending`, the decision
   showed a summary on its way, and a restart failed it and offered Retry summary
   (`interruptedComparisonState`). Keeping a side when the other had already failed, rather than
@@ -1481,9 +1490,8 @@ A kept answer's avatar is the winning model's vendor mark, alone, with only its 
 battle's result closes the answer instead, at the right end of its footer on the chat's right edge
 where the prompt ends (`ArenaBattleResult`, keyed by `arenaTurnHeads`' `ends`): `Claude Opus 5.5
 [Won] vs GPT-6.1 Sol · Show battle`, the tag tinted in the kept side's colour, or `Tie` or `Chosen
-early`. A side kept at a Stop reads `Battle stopped · Claude Opus 5.5 [Kept] vs GPT-6.1 Sol · Show
-battle`: the owner turned down tagging it `Won` or `Stopped`. A side kept after the other failed
-shows `Won`, with `Vote not counted` when the vote was discarded. Every kept side gets it
+early`. A side chosen at a Stop shows `Won` too, with nothing about the Stop (see **Stop** above).
+A side kept after the other failed shows `Won`, with `Vote not counted` when the vote was discarded. Every kept side gets it
 (`battleKeptSide`), on the footer of the kept answer's last text, so replies sent inside the battle
 share one result. An answer stopped before it wrote any text has its footer on its last run of work,
 so the result goes there; one stopped before it did anything has no rows, and its result stands
@@ -1635,6 +1643,12 @@ The Battle toggle is per turn. With it off, choose **Medium** (the default) or *
 Medium shows **GPT Luna 5.6 Xhigh** and allows continued use without a rating. Frontier draws one
 contestant from the battle pool and hides its identity until a thumbs-up or thumbs-down rating.
 The question-mark control explains this before the user sends a prompt.
+
+Each single-agent answer is headed by its model: Medium's always, a frontier model once rated, and
+**Frontier** until then. The snapshot lists every single-agent turn of the chat by its prompt
+(`singleAgentTurns`), the ones a fork copied included. The daemon shows a prompt it sent under the
+client's ID (`paseoClientMessageId`) until it rereads the session, so the record keeps that ID too
+and the app finds a turn by either; with only the engine's ID, a fresh answer stayed "Agent".
 
 A frontier turn locks the chat composer and its settings until its completed result is rated.
 Keep Stop and tool permission responses available while the agent works. When it finishes successfully, show

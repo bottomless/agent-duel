@@ -54,7 +54,7 @@ export const fr: TranslationResources = {
     battle: "Bataille",
     battleMode: "Mode bataille",
     battleHint:
-      "Activé : deux agents répondent à chaque prompt et vous gardez la meilleure réponse. Leurs modèles restent masqués jusqu’à votre vote. Désactivé : un seul agent répond.",
+      "Activé : deux agents répondent à chaque prompt et vous choisissez la meilleure réponse. Leurs modèles restent masqués jusqu’à votre vote. Désactivé : un seul agent répond.",
     autoAccept: "Acceptation automatique",
     askBeforeTools: "Demander avant les outils",
     toolPermissions: "Autorisations des outils",
@@ -97,8 +97,6 @@ export const fr: TranslationResources = {
     versus: "contre",
     resultWon: "Gagnant",
     resultEarly: "Choisi tôt",
-    resultKept: "Conservé",
-    battleStopped: "Bataille arrêtée",
     battleResolved: "Bataille résolue",
     sameChanges:
       "Les deux agents ont effectué les mêmes modifications. Affichage des modifications par rapport à l’original.",
@@ -124,7 +122,10 @@ export const fr: TranslationResources = {
     openTerminalIn: "Ouvrir un terminal dans le worktree de l’agent {{side}}",
     showBattle: "Afficher la bataille",
     hideBattle: "Masquer la bataille",
-    keptAgent: "Agent {{side}} · gardé",
+    youChoseSide: "Vous avez choisi {{side}}",
+    youChoseSideEarly: "Vous avez choisi {{side}} tôt",
+    youCalledTie: "Vous avez déclaré une égalité",
+    tieSideApplied: "Modifications de {{side}} appliquées",
     actionFailed: "Échec de l’action de bataille",
     trunkUnavailable: "Tronc indisponible",
     fewerFiles: "Afficher moins de fichiers",
@@ -145,16 +146,16 @@ export const fr: TranslationResources = {
     stopBattle: "Arrêter la bataille",
     tie: "Égalité",
     tieBattle: "Déclarer une égalité",
-    tieHelp: "Une égalité conserve le travail de l’agent A.",
+    tieHelp: "Une égalité applique le travail de l’agent A.",
     resume: "Reprendre",
     resumeBattle: "Reprendre la bataille",
     discard: "Abandonner",
     retryResolution: "Réessayer la résolution",
-    stoppedChoose: "Bataille arrêtée · choisissez quoi conserver",
+    stoppedChoose: "Bataille arrêtée · choisissez un résultat",
     stoppedFailedSide:
-      "L'agent {{side}} a échoué · conserver l'un ou l'autre ne comptera pas comme un vote",
+      "L’agent {{side}} a échoué · choisir l’un ou l’autre ne comptera pas comme un vote",
     stoppedBothFailed:
-      "Les deux agents ont échoué · conserver l'un ou l'autre ne comptera pas comme un vote",
+      "Les deux agents ont échoué · choisir l’un ou l’autre ne comptera pas comme un vote",
     closedBattle: "Agent Duel s’est fermé pendant la bataille · reprendre ou abandonner",
     bothFailedRetry: "Les deux agents ont échoué · réessayer ou abandonner",
     bothFailed: "Les deux agents ont échoué",
@@ -202,8 +203,8 @@ export const fr: TranslationResources = {
     mergeConflicts: "Certains fichiers ont des conflits de fusion",
     discardWinning: "Abandonner les modifications gagnantes",
     winningNotApplied: "Les modifications gagnantes n’ont pas été appliquées",
-    winningKept:
-      "Le résultat gagnant est conservé, mais Arena n’a pas pu l’appliquer à cet espace de travail.",
+    winningSaved:
+      "Le résultat gagnant est enregistré, mais Arena n’a pas pu l’appliquer à cet espace de travail.",
     restoreWorkspace: "Restaurer mon espace de travail",
     partlyApplied: "Seule une partie des modifications gagnantes a été appliquée",
     partialApplyHelp:
@@ -321,7 +322,6 @@ export const fr: TranslationResources = {
     worktreeCopied: "Chemin de l’arbre de travail de l’agent {{side}} copié",
     chooseEarly: "Choisir {{side}} avant la fin",
     choose: "Choisir {{side}}",
-    keepSide: "Conserver {{side}}",
     chooseEarlyTitle: "Choisir {{side}} avant la fin ?",
     chooseEarlyHelp:
       "L’agent {{other}} s’arrête immédiatement et son travail est abandonné. Le travail actuel de l’agent {{side}} devient le résultat de ce tour.",
@@ -374,8 +374,7 @@ export const fr: TranslationResources = {
       "S’applique aux deux concurrents et devient le réglage par défaut des nouveaux chats. Les refus explicites restent applicables.",
     permissionsChat:
       "S’applique à ce chat et devient le réglage par défaut des nouveaux chats. Les refus explicites restent applicables.",
-    waitingSummary:
-      "travaille encore. Le résumé des différences comparera les deux résultats une fois le travail terminé.",
+    waitingSummary: "Le résumé des différences apparaît une fois que les deux agents ont terminé.",
     regionsReplaced:
       "Certaines zones étaient trop grandes pour être alignées précisément. Elles remplacent l’original ; les étiquettes de modifications communes sont indisponibles.",
     sideReplaced:

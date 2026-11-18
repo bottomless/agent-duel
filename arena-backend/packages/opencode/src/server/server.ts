@@ -287,6 +287,11 @@ async function prepareNativePrompt(
   const sessionID = decodeURIComponent(match[1]) as CoreSession.ID
   const messageID = typeof body.id === "string" ? body.id : MessageID.ascending()
   body.id = messageID
+  const metadata = body.metadata
+  const clientMessageID =
+    metadata && typeof metadata === "object" && !Array.isArray(metadata)
+      ? (metadata as Record<string, unknown>).paseoClientMessageId
+      : undefined
   let persisted: { readonly model?: { readonly providerID: string; readonly id: string } } | undefined
   try {
     const sessions = Context.getUnsafe(context, CoreSession.Service)
@@ -330,6 +335,7 @@ async function prepareNativePrompt(
         arena.beginNormalTurn({
           sessionID,
           messageID: messageID as MessageID,
+          ...(typeof clientMessageID === "string" ? { clientMessageID } : {}),
           ...(model?.providerID && model.modelID
             ? { model: { providerID: Provider.ID.make(model.providerID), modelID: CoreModel.ID.make(model.modelID) } }
             : {}),

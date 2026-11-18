@@ -52,10 +52,10 @@ describe("arenaTurnHeads", () => {
     const kept = battle("turn-2", "msg_0100");
     const { heads, answerRowIds, ends } = arenaTurnHeads([kept], { tail, head: [] });
     expect([...heads.entries()]).toEqual([
-      ["a1", { kind: "agent" }],
+      ["a1", { kind: "agent", promptMessageId: "msg_0010" }],
       // An answer that is its turn's only text keeps its work above it (`orderArenaChat`).
       ["t2", { kind: "battle", item: kept }],
-      ["a3", { kind: "agent" }],
+      ["a3", { kind: "agent", promptMessageId: "msg_0200" }],
     ]);
     expect([...answerRowIds]).toEqual(["a1", "t2", "a2", "a3"]);
     // The battle's result ends the footer of its answer's last text.
@@ -94,7 +94,7 @@ describe("arenaTurnHeads", () => {
       tail,
       head: [],
     });
-    expect([...heads.entries()]).toEqual([["a2", { kind: "agent" }]]);
+    expect([...heads.entries()]).toEqual([["a2", { kind: "agent", promptMessageId: "msg_0200" }]]);
     expect(answerRowIds.has("a0")).toBe(true);
   });
 
@@ -125,11 +125,18 @@ describe("arenaTurnHeads", () => {
     } as unknown as ArenaHistoryItem;
     const tail = [prompt("msg_0100"), prompt("msg_0200"), text("a2")];
     const { heads } = arenaTurnHeads([discarded], { tail, head: [] });
-    expect([...heads.entries()]).toEqual([["a2", { kind: "agent" }]]);
+    expect([...heads.entries()]).toEqual([["a2", { kind: "agent", promptMessageId: "msg_0200" }]]);
   });
 });
 
 describe("arenaTurnStartRowIds", () => {
+  it("starts a turn at a prompt sent after an inherited battle in a fork", () => {
+    // A fork's copies are `<fork ID>_<seq>`: as strings, `_13` falls inside a battle ending at `_9`.
+    const tail = [prompt("msg_f_1"), text("a1"), prompt("msg_f_13"), text("a2")];
+    const kept = battle("turn-1", "msg_f_1", "msg_f_9");
+    expect([...arenaTurnStartRowIds([kept], { tail, head: [] })]).toEqual(["msg_f_1", "msg_f_13"]);
+  });
+
   it("starts a turn at every prompt, plain or battle, but not at a reply inside a battle", () => {
     const tail = [
       prompt("msg_0050"),

@@ -54,7 +54,7 @@ export const ptBR: TranslationResources = {
     battle: "Batalha",
     battleMode: "Modo batalha",
     battleHint:
-      "Ligado: dois agentes respondem a cada prompt e você fica com a melhor resposta. Os modelos ficam ocultos até você votar. Desligado: um agente responde.",
+      "Ligado: dois agentes respondem a cada prompt e você escolhe a melhor resposta. Os modelos ficam ocultos até você votar. Desligado: um agente responde.",
     autoAccept: "Aceitar automaticamente",
     askBeforeTools: "Perguntar antes de usar ferramentas",
     toolPermissions: "Permissões de ferramentas",
@@ -97,8 +97,6 @@ export const ptBR: TranslationResources = {
     versus: "vs.",
     resultWon: "Venceu",
     resultEarly: "Escolhido antes",
-    resultKept: "Mantido",
-    battleStopped: "Batalha parada",
     battleResolved: "Batalha resolvida",
     sameChanges:
       "Ambos os agentes fizeram as mesmas alterações. Mostrando alterações em relação ao original.",
@@ -123,7 +121,10 @@ export const ptBR: TranslationResources = {
     openTerminalIn: "Abrir um terminal no worktree do agente {{side}}",
     showBattle: "Mostrar batalha",
     hideBattle: "Ocultar batalha",
-    keptAgent: "Agente {{side}} · mantido",
+    youChoseSide: "Você escolheu {{side}}",
+    youChoseSideEarly: "Você escolheu {{side}} antes",
+    youCalledTie: "Você declarou empate",
+    tieSideApplied: "Alterações de {{side}} aplicadas",
     actionFailed: "Falha na ação da batalha",
     trunkUnavailable: "Trunk indisponível",
     fewerFiles: "Mostrar menos arquivos",
@@ -144,14 +145,14 @@ export const ptBR: TranslationResources = {
     stopBattle: "Parar batalha",
     tie: "Empate",
     tieBattle: "Empatar batalha",
-    tieHelp: "Um empate mantém o trabalho do agente A.",
+    tieHelp: "Um empate aplica o trabalho do agente A.",
     resume: "Retomar",
     resumeBattle: "Retomar batalha",
     discard: "Descartar",
     retryResolution: "Tentar resolução novamente",
-    stoppedChoose: "Batalha parada · escolha o que manter",
-    stoppedFailedSide: "O agente {{side}} falhou · manter qualquer um não contará como voto",
-    stoppedBothFailed: "Ambos os agentes falharam · manter qualquer um não contará como voto",
+    stoppedChoose: "Batalha parada · escolha um resultado",
+    stoppedFailedSide: "O agente {{side}} falhou · escolher qualquer um não contará como voto",
+    stoppedBothFailed: "Os dois agentes falharam · escolher qualquer um não contará como voto",
     closedBattle: "Agent Duel fechou durante a batalha · retome ou descarte",
     bothFailedRetry: "Ambos os agentes falharam · tente novamente ou descarte",
     bothFailed: "Ambos os agentes falharam",
@@ -199,8 +200,8 @@ export const ptBR: TranslationResources = {
     mergeConflicts: "Alguns arquivos têm conflitos de mesclagem",
     discardWinning: "Descartar alterações vencedoras",
     winningNotApplied: "As alterações vencedoras não foram aplicadas",
-    winningKept:
-      "O resultado vencedor foi mantido, mas Arena não conseguiu aplicá-lo a este espaço de trabalho.",
+    winningSaved:
+      "O resultado vencedor foi salvo, mas Arena não conseguiu aplicá-lo a este espaço de trabalho.",
     restoreWorkspace: "Restaurar meu espaço de trabalho",
     partlyApplied: "Apenas parte das alterações vencedoras foi aplicada",
     partialApplyHelp:
@@ -315,7 +316,6 @@ export const ptBR: TranslationResources = {
     worktreeCopied: "Caminho da árvore de trabalho do agente {{side}} copiado",
     chooseEarly: "Escolher {{side}} antecipadamente",
     choose: "Escolher {{side}}",
-    keepSide: "Manter {{side}}",
     chooseEarlyTitle: "Escolher {{side}} antecipadamente?",
     chooseEarlyHelp:
       "O agente {{other}} para imediatamente e seu trabalho é descartado. O trabalho do agente {{side}} até agora se torna o resultado deste turno.",
@@ -368,8 +368,7 @@ export const ptBR: TranslationResources = {
       "Aplica-se aos dois participantes e se torna o padrão para novos chats. Regras explícitas de negação continuam válidas.",
     permissionsChat:
       "Aplica-se a este chat e se torna o padrão para novos chats. Regras explícitas de negação continuam válidas.",
-    waitingSummary:
-      "ainda está trabalhando. O resumo das diferenças comparará os dois resultados quando terminar.",
+    waitingSummary: "O resumo das diferenças aparece quando os dois agentes terminarem.",
     regionsReplaced:
       "Algumas regiões eram grandes demais para alinhar com precisão. São mostradas como substituições do original; rótulos de alterações compartilhadas estão indisponíveis.",
     sideReplaced:

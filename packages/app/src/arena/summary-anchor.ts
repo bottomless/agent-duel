@@ -4,6 +4,7 @@ import type { AgentTimelineCursorState } from "@/stores/session-store";
 import { createUserMessage, type StreamItem } from "@/types/stream";
 import { isResolvingBattleState } from "./battle-result";
 import { orderArenaChat } from "./chat-order";
+import { compareMessageIds } from "./message-order";
 
 export function isArenaBattleUnresolved(snapshot: ArenaSnapshot | undefined): boolean {
   return snapshot?.chat.status === "battle_active" && snapshot.turn?.resolution === undefined;
@@ -154,29 +155,31 @@ interface ArenaAnchorItem {
   messageId?: string;
 }
 
+/**
+ * The battle's own prompt row: its grafted prompt, or for a discarded battle, which grafted
+ * nothing, its projected row (`projectDiscardedArenaPrompts`). Matching a missing canonical ID
+ * against a row's missing message ID put every discarded battle under the first projected prompt.
+ */
 function isCanonicalPrompt(item: ArenaHistoryItem, streamItem: ArenaAnchorItem): boolean {
-  return (
-    streamItem.kind === "user_message" &&
-    (streamItem.messageId === item.canonicalUserMessageID ||
-      streamItem.id === item.canonicalUserMessageID)
-  );
+  if (streamItem.kind !== "user_message") return false;
+  const prompt = item.canonicalUserMessageID;
+  if (!prompt) return streamItem.id === arenaPromptRowId(item.id);
+  return streamItem.messageId === prompt || streamItem.id === prompt;
 }
 
 /**
  * The battle's last prompt in the chat: its own, or the last reply sent inside the battle. Those
  * replies are grafted with the winner as user messages, so the next user message is not where the
- * battle ends. Canonical message IDs ascend, so the battle's prompts are the user messages from its
- * own prompt through the last message the graft copied. A turn grafted before that bound was
- * recorded falls back to its own prompt.
+ * battle ends. Canonical message IDs ascend (`compareMessageIds`), so the battle's prompts are the
+ * user messages from its own prompt through the last message the graft copied. A turn grafted
+ * before that bound was recorded falls back to its own prompt.
  */
 function lastBattlePromptIndex(
   item: ArenaHistoryItem,
   streamItems: ReadonlyArray<ArenaAnchorItem>,
 ): number {
   const first = item.canonicalUserMessageID;
-  // A discarded turn has only its projected prompt (`projectDiscardedArenaPrompts`).
-  if (!first)
-    return streamItems.findIndex((streamItem) => streamItem.id === arenaPromptRowId(item.id));
+  if (!first) return streamItems.findIndex((streamItem) => isCanonicalPrompt(item, streamItem));
   const last = item.canonicalLastMessageID;
   if (!last) return streamItems.findIndex((streamItem) => isCanonicalPrompt(item, streamItem));
   return streamItems.findLastIndex(
@@ -184,8 +187,8 @@ function lastBattlePromptIndex(
       isCanonicalPrompt(item, streamItem) ||
       (streamItem.kind === "user_message" &&
         streamItem.messageId !== undefined &&
-        streamItem.messageId >= first &&
-        streamItem.messageId <= last),
+        compareMessageIds(streamItem.messageId, first) >= 0 &&
+        compareMessageIds(streamItem.messageId, last) <= 0),
   );
 }
 
@@ -271,7 +274,7 @@ export function arenaTurnFollowedUp(item: ArenaHistoryItem, stream: ArenaPresent
       (streamItem) =>
         streamItem.kind === "user_message" &&
         streamItem.messageId !== undefined &&
-        streamItem.messageId > last,
+        compareMessageIds(streamItem.messageId, last) > 0,
     )
   );
 }

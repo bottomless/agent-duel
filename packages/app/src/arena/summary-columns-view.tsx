@@ -14,7 +14,8 @@ export const SummaryStackedBreakpoint = createContext(LIVE_SUMMARY_STACKED_BREAK
 
 /**
  * Inline code and bold, the only markdown the judge puts inside a sentence or a table cell. Code
- * is set a pixel under its text, which mono's wider glyphs need to sit level with it.
+ * is set a pixel under its text, which mono's wider glyphs need to sit level with it, on the chat's
+ * code chip.
  */
 function InlineText({
   text,
@@ -69,8 +70,11 @@ function SideColumn({
   return (
     <View style={styles.column} testID={`arena-summary-column-${side}`}>
       <InlineText text={sentence} style={styles.sentence} codeStyle={styles.sentenceCode} />
-      {rows.map((row) => (
-        <View key={row.aspect} style={[styles.row, styles.stackedRow]}>
+      {rows.map((row, index) => (
+        <View
+          key={row.aspect}
+          style={[styles.row, styles.stackedRow, index === 0 && styles.afterLead]}
+        >
           <InlineText text={row.aspect} style={styles.aspect} codeStyle={styles.aspectCode} />
           <InlineText
             text={side === "a" ? row.a : row.b}
@@ -92,15 +96,18 @@ function SideBySideRows({ columns }: { columns: SummaryColumns }) {
   return (
     <View testID="arena-summary-rows">
       <View style={styles.pair}>
-        <View style={[styles.cell, styles.sentenceCell]} testID="arena-summary-column-a">
+        <View style={styles.cell} testID="arena-summary-column-a">
           <InlineText text={columns.a} style={styles.sentence} codeStyle={styles.sentenceCode} />
         </View>
-        <View style={[styles.cell, styles.sentenceCell]} testID="arena-summary-column-b">
+        <View style={styles.cell} testID="arena-summary-column-b">
           <InlineText text={columns.b} style={styles.sentence} codeStyle={styles.sentenceCode} />
         </View>
       </View>
-      {columns.rows.map((row) => (
-        <View key={row.aspect} style={[styles.pair, styles.rowPair]}>
+      {columns.rows.map((row, index) => (
+        <View
+          key={row.aspect}
+          style={[styles.pair, styles.rowPair, index === 0 && styles.afterLead]}
+        >
           <View style={[styles.cell, styles.row]}>
             <InlineText text={row.aspect} style={styles.aspect} codeStyle={styles.aspectCode} />
             <InlineText text={row.a} style={styles.value} codeStyle={styles.valueCode} />
@@ -168,23 +175,22 @@ const styles = StyleSheet.create((theme) => ({
     flex: 1,
     minWidth: 0,
   },
-  sentenceCell: {
-    paddingTop: theme.spacing[3],
-    borderTopWidth: 1,
-    borderTopColor: theme.colors.border,
-  },
-  // Each column opens with a hairline, a quiet echo of the answer's colour rule above it.
+  // A column opens with its lead, straight under the review's tabs: a hairline above it made the
+  // lead read as one more row of the table, which starts at the first row's hairline below it.
   column: {
     flex: 1,
     minWidth: 0,
-    paddingTop: theme.spacing[3],
-    borderTopWidth: 1,
-    borderTopColor: theme.colors.border,
   },
+  // The answer's gist, above its compared aspects: set in medium weight with room below, so it
+  // reads as the lead rather than as a row whose label is missing.
   sentence: {
     color: theme.colors.foreground,
     fontSize: theme.fontSize.content,
+    fontWeight: theme.fontWeight.medium,
     lineHeight: 23,
+  },
+  afterLead: {
+    marginTop: theme.spacing[6],
   },
   // Rows of the comparison, each set off by a hairline so the two sides read across. The aspect
   // sits above its value in the same cell: beside it, a fixed label column left a narrow answer's
@@ -209,14 +215,23 @@ const styles = StyleSheet.create((theme) => ({
     fontSize: theme.fontSize.base,
     lineHeight: 20,
   },
+  // The chat's inline code chip (the markdown renderer's `code`), so a file or symbol name reads
+  // as code here too rather than as text that shrank mid-sentence.
   code: {
     fontFamily: theme.fontFamily.mono,
+    color: theme.colors.foreground,
+    backgroundColor: theme.colors.surface2,
+    borderRadius: 3,
+    paddingHorizontal: 4,
+    paddingVertical: 1,
   },
   sentenceCode: {
     fontSize: theme.fontSize.content - 1,
   },
+  // A row's label stays muted, its code included, so the label does not outweigh its value.
   aspectCode: {
     fontSize: Math.round((theme.fontSize.base * 13) / 14) - 1,
+    color: theme.colors.foregroundMuted,
   },
   valueCode: {
     fontSize: theme.fontSize.base - 1,

@@ -35,4 +35,18 @@ export function inheritTurns(
   return inherited
 }
 
+/**
+ * The source chat's single-agent turns whose prompt the fork copied, under the copy's message ID,
+ * so a fork names the model behind each copied answer as its source does.
+ */
+export function inheritSingleAgentTurns<T extends { readonly messageID: string }>(
+  turns: readonly T[],
+  lineage: Pick<ForkLineageDocument, "messages">,
+): T[] {
+  return turns.flatMap((turn) => {
+    const copy = lineage.messages[turn.messageID]
+    return copy ? [{ ...turn, messageID: copy }] : []
+  })
+}
+
 export * as ArenaForkLineage from "./fork-lineage"

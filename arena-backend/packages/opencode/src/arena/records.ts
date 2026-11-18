@@ -334,6 +334,11 @@ export type SingleAgentRatingDocument = {
   userId?: string
   readonly sessionID: string
   readonly messageID: string
+  /**
+   * The sender's own ID for the prompt. The daemon's chat shows a prompt it sent under this ID
+   * until it reads the session back, so the chat finds the turn by either.
+   */
+  readonly clientMessageID?: string
   /** Older records omitted this field and are frontier ratings. */
   readonly modelSize?: SingleAgentModelSize
   readonly assignment: HiddenAssignment
@@ -1067,6 +1072,8 @@ export type BattleHistoryTurn = Pick<
 export type BattleSnapshot = {
   readonly chat: ChatDocument
   readonly singleAgentRating?: SingleAgentRatingDocument
+  /** Every single-agent turn in the chat, copied ones from its fork sources first. */
+  readonly singleAgentTurns?: readonly SingleAgentRatingDocument[]
   readonly turn?: TurnDocument
   readonly history?: readonly BattleHistoryTurn[]
   readonly runs: readonly RunDocument[]

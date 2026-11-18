@@ -27,6 +27,7 @@ vi.mock("./use-battle-actions", () => ({
   }),
 }));
 
+import { ArenaPastDecision } from "./decision-bar";
 import { ArenaDecisionPill } from "./decision-pill";
 
 const noop = () => {};
@@ -275,7 +276,7 @@ describe("ArenaDecisionPill", () => {
     expect(view.queryByTestId("arena-choose-tie")).toBeNull();
   });
 
-  it("says first that keeping either side after a failure will not count", () => {
+  it("says first that choosing either side after a failure will not count", () => {
     const view = render(
       <ArenaDecisionPill
         serverId="server"
@@ -284,13 +285,42 @@ describe("ArenaDecisionPill", () => {
         onHeightChange={noop}
       />,
     );
-    expect(view.getByText("Agent A failed · keeping either won't count as a vote")).toBeTruthy();
-    expect(view.queryByTestId("arena-stopped-keep-b")).not.toBeNull();
+    expect(view.getByText("Agent A failed · choosing either won't count as a vote")).toBeTruthy();
+    // After a stop the sides read as at the vote: Choose, or Accept for the side that failed.
+    expect(view.getByTestId("arena-stopped-choose-b").textContent).toBe("Choose B");
+    expect(view.queryByText(/Keep/)).toBeNull();
     // After a stop Discard is one of the pill's three choices, not a row action.
     expect(choiceRowDiscard(view)).not.toBeNull();
     expect(choiceRowDiscard(view)?.textContent).not.toContain("Discard battle");
   });
 });
+
+describe("a failed side after a stop", () => {
+  it("offers Accept, as at the vote, when its work can be applied", () => {
+    const view = render(
+      <ArenaDecisionPill
+        serverId="server"
+        agentId="agent"
+        snapshot={STOPPED_WITH_ACCEPTABLE_FAILURE}
+        onHeightChange={noop}
+      />,
+    );
+    expect(view.getByTestId("arena-stopped-choose-a").textContent).toBe("Accept A");
+    expect(view.getByTestId("arena-stopped-choose-b").textContent).toBe("Choose B");
+    view.unmount();
+  });
+});
+
+const STOPPED_WITH_ACCEPTABLE_FAILURE: ArenaSnapshot = (() => {
+  const snapshot = awaitingVote(
+    [
+      run({ id: "run-a", side: "a", runState: "error", selectable: false, applicable: true }),
+      run({ id: "run-b", side: "b", runState: "stopped", selectable: false, applicable: true }),
+    ],
+    { canTie: false, canDiscardBattle: true },
+  );
+  return { ...snapshot, turn: { ...snapshot.turn!, state: "awaiting_stop_resolution" } };
+})();
 
 const STOPPED_AFTER_FAILURE: ArenaSnapshot = (() => {
   const snapshot = awaitingVote(
@@ -400,5 +430,20 @@ describe("the decision just made", () => {
       />,
     );
     expect(view.queryByTestId("arena-decision-pill")).toBeNull();
+  });
+});
+
+describe("ArenaPastDecision", () => {
+  it("draws a taken Tie or Discard in the foreground, not the browser's default black", () => {
+    for (const kind of ["vote", "stop"] as const) {
+      const view = render(<ArenaPastDecision kind={kind} chosen="middle" />);
+      const taken = within(view.getByTestId("arena-past-decision-middle-chosen")).getByText(
+        kind === "vote" ? "Tie" : "Discard",
+      );
+      const side = within(view.getByTestId("arena-past-decision-a")).getByText("Choose A");
+      expect(taken.style.color).not.toBe("");
+      expect(taken.style.color).toBe(side.style.color);
+      view.unmount();
+    }
   });
 });

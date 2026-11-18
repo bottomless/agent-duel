@@ -192,3 +192,65 @@ describe("a forked chat's history", () => {
       expect(project(await store.snapshot("source")).history.map((item) => item.id)).toEqual(["source-0", "source-1"])
     }))
 })
+
+describe("a chat's single-agent turns", () => {
+  const rating = (sessionID: string, messageID: string, modelSize: "medium" | "frontier", vote?: "up") => ({
+    _id: `single-agent|${sessionID}|${messageID}`,
+    sessionID,
+    messageID,
+    modelSize,
+    assignment,
+    ...(vote ? { vote } : {}),
+    createdAt: now,
+    updatedAt: now,
+  })
+
+  test("names Medium, a frontier model only once rated, and carries both through a fork of a fork", async () =>
+    fixture(async (store) => {
+      await store.createChat(chat("source"))
+      await store.claimSingleAgentRating(rating("session-source", "msg_01", "medium"))
+      await store.claimSingleAgentRating(rating("session-source", "msg_03", "frontier", "up"))
+      await store.claimSingleAgentRating(rating("session-source", "msg_05", "frontier"))
+      await store.claimSingleAgentRating({ ...rating("session-source", "msg_07", "medium"), clientMessageID: "client_07" })
+      expect(project(await store.snapshot("source")).singleAgentTurns).toEqual([
+        { messageID: "msg_01", modelSize: "medium", identity: { name: "GPT Luna 5.6 Xhigh" } },
+        { messageID: "msg_03", modelSize: "frontier", identity: { name: "Contestant" } },
+        { messageID: "msg_05", modelSize: "frontier" },
+        {
+          messageID: "msg_07",
+          clientMessageID: "client_07",
+          modelSize: "medium",
+          identity: { name: "GPT Luna 5.6 Xhigh" },
+        },
+      ])
+
+      // The fork copied the first three prompts, then ran one of its own.
+      await store.recordForkLineage({
+        _id: "session-fork",
+        sourceSessionID: "session-source",
+        messages: { msg_01: "msg_f1", msg_03: "msg_f3", msg_05: "msg_f5" },
+        throughTime: now.getTime(),
+        createdAt: now,
+      })
+      await store.createChat({ ...chat("fork"), canonicalSessionID: "session-fork" })
+      await store.claimSingleAgentRating(rating("session-fork", "msg_f9", "medium"))
+      expect(project(await store.snapshot("fork")).singleAgentTurns?.map((turn) => turn.messageID)).toEqual([
+        "msg_f1",
+        "msg_f3",
+        "msg_f5",
+        "msg_f9",
+      ])
+
+      await store.recordForkLineage({
+        _id: "session-fork2",
+        sourceSessionID: "session-fork",
+        messages: { msg_f3: "msg_g3" },
+        throughTime: now.getTime(),
+        createdAt: now,
+      })
+      await store.createChat({ ...chat("fork2"), canonicalSessionID: "session-fork2" })
+      expect(project(await store.snapshot("fork2")).singleAgentTurns).toEqual([
+        { messageID: "msg_g3", modelSize: "frontier", identity: { name: "Contestant" } },
+      ])
+    }))
+})

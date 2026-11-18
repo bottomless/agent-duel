@@ -42,12 +42,11 @@ import { DiffLayoutControl } from "./diff-layout-control";
 import { InlineFileDiff, openChangesFiles, toggleChangesFile } from "./inline-file-diff";
 import { VerdictBody } from "./verdict-body";
 import { ArenaChangesList } from "./changes-list";
-import { ArenaPastDecision, arenaPastChoice } from "./decision-bar";
 import { arenaChangesCountLabel, arenaChangesRows } from "./changes-rows";
 import { arenaDiffQueryKey, hasBattleDiff } from "./comparison-visibility";
 import { arenaModelDisplayName } from "./side-label";
 import { ArenaModelVendorIcon } from "./model-vendor-icon";
-import { ArenaBattleResult, ArenaUnkeptResult } from "./turn-head";
+import { ArenaBattleResult, ArenaUnkeptResult, ResultTag, arenaColumnResult } from "./turn-head";
 import { describeSummaryOmissions } from "./summary-omissions";
 import { ArenaRunThread } from "./run-thread";
 import { arenaSessionQueryKey, useArenaStartMutation } from "./use-arena-session";
@@ -57,6 +56,7 @@ import { BattleReview } from "./battle-review";
 import { BATTLE_GUTTER, BATTLE_RAIL, SHOWN_SUMMARY_STACKED_BREAKPOINT } from "./battle-layout";
 import { SummaryStackedBreakpoint } from "./summary-columns-view";
 import { useArenaShownBattle, useArenaShownBattleStore } from "./shown-battle";
+import { ArenaShownBattleResult, shownBattleResult } from "./shown-battle-result";
 
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
 const ThemedGitCompareArrows = withUnistyles(GitCompareArrows);
@@ -310,19 +310,19 @@ function keptModel(item: ArenaHistoryItem): string | undefined {
 }
 
 /**
- * The end of a shown battle, in the chat under its review: the decision row as it was left, the
- * button taken marked, and Hide battle at the row's end.
+ * The end of a shown battle, in the chat under its review: the decision it ended with, as a line of
+ * text (`shownBattleResult`), and Hide battle at the row's end.
  */
 function ShownBattleEnd({ agentId, item }: { agentId: string; item: ArenaHistoryItem }) {
   const { t } = useTranslation();
-  const choice = arenaPastChoice(item);
+  const result = shownBattleResult(item);
   const hide = useArenaShownBattleStore((state) => state.hide);
   const onHideBattle = useCallback(() => hide(agentId), [agentId, hide]);
   return (
     <View style={styles.shownFooter} testID="arena-shown-battle-footer">
       <View style={styles.shownFooterEnd} />
-      {choice ? (
-        <ArenaPastDecision kind={choice.kind} chosen={choice.chosen} />
+      {result ? (
+        <ArenaShownBattleResult result={result} />
       ) : (
         <Text style={styles.shownFooterResult}>{chosenLabel(item)}</Text>
       )}
@@ -430,20 +430,17 @@ function ThreadPane({
   side,
   run,
   item,
-  kept,
 }: {
   side: "a" | "b";
   run: ArenaRun;
   item: ArenaHistoryItem;
-  kept: boolean;
 }) {
   const { t } = useTranslation();
   const model = item.identities?.[side].name;
+  const result = arenaColumnResult(item, side);
   const appliedSide = item.gitApplication?.state === "discarded" ? undefined : item.appliedSide;
   const meta = [
-    kept
-      ? t("arena.keptAgent", { side: side.toUpperCase() })
-      : `${t("arena.agent")} ${side.toUpperCase()}`,
+    `${t("arena.agent")} ${side.toUpperCase()}`,
     run.durationMs !== null ? formatDuration(run.durationMs) : null,
   ]
     .filter(Boolean)
@@ -456,6 +453,9 @@ function ThreadPane({
           <Text style={styles.threadTitle}>
             {model ? arenaModelDisplayName(model) : `${t("arena.agent")} ${side.toUpperCase()}`}
           </Text>
+          {model && result ? (
+            <ResultTag result={result} side={side} testID={`arena-shown-pane-tag-${side}`} />
+          ) : null}
           {model ? <Text style={styles.threadMeta}>{meta}</Text> : null}
         </View>
       </View>
@@ -478,11 +478,10 @@ function BattleThreads({
   item: ArenaHistoryItem;
 }) {
   if (!runA || !runB) return null;
-  const winner = battleWinnerSide(item);
   return (
     <View style={styles.threads}>
-      <ThreadPane side="a" run={runA} item={item} kept={winner === "a"} />
-      <ThreadPane side="b" run={runB} item={item} kept={winner === "b"} />
+      <ThreadPane side="a" run={runA} item={item} />
+      <ThreadPane side="b" run={runB} item={item} />
     </View>
   );
 }

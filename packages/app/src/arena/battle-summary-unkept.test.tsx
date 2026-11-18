@@ -61,7 +61,7 @@ describe("a battle that kept no answer", () => {
   });
 });
 
-describe("a battle kept at a Stop before its side did anything", () => {
+describe("a side chosen at a Stop before it did anything", () => {
   it("shows its result in a line of its own when no footer in the chat carries it", () => {
     const view = render(
       <ArenaBattleSummary
@@ -73,9 +73,10 @@ describe("a battle kept at a Stop before its side did anything", () => {
       />,
       { wrapper: TestQueryProvider },
     );
+    // It reads as a win, as at the vote: nothing says how the battle ended.
     const line = view.getByTestId("arena-battle-result-turn-1");
-    expect(line.textContent).toContain("Battle stopped");
-    expect(view.getByTestId("arena-battle-result-tag-kept").textContent).toBe("Kept");
+    expect(line.textContent).not.toContain("Battle stopped");
+    expect(view.getByTestId("arena-battle-result-tag-won").textContent).toBe("Won");
 
     fireEvent.click(view.getByTestId("arena-show-battle-turn-1"));
     expect(useArenaShownBattleStore.getState().byAgent.agent).toBe("turn-1");
