@@ -128,7 +128,6 @@ export const es: TranslationResources = {
     youCalledTie: "Declaraste un empate",
     tieSideKept: "Se mantuvieron los cambios de {{side}}",
     youKeptSide: "mantuviste {{side}}",
-    keptAgent: "Agente {{side}} · elegido",
     actionFailed: "Falló la acción de batalla",
     trunkUnavailable: "Trunk no disponible",
     fewerFiles: "Mostrar menos archivos",

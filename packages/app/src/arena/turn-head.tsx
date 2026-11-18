@@ -102,7 +102,7 @@ export function ArenaBattleResult({ agentId, item }: { agentId: string; item: Ar
   );
 }
 
-type KeptResult = "won" | "tie" | "early" | "kept";
+export type KeptResult = "won" | "tie" | "early" | "kept";
 
 /**
  * How the kept side was kept: tied, chosen early, kept at a Stop, or won. A side kept at a Stop is
@@ -116,6 +116,17 @@ function keptResult(item: ArenaHistoryItem): KeptResult {
   return "won";
 }
 
+/**
+ * A shown battle's column tag: the kept side's result, on its column only. A tie tags both columns,
+ * so neither reads as the winner though one side's changes were kept.
+ */
+export function arenaColumnResult(item: ArenaHistoryItem, side: ArenaSide): KeptResult | undefined {
+  const kept = battleKeptSide(item);
+  if (!kept) return undefined;
+  const result = keptResult(item);
+  return result === "tie" || side === kept ? result : undefined;
+}
+
 const RESULT_KEYS = {
   won: "arena.resultWon",
   tie: "arena.tie",
@@ -124,11 +135,19 @@ const RESULT_KEYS = {
 } as const;
 
 /** The result as a small tag after the name, tinted in the kept side's colour; a tie stays grey. */
-function ResultTag({ result, side }: { result: KeptResult; side: ArenaSide }) {
+export function ResultTag({
+  result,
+  side,
+  testID = `arena-battle-result-tag-${result}`,
+}: {
+  result: KeptResult;
+  side: ArenaSide;
+  testID?: string;
+}) {
   const { t } = useTranslation();
   const neutral = result === "tie";
   return (
-    <View style={[styles.tag, tagTone(neutral, side)]} testID={`arena-battle-result-tag-${result}`}>
+    <View style={[styles.tag, tagTone(neutral, side)]} testID={testID}>
       <Text style={[styles.tagText, tagTextTone(neutral, side)]}>{t(RESULT_KEYS[result])}</Text>
     </View>
   );

@@ -121,7 +121,6 @@ export const ar: TranslationResources = {
     youCalledTie: "اخترت التعادل",
     tieSideKept: "أُبقيت تغييرات {{side}}",
     youKeptSide: "أبقيت {{side}}",
-    keptAgent: "الوكيل {{side}} · محتفَظ به",
     actionFailed: "فشل إجراء المعركة",
     trunkUnavailable: "الجذع غير متاح",
     fewerFiles: "عرض ملفات أقل",

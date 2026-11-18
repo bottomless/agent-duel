@@ -46,7 +46,7 @@ import { arenaChangesCountLabel, arenaChangesRows } from "./changes-rows";
 import { arenaDiffQueryKey, hasBattleDiff } from "./comparison-visibility";
 import { arenaModelDisplayName } from "./side-label";
 import { ArenaModelVendorIcon } from "./model-vendor-icon";
-import { ArenaBattleResult, ArenaUnkeptResult } from "./turn-head";
+import { ArenaBattleResult, ArenaUnkeptResult, ResultTag, arenaColumnResult } from "./turn-head";
 import { describeSummaryOmissions } from "./summary-omissions";
 import { ArenaRunThread } from "./run-thread";
 import { arenaSessionQueryKey, useArenaStartMutation } from "./use-arena-session";
@@ -430,20 +430,17 @@ function ThreadPane({
   side,
   run,
   item,
-  kept,
 }: {
   side: "a" | "b";
   run: ArenaRun;
   item: ArenaHistoryItem;
-  kept: boolean;
 }) {
   const { t } = useTranslation();
   const model = item.identities?.[side].name;
+  const result = arenaColumnResult(item, side);
   const appliedSide = item.gitApplication?.state === "discarded" ? undefined : item.appliedSide;
   const meta = [
-    kept
-      ? t("arena.keptAgent", { side: side.toUpperCase() })
-      : `${t("arena.agent")} ${side.toUpperCase()}`,
+    `${t("arena.agent")} ${side.toUpperCase()}`,
     run.durationMs !== null ? formatDuration(run.durationMs) : null,
   ]
     .filter(Boolean)
@@ -456,6 +453,9 @@ function ThreadPane({
           <Text style={styles.threadTitle}>
             {model ? arenaModelDisplayName(model) : `${t("arena.agent")} ${side.toUpperCase()}`}
           </Text>
+          {model && result ? (
+            <ResultTag result={result} side={side} testID={`arena-shown-pane-tag-${side}`} />
+          ) : null}
           {model ? <Text style={styles.threadMeta}>{meta}</Text> : null}
         </View>
       </View>
@@ -478,11 +478,10 @@ function BattleThreads({
   item: ArenaHistoryItem;
 }) {
   if (!runA || !runB) return null;
-  const winner = battleWinnerSide(item);
   return (
     <View style={styles.threads}>
-      <ThreadPane side="a" run={runA} item={item} kept={winner === "a"} />
-      <ThreadPane side="b" run={runB} item={item} kept={winner === "b"} />
+      <ThreadPane side="a" run={runA} item={item} />
+      <ThreadPane side="b" run={runB} item={item} />
     </View>
   );
 }

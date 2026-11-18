@@ -8,7 +8,7 @@ import type { ArenaHistoryItem } from "@getpaseo/protocol/arena/rpc-schemas";
 
 vi.stubGlobal("React", React);
 
-import { ArenaBattleResult, ArenaTurnHead } from "./turn-head";
+import { ArenaBattleResult, ArenaTurnHead, arenaColumnResult } from "./turn-head";
 import { useArenaShownBattleStore } from "./shown-battle";
 
 const kept = (over: Partial<ArenaHistoryItem>) =>
@@ -96,5 +96,34 @@ describe("ArenaBattleResult", () => {
     expect(stopped.getByTestId("arena-battle-result-turn-1").textContent).not.toContain(
       "Vote not counted",
     );
+  });
+});
+
+describe("arenaColumnResult", () => {
+  const both = (item: ArenaHistoryItem) => [
+    arenaColumnResult(item, "a"),
+    arenaColumnResult(item, "b"),
+  ];
+
+  it("tags only the kept column with how it was kept", () => {
+    expect(both(kept({ vote: "b", appliedSide: "b" }))).toEqual([undefined, "won"]);
+    expect(both(kept({ vote: "a", appliedSide: "a", selectedEarly: true }))).toEqual([
+      "early",
+      undefined,
+    ]);
+    expect(
+      both(kept({ appliedSide: "a", resolution: { kind: "stopped", resolution: "apply_a" } })),
+    ).toEqual(["kept", undefined]);
+  });
+
+  it("tags both columns of a tie, so neither reads as the winner", () => {
+    expect(both(kept({ vote: "tie", appliedSide: "a" }))).toEqual(["tie", "tie"]);
+  });
+
+  it("tags neither column when nothing was kept", () => {
+    expect(both(kept({ resolution: { kind: "stopped", resolution: "discard" } }))).toEqual([
+      undefined,
+      undefined,
+    ]);
   });
 });

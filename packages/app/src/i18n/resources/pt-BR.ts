@@ -128,7 +128,6 @@ export const ptBR: TranslationResources = {
     youCalledTie: "Você declarou empate",
     tieSideKept: "Alterações de {{side}} mantidas",
     youKeptSide: "você manteve {{side}}",
-    keptAgent: "Agente {{side}} · mantido",
     actionFailed: "Falha na ação da batalha",
     trunkUnavailable: "Trunk indisponível",
     fewerFiles: "Mostrar menos arquivos",

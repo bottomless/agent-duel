@@ -120,7 +120,6 @@ export const zhCN: TranslationResources = {
     youCalledTie: "你判定为平局",
     tieSideKept: "已保留 {{side}} 的更改",
     youKeptSide: "你保留了 {{side}}",
-    keptAgent: "智能体 {{side}} · 已保留",
     actionFailed: "对战操作失败",
     trunkUnavailable: "主干不可用",
     fewerFiles: "显示更少文件",

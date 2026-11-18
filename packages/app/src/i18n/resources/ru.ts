@@ -123,7 +123,6 @@ export const ru: TranslationResources = {
     youCalledTie: "Вы объявили ничью",
     tieSideKept: "Изменения {{side}} сохранены",
     youKeptSide: "вы оставили {{side}}",
-    keptAgent: "Агент {{side}} · оставлен",
     actionFailed: "Действие битвы не выполнено",
     trunkUnavailable: "Основная ветка недоступна",
     fewerFiles: "Показать меньше файлов",

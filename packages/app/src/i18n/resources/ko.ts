@@ -124,7 +124,6 @@ export const ko: TranslationResources = {
     youCalledTie: "무승부로 정했습니다",
     tieSideKept: "{{side}}의 변경 사항 유지됨",
     youKeptSide: "{{side}}을(를) 유지했습니다",
-    keptAgent: "에이전트 {{side}} · 유지",
     actionFailed: "배틀 작업 실패",
     trunkUnavailable: "트렁크 사용 불가",
     fewerFiles: "파일 적게 보기",

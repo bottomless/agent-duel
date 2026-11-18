@@ -124,7 +124,6 @@ export const ja: TranslationResources = {
     youCalledTie: "引き分けにしました",
     tieSideKept: "{{side}}の変更を保持",
     youKeptSide: "{{side}}を保持しました",
-    keptAgent: "エージェント{{side}} · 採用",
     actionFailed: "バトル操作に失敗しました",
     trunkUnavailable: "トランクを利用できません",
     fewerFiles: "表示ファイルを減らす",

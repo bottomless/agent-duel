@@ -129,7 +129,6 @@ export const fr: TranslationResources = {
     youCalledTie: "Vous avez déclaré une égalité",
     tieSideKept: "Modifications de {{side}} conservées",
     youKeptSide: "vous avez gardé {{side}}",
-    keptAgent: "Agent {{side}} · gardé",
     actionFailed: "Échec de l’action de bataille",
     trunkUnavailable: "Tronc indisponible",
     fewerFiles: "Afficher moins de fichiers",

@@ -119,7 +119,6 @@ export const en = {
     youCalledTie: "You called a tie",
     tieSideKept: "{{side}}'s changes kept",
     youKeptSide: "you kept {{side}}",
-    keptAgent: "Agent {{side}} · kept",
     actionFailed: "Battle action failed",
     trunkUnavailable: "Trunk unavailable",
     fewerFiles: "Show fewer files",
