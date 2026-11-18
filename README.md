@@ -17,6 +17,38 @@
   <sub>v0.4.0-beta.23 · <a href="https://github.com/bottomless/agent-duel/releases/tag/v0.4.0-beta.23">Release notes</a></sub>
 </p>
 
+## How a battle works
+
+**1. One prompt.** You describe a coding task once.
+
+<p align="center">
+  <img src="docs/images/battle-steps/1-prompt.png" width="700" alt="The composer with Battle on and a prompt to add a shield power-up">
+</p>
+
+**2. Two models, drawn at random.** Both get the same prompt, tools and system prompt, and each works in its own copy of your repo. Sides are random, so A and B carry no meaning.
+
+<p align="center">
+  <img src="docs/images/battle-steps/2-agents.png" width="700" alt="Agent A and Agent B working side by side">
+</p>
+
+**3. Compare the results.** Read the Difference summary, open Files changed for the code, and try each version with Preview.
+
+<p align="center">
+  <img src="docs/images/battle-steps/3-compare.png" width="700" alt="The Difference summary tab open, with Files changed beside it, describing how each agent built the shield">
+</p>
+
+**4. Vote.** Keep one result or call a tie, before either model is named.
+
+<p align="center">
+  <img src="docs/images/battle-steps/4-vote.png" width="700" alt="Choose A, Tie and Choose B">
+</p>
+
+**5. Both models named.** You see which model wrote each result, and the one you kept is applied to your repo.
+
+<p align="center">
+  <img src="docs/images/battle-steps/5-result.png" width="700" alt="The result line: GLM 5.3 FlashX Won vs Grok 4.6, Show battle">
+</p>
+
 ## Demo
 
 https://github.com/user-attachments/assets/6413a6f6-b8d6-47cb-bbd3-e1667b2cdf15
