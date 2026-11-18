@@ -193,7 +193,7 @@ export const ar: TranslationResources = {
     mergeConflicts: "بعض الملفات بها تعارضات دمج",
     discardWinning: "تجاهل التغييرات الفائزة",
     winningNotApplied: "لم تُطبّق التغييرات الفائزة",
-    winningKept: "النتيجة الفائزة محفوظة، لكن Arena لم يتمكن من تطبيقها على مساحة العمل هذه.",
+    winningSaved: "النتيجة الفائزة محفوظة، لكن Arena لم يتمكن من تطبيقها على مساحة العمل هذه.",
     restoreWorkspace: "استعادة مساحة عملي",
     partlyApplied: "طُبّق جزء فقط من التغييرات الفائزة",
     partialApplyHelp:

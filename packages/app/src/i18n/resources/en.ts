@@ -191,7 +191,7 @@ export const en = {
     mergeConflicts: "Some files have merge conflicts",
     discardWinning: "Discard winning changes",
     winningNotApplied: "The winning changes were not applied",
-    winningKept: "The winning result is kept, but Arena could not apply it to this workspace.",
+    winningSaved: "The winning result is saved, but Arena could not apply it to this workspace.",
     restoreWorkspace: "Restore my workspace",
     partlyApplied: "Only part of the winning changes were applied",
     partialApplyHelp:

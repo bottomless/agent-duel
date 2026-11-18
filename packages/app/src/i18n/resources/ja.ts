@@ -196,8 +196,8 @@ export const ja: TranslationResources = {
     mergeConflicts: "一部のファイルにマージ競合があります",
     discardWinning: "勝者の変更を破棄",
     winningNotApplied: "勝者の変更は適用されませんでした",
-    winningKept:
-      "勝者の結果は保持されていますが、Arenaはこのワークスペースに適用できませんでした。",
+    winningSaved:
+      "勝者の結果は保存されていますが、Arenaはこのワークスペースに適用できませんでした。",
     restoreWorkspace: "ワークスペースを復元",
     partlyApplied: "勝者の変更の一部のみ適用されました",
     partialApplyHelp:

@@ -191,7 +191,7 @@ export const zhCN: TranslationResources = {
     mergeConflicts: "部分文件存在合并冲突",
     discardWinning: "放弃获胜更改",
     winningNotApplied: "获胜更改未应用",
-    winningKept: "获胜结果已保留，但 Arena 无法将其应用到此工作区。",
+    winningSaved: "获胜结果已保存，但 Arena 无法将其应用到此工作区。",
     restoreWorkspace: "恢复我的工作区",
     partlyApplied: "仅应用了部分获胜更改",
     partialApplyHelp:

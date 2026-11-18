@@ -11540,7 +11540,7 @@ export const layer: Layer.Layer<
       if (resolved.appliedSide) {
         const side = resolved.appliedSide
         if (runs.find((run) => run.side === side)?.applicability === "blocked") {
-          return yield* Effect.fail(new Error("Arena side cannot be kept because its environment setup failed"))
+          return yield* Effect.fail(new Error("Arena side cannot be chosen because its environment setup failed"))
         }
         return yield* promote(store, turn, side, resolved)
       }

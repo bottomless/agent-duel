@@ -196,7 +196,7 @@ export const ko: TranslationResources = {
     mergeConflicts: "일부 파일에 병합 충돌이 있습니다",
     discardWinning: "승자 변경 사항 삭제",
     winningNotApplied: "승자 변경 사항이 적용되지 않았습니다",
-    winningKept: "승자 결과는 보존되었지만 Arena가 이 작업 공간에 적용하지 못했습니다.",
+    winningSaved: "승자 결과는 보존되었지만 Arena가 이 작업 공간에 적용하지 못했습니다.",
     restoreWorkspace: "내 작업 공간 복원",
     partlyApplied: "승자 변경 사항 중 일부만 적용되었습니다",
     partialApplyHelp:

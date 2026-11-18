@@ -203,8 +203,8 @@ export const fr: TranslationResources = {
     mergeConflicts: "Certains fichiers ont des conflits de fusion",
     discardWinning: "Abandonner les modifications gagnantes",
     winningNotApplied: "Les modifications gagnantes n’ont pas été appliquées",
-    winningKept:
-      "Le résultat gagnant est conservé, mais Arena n’a pas pu l’appliquer à cet espace de travail.",
+    winningSaved:
+      "Le résultat gagnant est enregistré, mais Arena n’a pas pu l’appliquer à cet espace de travail.",
     restoreWorkspace: "Restaurer mon espace de travail",
     partlyApplied: "Seule une partie des modifications gagnantes a été appliquée",
     partialApplyHelp:

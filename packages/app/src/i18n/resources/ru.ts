@@ -195,7 +195,7 @@ export const ru: TranslationResources = {
     mergeConflicts: "В некоторых файлах есть конфликты слияния",
     discardWinning: "Отклонить изменения победителя",
     winningNotApplied: "Изменения победителя не применены",
-    winningKept:
+    winningSaved:
       "Результат победителя сохранён, но Arena не смогла применить его к этому рабочему пространству.",
     restoreWorkspace: "Восстановить моё рабочее пространство",
     partlyApplied: "Применена только часть изменений победителя",
