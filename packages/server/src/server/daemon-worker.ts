@@ -13,6 +13,7 @@ import {
   claimRunningMarker,
   describeError,
   describeUncleanShutdown,
+  isExternalMarkerEnd,
   recordMarkerStopping,
   releaseRunningMarker,
 } from "./crash-reports/store.js";
@@ -158,6 +159,7 @@ function startCrashReporting(paseoHome: string): void {
       message: describeUncleanShutdown("The daemon", previous),
       exitCode: previous.exit?.code ?? null,
       signal: previous.exit?.signal ?? null,
+      external: isExternalMarkerEnd(previous),
     });
   }
 }

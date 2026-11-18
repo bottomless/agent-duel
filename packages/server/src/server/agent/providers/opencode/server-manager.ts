@@ -44,6 +44,12 @@ import {
 export const OPENCODE_SERVER_STARTUP_TIMEOUT_MS = 30_000;
 /** One stalled SSE attempt plus enough time for the consumer's retry. */
 export const OPENCODE_EVENT_STREAM_READY_TIMEOUT_MS = 45_000;
+// An engine that fails to start fails the same way on the next try: a database a newer version
+// upgraded, a broken install. Anything can ask for the engine (the activity poll every second),
+// so after the first retry each start waits longer, and every wait fails at once with the last
+// error. A shutdown, which a key or settings change does, clears the wait.
+const OPENCODE_STARTUP_RETRY_BASE_MS = 5_000;
+const OPENCODE_STARTUP_RETRY_MAX_MS = 5 * 60_000;
 const OPENCODE_SERVER_GRACEFUL_SHUTDOWN_TIMEOUT_MS = 5_000;
 const OPENCODE_SERVER_FORCE_SHUTDOWN_TIMEOUT_MS = 1_000;
 const OPENCODE_CONTROL_TOKEN_ENV = "PASEO_OPENCODE_CONTROL_TOKEN";
@@ -275,6 +281,7 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
   private allServers = new Set<OpenCodeServerGeneration>();
   private shutdownPromise: Promise<void> | null = null;
   private lifecycleGeneration = 0;
+  private startupFailures: { count: number; retryAt: number; error: Error } | null = null;
   private readonly logger: Logger;
   private readonly baseEnv?: SpawnProcessOptions["baseEnv"];
   private readonly runtimeSettings?: ProviderRuntimeSettings;
@@ -470,6 +477,8 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
 
     this.newServerPromise = Promise.resolve()
       .then(async () => {
+        // Before the rotation, so a postponed start leaves the current engine running.
+        this.ensureStartupRetryAllowed();
         await this.rotateCurrentServer();
         const server = await this.startServer();
         if (!server.retired) {
@@ -552,6 +561,7 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
         throw new Error("OpenCode server startup was interrupted by shutdown");
       }
     };
+    this.ensureStartupRetryAllowed();
     const launchPrefix = await this.resolveCommandPrefix();
     ensureCurrentGeneration();
     const isArenaLaunch =
@@ -834,6 +844,17 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
       });
     }
 
+    // A start that a shutdown interrupted neither failed nor succeeded.
+    const isCurrentLifecycle = () => this.lifecycleGeneration === lifecycleGeneration;
+    void ready.then(
+      () => {
+        if (isCurrentLifecycle()) this.startupFailures = null;
+        return undefined;
+      },
+      (error: Error) => {
+        if (isCurrentLifecycle()) this.recordStartupFailure(error);
+      },
+    );
     server.ready = ready.catch(async (error) => {
       await this.killServer(server);
       if (this.currentServer === server) {
@@ -933,6 +954,7 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
       return this.shutdownPromise;
     }
     this.lifecycleGeneration += 1;
+    this.startupFailures = null;
     const servers = [
       ...(this.currentServer ? [this.currentServer] : []),
       ...Array.from(this.retiredServers),
@@ -957,6 +979,32 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
     });
     this.shutdownPromise = barrier;
     return barrier;
+  }
+
+  private recordStartupFailure(error: Error): void {
+    const count = (this.startupFailures?.count ?? 0) + 1;
+    const delayMs =
+      count < 2
+        ? 0
+        : Math.min(
+            OPENCODE_STARTUP_RETRY_MAX_MS,
+            OPENCODE_STARTUP_RETRY_BASE_MS * 2 ** (count - 2),
+          );
+    this.startupFailures = { count, retryAt: Date.now() + delayMs, error };
+    if (delayMs > 0) {
+      this.logger.warn({ failures: count, retryInMs: delayMs }, "OpenCode server start postponed");
+    }
+  }
+
+  private ensureStartupRetryAllowed(): void {
+    const failures = this.startupFailures;
+    if (!failures) return;
+    const waitMs = failures.retryAt - Date.now();
+    if (waitMs <= 0) return;
+    throw new Error(
+      `${failures.error.message}\nThe engine failed to start ${failures.count} times; ` +
+        `the next try is in ${Math.ceil(waitMs / 1000)} s.`,
+    );
   }
 
   private async cleanupRetiredServers(): Promise<void> {

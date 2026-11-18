@@ -143,10 +143,18 @@ The daemon password and account session are separate credentials; a remote clien
   session is installed and the control plane has it. A control plane that does not accept that
   source answers 400 and the reports keep waiting, so deploy it before a release that sends them.
   The code is in `packages/server/src/server/crash-reports/`.
+- The daemon reports the same crash once a day and counts the repeats into the next report
+  (`reporter.ts`). The last report's time is kept in `crash-reports/repeats.state`, so a
+  restarted app does not report it again. An engine that cannot start fails on every try, and the activity poll asks for
+  it every second: one beta.18 install sent 24,000 reports in 12 hours. The engine manager also
+  waits longer between failed starts, up to 5 minutes, until a shutdown such as a key change
+  (`OpenCodeServerManager.recordStartupFailure`).
 - Only the app's own failures go without asking: an exception, an exit code, or a crash signal such
   as `SIGSEGV`. When something outside the app ended a process (found gone with no exit of its
-  own, killed by a signal like `SIGKILL`, or Electron's `killed` reason), nothing in the log
-  explains it. The report waits for the next launch, where the app asks whether to send it and
+  own, killed by a signal like `SIGKILL`, a Windows daemon terminated with exit code 1, or
+  Electron's `killed` reason), nothing in the log explains it. Windows has no kill signal:
+  TerminateProcess from Task Manager, `taskkill /F` or another program ends a process with exit
+  code 1, and only a terminated daemon leaves its marker with that exit (`isExternalMarkerEnd`). The report waits for the next launch, where the app asks whether to send it and
   takes the user's account of what happened as the feedback message
   (`packages/app/src/feedback/crash-report-review.tsx`). The control plane must store that
   message before a release sends it; an older one drops it without an error. Electron's `killed`
