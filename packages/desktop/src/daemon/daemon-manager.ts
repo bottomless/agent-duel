@@ -441,21 +441,29 @@ export async function stopCapturedDaemon(
   try {
     return await stop(input.keepTerminals);
   } catch (error) {
-    // The CLI refuses a keep stop before sending anything when the daemon predates the feature;
-    // that daemon closes terminals on every stop, as every upgrade did before.
-    if (
-      !input.keepTerminals ||
-      !(error instanceof ExternalCliCommandError) ||
-      error.code !== "TERMINALS_KEEP_UNSUPPORTED"
-    ) {
-      throw error;
+    if (!input.keepTerminals || !(error instanceof ExternalCliCommandError)) throw error;
+    // Keeping terminals only goes over the CLI's lifecycle RPC. Both refusals below come before
+    // anything reaches the daemon, so it is still running and a plain stop (SIGTERM off Windows)
+    // closes it with its terminals, as every upgrade did before terminals could survive one.
+    if (error.code === "TERMINALS_KEEP_UNSUPPORTED") {
+      // The daemon predates the feature.
+      const version = typeof error.error?.version === "string" ? error.error.version : "unknown";
+      logLifecycle(`daemon v${version} cannot keep terminals; stopping it and closing them`, {
+        reason: input.reason,
+        pid: input.instance.pid,
+      });
+      return await stop(false);
     }
-    const version = typeof error.error?.version === "string" ? error.error.version : "unknown";
-    logLifecycle(`daemon v${version} cannot keep terminals; stopping it and closing them`, {
-      reason: input.reason,
-      pid: input.instance.pid,
-    });
-    return await stop(false);
+    if (error.code === "SIGN_IN_REQUIRED") {
+      // A daemon with accounts refuses the CLI, which never has a signed-in session. Without this
+      // every macOS Install & restart failed from beta.21 on.
+      logLifecycle("daemon refused the CLI's keep stop; stopping it and closing its terminals", {
+        reason: input.reason,
+        pid: input.instance.pid,
+      });
+      return await stop(false);
+    }
+    throw error;
   }
 }
 
