@@ -27,8 +27,6 @@ product.
 
 ## Current models
 
-The hosted version draws from:
-
 <a href="https://agentduel.com/leaderboard">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://agentduel.com/readme/current-models-dark.svg">
@@ -37,8 +35,6 @@ The hosted version draws from:
 </a>
 
 See [leaderboard](https://agentduel.com/leaderboard) for model performance
-
-[Plain-text model list](https://agentduel.com/readme/current-models.txt)
 
 ## Architecture
 
