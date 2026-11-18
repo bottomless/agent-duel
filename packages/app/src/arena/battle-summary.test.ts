@@ -37,6 +37,7 @@ import {
   arenaSummaryAnchor,
   arenaSummaryAnchors,
   arenaTurnFollowedUp,
+  arenaTurnStartRowIds,
   pendingArenaPrompt,
   projectDiscardedArenaPrompts,
   projectPendingArenaPrompt,
@@ -120,6 +121,34 @@ describe("a discarded battle between two votes", () => {
     expect(arenaSummaryAnchors([voted1, discarded], stream)).toEqual([
       "user-1",
       "arena-prompt:turn-2",
+    ]);
+  });
+
+  it("puts each of several discarded battles in a row under its own prompt", () => {
+    const discard = (index: number) =>
+      turn(index, {
+        state: "discarded",
+        resolution: { kind: "stopped", resolution: "discard" },
+        prompt: `Discard test ${index}`,
+      });
+    const discards = [discard(2), discard(3), discard(4)];
+    const canonical = [user("user-1", 10), answer("answer-1", 11)];
+    const stream = projectDiscardedArenaPrompts(
+      { tail: canonical, head: [] },
+      [voted1, ...discards],
+      options,
+    );
+    expect(arenaSummaryAnchors(discards, stream)).toEqual([
+      "arena-prompt:turn-2",
+      "arena-prompt:turn-3",
+      "arena-prompt:turn-4",
+    ]);
+    // Each discarded prompt starts its own turn, so the chat draws a rule above every one.
+    expect([...arenaTurnStartRowIds([voted1, ...discards], stream)]).toEqual([
+      "user-1",
+      "arena-prompt:turn-2",
+      "arena-prompt:turn-3",
+      "arena-prompt:turn-4",
     ]);
   });
 

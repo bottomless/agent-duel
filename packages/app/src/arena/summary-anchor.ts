@@ -155,12 +155,16 @@ interface ArenaAnchorItem {
   messageId?: string;
 }
 
+/**
+ * The battle's own prompt row: its grafted prompt, or for a discarded battle, which grafted
+ * nothing, its projected row (`projectDiscardedArenaPrompts`). Matching a missing canonical ID
+ * against a row's missing message ID put every discarded battle under the first projected prompt.
+ */
 function isCanonicalPrompt(item: ArenaHistoryItem, streamItem: ArenaAnchorItem): boolean {
-  return (
-    streamItem.kind === "user_message" &&
-    (streamItem.messageId === item.canonicalUserMessageID ||
-      streamItem.id === item.canonicalUserMessageID)
-  );
+  if (streamItem.kind !== "user_message") return false;
+  const prompt = item.canonicalUserMessageID;
+  if (!prompt) return streamItem.id === arenaPromptRowId(item.id);
+  return streamItem.messageId === prompt || streamItem.id === prompt;
 }
 
 /**
@@ -175,9 +179,7 @@ function lastBattlePromptIndex(
   streamItems: ReadonlyArray<ArenaAnchorItem>,
 ): number {
   const first = item.canonicalUserMessageID;
-  // A discarded turn has only its projected prompt (`projectDiscardedArenaPrompts`).
-  if (!first)
-    return streamItems.findIndex((streamItem) => streamItem.id === arenaPromptRowId(item.id));
+  if (!first) return streamItems.findIndex((streamItem) => isCanonicalPrompt(item, streamItem));
   const last = item.canonicalLastMessageID;
   if (!last) return streamItems.findIndex((streamItem) => isCanonicalPrompt(item, streamItem));
   return streamItems.findLastIndex(
