@@ -448,29 +448,28 @@ describe("desktop stops and terminals", () => {
     expect(harness.stops).toEqual([{ keepTerminals: true }, { keepTerminals: false }]);
     expect(calls[1]).toEqual(["daemon", "stop", "--host", "127.0.0.1:6799", "--json"]);
     expect(harness.logged).toContain(
-      "daemon v0.11.0 cannot keep terminals; stopping it and closing them",
+      "daemon v0.11.0 cannot keep terminals; stopping it and closing its terminals",
     );
   });
 
-  it("stops a daemon that refuses the CLI with its terminals closed", async () => {
-    const calls: string[][] = [];
-    const harness = stopHarness(async (args) => {
-      calls.push(args);
-      if (args.includes("--keep-terminals")) {
-        throw new ExternalCliCommandError("Sign in to use Agent Duel", {
-          code: "SIGN_IN_REQUIRED",
-        });
-      }
-      return { action: "shutdown_requested" };
-    });
+  it.each(["SIGN_IN_REQUIRED", "ACCOUNTS_UNAVAILABLE"])(
+    "stops a daemon that refuses the CLI with %s, closing its terminals",
+    async (code) => {
+      const harness = stopHarness(async (args) => {
+        if (args.includes("--keep-terminals")) {
+          throw new ExternalCliCommandError("refused", { code });
+        }
+        return { action: "shutdown_requested" };
+      });
 
-    await stopCapturedDaemon({ ...harness.input, reason: "app_update", keepTerminals: true });
+      await stopCapturedDaemon({ ...harness.input, reason: "app_update", keepTerminals: true });
 
-    expect(harness.stops).toEqual([{ keepTerminals: true }, { keepTerminals: false }]);
-    expect(harness.logged).toContain(
-      "daemon refused the CLI's keep stop; stopping it and closing its terminals",
-    );
-  });
+      expect(harness.stops).toEqual([{ keepTerminals: true }, { keepTerminals: false }]);
+      expect(harness.logged).toContain(
+        `daemon refused the CLI's keep stop (${code}); stopping it and closing its terminals`,
+      );
+    },
+  );
 
   it("does not retry a keep stop that failed for another reason", async () => {
     const harness = stopHarness(async () => {
