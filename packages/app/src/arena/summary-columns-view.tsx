@@ -14,7 +14,8 @@ export const SummaryStackedBreakpoint = createContext(LIVE_SUMMARY_STACKED_BREAK
 
 /**
  * Inline code and bold, the only markdown the judge puts inside a sentence or a table cell. Code
- * is set a pixel under its text, which mono's wider glyphs need to sit level with it.
+ * is set a pixel under its text, which mono's wider glyphs need to sit level with it, on the chat's
+ * code chip.
  */
 function InlineText({
   text,
@@ -209,14 +210,23 @@ const styles = StyleSheet.create((theme) => ({
     fontSize: theme.fontSize.base,
     lineHeight: 20,
   },
+  // The chat's inline code chip (the markdown renderer's `code`), so a file or symbol name reads
+  // as code here too rather than as text that shrank mid-sentence.
   code: {
     fontFamily: theme.fontFamily.mono,
+    color: theme.colors.foreground,
+    backgroundColor: theme.colors.surface2,
+    borderRadius: 3,
+    paddingHorizontal: 4,
+    paddingVertical: 1,
   },
   sentenceCode: {
     fontSize: theme.fontSize.content - 1,
   },
+  // A row's label stays muted, its code included, so the label does not outweigh its value.
   aspectCode: {
     fontSize: Math.round((theme.fontSize.base * 13) / 14) - 1,
+    color: theme.colors.foregroundMuted,
   },
   valueCode: {
     fontSize: theme.fontSize.base - 1,
