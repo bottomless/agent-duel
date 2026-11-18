@@ -378,8 +378,7 @@ export const fr: TranslationResources = {
       "S’applique aux deux concurrents et devient le réglage par défaut des nouveaux chats. Les refus explicites restent applicables.",
     permissionsChat:
       "S’applique à ce chat et devient le réglage par défaut des nouveaux chats. Les refus explicites restent applicables.",
-    waitingSummary:
-      "travaille encore. Le résumé des différences comparera les deux résultats une fois le travail terminé.",
+    waitingSummary: "Le résumé des différences apparaît une fois que les deux agents ont terminé.",
     regionsReplaced:
       "Certaines zones étaient trop grandes pour être alignées précisément. Elles remplacent l’original ; les étiquettes de modifications communes sont indisponibles.",
     sideReplaced:

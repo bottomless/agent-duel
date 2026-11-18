@@ -372,8 +372,7 @@ export const ptBR: TranslationResources = {
       "Aplica-se aos dois participantes e se torna o padrão para novos chats. Regras explícitas de negação continuam válidas.",
     permissionsChat:
       "Aplica-se a este chat e se torna o padrão para novos chats. Regras explícitas de negação continuam válidas.",
-    waitingSummary:
-      "ainda está trabalhando. O resumo das diferenças comparará os dois resultados quando terminar.",
+    waitingSummary: "O resumo das diferenças aparece quando os dois agentes terminarem.",
     regionsReplaced:
       "Algumas regiões eram grandes demais para alinhar com precisão. São mostradas como substituições do original; rótulos de alterações compartilhadas estão indisponíveis.",
     sideReplaced:

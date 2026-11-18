@@ -361,8 +361,7 @@ export const en = {
       "Applies to both contestants and becomes the default for new chats. Explicit deny rules still apply.",
     permissionsChat:
       "Applies to this chat and becomes the default for new chats. Explicit deny rules still apply.",
-    waitingSummary:
-      "is still working. The difference summary compares both results once it finishes.",
+    waitingSummary: "The summary appears once both agents finish.",
     regionsReplaced:
       "Some regions were too large to align precisely. They are shown as replacements from the original; shared-change labels are unavailable.",
     sideReplaced:

@@ -358,7 +358,7 @@ export const zhCN: TranslationResources = {
     voteFailedReason: "。由于智能体失败，投票未计入",
     permissionsBoth: "适用于两个参赛者，并成为新聊天的默认设置。明确拒绝规则仍然生效。",
     permissionsChat: "适用于此聊天，并成为新聊天的默认设置。明确拒绝规则仍然生效。",
-    waitingSummary: "仍在工作。完成后，差异摘要将比较双方结果。",
+    waitingSummary: "两个智能体都完成后，将显示差异摘要。",
     regionsReplaced: "部分区域过大，无法精确对齐。将显示为原始内容的替换，无法提供共同更改标签。",
     sideReplaced: "此文件过大，无法逐行对齐；将显示为一方内容被全部替换。",
     baseReplaced: "此文件过大，无法逐行对齐；将显示为基础版本被全部替换。",

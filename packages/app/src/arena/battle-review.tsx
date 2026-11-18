@@ -1,4 +1,3 @@
-import { i18n } from "@/i18n/i18next";
 import { useTranslation } from "react-i18next";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Text, View, type LayoutChangeEvent } from "react-native";
@@ -81,17 +80,16 @@ function Verdict({
   );
 }
 
-const sideName = (side: ArenaSide) => i18n.t("arena.agentSide", { side: side.toUpperCase() });
-
-/** The summary tab while one side still works: nothing to compare yet, and it says so. */
-function WaitingSummary({ waitingFor }: { waitingFor: ArenaSide }) {
+/**
+ * The summary tab while one side still works: nothing to compare yet, and it says when there will
+ * be. Who is still working is the decision pill's to say, right below.
+ */
+function WaitingSummary() {
   const { t } = useTranslation();
 
   return (
     <View style={styles.section} testID="arena-summary-waiting">
-      <Text style={styles.status}>
-        {sideName(waitingFor)} {t("arena.waitingSummary")}
-      </Text>
+      <Text style={[styles.status, styles.statusCentred]}>{t("arena.waitingSummary")}</Text>
     </View>
   );
 }
@@ -161,7 +159,7 @@ function ChangesTab({
     );
   if (diff?.treesEqual && rows.length === 0) return <ArenaNoChangesColumns />;
   if (rows.length === 0 || !diff) {
-    return <Text style={styles.status}>{t("arena.baseUnavailable")}</Text>;
+    return <Text style={[styles.status, styles.statusCentred]}>{t("arena.baseUnavailable")}</Text>;
   }
   return (
     <View style={styles.block}>
@@ -425,7 +423,7 @@ export function BattleReview({
   }, [arrivalFile, rows, setShownFile, showChanges, turnId]);
   let content;
   if (shownTab === "verdict" && waitingFor !== null) {
-    content = <WaitingSummary waitingFor={waitingFor} />;
+    content = <WaitingSummary />;
   } else if (shownTab === "verdict") {
     content = (
       <Verdict
@@ -500,10 +498,11 @@ function ReviewFrame({
 }
 
 const styles = StyleSheet.create((theme) => ({
-  // In the chat under the answers, on their text edge, with no rule across both of them.
+  // In the chat under the answers, on their text edge, with no rule across both of them. The
+  // decision pill floats just below its end, so the end keeps room before the pill's buttons.
   review: {
     paddingTop: theme.spacing[4] + theme.spacing[1],
-    paddingBottom: theme.spacing[3],
+    paddingBottom: theme.spacing[8],
   },
   block: {
     gap: theme.spacing[2],
@@ -542,9 +541,14 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.foregroundMuted,
     fontSize: theme.fontSize.base,
   },
+  // A status stands where the tab's content will be, under the switch on the centre line.
+  statusCentred: {
+    textAlign: "center",
+  },
   loading: {
     flexDirection: "row",
     alignItems: "center",
+    justifyContent: "center",
     flexWrap: "wrap",
     gap: theme.spacing[2],
   },

@@ -373,8 +373,7 @@ export const es: TranslationResources = {
       "Se aplica a ambos concursantes y será el valor predeterminado en chats nuevos. Las reglas de denegación explícitas siguen vigentes.",
     permissionsChat:
       "Se aplica a este chat y será el valor predeterminado en chats nuevos. Las reglas de denegación explícitas siguen vigentes.",
-    waitingSummary:
-      "sigue trabajando. El resumen de diferencias comparará ambos resultados cuando termine.",
+    waitingSummary: "El resumen de diferencias aparece cuando ambos agentes terminan.",
     regionsReplaced:
       "Algunas regiones eran demasiado grandes para alinearlas con precisión. Se muestran como reemplazos del original; no hay etiquetas de cambios compartidos.",
     sideReplaced:
