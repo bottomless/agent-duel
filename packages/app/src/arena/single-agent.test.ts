@@ -5,6 +5,7 @@ import {
   singleAgentControlsLocked,
   singleAgentRatingOptional,
   singleAgentRatingRequired,
+  singleAgentTurnsByPrompt,
 } from "./single-agent";
 
 const frontier: NonNullable<ArenaSnapshot["singleAgent"]> = {
@@ -68,5 +69,22 @@ describe("single-agent rating gate", () => {
       thinking: "xhigh",
       label: "GPT Luna 5.6 Xhigh",
     });
+  });
+});
+
+describe("singleAgentTurnsByPrompt", () => {
+  it("finds a turn by the engine's prompt ID and by the client's", () => {
+    const medium = {
+      messageID: "msg_engine",
+      clientMessageID: "msg_client",
+      modelSize: "medium" as const,
+      identity: { name: "GPT Luna 5.6 Xhigh" },
+    };
+    const unrated = { messageID: "msg_other", modelSize: "frontier" as const };
+    const byPrompt = singleAgentTurnsByPrompt([medium, unrated]);
+    expect(byPrompt.get("msg_engine")).toBe(medium);
+    expect(byPrompt.get("msg_client")).toBe(medium);
+    expect(byPrompt.get("msg_other")).toBe(unrated);
+    expect(singleAgentTurnsByPrompt(undefined).size).toBe(0);
   });
 });

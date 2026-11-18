@@ -1641,6 +1641,12 @@ Medium shows **GPT Luna 5.6 Xhigh** and allows continued use without a rating. F
 contestant from the battle pool and hides its identity until a thumbs-up or thumbs-down rating.
 The question-mark control explains this before the user sends a prompt.
 
+Each single-agent answer is headed by its model: Medium's always, a frontier model once rated, and
+**Frontier** until then. The snapshot lists every single-agent turn of the chat by its prompt
+(`singleAgentTurns`), the ones a fork copied included. The daemon shows a prompt it sent under the
+client's ID (`paseoClientMessageId`) until it rereads the session, so the record keeps that ID too
+and the app finds a turn by either; with only the engine's ID, a fresh answer stayed "Agent".
+
 A frontier turn locks the chat composer and its settings until its completed result is rated.
 Keep Stop and tool permission responses available while the agent works. When it finishes successfully, show
 an in-stream rating dialog below the response, with both thumbs and no dismiss action. The disabled

@@ -107,11 +107,13 @@ function identity(assignment: HiddenAssignment): PublicIdentity {
   return { name: assignment.model }
 }
 
+const MEDIUM_IDENTITY: PublicIdentity = { name: "GPT Luna 5.6 Xhigh" }
+
 function singleAgent(rating: SingleAgentRatingDocument) {
   const modelSize = rating.modelSize ?? "frontier"
   const medium = modelSize === "medium"
   let revealedIdentity: PublicIdentity | undefined
-  if (medium) revealedIdentity = { name: "GPT Luna 5.6 Xhigh" }
+  if (medium) revealedIdentity = MEDIUM_IDENTITY
   else if (rating.vote) revealedIdentity = identity(rating.assignment)
   return {
     id: rating._id,
@@ -122,6 +124,23 @@ function singleAgent(rating: SingleAgentRatingDocument) {
     revealed: medium || rating.vote !== undefined,
     ...(revealedIdentity ? { identity: revealedIdentity } : {}),
     ...(rating.vote ? { vote: rating.vote } : {}),
+  }
+}
+
+/**
+ * A single-agent turn under its prompt, so the chat can head the answer: Medium by its model, a
+ * frontier model only once its rating revealed it. An unrated frontier turn names no model.
+ */
+function singleAgentTurn(rating: SingleAgentRatingDocument) {
+  const modelSize = rating.modelSize ?? "frontier"
+  let revealed: PublicIdentity | undefined
+  if (modelSize === "medium") revealed = MEDIUM_IDENTITY
+  else if (rating.vote && rating.assignment.model) revealed = { name: rating.assignment.model }
+  return {
+    messageID: rating.messageID,
+    ...(rating.clientMessageID ? { clientMessageID: rating.clientMessageID } : {}),
+    modelSize,
+    ...(revealed ? { identity: revealed } : {}),
   }
 }
 
@@ -315,6 +334,9 @@ export function project(snapshot: BattleSnapshot) {
       ? {
           singleAgent: singleAgent(snapshot.singleAgentRating),
         }
+      : {}),
+    ...(snapshot.singleAgentTurns?.length
+      ? { singleAgentTurns: snapshot.singleAgentTurns.map(singleAgentTurn) }
       : {}),
     ...(turn
       ? {

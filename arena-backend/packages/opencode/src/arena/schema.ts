@@ -325,6 +325,17 @@ export const Snapshot = Schema.Struct({
       identity: Schema.optional(Identity),
     }),
   ),
+  // Each single-agent turn under its prompt, so its answer can be headed by its model.
+  singleAgentTurns: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        messageID: Schema.String,
+        clientMessageID: Schema.optional(Schema.String),
+        modelSize: Schema.Literals(["medium", "frontier"]),
+        identity: Schema.optional(Identity),
+      }),
+    ),
+  ),
   turn: Schema.optional(
     Schema.Struct({
       ...HistoryItem.fields,

@@ -3,7 +3,11 @@ import { Text, View } from "react-native";
 import { useTranslation } from "react-i18next";
 import { StyleSheet, withUnistyles } from "react-native-unistyles";
 import { Bot } from "lucide-react-native";
-import type { ArenaHistoryItem, ArenaSide } from "@getpaseo/protocol/arena/rpc-schemas";
+import type {
+  ArenaHistoryItem,
+  ArenaSide,
+  ArenaSnapshot,
+} from "@getpaseo/protocol/arena/rpc-schemas";
 import { PressHighlight } from "@/components/ui/press-highlight";
 import type { Theme } from "@/styles/theme";
 import { tint } from "@/styles/tint";
@@ -35,25 +39,37 @@ export function ArenaAnswerColumn({ head, children }: { head?: ReactNode; childr
   );
 }
 
+export type ArenaSingleAgentTurn = NonNullable<ArenaSnapshot["singleAgentTurns"]>[number];
+
 /**
  * Who wrote an answer, above its first row: their avatar in the column and their name beside it.
  * A battle's kept answer shows the model that won; how it won and against whom close the answer,
- * at its footer's right end (`ArenaBattleResult`). A plain turn shows the agent.
+ * at its footer's right end (`ArenaBattleResult`). A single-agent turn shows its model: Medium's
+ * always, a frontier model once its rating revealed it and "Frontier" until then. A turn with no
+ * record of either shows the agent.
  */
-export function ArenaTurnHead({ item }: { item?: ArenaHistoryItem }) {
+export function ArenaTurnHead({
+  item,
+  singleAgent,
+}: {
+  item?: ArenaHistoryItem;
+  singleAgent?: ArenaSingleAgentTurn;
+}) {
   const { t } = useTranslation();
   const kept = item ? battleKeptSide(item) : undefined;
-  const model = kept ? item?.identities?.[kept].name : undefined;
-  if (!item || !model) {
+  const model = kept ? item?.identities?.[kept].name : singleAgent?.identity?.name;
+  if (!model) {
     return (
       <View style={styles.head} testID="arena-turn-head-agent">
         <ArenaAgentAvatar />
-        <Text style={styles.name}>{t("arena.agent")}</Text>
+        <Text style={styles.name}>
+          {singleAgent?.modelSize === "frontier" ? t("arena.frontier") : t("arena.agent")}
+        </Text>
       </View>
     );
   }
   return (
-    <View style={styles.head} testID={`arena-turn-head-${item.id}`}>
+    <View style={styles.head} testID={`arena-turn-head-${item?.id ?? singleAgent?.messageID}`}>
       <View style={styles.avatar}>
         <ArenaModelVendorIcon model={model} size={17} />
       </View>

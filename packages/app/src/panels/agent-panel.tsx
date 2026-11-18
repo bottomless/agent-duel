@@ -4,6 +4,7 @@ import {
   singleAgentControlsLocked,
   singleAgentRatingOptional,
   singleAgentRatingRequired,
+  singleAgentTurnsByPrompt,
 } from "@/arena/single-agent";
 import { SingleAgentRatingDialog, SingleAgentComposerTooltip } from "@/arena/single-agent-rating";
 import { usePendingArenaPrompt } from "@/arena/use-pending-arena-prompt";
@@ -1970,6 +1971,7 @@ function ArenaAgentStream({
   const { turnHeads, turnFooterEnds, answeredTurnIds, userRowIds } = useTurnHeads(
     agent.id,
     battleHistory,
+    arenaSession.data?.singleAgentTurns,
     shownStream,
     turnPresentation.isActive,
   );
@@ -2384,15 +2386,19 @@ interface TurnHeads {
 function useTurnHeads(
   agentId: string,
   history: ArenaSnapshot["history"] | undefined,
+  singleAgentTurns: ArenaSnapshot["singleAgentTurns"],
   stream: ArenaPresentedStream,
   lastTurnOpen: boolean,
 ): TurnHeads {
   const layoutKey = useMemo(() => {
     const { heads, ends } = arenaTurnHeads(history ?? [], stream, lastTurnOpen);
-    const headPairs: [string, string | null][] = [...heads.entries()].map(([row, author]) => [
-      row,
-      author.kind === "battle" ? author.item.id : null,
-    ]);
+    // A battle's head is keyed by its turn; a single agent's by the prompt it answered.
+    const headPairs: [string, { turn: string } | { prompt: string } | null][] = [
+      ...heads.entries(),
+    ].map(([row, author]) => {
+      if (author.kind === "battle") return [row, { turn: author.item.id }];
+      return [row, author.promptMessageId ? { prompt: author.promptMessageId } : null];
+    });
     const endPairs: [string, string][] = [...ends.entries()].map(([row, item]) => [row, item.id]);
     return JSON.stringify({ heads: headPairs, ends: endPairs });
   }, [history, lastTurnOpen, stream]);
@@ -2405,12 +2411,21 @@ function useTurnHeads(
     [stream],
   );
   const { turnHeads, turnFooterEnds, answeredTurnIds } = useMemo(() => {
-    const pairs: { heads: [string, string | null][]; ends: [string, string][] } =
-      JSON.parse(layoutKey);
+    const pairs: {
+      heads: [string, { turn: string } | { prompt: string } | null][];
+      ends: [string, string][];
+    } = JSON.parse(layoutKey);
     const byTurn = new Map((history ?? []).map((item) => [item.id, item]));
+    const byPrompt = singleAgentTurnsByPrompt(singleAgentTurns);
     const heads = new Map<string, React.ReactNode>();
-    for (const [row, turnId] of pairs.heads) {
-      heads.set(row, <ArenaTurnHead item={turnId ? byTurn.get(turnId) : undefined} />);
+    for (const [row, author] of pairs.heads) {
+      heads.set(
+        row,
+        <ArenaTurnHead
+          item={author && "turn" in author ? byTurn.get(author.turn) : undefined}
+          singleAgent={author && "prompt" in author ? byPrompt.get(author.prompt) : undefined}
+        />,
+      );
     }
     const ends = new Map<string, React.ReactNode>();
     for (const [row, turnId] of pairs.ends) {
@@ -2422,7 +2437,7 @@ function useTurnHeads(
       turnFooterEnds: ends,
       answeredTurnIds: new Set(pairs.ends.map(([, turnId]) => turnId)),
     };
-  }, [agentId, layoutKey, history]);
+  }, [agentId, layoutKey, history, singleAgentTurns]);
   const userRowIds = useMemo(() => new Set(userKey ? userKey.split("\n") : []), [userKey]);
   return { turnHeads, turnFooterEnds, answeredTurnIds, userRowIds };
 }

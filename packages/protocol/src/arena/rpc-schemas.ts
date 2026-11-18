@@ -453,6 +453,20 @@ export const ArenaSnapshotSchema = z
       })
       .passthrough()
       .optional(),
+    // Each single-agent turn under its prompt's message ID: Medium named, frontier once rated.
+    singleAgentTurns: z
+      .array(
+        z
+          .object({
+            messageID: z.string(),
+            // The sender's ID for the prompt: a prompt the daemon sent shows under it until reread.
+            clientMessageID: z.string().optional(),
+            modelSize: z.enum(["medium", "frontier"]),
+            identity: ArenaIdentitySchema.optional(),
+          })
+          .passthrough(),
+      )
+      .optional(),
     turn: ArenaHistoryItemSchema.extend({
       prompt: z.string(),
       attachments: z

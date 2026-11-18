@@ -8,7 +8,12 @@ import type { ArenaHistoryItem } from "@getpaseo/protocol/arena/rpc-schemas";
 
 vi.stubGlobal("React", React);
 
-import { ArenaBattleResult, ArenaTurnHead, arenaColumnResult } from "./turn-head";
+import {
+  ArenaBattleResult,
+  ArenaTurnHead,
+  arenaColumnResult,
+  type ArenaSingleAgentTurn,
+} from "./turn-head";
 import { useArenaShownBattleStore } from "./shown-battle";
 
 const kept = (over: Partial<ArenaHistoryItem>) =>
@@ -19,6 +24,18 @@ const kept = (over: Partial<ArenaHistoryItem>) =>
     identities: { a: { name: "GPT-6.1 Sol" }, b: { name: "Claude Opus 5.5" } },
     ...over,
   }) as unknown as ArenaHistoryItem;
+
+const MEDIUM_TURN: ArenaSingleAgentTurn = {
+  messageID: "msg_1",
+  modelSize: "medium",
+  identity: { name: "GPT Luna 5.6 Xhigh" },
+};
+const UNRATED_FRONTIER_TURN: ArenaSingleAgentTurn = { messageID: "msg_2", modelSize: "frontier" };
+const RATED_FRONTIER_TURN: ArenaSingleAgentTurn = {
+  messageID: "msg_3",
+  modelSize: "frontier",
+  identity: { name: "Claude Opus 5.5" },
+};
 
 afterEach(() => {
   cleanup();
@@ -34,6 +51,19 @@ describe("ArenaTurnHead", () => {
   it("heads a plain turn with the agent", () => {
     const view = render(<ArenaTurnHead />);
     expect(view.getByTestId("arena-turn-head-agent").textContent).toBe("Agent");
+  });
+
+  it("heads a single-agent turn with its model, and an unrated frontier turn with Frontier", () => {
+    const medium = render(<ArenaTurnHead singleAgent={MEDIUM_TURN} />);
+    expect(medium.getByTestId("arena-turn-head-msg_1").textContent).toBe("GPT Luna 5.6 Xhigh");
+    medium.unmount();
+
+    const unrated = render(<ArenaTurnHead singleAgent={UNRATED_FRONTIER_TURN} />);
+    expect(unrated.getByTestId("arena-turn-head-agent").textContent).toBe("Frontier");
+    unrated.unmount();
+
+    const rated = render(<ArenaTurnHead singleAgent={RATED_FRONTIER_TURN} />);
+    expect(rated.getByTestId("arena-turn-head-msg_3").textContent).toBe("Claude Opus 5.5");
   });
 });
 
