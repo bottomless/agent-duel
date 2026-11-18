@@ -60,7 +60,7 @@ function BattlePaneDecision({
   }
 
   if (phase.kind === "awaiting_stop_resolution") {
-    return <BattlePaneKeepDecision side={side} phase={phase} actions={actions} />;
+    return <BattlePaneStoppedDecision side={side} phase={phase} actions={actions} />;
   }
 
   if (phase.kind !== "awaiting_vote") return null;
@@ -91,7 +91,11 @@ function BattlePaneDecision({
   );
 }
 
-function BattlePaneKeepDecision({
+/**
+ * A side after a stop, drawn as at the vote: Choose, or Accept for a side that failed, which asks
+ * first because its work can be partial.
+ */
+function BattlePaneStoppedDecision({
   side,
   phase,
   actions,
@@ -104,18 +108,17 @@ function BattlePaneKeepDecision({
   const resolution = side === "a" ? "apply_a" : "apply_b";
   const canKeep = side === "a" ? phase.canKeepA : phase.canKeepB;
   const failed = side === "a" ? phase.failedA : phase.failedB;
-  const handleKeep = useCallback(() => {
-    // A failed side's work can be partial, so it asks first, as Accept does.
-    void (failed ? actions.keepFailed(side) : actions.resolveStop(resolution));
+  const handleChoose = useCallback(() => {
+    void (failed ? actions.acceptStoppedFailed(side) : actions.resolveStop(resolution));
   }, [actions, failed, resolution, side]);
   return (
     <ArenaSideChoiceButton
       side={side}
-      kind="keep"
+      kind={failed ? "accept" : "vote"}
       loading={pendingAction?.kind === "resolve_stop" && pendingAction.resolution === resolution}
       disabled={pending || !canKeep}
-      onPress={handleKeep}
-      testID={`arena-stopped-keep-${side}`}
+      onPress={handleChoose}
+      testID={`arena-stopped-choose-${side}`}
     />
   );
 }

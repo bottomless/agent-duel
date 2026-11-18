@@ -124,7 +124,7 @@ function refStory(item: RefItem): ReviewStory {
       note: i18n.t("arena.agentDeleted"),
       detail: i18n.t("arena.applyDeletes", { name: name }),
       asides: [backup, ...elsewhere],
-      mine: i18n.t("arena.keepSide", { side: name }),
+      mine: i18n.t("arena.keepRef", { name }),
       winner: i18n.t("arena.deleteRef", { name: name }),
     };
   }

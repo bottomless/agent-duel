@@ -102,7 +102,7 @@ export function ArenaBattleResult({ agentId, item }: { agentId: string; item: Ar
         <Text style={styles.meta}>{t("arena.versus")}</Text>
         <UnkeptModel model={opponent} testID={`arena-battle-result-opponent-${item.id}`} />
         <Text style={styles.meta}>·</Text>
-        <Text style={styles.meta}>{t("arena.tieSideKept", { side: kept.toUpperCase() })}</Text>
+        <Text style={styles.meta}>{t("arena.tieSideApplied", { side: kept.toUpperCase() })}</Text>
         {item.voteDiscardedReason ? (
           <Text style={styles.meta}>· {t("arena.voteNotCounted")}</Text>
         ) : null}
@@ -113,12 +113,6 @@ export function ArenaBattleResult({ agentId, item }: { agentId: string; item: Ar
   }
   return (
     <View style={styles.result} testID={`arena-battle-result-${item.id}`}>
-      {result === "kept" ? (
-        <>
-          <Text style={styles.meta}>{t("arena.battleStopped")}</Text>
-          <Text style={styles.meta}>·</Text>
-        </>
-      ) : null}
       <View style={styles.model}>
         <ArenaModelVendorIcon model={model} size={15} />
         <Text style={styles.resultName} numberOfLines={1}>
@@ -137,17 +131,17 @@ export function ArenaBattleResult({ agentId, item }: { agentId: string; item: Ar
   );
 }
 
-export type KeptResult = "won" | "tie" | "early" | "kept";
+export type KeptResult = "won" | "tie" | "early";
 
 /**
- * How the kept side was kept: tied, chosen early, kept at a Stop, or won. A side kept at a Stop is
- * tagged Kept, after "Battle stopped". A side kept after the other failed is shown as won, with
- * "Vote not counted" beside it when the vote was discarded.
+ * How the kept side was chosen: tied, chosen early, or won. A side chosen after a Stop reads as won,
+ * the same as at the vote: the person choosing should not have to tell how the battle ended. A side
+ * kept after the other failed is shown as won too, with "Vote not counted" beside it when the vote
+ * was discarded.
  */
 function keptResult(item: ArenaHistoryItem): KeptResult {
   if (item.vote === "tie") return "tie";
   if (item.selectedEarly) return "early";
-  if (item.resolution?.kind === "stopped") return "kept";
   return "won";
 }
 
@@ -166,7 +160,6 @@ const RESULT_KEYS = {
   won: "arena.resultWon",
   tie: "arena.tie",
   early: "arena.resultEarly",
-  kept: "arena.resultKept",
 } as const;
 
 /** The result as a small tag after the name, tinted in the kept side's colour; a tie stays grey. */

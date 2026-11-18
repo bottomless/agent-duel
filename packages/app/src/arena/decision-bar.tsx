@@ -38,14 +38,14 @@ import {
 } from "./decision-state";
 import { useArenaBattleActions, type ArenaBattleActions } from "./use-battle-actions";
 
-function sideChoiceLabelKey(kind: "vote" | "keep" | "accept"): string {
-  if (kind === "keep") return "arena.keepSide";
-  if (kind === "accept") return "arena.acceptSide";
-  return "arena.choose";
+function sideChoiceLabelKey(kind: "vote" | "accept"): string {
+  return kind === "accept" ? "arena.acceptSide" : "arena.choose";
 }
 
 /**
- * The decision for one side: the vote, the early pick, or keeping that side after a stop.
+ * The decision for one side: the vote, the early pick, or the choice after a stop. A side chosen
+ * after a stop reads as it does at the vote, Choose or Accept: the person choosing should not
+ * have to tell how the battle ended.
  *
  * Two choices of equal weight, so neither can be the accent. The tint is the side's colour,
  * the blue and amber the diff's column headings use, so the button reads as picking that
@@ -62,7 +62,7 @@ export function ArenaSideChoiceButton({
   testID,
 }: {
   side: ArenaSide;
-  kind: "early" | "vote" | "keep" | "accept";
+  kind: "early" | "vote" | "accept";
   label?: string;
   loading?: boolean;
   disabled?: boolean;
@@ -180,7 +180,7 @@ export function ArenaBalancedChoiceGroup({
 
 /** What a decided battle's row offered, and which of its three it took. */
 export interface ArenaPastChoice {
-  kind: "vote" | "keep";
+  kind: "vote" | "stop";
   chosen: ArenaSide | "middle";
 }
 
@@ -194,9 +194,9 @@ export function arenaPastChoice(
   }
   if (resolution?.kind === "early") return { kind: "vote", chosen: resolution.vote };
   if (resolution?.kind === "stopped") {
-    if (resolution.resolution === "apply_a") return { kind: "keep", chosen: "a" };
-    if (resolution.resolution === "apply_b") return { kind: "keep", chosen: "b" };
-    return { kind: "keep", chosen: "middle" };
+    if (resolution.resolution === "apply_a") return { kind: "stop", chosen: "a" };
+    if (resolution.resolution === "apply_b") return { kind: "stop", chosen: "b" };
+    return { kind: "stop", chosen: "middle" };
   }
   return null;
 }
@@ -221,8 +221,7 @@ export function ArenaPastDecision({
 }: ArenaPastChoice & { identities?: ArenaHistoryItem["identities"]; reveal?: boolean }) {
   const { t } = useTranslation();
   const phase = useRevealPhase(reveal);
-  const voteLabel = (side: ArenaSide) =>
-    t(kind === "vote" ? "arena.choose" : "arena.keepSide", { side: side.toUpperCase() });
+  const voteLabel = (side: ArenaSide) => t("arena.choose", { side: side.toUpperCase() });
   const sideLabel = (side: ArenaSide) => {
     const model = identities?.[side].name;
     return model ? arenaModelDisplayName(model) : voteLabel(side);

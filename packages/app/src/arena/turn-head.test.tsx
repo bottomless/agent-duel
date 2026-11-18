@@ -84,7 +84,7 @@ describe("ArenaBattleResult", () => {
       <ArenaBattleResult agentId="agent" item={kept({ vote: "tie", appliedSide: "a" })} />,
     );
     expect(view.getByTestId("arena-battle-result-turn-1").textContent).toBe(
-      "TieGPT-6.1 SolvsClaude Opus 5.5·A's changes kept·Show battle›",
+      "TieGPT-6.1 SolvsClaude Opus 5.5·A's changes applied·Show battle›",
     );
   });
 
@@ -117,7 +117,7 @@ describe("ArenaBattleResult", () => {
     );
     failed.unmount();
 
-    // Kept at a Stop: no vote at all.
+    // Chosen at a Stop: no vote at all, yet it reads as a win, as at the vote.
     const stopped = render(
       <ArenaBattleResult
         agentId="agent"
@@ -127,10 +127,9 @@ describe("ArenaBattleResult", () => {
         })}
       />,
     );
-    // The line says the battle was stopped, then tags the side it kept.
-    expect(stopped.getByTestId("arena-battle-result-tag-kept").textContent).toBe("Kept");
+    expect(stopped.getByTestId("arena-battle-result-tag-won").textContent).toBe("Won");
     expect(stopped.getByTestId("arena-battle-result-turn-1").textContent).toMatch(
-      /^Battle stopped·GPT-6\.1 SolKeptvs/,
+      /^GPT-6\.1 SolWonvs/,
     );
     expect(stopped.getByTestId("arena-battle-result-turn-1").textContent).not.toContain(
       "Vote not counted",
@@ -144,7 +143,7 @@ describe("arenaColumnResult", () => {
     arenaColumnResult(item, "b"),
   ];
 
-  it("tags only the kept column with how it was kept", () => {
+  it("tags only the chosen column with how it was chosen, a side chosen at a Stop as won", () => {
     expect(both(kept({ vote: "b", appliedSide: "b" }))).toEqual([undefined, "won"]);
     expect(both(kept({ vote: "a", appliedSide: "a", selectedEarly: true }))).toEqual([
       "early",
@@ -152,7 +151,7 @@ describe("arenaColumnResult", () => {
     ]);
     expect(
       both(kept({ appliedSide: "a", resolution: { kind: "stopped", resolution: "apply_a" } })),
-    ).toEqual(["kept", undefined]);
+    ).toEqual(["won", undefined]);
   });
 
   it("tags both columns of a tie, so neither reads as the winner", () => {

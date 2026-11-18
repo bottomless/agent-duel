@@ -18,19 +18,19 @@ describe("shownBattleResult", () => {
     });
   });
 
-  it("states a tie with the side whose changes were kept", () => {
+  it("states a tie with the side whose changes were applied", () => {
     expect(
       shownBattleResult(item({ resolution: { kind: "vote", vote: "tie", appliedSide: "a" } })),
     ).toEqual({
       statement: { key: "arena.youCalledTie" },
       check: "tie",
-      tieKept: "a",
+      tieApplied: "a",
       model: "Claude Opus",
       notes: [],
     });
   });
 
-  it("states an early pick, a side kept at a Stop, and a discard", () => {
+  it("states an early pick, a side chosen at a Stop, and a discard", () => {
     expect(
       shownBattleResult(item({ resolution: { kind: "early", vote: "a", appliedSide: "a" } }))
         ?.statement,
@@ -38,8 +38,9 @@ describe("shownBattleResult", () => {
     expect(
       shownBattleResult(item({ resolution: { kind: "stopped", resolution: "apply_b" } })),
     ).toEqual({
-      lead: { key: "arena.battleStopped" },
-      statement: { key: "arena.youKeptSide", side: "b" },
+      // Chosen at a Stop reads as chosen at the vote.
+      statement: { key: "arena.youChoseSide", side: "b" },
+      check: "b",
       model: "Qwen 3.8 Max",
       notes: [],
     });

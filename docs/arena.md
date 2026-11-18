@@ -450,7 +450,8 @@ The vote lives in a centered sticky pill above the composer: `Choose A`, `Tie`, 
 They are one control (`ArenaChoiceGroup`): the sides' solid buttons at its ends and `Tie` a plain
 label between them, because as three separate buttons Tie read as a third answer. Anchor it over the transcript above the composer, with a gray surface inside the pill and a
 transparent, click-through area around it. It stays reachable while reviewing either thread or
-the diff. A stopped battle uses the same pill for `Keep A`, `Discard`, and `Keep B`; an early
+the diff. A stopped battle uses the same pill for `Choose A`, `Discard`, and `Choose B` (`Accept A`
+for a side that failed, as at the vote); an early
 choice while the battle runs sits there too. While neither result is selectable, show one `Stop`
 button. When one result becomes selectable, the row becomes the same gray pill as the vote, with
 `Stop` in the middle and each side's place holding what applies to it: `Choose A early` or
@@ -1467,8 +1468,11 @@ actually verified. Use one utility request; increase evidence quality before add
   retry. A discard grafts nothing, so the chat's session never holds its prompt: the history item
   carries it, and the app shows it as a prompt row with the discarded card under it
   (`projectDiscardedArenaPrompts`). The next battle's agents do not see the discarded turn.
-- **Stop** moves to `awaiting_stop_resolution`, where the choice is discard, keep A, or keep B
-  (`stop` in `arena/service.ts`). A stopped battle gets no summary, so the move to `stopping` marks
+- **Stop** moves to `awaiting_stop_resolution`, where the choice is discard, A, or B (`stop` in
+  `arena/service.ts`). The engine records a side chosen there as `stopped` with `apply_a` or
+  `apply_b`, but the app never shows the difference: the pill reads `Choose`, the result `Won`, as
+  at the vote. The owner wants a battle that was stopped to read like one that ran to the end; only
+  a discard reads differently. Do not bring back `Keep` or `Kept`. A stopped battle gets no summary, so the move to `stopping` marks
   it `skipped` in the same write (`transitionTurn` in `arena/mongo.ts`). Left `pending`, the decision
   showed a summary on its way, and a restart failed it and offered Retry summary
   (`interruptedComparisonState`). Keeping a side when the other had already failed, rather than
@@ -1486,9 +1490,8 @@ A kept answer's avatar is the winning model's vendor mark, alone, with only its 
 battle's result closes the answer instead, at the right end of its footer on the chat's right edge
 where the prompt ends (`ArenaBattleResult`, keyed by `arenaTurnHeads`' `ends`): `Claude Opus 5.5
 [Won] vs GPT-6.1 Sol · Show battle`, the tag tinted in the kept side's colour, or `Tie` or `Chosen
-early`. A side kept at a Stop reads `Battle stopped · Claude Opus 5.5 [Kept] vs GPT-6.1 Sol · Show
-battle`: the owner turned down tagging it `Won` or `Stopped`. A side kept after the other failed
-shows `Won`, with `Vote not counted` when the vote was discarded. Every kept side gets it
+early`. A side chosen at a Stop shows `Won` too, with nothing about the Stop (see **Stop** above).
+A side kept after the other failed shows `Won`, with `Vote not counted` when the vote was discarded. Every kept side gets it
 (`battleKeptSide`), on the footer of the kept answer's last text, so replies sent inside the battle
 share one result. An answer stopped before it wrote any text has its footer on its last run of work,
 so the result goes there; one stopped before it did anything has no rows, and its result stands

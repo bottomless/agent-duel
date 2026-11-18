@@ -9,19 +9,14 @@ import { arenaModelDisplayName } from "./side-label";
 
 /** What Show battle's footer says about a decided battle. */
 export interface ShownBattleResult {
-  /** Words before the statement, in the muted tone: how the battle ended. */
-  lead?: { key: "arena.battleStopped" };
   statement:
-    | {
-        key: "arena.youChoseSide" | "arena.youChoseSideEarly" | "arena.youKeptSide";
-        side: ArenaSide;
-      }
+    | { key: "arena.youChoseSide" | "arena.youChoseSideEarly"; side: ArenaSide }
     | { key: "arena.youCalledTie" }
     | { key: "arena.battleDiscarded" };
   /** The check before a choice the voter made: tinted in the chosen side's colour, grey for a tie. */
   check?: ArenaSide | "tie";
-  /** The side whose changes the chat kept, when a tie names it. */
-  tieKept?: ArenaSide;
+  /** The side whose changes a tie applied. */
+  tieApplied?: ArenaSide;
   /** The kept side's model, once revealed. */
   model?: string;
   notes: ("arena.winningDiscarded" | "arena.voteNotCounted")[];
@@ -47,7 +42,7 @@ export function shownBattleResult(item: ArenaHistoryItem): ShownBattleResult | n
     return {
       statement: { key: "arena.youCalledTie" },
       check: "tie",
-      tieKept: kept,
+      tieApplied: kept,
       ...named(kept),
       notes,
     };
@@ -69,13 +64,9 @@ export function shownBattleResult(item: ArenaHistoryItem): ShownBattleResult | n
     if (resolution.resolution === "discard") {
       return { statement: { key: "arena.battleDiscarded" }, notes };
     }
+    // A side chosen after a Stop reads as one chosen at the vote.
     const side = resolution.resolution === "apply_a" ? "a" : "b";
-    return {
-      lead: { key: "arena.battleStopped" },
-      statement: { key: "arena.youKeptSide", side },
-      ...named(side),
-      notes,
-    };
+    return { statement: { key: "arena.youChoseSide", side }, check: side, ...named(side), notes };
   }
   return null;
 }
@@ -97,21 +88,15 @@ export function ArenaShownBattleResult({ result }: { result: ShownBattleResult }
       : t(statement.key);
   return (
     <View style={styles.line} testID="arena-shown-battle-result">
-      {result.lead ? (
-        <>
-          <Text style={styles.meta}>{t(result.lead.key)}</Text>
-          <Text style={styles.meta}>·</Text>
-        </>
-      ) : null}
       <View style={styles.statement}>
         {result.check ? <ThemedCheck size={15} uniProps={checkColorMapping[result.check]} /> : null}
         <Text style={styles.statementText}>{statementText}</Text>
       </View>
-      {result.tieKept ? (
+      {result.tieApplied ? (
         <>
           <Text style={styles.meta}>·</Text>
           <Text style={styles.meta}>
-            {t("arena.tieSideKept", { side: result.tieKept.toUpperCase() })}
+            {t("arena.tieSideApplied", { side: result.tieApplied.toUpperCase() })}
           </Text>
         </>
       ) : null}
