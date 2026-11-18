@@ -250,6 +250,31 @@ describe("paths that are not at the start of a word (round 2, issue 2)", async (
   })
 })
 
+describe("operands after --", async () => {
+  // `--` ends the options, so a word after it is a file even when it starts with `-` (#239 review).
+  it.each([["rm -rf -- --/../../x"], ["rm -rf -- -x/../../x"], ["touch -- -x/../../x"], ["mv a -- -x/../../x"]])(
+    "reads the operand in %s",
+    async (command) => {
+      expect(await outside(command)).toContain("/work/*")
+    },
+  )
+
+  it.each([["rm -rf -- -x"], ["rm -rf -- --"], ["npm test -- --watch"]])(
+    "keeps a dash operand inside the project in %s",
+    async (command) => {
+      expect(await outside(command)).toEqual([])
+    },
+  )
+
+  // After `--`, npm and cargo pass the words on to the program they run, so `-o` is still an option.
+  it.each([[`npm run build -- -o${OUT}/x`], [`cargo run -- -p${OUT}/x`]])(
+    "still reads an attached option value in %s",
+    async (command) => {
+      expect(await outside(command)).toContain(`${OUT}/*`)
+    },
+  )
+})
+
 describe("text that is not a path (round 2, issue 3)", async () => {
   it.each([
     ["git commit --allow-empty -m 'fix /api/users route'"],
