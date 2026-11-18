@@ -65,6 +65,8 @@ async function fork(
   parts: SessionV1.Part[] = [],
   empty = false,
   native?: SessionMessage.Info,
+  // The copied transcript in order; `parts` go on every message but the boundary.
+  copies: { ids: MessageID[]; boundary: MessageID } = { ids: [targetMessageID, boundary], boundary },
 ) {
   const written: SessionV1.Part[] = []
   const moved: unknown[] = []
@@ -91,7 +93,7 @@ async function fork(
               input.onMessageMapping?.(
                 new Map([
                   [sourceMessageID, targetMessageID],
-                  [MessageID.make("msg_02"), boundary],
+                  [MessageID.make("msg_02"), copies.boundary],
                 ]),
               )
               return empty
@@ -108,7 +110,10 @@ async function fork(
               Effect.sync(() => {
                 canonical.push(input.message)
               }),
-            messages: () => Effect.succeed([{ info, parts }]),
+            messages: () =>
+              Effect.succeed(
+                copies.ids.map((id) => ({ info: { ...info, id }, parts: id === copies.boundary ? [] : parts })),
+              ),
             updatePart: (part) =>
               Effect.sync(() => {
                 written.push(part)
@@ -216,6 +221,20 @@ describe("Arena fork on native sessions", () => {
       state: { metadata: { output: "[Old tool result content cleared]" } },
     })
     expect(parts[1]).toMatchObject({ state: { time: { start: 0, end: 1 } } })
+  })
+  test("prunes by transcript position, not by the string order of Core's copy IDs", async () => {
+    // Core names copies `<fork ID>_<seq>`, so `msg_f_13` sorts before `msg_f_9` as a string.
+    const ids = ["msg_f_9", "msg_f_10", "msg_f_13"].map((id) => MessageID.make(id))
+    const result = await fork(
+      { pruneToolOutputBefore: MessageID.make("msg_02") },
+      [tool("bash", { command: "npm test" })],
+      false,
+      undefined,
+      { ids, boundary: ids[1] },
+    )
+    expect(result.written[0]).toMatchObject({ state: { time: { compacted: expect.any(Number) } } })
+    expect(result.written[1]).toMatchObject({ state: { time: { start: 0, end: 1 } } })
+    expect(result.written[1]).not.toMatchObject({ state: { time: { compacted: expect.any(Number) } } })
   })
   test("leaves a same-directory fork at its source and can defer moving a staged copy", async () => {
     expect((await fork({ roots: { canonical: "/repo", worktree: "/repo" } })).moved).toEqual([])

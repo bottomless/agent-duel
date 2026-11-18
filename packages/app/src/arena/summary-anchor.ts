@@ -4,6 +4,7 @@ import type { AgentTimelineCursorState } from "@/stores/session-store";
 import { createUserMessage, type StreamItem } from "@/types/stream";
 import { isResolvingBattleState } from "./battle-result";
 import { orderArenaChat } from "./chat-order";
+import { compareMessageIds } from "./message-order";
 
 export function isArenaBattleUnresolved(snapshot: ArenaSnapshot | undefined): boolean {
   return snapshot?.chat.status === "battle_active" && snapshot.turn?.resolution === undefined;
@@ -165,9 +166,9 @@ function isCanonicalPrompt(item: ArenaHistoryItem, streamItem: ArenaAnchorItem):
 /**
  * The battle's last prompt in the chat: its own, or the last reply sent inside the battle. Those
  * replies are grafted with the winner as user messages, so the next user message is not where the
- * battle ends. Canonical message IDs ascend, so the battle's prompts are the user messages from its
- * own prompt through the last message the graft copied. A turn grafted before that bound was
- * recorded falls back to its own prompt.
+ * battle ends. Canonical message IDs ascend (`compareMessageIds`), so the battle's prompts are the
+ * user messages from its own prompt through the last message the graft copied. A turn grafted
+ * before that bound was recorded falls back to its own prompt.
  */
 function lastBattlePromptIndex(
   item: ArenaHistoryItem,
@@ -184,8 +185,8 @@ function lastBattlePromptIndex(
       isCanonicalPrompt(item, streamItem) ||
       (streamItem.kind === "user_message" &&
         streamItem.messageId !== undefined &&
-        streamItem.messageId >= first &&
-        streamItem.messageId <= last),
+        compareMessageIds(streamItem.messageId, first) >= 0 &&
+        compareMessageIds(streamItem.messageId, last) <= 0),
   );
 }
 
@@ -271,7 +272,7 @@ export function arenaTurnFollowedUp(item: ArenaHistoryItem, stream: ArenaPresent
       (streamItem) =>
         streamItem.kind === "user_message" &&
         streamItem.messageId !== undefined &&
-        streamItem.messageId > last,
+        compareMessageIds(streamItem.messageId, last) > 0,
     )
   );
 }

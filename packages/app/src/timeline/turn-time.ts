@@ -1,6 +1,7 @@
 import type { StreamItem } from "@/types/stream";
 import { startsNewTurn, isTurnTrigger } from "@/agent-stream/turn-membership";
 import type { ArenaHistoryItem } from "@getpaseo/protocol/arena/rpc-schemas";
+import { compareMessageIds } from "@/arena/message-order";
 
 export interface TurnTiming {
   completedAt: Date;
@@ -162,7 +163,7 @@ function applyBattleTiming(
     const isWinnerAnswer = (item: StreamItem) => {
       if (item.kind !== "assistant_message") return false;
       const id = item.messageId ?? item.id;
-      return id >= first && id <= last;
+      return compareMessageIds(id, first) >= 0 && compareMessageIds(id, last) <= 0;
     };
     const answer = params.head.findLast(isWinnerAnswer) ?? params.tail.findLast(isWinnerAnswer);
     if (!answer) continue;

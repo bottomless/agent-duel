@@ -574,6 +574,11 @@ history then starts with the decided battles it copied, moved onto its own messa
 (`inheritTurns` in `arena/fork-lineage.ts`), through forks of forks; without that the fork showed
 every copied battle answer as the plain agent's. Show battle on a copied battle opens the source
 chat's battle. A fork made before lineage was recorded has none and stays that way.
+Core names each copy `<fork message ID>_<seq>`, in forked chats and in contestant forks alike, so
+copies stop sorting as strings past the tenth (`…_13` before `…_9`). Order copies by transcript
+position, or in the app by `compareMessageIds` (`packages/app/src/arena/message-order.ts`); a string
+comparison let a fork count the turn after an inherited battle, such as a conflict-resolving agent,
+as part of that battle.
 A battle needs Git 2.39 or newer, and a send refuses an older or missing Git with the command that
 fixes it (`requireBattleGit` in `arena/git.ts`). Many Macs still run Apple's Git 2.39 from older
 Command Line Tools, so the engine's merges pick their base by parenting wrapper commits on it rather

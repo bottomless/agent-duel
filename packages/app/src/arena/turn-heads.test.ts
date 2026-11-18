@@ -130,6 +130,13 @@ describe("arenaTurnHeads", () => {
 });
 
 describe("arenaTurnStartRowIds", () => {
+  it("starts a turn at a prompt sent after an inherited battle in a fork", () => {
+    // A fork's copies are `<fork ID>_<seq>`: as strings, `_13` falls inside a battle ending at `_9`.
+    const tail = [prompt("msg_f_1"), text("a1"), prompt("msg_f_13"), text("a2")];
+    const kept = battle("turn-1", "msg_f_1", "msg_f_9");
+    expect([...arenaTurnStartRowIds([kept], { tail, head: [] })]).toEqual(["msg_f_1", "msg_f_13"]);
+  });
+
   it("starts a turn at every prompt, plain or battle, but not at a reply inside a battle", () => {
     const tail = [
       prompt("msg_0050"),
