@@ -441,21 +441,37 @@ export async function stopCapturedDaemon(
   try {
     return await stop(input.keepTerminals);
   } catch (error) {
-    // The CLI refuses a keep stop before sending anything when the daemon predates the feature;
-    // that daemon closes terminals on every stop, as every upgrade did before.
-    if (
-      !input.keepTerminals ||
-      !(error instanceof ExternalCliCommandError) ||
-      error.code !== "TERMINALS_KEEP_UNSUPPORTED"
-    ) {
-      throw error;
-    }
-    const version = typeof error.error?.version === "string" ? error.error.version : "unknown";
-    logLifecycle(`daemon v${version} cannot keep terminals; stopping it and closing them`, {
+    // Keeping terminals only goes over the CLI's lifecycle RPC. Each refusal below comes before
+    // anything reaches the daemon, so it is still running and a plain stop (SIGTERM off Windows)
+    // closes it with its terminals, as every upgrade did before terminals could survive one.
+    const refusal =
+      input.keepTerminals && error instanceof ExternalCliCommandError
+        ? describeKeepStopRefusal(error)
+        : null;
+    if (!refusal) throw error;
+    logLifecycle(`${refusal}; stopping it and closing its terminals`, {
       reason: input.reason,
       pid: input.instance.pid,
     });
     return await stop(false);
+  }
+}
+
+function describeKeepStopRefusal(error: ExternalCliCommandError): string | null {
+  switch (error.code) {
+    case "TERMINALS_KEEP_UNSUPPORTED": {
+      // The daemon predates the feature.
+      const version = typeof error.error?.version === "string" ? error.error.version : "unknown";
+      return `daemon v${version} cannot keep terminals`;
+    }
+    // A daemon with accounts refuses the CLI, which never has a signed-in session, and refuses it
+    // differently while its accounts service starts. Without this every macOS app update and
+    // version-mismatch restart failed from beta.21 on (#210 made them keep terminals).
+    case "SIGN_IN_REQUIRED":
+    case "ACCOUNTS_UNAVAILABLE":
+      return `daemon refused the CLI's keep stop (${error.code})`;
+    default:
+      return null;
   }
 }
 
