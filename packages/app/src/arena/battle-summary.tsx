@@ -42,7 +42,6 @@ import { DiffLayoutControl } from "./diff-layout-control";
 import { InlineFileDiff, openChangesFiles, toggleChangesFile } from "./inline-file-diff";
 import { VerdictBody } from "./verdict-body";
 import { ArenaChangesList } from "./changes-list";
-import { ArenaPastDecision, arenaPastChoice } from "./decision-bar";
 import { arenaChangesCountLabel, arenaChangesRows } from "./changes-rows";
 import { arenaDiffQueryKey, hasBattleDiff } from "./comparison-visibility";
 import { arenaModelDisplayName } from "./side-label";
@@ -57,6 +56,7 @@ import { BattleReview } from "./battle-review";
 import { BATTLE_GUTTER, BATTLE_RAIL, SHOWN_SUMMARY_STACKED_BREAKPOINT } from "./battle-layout";
 import { SummaryStackedBreakpoint } from "./summary-columns-view";
 import { useArenaShownBattle, useArenaShownBattleStore } from "./shown-battle";
+import { ArenaShownBattleResult, shownBattleResult } from "./shown-battle-result";
 
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
 const ThemedGitCompareArrows = withUnistyles(GitCompareArrows);
@@ -310,19 +310,19 @@ function keptModel(item: ArenaHistoryItem): string | undefined {
 }
 
 /**
- * The end of a shown battle, in the chat under its review: the decision row as it was left, the
- * button taken marked, and Hide battle at the row's end.
+ * The end of a shown battle, in the chat under its review: the decision it ended with, as a line of
+ * text (`shownBattleResult`), and Hide battle at the row's end.
  */
 function ShownBattleEnd({ agentId, item }: { agentId: string; item: ArenaHistoryItem }) {
   const { t } = useTranslation();
-  const choice = arenaPastChoice(item);
+  const result = shownBattleResult(item);
   const hide = useArenaShownBattleStore((state) => state.hide);
   const onHideBattle = useCallback(() => hide(agentId), [agentId, hide]);
   return (
     <View style={styles.shownFooter} testID="arena-shown-battle-footer">
       <View style={styles.shownFooterEnd} />
-      {choice ? (
-        <ArenaPastDecision kind={choice.kind} chosen={choice.chosen} />
+      {result ? (
+        <ArenaShownBattleResult result={result} />
       ) : (
         <Text style={styles.shownFooterResult}>{chosenLabel(item)}</Text>
       )}

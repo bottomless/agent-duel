@@ -114,6 +114,11 @@ export const en = {
     // After the kept model in its answer's footer: the model it was chosen over.
     showBattle: "Show battle",
     hideBattle: "Hide battle",
+    youChoseSide: "You chose {{side}}",
+    youChoseSideEarly: "You chose {{side}} early",
+    youCalledTie: "You called a tie",
+    tieSideKept: "{{side}}'s changes kept",
+    youKeptSide: "you kept {{side}}",
     keptAgent: "Agent {{side}} · kept",
     actionFailed: "Battle action failed",
     trunkUnavailable: "Trunk unavailable",
