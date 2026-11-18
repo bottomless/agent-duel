@@ -21,6 +21,7 @@ import type {
   ArenaSnapshot,
 } from "@getpaseo/protocol/arena/rpc-schemas";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ArenaTransitionStatus } from "./transition-status";
 import { arenaSetupStatus } from "./transition-progress";
 import { inlineUnistylesStyle } from "@/styles/unistyles-inline-style";
@@ -431,21 +432,32 @@ export function VoteDecision({
   const tie = useCallback(() => {
     void actions.tie();
   }, [actions]);
+  // A tie keeps Agent A's work, which nothing on the button says; the tooltip says it before the
+  // vote. Hover rides a plain View (docs/hover.md): Button keeps its own hover handlers.
   return (
-    <Button
-      variant="ghost"
-      size="sm"
-      style={styles.pillChoice}
-      textStyle={styles.choiceText}
-      loading={pendingAction?.kind === "vote" && pendingAction.vote === "tie"}
-      disabled={pending || disabled}
-      onPress={tie}
-      accessibilityLabel={t("arena.tieBattle")}
-      accessibilityHint={t("arena.tieHelp")}
-      testID="arena-choose-tie"
-    >
-      {t("arena.tie")}
-    </Button>
+    <Tooltip delayDuration={250} enabledOnDesktop enabledOnMobile={false}>
+      <TooltipTrigger asChild>
+        <View>
+          <Button
+            variant="ghost"
+            size="sm"
+            style={styles.pillChoice}
+            textStyle={styles.choiceText}
+            loading={pendingAction?.kind === "vote" && pendingAction.vote === "tie"}
+            disabled={pending || disabled}
+            onPress={tie}
+            accessibilityLabel={t("arena.tieBattle")}
+            accessibilityHint={t("arena.tieHelp")}
+            testID="arena-choose-tie"
+          >
+            {t("arena.tie")}
+          </Button>
+        </View>
+      </TooltipTrigger>
+      <TooltipContent side="top" align="center" offset={8} testID="arena-tie-tooltip">
+        <Text style={styles.tooltipText}>{t("arena.tieHelp")}</Text>
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -687,6 +699,10 @@ function onSideSolid(theme: Theme): string {
 }
 
 const styles = StyleSheet.create((theme) => ({
+  tooltipText: {
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.sm,
+  },
   // The buttons' corners plus the group's padding, so the two curves run parallel.
   choiceGroup: {
     flexDirection: "row",

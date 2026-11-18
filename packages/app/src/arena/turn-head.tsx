@@ -76,6 +76,25 @@ export function ArenaBattleResult({ agentId, item }: { agentId: string; item: Ar
   const model = identities[kept].name;
   const opponent = identities[kept === "a" ? "b" : "a"].name;
   const result = keptResult(item);
+  if (result === "tie") {
+    // A tie keeps A by rule, not as the better answer: the tag heads the pair, both models get the
+    // same weight, and the line says whose changes stayed.
+    return (
+      <View style={styles.result} testID={`arena-battle-result-${item.id}`}>
+        <ResultTag result="tie" side={kept} />
+        <UnkeptModel model={model} />
+        <Text style={styles.meta}>{t("arena.versus")}</Text>
+        <UnkeptModel model={opponent} testID={`arena-battle-result-opponent-${item.id}`} />
+        <Text style={styles.meta}>·</Text>
+        <Text style={styles.meta}>{t("arena.tieSideKept", { side: kept.toUpperCase() })}</Text>
+        {item.voteDiscardedReason ? (
+          <Text style={styles.meta}>· {t("arena.voteNotCounted")}</Text>
+        ) : null}
+        <Text style={styles.meta}>·</Text>
+        <ArenaShowBattleLink agentId={agentId} turnId={item.id} />
+      </View>
+    );
+  }
   return (
     <View style={styles.result} testID={`arena-battle-result-${item.id}`}>
       {result === "kept" ? (

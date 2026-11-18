@@ -49,6 +49,15 @@ describe("ArenaBattleResult", () => {
     expect(useArenaShownBattleStore.getState().byAgent.agent).toBe("turn-1");
   });
 
+  it("heads a tie with its tag, names both models alike and says whose changes stayed", () => {
+    const view = render(
+      <ArenaBattleResult agentId="agent" item={kept({ vote: "tie", appliedSide: "a" })} />,
+    );
+    expect(view.getByTestId("arena-battle-result-turn-1").textContent).toBe(
+      "TieGPT-6.1 SolvsClaude Opus 5.5·A's changes kept·Show battle›",
+    );
+  });
+
   it("tags a tie, an early pick and a side kept at a Stop for what they were, and any other kept side as won", () => {
     const tie = render(
       <ArenaBattleResult agentId="agent" item={kept({ vote: "tie", appliedSide: "a" })} />,
