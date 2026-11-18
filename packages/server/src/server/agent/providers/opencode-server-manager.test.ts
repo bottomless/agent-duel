@@ -1018,6 +1018,81 @@ describe("OpenCodeServerManager generations", () => {
     expect(await runtime.managedProcesses.list()).toEqual([]);
   });
 
+  test("postpones starts after repeated startup failures and fails them at once meanwhile", async () => {
+    vi.useFakeTimers();
+    const { manager, runtime } = createTestManager([4490, 4491, 4492], { autoAnnounce: false });
+    const failStart = async (port: number) => {
+      const acquisition = manager.acquireCurrent();
+      const failure = expect(acquisition).rejects.toThrow("OpenCode server exited with code 1");
+      await vi.waitFor(() => expect(runtime.launchedPorts).toContain(port));
+      runtime.processForPort(port).exitNormally(1);
+      await failure;
+    };
+
+    await failStart(4490);
+    // One retry goes at once: a single failure can be transient.
+    await failStart(4491);
+
+    await expect(manager.acquireCurrent()).rejects.toThrow(
+      "The engine failed to start 2 times; the next try is in 5 s.",
+    );
+    await expect(manager.acquireNew()).rejects.toThrow("OpenCode server exited with code 1");
+    expect(runtime.launchedPorts).toEqual([4490, 4491]);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    const recovered = manager.acquireCurrent();
+    await vi.waitFor(() => expect(runtime.launchedPorts).toEqual([4490, 4491, 4492]));
+    runtime.processForPort(4492).announceListening();
+    const acquisition = await recovered;
+    expect(acquisition.server.url).toBe("http://127.0.0.1:4492");
+    await acquisition.release();
+  });
+
+  test("doubles the wait between failed starts up to five minutes", async () => {
+    vi.useFakeTimers();
+    const ports = Array.from({ length: 10 }, (_, index) => 4500 + index);
+    const { manager, runtime } = createTestManager(ports, { autoAnnounce: false });
+    const waits: string[] = [];
+    for (const [index, port] of ports.entries()) {
+      const acquisition = manager.acquireCurrent();
+      const failure = expect(acquisition).rejects.toThrow("OpenCode server exited with code 1");
+      await vi.waitFor(() => expect(runtime.launchedPorts).toContain(port));
+      runtime.processForPort(port).exitNormally(1);
+      await failure;
+      // The first failure is retried at once, which would start the next port here.
+      if (index > 0) {
+        const postponed = await manager.acquireCurrent().then(
+          () => "started",
+          (error: Error) => /next try is in (\d+) s/.exec(error.message)?.[1] ?? error.message,
+        );
+        waits.push(postponed);
+        await vi.advanceTimersByTimeAsync(5 * 60_000);
+      }
+    }
+    expect(waits).toEqual(["5", "10", "20", "40", "80", "160", "300", "300", "300"]);
+    expect(runtime.launchedPorts).toEqual(ports);
+  });
+
+  test("a shutdown clears a postponed start, so a new key or setting starts at once", async () => {
+    vi.useFakeTimers();
+    const { manager, runtime } = createTestManager([4520, 4521, 4522], { autoAnnounce: false });
+    for (const port of [4520, 4521]) {
+      const acquisition = manager.acquireCurrent();
+      const failure = expect(acquisition).rejects.toThrow("OpenCode server exited with code 1");
+      await vi.waitFor(() => expect(runtime.launchedPorts).toContain(port));
+      runtime.processForPort(port).exitNormally(1);
+      await failure;
+    }
+    await expect(manager.acquireCurrent()).rejects.toThrow("the next try is in");
+
+    await manager.shutdown();
+
+    const restarted = manager.acquireCurrent();
+    await vi.waitFor(() => expect(runtime.launchedPorts).toEqual([4520, 4521, 4522]));
+    runtime.processForPort(4522).announceListening();
+    await (await restarted).release();
+  });
+
   test("aborted acquisition transfers no reference and leaves startup reusable", async () => {
     const { manager, runtime } = createTestManager([4477], { autoAnnounce: false });
     const controller = new AbortController();
