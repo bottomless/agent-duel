@@ -270,12 +270,26 @@ describe("paths that are not at the start of a word (round 2, issue 2)", async (
     expect(await shellPaths("gcc -I/usr/include main.c", project, "read")).toContain("/usr/include")
   })
 
-  it.each([[`mv -t${OUT}/x a`], [`touch -r${OUT}/x a`], [`mktemp -p${OUT}/x`], [`patch -o${OUT}/x a.c`]])(
-    "still reads an attached path option in %s",
-    async (command) => {
-      expect(await outside(command)).toContain(`${OUT}/*`)
-    },
-  )
+  it.each([
+    [`mv -t${OUT}/x a`],
+    [`touch -r${OUT}/x a`],
+    [`mktemp -p${OUT}/x`],
+    [`patch -o${OUT}/x a.c`],
+    // A backup prefix or suffix and a macOS mktemp prefix are part of the file name written (#239 review).
+    [`patch -Y${OUT}/x a.c`],
+    [`patch -z${OUT}/x a.c`],
+    [`mktemp -t${OUT}/x`],
+    [`mv -bS${OUT}/x a b`],
+  ])("still reads an attached path option in %s", async (command) => {
+    expect(await outside(command)).toContain(`${OUT}/*`)
+  })
+
+  it.each([
+    ["patch -Y../../x/ a.c", ["/x/*"]],
+    ["mktemp -t../../x", ["/*"]],
+  ])("still reads the relative prefix in %s", async (command, expected) => {
+    expect(await outside(command)).toEqual(expected)
+  })
 })
 
 describe("text that is not a path (round 2, issue 3)", async () => {

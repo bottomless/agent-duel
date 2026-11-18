@@ -160,7 +160,8 @@ const PATH_FLAGS: Record<string, string> = {
   cc: "o",
   clang: "o",
 }
-// File commands whose short options are switches (`rm -rf`) except the ones listed, which take a path.
+// File commands whose short options are switches (`rm -rf`) except the ones listed, which take a path
+// or part of one (a backup prefix or suffix, a macOS `mktemp -t` prefix).
 const FILE_PATH_FLAGS: Record<string, string> = {
   chgrp: "",
   chmod: "",
@@ -168,9 +169,9 @@ const FILE_PATH_FLAGS: Record<string, string> = {
   mkdir: "",
   mkfifo: "",
   mknod: "",
-  mktemp: "p",
-  mv: "t",
-  patch: "oidrB",
+  mktemp: "pt",
+  mv: "tS",
+  patch: "oidrBYz",
   rm: "",
   rmdir: "",
   shred: "",
@@ -329,24 +330,7 @@ function wordPaths(input: readonly string[], skip: ReadonlySet<number> = new Set
  */
 type Operand = readonly [word: string, operation: "read" | "write"]
 
-const WRITERS = new Set([
-  "chgrp",
-  "chmod",
-  "chown",
-  "mkdir",
-  "mkfifo",
-  "mknod",
-  "mktemp",
-  "mv",
-  "patch",
-  "rm",
-  "rmdir",
-  "shred",
-  "tee",
-  "touch",
-  "truncate",
-  "unlink",
-])
+const WRITERS = new Set(Object.keys(FILE_PATH_FLAGS))
 // Every operand but the destination is a read.
 const COPIES = new Set(["cp", "install", "ln", "rsync", "scp"])
 const FIND_WRITES = ["-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprintf"]
