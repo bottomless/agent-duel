@@ -686,15 +686,18 @@ function BattlePanes({
   const panesRef = useRef<View>(null);
   const revealInStream = useRevealInStream();
   // The reply is in the panes, so that is where a send takes the chat when they are out of view,
-  // and where it goes back to once the answers are in: the review returns below the panes then.
+  // and where it goes back to once the answers are in, unless the reader has scrolled since: the
+  // review returns below the panes then.
   // Stacked panes are taller together than the chat, so there the pane replied to comes into view.
   const bothShown = paneView === "both";
-  const revealReply = useStableEvent((target: ArenaReplyTarget) => {
+  const revealReply = useStableEvent((target: ArenaReplyTarget, moment: "sent" | "answered") => {
     const panes = panesRef.current;
     if (!isWeb || !revealInStream || !(panes instanceof HTMLElement)) return;
     const onePane = stacked && bothShown && target !== "both";
     const revealed = onePane ? panes.querySelector(`[data-testid="arena-pane-${target}"]`) : panes;
-    if (revealed instanceof HTMLElement) revealInStream(revealed);
+    if (!(revealed instanceof HTMLElement)) return;
+    if (moment === "sent") revealInStream.reveal(revealed);
+    else revealInStream.revealAgain(revealed);
   });
   const finishedA = runIsFinal(runA);
   const finishedB = runIsFinal(runB);
@@ -707,7 +710,7 @@ function BattlePanes({
   useEffect(() => {
     if (!turnId) return;
     return subscribeArenaReplySent(turnId, (target) => {
-      revealReply(target);
+      revealReply(target, "sent");
       awaitedReplyRef.current = {
         turnId,
         target,
@@ -724,7 +727,7 @@ function BattlePanes({
     }
     if (!awaited.started) return;
     awaitedReplyRef.current = null;
-    revealReply(awaited.target);
+    revealReply(awaited.target, "answered");
   }, [finished, revealReply, turnId]);
   const jumpRefA = useRef<JumpToMessage | null>(null);
   const jumpRefB = useRef<JumpToMessage | null>(null);

@@ -4,8 +4,15 @@ import { createContext, useContext } from "react";
  * Brings an element to the top of the transcript when part of it is out of view, and keeps it
  * there while the content around it resizes. The transcript stops following its output, whose end
  * is somewhere else. An element already in view is left alone, and so is the transcript.
+ *
+ * The reveal stands until the reader scrolls the transcript or jumps to its end. While it stands,
+ * `revealAgain` brings an element back the same way, and the transcript returns to following its
+ * output if the revealed element leaves. Once the reader has moved, both leave the transcript alone.
  */
-export type RevealInStream = (element: HTMLElement) => void;
+export interface RevealInStream {
+  reveal: (element: HTMLElement) => void;
+  revealAgain: (element: HTMLElement) => void;
+}
 
 const RevealInStreamContext = createContext<RevealInStream | null>(null);
 

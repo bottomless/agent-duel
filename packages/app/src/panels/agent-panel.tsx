@@ -2856,7 +2856,6 @@ function ActiveAgentComposer({
         throw new Error("Enter a reply for the battle.");
       }
       const release = retainArenaPromptImages(payload.attachments);
-      announceArenaReplySent(replyableBattleTurn.id, action.target);
       try {
         await arenaReplyMutation.mutateAsync({
           kind: "reply",
@@ -2868,6 +2867,7 @@ function ActiveAgentComposer({
       } finally {
         release();
       }
+      announceArenaReplySent(replyableBattleTurn.id, action.target);
       const queuedMessage = arenaSteeringQueuedMessage(action);
       if (queuedMessage) {
         toast.show(queuedMessage, {

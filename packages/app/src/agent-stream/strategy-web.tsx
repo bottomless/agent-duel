@@ -557,11 +557,14 @@ function WebStreamViewport(props: StreamRenderInput & { isMobileBreakpoint: bool
   const holdPosition = useStableEvent((element: HTMLElement) =>
     holdElement({ element, rejoinsEnd: true }),
   );
+  // The element a reveal brought into view, until the reader scrolls or jumps to the end.
+  const revealedRef = useRef<HTMLElement | null>(null);
   const revealElement = useStableEvent((element: HTMLElement) => {
     const scrollContainer = scrollContainerRef.current;
     if (!isActiveRef.current || !scrollContainer || !isScrollContainerMeasurable(scrollContainer)) {
       return;
     }
+    revealedRef.current = element;
     const delta = revealScrollDelta({
       viewport: scrollContainer.getBoundingClientRect(),
       element: element.getBoundingClientRect(),
@@ -575,6 +578,20 @@ function WebStreamViewport(props: StreamRenderInput & { isMobileBreakpoint: bool
     // is not where the reader is looking. Rows this far from where the reader was are measured
     // only now, and would move the element again.
     holdElement({ element, rejoinsEnd: false });
+  });
+  const revealAgain = useStableEvent((element: HTMLElement) => {
+    if (revealedRef.current) revealElement(element);
+  });
+  const revealInStream = useMemo(
+    () => ({ reveal: revealElement, revealAgain }),
+    [revealAgain, revealElement],
+  );
+  // A vote replaces the revealed battle with its outcome, so the transcript goes back to its end.
+  const followWhenRevealedLeaves = useStableEvent(() => {
+    const revealed = revealedRef.current;
+    if (!revealed || revealed.isConnected) return;
+    revealedRef.current = null;
+    setFollowOutput(true);
   });
   const applyHeldPosition = useStableEvent(() => {
     const scrollContainer = scrollContainerRef.current;
@@ -804,6 +821,7 @@ function WebStreamViewport(props: StreamRenderInput & { isMobileBreakpoint: bool
     if (!isActiveRef.current || !container) return;
     const rows = measureRows();
     if (!rows) return;
+    followWhenRevealedLeaves();
     // A held element (`holdPosition`) keeps its place instead of the reading anchor.
     const holdingPosition = heldPositionRef.current !== null;
     if (holdingPosition) applyHeldPosition();
@@ -865,6 +883,7 @@ function WebStreamViewport(props: StreamRenderInput & { isMobileBreakpoint: bool
   const releaseHeldPositionOnScroll = useStableEvent((scrollTop: number) => {
     if (Math.abs(scrollTop - lastKnownScrollTopRef.current) > USER_SCROLL_DELTA_EPSILON) {
       heldPositionRef.current = null;
+      revealedRef.current = null;
     }
   });
 
@@ -1259,6 +1278,8 @@ function WebStreamViewport(props: StreamRenderInput & { isMobileBreakpoint: bool
     const handle: StreamViewportHandle = {
       focus: () => scrollContainerRef.current?.focus({ preventScroll: true }),
       scrollToBottom: () => {
+        heldPositionRef.current = null;
+        revealedRef.current = null;
         setFollowOutput(true);
         cancelPendingStickToBottom();
         forceStickToBottom();
@@ -1483,7 +1504,7 @@ function WebStreamViewport(props: StreamRenderInput & { isMobileBreakpoint: bool
   );
   return (
     <HoldStreamPositionProvider value={holdPosition}>
-      <RevealInStreamProvider value={revealElement}>{viewport}</RevealInStreamProvider>
+      <RevealInStreamProvider value={revealInStream}>{viewport}</RevealInStreamProvider>
     </HoldStreamPositionProvider>
   );
 }
