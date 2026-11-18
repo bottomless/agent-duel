@@ -27,6 +27,7 @@ vi.mock("./use-battle-actions", () => ({
   }),
 }));
 
+import { ArenaPastDecision } from "./decision-bar";
 import { ArenaDecisionPill } from "./decision-pill";
 
 const noop = () => {};
@@ -400,5 +401,22 @@ describe("the decision just made", () => {
       />,
     );
     expect(view.queryByTestId("arena-decision-pill")).toBeNull();
+  });
+});
+
+describe("ArenaPastDecision", () => {
+  it("draws a taken Tie or Discard in the foreground, not the browser's default black", () => {
+    for (const kind of ["vote", "keep"] as const) {
+      const view = render(<ArenaPastDecision kind={kind} chosen="middle" />);
+      const taken = within(view.getByTestId("arena-past-decision-middle-chosen")).getByText(
+        kind === "vote" ? "Tie" : "Discard",
+      );
+      const side = within(view.getByTestId("arena-past-decision-a")).getByText(
+        kind === "vote" ? "Choose A" : "Keep A",
+      );
+      expect(taken.style.color).not.toBe("");
+      expect(taken.style.color).toBe(side.style.color);
+      view.unmount();
+    }
   });
 });

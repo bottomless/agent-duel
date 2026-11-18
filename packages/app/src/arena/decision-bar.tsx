@@ -357,7 +357,9 @@ function pastItemStyle(choice: ArenaSide | "middle", selected: boolean) {
 
 function pastItemTextStyle(choice: ArenaSide | "middle", selected: boolean) {
   if (!selected) return choice === "middle" ? styles.pastQuietText : styles.pastNotTakenText;
-  return choice === "middle" ? null : styles.sideSolidText;
+  // A taken Tie or Discard takes the foreground its check is drawn in; with no colour of its own,
+  // the label fell back to black, which vanished on the dark theme's gray.
+  return choice === "middle" ? styles.pastChosenMiddleText : styles.sideSolidText;
 }
 
 function runningHoverStyle(side: ArenaSide | null) {
@@ -830,6 +832,9 @@ const styles = StyleSheet.create((theme) => ({
   pastChosenMiddle: {
     backgroundColor: theme.colors.surface3,
     borderColor: theme.colors.foregroundMuted,
+  },
+  pastChosenMiddleText: {
+    color: theme.colors.foreground,
   },
   pastText: {
     fontSize: theme.fontSize.base,
