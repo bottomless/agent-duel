@@ -13,6 +13,8 @@ import path from "node:path"
 import { Shell } from "@opencode/core/shell"
 import { Workspace } from "@opencode/core/workspace"
 import { Global } from "@opencode/util/global"
+import { PersistentPty } from "@opencode/core/persistent-pty"
+import { disabledPersistentPtyLayer } from "./fixture/persistent-pty"
 import { hostEnvironmentLayer } from "./fixture/environment"
 import { tempGlobalLayer } from "./fixture/global"
 import { location, tempLocationLayer } from "./fixture/location"
@@ -98,6 +100,7 @@ it.live("eviction makes progress past an already-removed shell", () =>
           Global.node.replace(tempGlobalLayer),
           Config.node.replace(Config.testLayer()),
           Environment.node.replace(environment),
+          PersistentPty.node.replace(disabledPersistentPtyLayer),
         ]),
       ),
     )

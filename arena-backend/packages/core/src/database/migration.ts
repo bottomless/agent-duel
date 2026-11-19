@@ -6,6 +6,7 @@ import type { SqlClient } from "effect/sql"
 import { supportsForeignKeyToggle } from "#sqlite"
 import { EffectDrizzleSqlite } from "./drizzle.js"
 import { migrations } from "./migration.gen.js"
+import legacyCredentials from "./migration/20260805200742_import_legacy_credentials.js"
 import schema from "./schema.gen.js"
 import { Global } from "@opencode/util/global"
 
@@ -20,7 +21,7 @@ export type Migration = {
 
 // Not serialized here: the Database layer holds a lock scoped to the database
 // it is bootstrapping, since two instances over one file must not race.
-export function apply(db: Database) {
+export function apply(db: Database, options = { legacyCredentials: true }) {
   return Effect.gen(function* () {
     // The lock only covers this process. Another process can open the same file at the same time
     // (the desktop app starts more than one engine), so look at the tables inside a write
@@ -36,6 +37,7 @@ export function apply(db: Database) {
           if (tables.some((table) => table.name === "session" || table.name === "session_v2")) return false
           if (tables.length > 0) return yield* Effect.die(new Error("Database is not empty and has no session table"))
           yield* schema.up(tx)
+          if (options.legacyCredentials) yield* legacyCredentials.up(tx)
           yield* tx.run(
             sql`CREATE TABLE ${sql.identifier("migration")} (id TEXT PRIMARY KEY, time_completed INTEGER NOT NULL)`,
           )

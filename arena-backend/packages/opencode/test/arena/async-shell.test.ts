@@ -17,13 +17,13 @@ import { Tool } from "@opencode/core/tool"
 import { Agent } from "@opencode/schema/agent"
 import { SessionMessage } from "@opencode/schema/session-message"
 import { LocationServiceMap } from "@opencode/core/location-service-map"
+import { InstanceStore } from "@/project/instance-store"
 import { AssignmentRegistry } from "@/arena/proxy"
 import { createArenaEnginePlugin } from "@/arena/engine-runtime/plugin"
 import {
   cancelSessionShells,
   closeShellTurn,
   contestantShellInput,
-  contestantShellTimeoutMessage,
   openShellTurn,
   shellNotification,
 } from "@/arena/engine-runtime/shell"
@@ -49,14 +49,6 @@ test("contestant foreground timeouts default to two minutes and honor requests u
   })
   const background = { command: "sleep 9999", background: true, timeout: 0 }
   expect(contestantShellInput(background)).toBe(background)
-})
-
-test("contestant timeout advice states the applied limit and directs long commands to the background", () => {
-  for (const timeout of [120_000, 240_000, 600_000]) {
-    expect(contestantShellTimeoutMessage(timeout)).toBe(
-      `Command exceeded the foreground timeout limit of ${timeout} ms. Use background: true for a server or a long-running command.`,
-    )
-  }
 })
 
 test("delivery and side closure serialize; old results cannot reach a reply or the next turn", async () => {
@@ -241,7 +233,18 @@ async function fixture(body: (input: Fixture) => Promise<void>) {
       jobs,
       directory,
       timeouts,
-      dispose: () => Effect.runPromise(locations.invalidate(root.location)),
+      // The Arena's real disposal path: InstanceStore ends the Location's shells, which the process daemon keeps.
+      dispose: () =>
+        Effect.runPromise(
+          Effect.gen(function* () {
+            const store = yield* InstanceStore.Service
+            yield* store.disposeDirectory(directory)
+          }).pipe(
+            Effect.provide(InstanceStore.layer),
+            Effect.provideService(LocationServiceMap.Service, locations),
+            Effect.scoped,
+          ),
+        ),
     }
   }
   try {
@@ -295,8 +298,16 @@ test("process-death assertions accept absent or unsignalable groups and propagat
   expect(failure).toBe(error)
 })
 
-test("native contestant and child shells enforce the deadline; ordinary shells keep their requested timeout", async () => {
-  await fixture(async ({ execute, root, child, other, timeouts }) => {
+// Core moves a foreground command that outlives its timeout to the background instead of stopping it.
+test("native contestant and child shells apply the capped deadline; ordinary shells keep their requested timeout", async () => {
+  await fixture(async ({ execute, shell, root, child, other, timeouts }) => {
+    const backgrounded = async (result: Awaited<ReturnType<typeof execute>>) => {
+      expect(result.metadata).toMatchObject({ status: "running" })
+      expect(JSON.stringify(result.content)).toContain("moved to the background")
+      const shellID = result.metadata?.shellID
+      if (typeof shellID !== "string") throw new Error("shell ID missing")
+      await Effect.runPromise(shell.stop(shellID, "killed").pipe(Effect.ignore))
+    }
     for (const info of [root, child]) {
       for (const [timeout, applied] of [
         [undefined, 120_000],
@@ -308,27 +319,14 @@ test("native contestant and child shells enforce the deadline; ordinary shells k
         const input = timeout === undefined ? {} : { timeout }
         const result = await execute(info.id, { command: "sleep 60; printf foreground", ...input })
         expect(timeouts.at(-1)).toBe(applied)
-        expect(result.metadata).toMatchObject({ timeout: true })
-        expect(result.content).toContainEqual({
-          type: "text",
-          text: expect.stringContaining(
-            "Command exceeded the foreground timeout limit of 25 ms. Use background: true for a server or a long-running command.",
-          ),
-        })
-        expect(JSON.stringify(result.content)).not.toContain("Retry with a larger timeout")
+        await backgrounded(result)
       }
     }
     const timedOut = await execute(other.id, { command: "sleep 60; printf foreground", timeout: 42 })
     expect(timeouts.at(-1)).toBe(42)
-    expect(timedOut.metadata).toMatchObject({ timeout: true })
-    expect(timedOut.content).toContainEqual({
-      type: "text",
-      text: expect.stringContaining(
-        "Command exceeded timeout of 25 ms. Retry with a larger timeout if the command is expected to take longer.",
-      ),
-    })
+    await backgrounded(timedOut)
     const ordinary = await execute(other.id, { command: "printf ordinary", timeout: 0 })
-    expect(timeouts.at(-1)).toBe(0)
+    expect(timeouts.at(-1)).toBe(120_000)
     expect(ordinary.metadata).toMatchObject({ status: "completed", exit: 0 })
   })
 }, 30_000)

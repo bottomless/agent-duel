@@ -673,6 +673,28 @@ describe("Session.create", () => {
     }),
   )
 
+  // Agent Duel vendor patch: Core's fork notice is not registered (see plugin/internal.ts).
+  liveIt.live("queues no fork notice after copied history", () =>
+    withTmp((directory) =>
+      Effect.gen(function* () {
+        const session = yield* Session.Service
+        const bus = yield* Bus.Service
+        const { db } = yield* Database.Service
+        const parent = yield* session.create({
+          location: Location.Ref.make({ directory: AbsolutePath.make(directory) }),
+        })
+        yield* session.prompt({ sessionID: parent.id, text: "Original", resume: false })
+        yield* SessionInbox.promote(db, bus, parent.id, "steer")
+        const fork = yield* session.fork({ sessionID: parent.id })
+        expect(yield* session.inbox(fork.id)).toEqual([])
+        yield* session.prompt({ sessionID: fork.id, text: "Continue", resume: false })
+        yield* SessionInbox.promote(db, bus, fork.id, "steer")
+        expect(yield* session.context(fork.id)).toMatchObject([Expected.user("Original"), Expected.user("Continue")])
+        expect(yield* session.context(parent.id)).toMatchObject([Expected.user("Original")])
+      }),
+    ),
+  )
+
   it.effect("keeps a fork untitled when its parent is untitled", () =>
     Effect.gen(function* () {
       const session = yield* Session.Service

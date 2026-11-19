@@ -44,10 +44,6 @@ export function contestantShellInput(input: Record<string, unknown>) {
   return { ...input, timeout }
 }
 
-export function contestantShellTimeoutMessage(timeout: number) {
-  return `Command exceeded the foreground timeout limit of ${timeout} ms. Use background: true for a server or a long-running command.`
-}
-
 /** Shell jobs are keyed by shell ID, unlike subagent jobs keyed by session ID. */
 export function cancelSessionShells(sessionID: string) {
   return Effect.gen(function* () {
