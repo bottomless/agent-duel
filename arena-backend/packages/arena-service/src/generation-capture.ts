@@ -17,7 +17,9 @@ const MAX_RESPONSE_BYTES = 15 * 1024 * 1024
 
 // A base64 data URL anywhere in a message: pasted screenshots, images a tool read, PDFs as `file_data`.
 const DATA_URL = /^data:([^;,]+);base64,/
-const MEDIA_REFERENCE = "arena-media:sha256:"
+/** `arena-media:sha256:<digest>:<mime>` names a stored media part in place of its data URL. */
+export const MEDIA_REFERENCE = "arena-media:sha256:"
+const MEDIA_REFERENCE_PATTERN = /^arena-media:sha256:([0-9a-f]{64}):([\w.+-]+\/[\w.+-]+)$/
 
 export type CaptureComponentKind = "params" | "system" | "tools" | "message"
 
@@ -148,6 +150,17 @@ function inlineMedia(value: unknown, media: ReadonlyMap<string, Buffer>) {
   })
 }
 
+/** The digests of the media references in a request body, each once. */
+export function mediaReferences(value: unknown) {
+  const digests = new Set<string>()
+  walkStrings(value, (text) => {
+    const digest = MEDIA_REFERENCE_PATTERN.exec(text)?.[1]
+    if (digest) digests.add(digest)
+    return undefined
+  })
+  return digests
+}
+
 function componentOf(kind: CaptureComponentKind, value: unknown, role?: string): SplitComponent {
   const text = JSON.stringify(value)
   return { kind, ...(role ? { role } : {}), sha256: sha256(text), bytes: Buffer.byteLength(text), text }
@@ -176,31 +189,17 @@ export function splitRequest(body: Readonly<Record<string, unknown>>) {
   return { components, media: [...media.values()] }
 }
 
-async function storeParts(db: ArenaDb, userId: string, split: ReturnType<typeof splitRequest>, createdAt: Date) {
-  const candidates = [
-    ...split.media.map(
-      (item): PartDocument => ({
-        _id: partID(userId, "media", item.sha256),
-        userId,
-        kind: "media",
-        sha256: item.sha256,
-        bytes: item.bytes,
-        data: item.data,
-        createdAt,
-      }),
-    ),
-    ...split.components.map(
-      (component): PartDocument => ({
-        _id: partID(userId, "component", component.sha256),
-        userId,
-        kind: "component",
-        sha256: component.sha256,
-        bytes: component.bytes,
-        text: component.text,
-        createdAt,
-      }),
-    ),
-  ].filter((part) => part.bytes <= MAX_PART_BYTES)
+const mediaPart = (userId: string, item: SplitMedia, createdAt: Date): PartDocument => ({
+  _id: partID(userId, "media", item.sha256),
+  userId,
+  kind: "media",
+  sha256: item.sha256,
+  bytes: item.bytes,
+  data: item.data,
+  createdAt,
+})
+
+async function insertNewParts(db: ArenaDb, userId: string, candidates: ReadonlyArray<PartDocument>) {
   const unique = [...new Map(candidates.map((part) => [part._id, part])).values()]
   const stored = await parts(db)
     .find({ _id: { $in: unique.map((part) => part._id) }, userId }, { projection: { _id: 1 } })
@@ -215,6 +214,95 @@ async function storeParts(db: ArenaDb, userId: string, split: ReturnType<typeof 
         if (!isDuplicateKeyError(error)) throw error
       })
   }
+}
+
+/** Keeps one media file the engine sends by reference, and returns its digest. */
+export async function storeMedia(db: ArenaDb, userId: string, data: Buffer, mimeType: string, createdAt: Date) {
+  const digest = sha256(data)
+  if (data.byteLength > MAX_PART_BYTES) throw new Error("Arena media is too large to store")
+  await insertNewParts(db, userId, [
+    mediaPart(userId, { sha256: digest, mimeType, bytes: data.byteLength, data }, createdAt),
+  ])
+  return digest
+}
+
+// A chat sends the same images on every call, so a warm function keeps the last ones it loaded
+// instead of reading them from the store again each time. Keyed by part id, so by account too.
+const MEDIA_CACHE_BYTES = 64 * 1024 * 1024
+const mediaCache = new Map<string, Buffer>()
+let mediaCacheBytes = 0
+
+function cachedMedia(id: string) {
+  const data = mediaCache.get(id)
+  if (!data) return undefined
+  mediaCache.delete(id)
+  mediaCache.set(id, data)
+  return data
+}
+
+function cacheMedia(id: string, data: Buffer) {
+  if (mediaCache.has(id) || data.byteLength > MEDIA_CACHE_BYTES / 4) return
+  mediaCache.set(id, data)
+  mediaCacheBytes += data.byteLength
+  for (const [oldest, value] of mediaCache) {
+    if (mediaCacheBytes <= MEDIA_CACHE_BYTES) break
+    mediaCache.delete(oldest)
+    mediaCacheBytes -= value.byteLength
+  }
+}
+
+/**
+ * Puts the account's stored media back in place of its references. Returns the body, or the digests
+ * of the references it has no media for.
+ */
+export async function resolveMedia(db: ArenaDb, userId: string, body: unknown) {
+  const digests = [...mediaReferences(body)]
+  if (digests.length === 0) return { body, missing: [] as string[] }
+  const media = new Map<string, Buffer>()
+  const unknown: string[] = []
+  for (const digest of digests) {
+    const data = cachedMedia(partID(userId, "media", digest))
+    if (data) media.set(digest, data)
+    else unknown.push(digest)
+  }
+  const stored =
+    unknown.length === 0
+      ? []
+      : await parts(db)
+          .find({ _id: { $in: unknown.map((digest) => partID(userId, "media", digest)) }, userId })
+          .toArray()
+  for (const part of stored) {
+    const data = binary(part.data)
+    if (!data || sha256(data) !== part.sha256) continue
+    media.set(part.sha256, data)
+    cacheMedia(part._id, data)
+  }
+  const missing = digests.filter((digest) => !media.has(digest))
+  if (missing.length > 0) return { body, missing }
+  const resolved = walkStrings(body, (text) => {
+    const match = MEDIA_REFERENCE_PATTERN.exec(text)
+    const data = match && media.get(match[1]!)
+    return data ? `data:${match[2]};base64,${data.toString("base64")}` : undefined
+  })
+  return { body: resolved, missing }
+}
+
+async function storeParts(db: ArenaDb, userId: string, split: ReturnType<typeof splitRequest>, createdAt: Date) {
+  const candidates = [
+    ...split.media.map((item) => mediaPart(userId, item, createdAt)),
+    ...split.components.map(
+      (component): PartDocument => ({
+        _id: partID(userId, "component", component.sha256),
+        userId,
+        kind: "component",
+        sha256: component.sha256,
+        bytes: component.bytes,
+        text: component.text,
+        createdAt,
+      }),
+    ),
+  ].filter((part) => part.bytes <= MAX_PART_BYTES)
+  await insertNewParts(db, userId, candidates)
 }
 
 type CaptureInput = CaptureKey & {

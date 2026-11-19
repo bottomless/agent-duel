@@ -1056,15 +1056,29 @@ reply takes the same attachments as a chat message, and both contestants get ide
 - The engine resizes each image once, at admission, to 1568 px and 600 KB, and names it
   `attachment-<n>.<ext>`. Every model call re-sends the conversation through the control plane,
   whose hosted function takes about 4.5 MB per request, so a message carries at most four images.
-  The composer holds a battle message to that count when images are attached and refuses a send
+  The cap predates sending media by reference (below) and stays. The composer holds a battle message to that count when images are attached and refuses a send
   over it: the engine's refusal comes only after New chat has created the chat.
   An image's own file name never reaches the models, transcripts, or judge.
-- Images a contestant reads with its tools are not resized, and they stay in history, so they
-  reach the 4.5 MB limit within one turn. Vercel refuses a larger body before Arena's code runs,
-  and the side fails on a bare 413. The measured cap is 4,494,157 bytes of body, and headers count
-  against it. The engine leaves the oldest images out of a request, only as many as it takes to fit
-  (`engine-runtime/request-size.ts`), with a note in each one's place. Each removal costs a
-  prompt-cache miss, so a chat at the limit misses the cache on every step that reads an image.
+- Images a contestant reads with its tools are not resized, and they stay in history, so every
+  later call sends them again. Vercel refuses a control-plane request over 4,494,157 bytes (headers
+  count) before Arena's code runs, and the side fails on a bare 413. So a hosted request carries
+  its images and PDFs by reference: the engine uploads each file once
+  (`/api/openrouter/api/v1/arena/media`, `arena/media-reference.ts`), names it
+  `arena-media:sha256:<digest>:<type>`, and the proxy puts the data back before OpenRouter sees the
+  body (arena-service `media.ts`). Files are stored per account, with the generation-capture parts.
+  The route is its own Vercel function in the control-plane repository, which must ship it before a
+  desktop release relies on it; a control plane without it answers 404, and the engine sends the
+  media inline. Until an upload has succeeded in the engine process, the size check counts media in
+  full, so an inline body still fits. BYOK runs in process, sends media inline, and meets only the
+  provider's limits.
+  The provider still takes only so many images per request. Past the body limit or the provider's
+  (`engine-runtime/request-size.ts`), the engine leaves the oldest tool images out, well below the
+  limit rather than just enough to fit, with a note in each one's place; the user's pasted images
+  go only as far as it takes to fit. Each removal rewrites the prompt prefix, and Claude, cached
+  from one breakpoint at the end, then writes the whole conversation again; trimming only to the
+  limit did that on every later step that read an image. The body size counts what the request
+  sends: a streamed step stores its sealed reasoning on every part, tool calls included, but sends
+  it once.
   It never drops the newest step's images to fit older ones; what does not fit
   of that step, or an image too large on its own, gets a note asking for a separate read or a
   smaller file. Canonical history keeps every image. Reasoning is sealed between calls, so an
@@ -1331,7 +1345,9 @@ field. Each layer has its own file:
   Resolution disables further routing without deleting the assignment.
 - **Keep-alive** (`arena/keep-alive.ts`) — preserve Anthropic's five-minute prompt cache during long
   tool, permission and child-agent waits by pinging waiting sessions every four minutes, for at most
-  30 minutes. Finished sessions waiting for a user reply get no pings. The engine cannot know which
+  30 minutes. An answer still running after four minutes gets the same pings: the cache counts from
+  when its request started, and a 20-30K-token answer takes three to seven minutes. Finished
+  sessions waiting for a user reply get no pings. The engine cannot know which
   contestant is Claude: the service forwards only `anthropic/` chat completions and returns the same
   empty 204 for every side, including a refused ping (`arena-service/src/keep-alive.ts`). Pings carry
   `max_tokens: 1`; zero is ignored by OpenRouter and runs a full answer. Keep them out of transcripts,

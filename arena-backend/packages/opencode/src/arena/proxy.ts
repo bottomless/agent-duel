@@ -17,7 +17,9 @@ import {
 import { COMPACTION_HEADER, COMPACTION_OFFER } from "@agent-duel/arena-service/request-budget"
 import { HEARTBEAT_HEADER, REPLAY_PATH, REPLAY_UNAVAILABLE_LINE } from "@agent-duel/arena-service/stream-recovery"
 import { KEEP_ALIVE_HEADER } from "@agent-duel/arena-service/keep-alive"
+import { readMediaMissing } from "@agent-duel/arena-service/media"
 import type { KeepAlive, Ping, PingResult } from "./keep-alive"
+import { forgetUploads, referenceMedia, referencesUnsupported, uploadMedia, type Media } from "./media-reference"
 
 export type Assignment = {
   readonly runID: string
@@ -85,6 +87,8 @@ export type ProxyOptions = {
   readonly fetch?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>
   readonly telemetry?: Telemetry
   readonly keepAlive?: KeepAlive
+  /** Upload images and PDFs once and name them in the request (`media-reference.ts`): the hosted control plane. */
+  readonly mediaByReference?: boolean
 }
 
 type StreamProgress = {
@@ -685,12 +689,14 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
     const execute = options.fetch ?? fetch
     const url = `${upstream}${upstreamPath(request)}`
     const classification = request.headers.get("x-arena-generation-classification")
+    // What goes to the control plane: the body itself, or the body naming its uploaded media.
+    let outgoing: Readonly<Record<string, unknown>> = rewritten
+    const ping: Ping | undefined =
+      classification === "generation" ? () => keepAlivePing(execute, url, assignment, outgoing) : undefined
     // A compaction ends the wait with no ping: the next call continues its summary, not this prompt.
     if (classification === "generation" || classification === "compaction") {
-      endWait = options.keepAlive?.begin(sessionID)
+      endWait = options.keepAlive?.begin(sessionID, ping)
     }
-    const ping: Ping | undefined =
-      classification === "generation" ? () => keepAlivePing(execute, url, assignment, rewritten) : undefined
     const routing = {
       "X-Arena-Assignment-ID": assignment.assignmentID,
       "X-Arena-Scope-ID": assignment.scopeID,
@@ -701,23 +707,52 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
     const dispatch = new AbortController()
     if (request.signal.aborted) dispatch.abort(request.signal.reason)
     else request.signal.addEventListener("abort", () => dispatch.abort(request.signal.reason), { once: true })
-    const responsePromise = execute(url, {
-      method: "POST",
-      headers: {
-        ...routing,
-        Accept: request.headers.get("accept") || "text/event-stream, application/json",
-        "X-OpenRouter-Metadata": "enabled",
-        // Lets the control plane compact this step at the hidden model's level.
-        ...(request.headers.get(COMPACTION_HEADER) === COMPACTION_OFFER
-          ? { [COMPACTION_HEADER]: COMPACTION_OFFER }
-          : {}),
-      },
-      body: JSON.stringify(rewritten),
-      signal: dispatch.signal,
-    })
+    const send = () =>
+      execute(url, {
+        method: "POST",
+        headers: {
+          ...routing,
+          Accept: request.headers.get("accept") || "text/event-stream, application/json",
+          "X-OpenRouter-Metadata": "enabled",
+          // Lets the control plane compact this step at the hidden model's level.
+          ...(request.headers.get(COMPACTION_HEADER) === COMPACTION_OFFER
+            ? { [COMPACTION_HEADER]: COMPACTION_OFFER }
+            : {}),
+        },
+        body: JSON.stringify(outgoing),
+        signal: dispatch.signal,
+      })
+    const referenced =
+      options.mediaByReference && !referencesUnsupported(upstream) ? referenceMedia(rewritten) : undefined
+    const upload = (media: Iterable<Media>) =>
+      uploadMedia({
+        execute,
+        upstream,
+        routing: { "X-Arena-Assignment-ID": assignment.assignmentID, "X-Arena-Scope-ID": assignment.scopeID },
+        media,
+        signal: dispatch.signal,
+      })
     let response: Response
     try {
-      response = await responsePromise
+      let refusal: Response | "unsupported" | undefined
+      if (referenced && referenced.media.size > 0) {
+        refusal = await upload(referenced.media.values())
+        // A control plane without the upload route takes the media inline. The size check counts
+        // media in full until an upload succeeds, so that body fits its limit.
+        if (refusal === undefined) outgoing = referenced.body
+      }
+      response = refusal instanceof Response ? refusal : await send()
+      const missing =
+        referenced && outgoing !== rewritten && response.status === 409
+          ? readMediaMissing(await response.clone().text())
+          : undefined
+      if (missing) {
+        await response.body?.cancel().catch(() => undefined)
+        forgetUploads(upstream, missing)
+        const again = await upload(missing.flatMap((digest) => referenced?.media.get(digest) ?? []))
+        if (again === "unsupported") outgoing = rewritten
+        response = again instanceof Response ? again : await send()
+      }
     } catch (error) {
       preHeaderTransportFailure = !request.signal.aborted && retryableTransport(error)
       throw error
