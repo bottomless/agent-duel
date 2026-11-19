@@ -75,10 +75,11 @@ describe("Arena v2 engine runtime", () => {
           result: {
             type: "content",
             value: ReadTool.toModelContent("screenshot.png", undefined, {
-              type: "file",
-              encoding: "base64",
+              type: "media",
+              uri: "file:///screenshot.png",
               mime: "image/png",
-              content: base64,
+              name: "screenshot.png",
+              bytes: new Uint8Array(png),
             }),
           },
         }),
