@@ -684,10 +684,12 @@ function BattlePanes({
   const { width, onLayout } = useContainerWidth();
   const stacked = width > 0 && width < STACKED_PANES_BREAKPOINT;
   const panesRef = useRef<View>(null);
+  const headersRef = useRef<View>(null);
   const revealInStream = useRevealInStream();
   // The reply is in the panes, so that is where a send takes the chat when they are out of view,
   // and where it goes back to once the answers are in, unless the reader has scrolled since: the
-  // review returns below the panes then.
+  // review returns below the panes then. Side by side, the headings stick over the panes' top, so
+  // the panes come into view under them.
   // Stacked panes are taller together than the chat, so there the pane replied to comes into view.
   const bothShown = paneView === "both";
   const revealReply = useStableEvent((target: ArenaReplyTarget, moment: "sent" | "answered") => {
@@ -696,8 +698,10 @@ function BattlePanes({
     const onePane = stacked && bothShown && target !== "both";
     const revealed = onePane ? panes.querySelector(`[data-testid="arena-pane-${target}"]`) : panes;
     if (!(revealed instanceof HTMLElement)) return;
-    if (moment === "sent") revealInStream.reveal(revealed);
-    else revealInStream.revealAgain(revealed);
+    const headers = headersRef.current;
+    const clearance = headers instanceof HTMLElement ? headers.offsetHeight : 0;
+    if (moment === "sent") revealInStream.reveal(revealed, clearance);
+    else revealInStream.revealAgain(revealed, clearance);
   });
   const finishedA = runIsFinal(runA);
   const finishedB = runIsFinal(runB);
@@ -758,7 +762,12 @@ function BattlePanes({
     <>
       {/* A child of the battle, not of the panes, so it stays stuck through the review below. */}
       {stacked ? null : (
-        <View style={[styles.paneHeaders, stickyHeaderStyle]} testID="arena-pane-headers">
+        <View
+          ref={headersRef}
+          collapsable={false}
+          style={[styles.paneHeaders, stickyHeaderStyle]}
+          testID="arena-pane-headers"
+        >
           <View style={[styles.paneHeaderCell, paneView === "b" && styles.paneHidden]}>
             <BattlePaneHeader {...headerProps} side="a" run={runA} onJumpToMessage={jumpA} />
           </View>

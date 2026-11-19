@@ -8,10 +8,13 @@ import { createContext, useContext } from "react";
  * The reveal stands until the reader scrolls the transcript or jumps to its end. While it stands,
  * `revealAgain` brings an element back the same way, and the transcript returns to following its
  * output if the revealed element leaves. Once the reader has moved, both leave the transcript alone.
+ *
+ * `clearance` is the height of what sticks to the transcript's top over the element, such as the
+ * battle's pane headings, so the element comes into view under it.
  */
 export interface RevealInStream {
-  reveal: (element: HTMLElement) => void;
-  revealAgain: (element: HTMLElement) => void;
+  reveal: (element: HTMLElement, clearance?: number) => void;
+  revealAgain: (element: HTMLElement, clearance?: number) => void;
 }
 
 const RevealInStreamContext = createContext<RevealInStream | null>(null);

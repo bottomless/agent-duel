@@ -108,12 +108,14 @@ function mountTimeline(historyMounted: StreamItem[]) {
   const rowElement = (id: string) => element(`[data-history-row-id="${id}"]`);
   const topOf = (target: HTMLElement) =>
     target.getBoundingClientRect().top - scrollContainer.getBoundingClientRect().top;
-  const reveal = (target: HTMLElement, how: keyof RevealInStream = "reveal") => {
+  const reveal = (target: HTMLElement, how: keyof RevealInStream = "reveal", clearance = 0) => {
     const revealIn = revealInStream;
     if (!revealIn) throw new Error("Expected the transcript to provide a reveal");
-    act(() => revealIn[how](target));
+    act(() => revealIn[how](target, clearance));
   };
   const panes = () => element('[data-testid="battle-panes"]');
+  // The panes' headings stick over the panes' top, so a reveal keeps clear of them.
+  const paneHeadersHeight = () => element('[data-testid="battle-pane-headers"]').offsetHeight;
 
   return {
     render: (next: Partial<StreamRenderInput["segments"]>) =>
@@ -130,10 +132,11 @@ function mountTimeline(historyMounted: StreamItem[]) {
     hold: (rowId: string, apply: () => void, triggerEdge: DisclosureTriggerEdge = "top") =>
       act(() => viewportRef.current!.holdRow(rowId, apply, triggerEdge)),
     reveal: (id: string) => reveal(rowElement(id)),
-    revealPanes: () => reveal(panes()),
-    revealPanesAgain: () => reveal(panes(), "revealAgain"),
+    revealPanes: () => reveal(panes(), "reveal", paneHeadersHeight()),
+    revealPanesAgain: () => reveal(panes(), "revealAgain", paneHeadersHeight()),
     rowTop: (id: string) => topOf(rowElement(id)),
     panesTop: () => topOf(panes()),
+    paneHeadersTop: () => topOf(element('[data-testid="battle-pane-headers"]')),
     rowBottom: (id: string) =>
       rowElement(id).getBoundingClientRect().bottom - scrollContainer.getBoundingClientRect().top,
     scrollTo: (top: number) => {
@@ -306,7 +309,15 @@ describe("web reveal", () => {
   });
 });
 
-// The active battle: its panes, and the review that leaves while a reply runs.
+// The active battle: the pane headings, which stick to the top of the chat through the battle, its
+// panes, and the review that leaves while a reply runs.
+const PANE_HEADERS_HEIGHT = 40;
+const paneHeadersStyle = {
+  position: "sticky",
+  top: 0,
+  height: PANE_HEADERS_HEIGHT,
+  background: "white",
+} as const;
 const panesStyle = { height: 200 };
 const reviewStyle = { height: 600 };
 
@@ -314,6 +325,7 @@ function battle({ reviewShown }: { reviewShown: boolean }) {
   return (
     <div>
       <RevealCapture />
+      <div data-testid="battle-pane-headers" style={paneHeadersStyle} />
       <div data-testid="battle-panes" style={panesStyle} />
       {reviewShown ? <div style={reviewStyle} /> : null}
     </div>
@@ -331,7 +343,8 @@ async function mountRepliedBattle() {
   await timeline.settle();
   timeline.revealPanes();
   await timeline.settle();
-  expect(timeline.panesTop()).toBe(REVEAL_TOP_INSET);
+  expect(timeline.panesTop()).toBe(REVEAL_TOP_INSET + PANE_HEADERS_HEIGHT);
+  expect(timeline.paneHeadersTop()).toBe(REVEAL_TOP_INSET);
   timeline.renderLive(battle({ reviewShown: false }));
   await timeline.settle();
   return timeline;
@@ -345,7 +358,7 @@ describe("web reveal in the live area", () => {
     timeline.revealPanesAgain();
     await timeline.settle();
 
-    expect(timeline.panesTop()).toBe(REVEAL_TOP_INSET);
+    expect(timeline.panesTop()).toBe(REVEAL_TOP_INSET + PANE_HEADERS_HEIGHT);
   });
 
   it("leaves the reader in an earlier turn when the answers arrive", async () => {

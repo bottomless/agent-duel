@@ -559,14 +559,15 @@ function WebStreamViewport(props: StreamRenderInput & { isMobileBreakpoint: bool
   );
   // The element a reveal brought into view, until the reader scrolls or jumps to the end.
   const revealedRef = useRef<HTMLElement | null>(null);
-  const revealElement = useStableEvent((element: HTMLElement) => {
+  const revealElement = useStableEvent((element: HTMLElement, clearance: number = 0) => {
     const scrollContainer = scrollContainerRef.current;
     if (!isActiveRef.current || !scrollContainer || !isScrollContainerMeasurable(scrollContainer)) {
       return;
     }
     revealedRef.current = element;
+    const viewport = scrollContainer.getBoundingClientRect();
     const delta = revealScrollDelta({
-      viewport: scrollContainer.getBoundingClientRect(),
+      viewport: { top: viewport.top + clearance, bottom: viewport.bottom },
       element: element.getBoundingClientRect(),
     });
     if (delta !== 0) {
@@ -579,8 +580,8 @@ function WebStreamViewport(props: StreamRenderInput & { isMobileBreakpoint: bool
     // only now, and would move the element again.
     holdElement({ element, rejoinsEnd: false });
   });
-  const revealAgain = useStableEvent((element: HTMLElement) => {
-    if (revealedRef.current) revealElement(element);
+  const revealAgain = useStableEvent((element: HTMLElement, clearance?: number) => {
+    if (revealedRef.current) revealElement(element, clearance);
   });
   const revealInStream = useMemo(
     () => ({ reveal: revealElement, revealAgain }),
