@@ -97,6 +97,8 @@ const toolContent = (part: ContentPart) =>
 function fixedBytes(message: Message) {
   let media = 0
   const json = JSON.stringify(message, function (key, value) {
+    // Core hands hooks each stored message's metadata and strips it before the request is sent.
+    if (key === "metadata" && this === message) return undefined
     if (key === "media" && this?.type === "media") {
       if (!isImage(this.media.mediaType)) media += mediaBytes(this)
       return undefined
