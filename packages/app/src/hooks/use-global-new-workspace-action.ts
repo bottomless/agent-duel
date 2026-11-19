@@ -5,43 +5,49 @@ import type { KeyboardActionId } from "@/keyboard/keyboard-action-dispatcher";
 import { canCreateWorktreeForProjectKind } from "@/projects/host-projects";
 import { useHostFeature } from "@/runtime/host-features";
 import { useHosts } from "@/runtime/host-runtime";
-import { useActiveWorkspaceSelection } from "@/stores/navigation-active-workspace-store";
+import { useLastWorkspaceSelection } from "@/stores/navigation-active-workspace-store";
 import { useWorkspace } from "@/stores/session-store-hooks";
 import { buildNewWorkspaceRoute } from "@/utils/host-routes";
 
 const WORKSPACE_NEW_ACTIONS: readonly KeyboardActionId[] = ["workspace.new"];
 
-export function useGlobalNewWorkspaceAction() {
-  const selection = useActiveWorkspaceSelection();
+/**
+ * New chat in the project of the chat opened last, so it still lands there from Home or
+ * Settings. Without a usable last chat, New chat asks for the project.
+ */
+export function useNewChatInLastProjectRoute(): ReturnType<typeof buildNewWorkspaceRoute> {
+  const selection = useLastWorkspaceSelection();
   const serverId = selection?.serverId ?? null;
-  const workspaceId = selection?.workspaceId ?? null;
-  const hosts = useHosts();
-  const activeWorkspace = useWorkspace(serverId, workspaceId);
+  const lastWorkspace = useWorkspace(serverId, selection?.workspaceId ?? null);
   const supportsWorkspaceMultiplicity = useHostFeature(serverId, "workspaceMultiplicity");
-  const canUseActiveWorkspaceContext = Boolean(
-    activeWorkspace &&
-    (supportsWorkspaceMultiplicity || canCreateWorktreeForProjectKind(activeWorkspace.projectKind)),
-  );
+  if (!serverId) {
+    return buildNewWorkspaceRoute();
+  }
+  if (
+    !lastWorkspace ||
+    !(supportsWorkspaceMultiplicity || canCreateWorktreeForProjectKind(lastWorkspace.projectKind))
+  ) {
+    return buildNewWorkspaceRoute({ serverId });
+  }
+  return buildNewWorkspaceRoute({
+    serverId,
+    sourceDirectory: lastWorkspace.projectRootPath,
+    displayName: lastWorkspace.projectDisplayName,
+    projectId: lastWorkspace.projectId,
+  });
+}
+
+export function useGlobalNewWorkspaceAction() {
+  const hosts = useHosts();
+  const newChatRoute = useNewChatInLastProjectRoute();
 
   const handle = useCallback(() => {
     if (hosts.length === 0) {
       return false;
     }
-    router.navigate(
-      (serverId
-        ? buildNewWorkspaceRoute(
-            activeWorkspace && canUseActiveWorkspaceContext
-              ? {
-                  serverId,
-                  sourceDirectory: activeWorkspace.projectRootPath,
-                  projectId: activeWorkspace.projectId,
-                }
-              : { serverId },
-          )
-        : buildNewWorkspaceRoute()) as never,
-    );
+    router.navigate(newChatRoute as never);
     return true;
-  }, [activeWorkspace, canUseActiveWorkspaceContext, hosts.length, serverId]);
+  }, [hosts.length, newChatRoute]);
 
   useKeyboardActionHandler({
     handlerId: "workspace-new-global",
