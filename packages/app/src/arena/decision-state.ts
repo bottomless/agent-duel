@@ -87,22 +87,19 @@ export function decisionBarShowsPhase(phase: ArenaDecisionPhase): boolean {
   return phase.kind === "retry_resolution" || phase.kind === "transitional";
 }
 
-/** Names the side still working once the other can be picked early, so the pick is not a guess. */
-export function arenaRunningDecisionHint(phase: ArenaDecisionPhase): string | null {
-  if (phase.kind !== "running" || phase.waitingFor === null) return null;
-  if (!phase.canPickA && !phase.canPickB) return null;
-  return i18n.t("arena.agentWaiting", { side: phase.waitingFor.toUpperCase() });
-}
-
-export function arenaRunningDecisionOrder({
-  canPickA,
-  canPickB,
-}: Pick<Extract<ArenaDecisionPhase, { kind: "running" }>, "canPickA" | "canPickB">): (
-  | ArenaSide
-  | "stop"
-)[] {
-  if (canPickA) return canPickB ? ["a", "stop", "b"] : ["a", "stop"];
-  return canPickB ? ["stop", "b"] : ["stop"];
+/**
+ * The side still working once the other can be picked early, which the row names in that side's
+ * place so the pick is not a guess. Null while both run, before a pick is offered, or after.
+ *
+ * A side counts as working until it can be picked, not only until its run settles: the engine
+ * saves its result a moment after that, and in between its place in the row was left empty. A
+ * side that failed or stopped is not working, and its place stays empty.
+ */
+export function arenaRunningWaitingSide(phase: ArenaDecisionPhase): ArenaSide | null {
+  if (phase.kind !== "running" || phase.canPickA === phase.canPickB) return null;
+  const other = phase.canPickA ? phase.b : phase.a;
+  const state = other.run?.runState;
+  return state === undefined || state === "pending" || state === "complete" ? other.side : null;
 }
 
 /**

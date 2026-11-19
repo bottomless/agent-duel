@@ -9,6 +9,8 @@ import { useHosts, useHostRuntimeLastError } from "@/runtime/host-runtime";
 import { usePanelStore } from "@/stores/panel-store";
 import { useHeaderMetrics, useIsCompactFormFactor } from "@/constants/layout";
 import { SPACING } from "@/styles/theme";
+import { useLocalDaemonServerId } from "@/hooks/use-is-local-daemon";
+import { RecentProjectsSection, useRecentProjects } from "@/screens/recent-projects-section";
 
 const WINDOW_CONTENT_DATASET = { "window-content": "" };
 
@@ -36,6 +38,53 @@ export function OpenProjectScreen() {
     void openProjectPicker();
   }, [openProjectPicker]);
 
+  // Recent projects are read from this computer's tools, so only the local daemon can offer them.
+  const localServerId = useLocalDaemonServerId();
+  const recent = useRecentProjects(localServerId);
+
+  const hostErrors = hosts.map((host) => (
+    <HostError key={host.serverId} serverId={host.serverId} label={host.label} />
+  ));
+
+  const renderAddProjectTile = (wide: boolean) => (
+    <HomeTile
+      icon={FolderOpen}
+      title={t("openProject.tiles.addProject.title")}
+      description={t("openProject.tiles.addProject.description")}
+      onPress={handleOpenPicker}
+      testID="open-project-submit"
+      accent
+      wide={wide}
+    />
+  );
+
+  if (localServerId) {
+    // Anchored to the top rather than centred, so the list arriving or turning out empty never
+    // moves the tile.
+    return (
+      <View style={styles.container}>
+        <MenuHeader borderless />
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={styles.recentScrollContent}
+          dataSet={WINDOW_CONTENT_DATASET}
+        >
+          {/* One column, so the tile and the list share their edges. */}
+          <View style={styles.column}>
+            {hostErrors}
+            {renderAddProjectTile(true)}
+            <View style={styles.recent}>
+              <RecentProjectsSection
+                serverId={localServerId}
+                projects={recent.isError ? [] : recent.data}
+              />
+            </View>
+          </View>
+        </ScrollView>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
       <MenuHeader borderless />
@@ -45,19 +94,8 @@ export function OpenProjectScreen() {
         dataSet={WINDOW_CONTENT_DATASET}
       >
         <View style={contentStyle}>
-          {hosts.map((host) => (
-            <HostError key={host.serverId} serverId={host.serverId} label={host.label} />
-          ))}
-          <View style={styles.tiles}>
-            <HomeTile
-              icon={FolderOpen}
-              title={t("openProject.tiles.addProject.title")}
-              description={t("openProject.tiles.addProject.description")}
-              onPress={handleOpenPicker}
-              testID="open-project-submit"
-              accent
-            />
-          </View>
+          {hostErrors}
+          <View style={styles.tiles}>{renderAddProjectTile(false)}</View>
         </View>
       </ScrollView>
     </View>
@@ -80,9 +118,22 @@ interface HomeTileProps {
   onPress: () => void;
   testID?: string;
   accent?: boolean;
+  /**
+   * Spans the column as a row, matching the recent projects card below it: its 16px icon sits on
+   * the rows' icon rail, so the title starts where theirs do.
+   */
+  wide?: boolean;
 }
 
-function HomeTile({ icon: Icon, title, description, onPress, testID, accent }: HomeTileProps) {
+function HomeTile({
+  icon: Icon,
+  title,
+  description,
+  onPress,
+  testID,
+  accent,
+  wide,
+}: HomeTileProps) {
   // useUnistyles is acceptable here: leaf component, off the hot path (home screen renders once).
   const { theme } = useUnistyles();
   const [hovered, setHovered] = useState(false);
@@ -94,10 +145,11 @@ function HomeTile({ icon: Icon, title, description, onPress, testID, accent }: H
   const pressableStyle = useCallback(
     ({ pressed }: { pressed: boolean }) => [
       styles.tile,
+      wide && styles.tileWide,
       hovered && styles.tileHovered,
       pressed && styles.tilePressed,
     ],
-    [hovered],
+    [hovered, wide],
   );
 
   return (
@@ -108,8 +160,8 @@ function HomeTile({ icon: Icon, title, description, onPress, testID, accent }: H
       testID={testID}
       style={pressableStyle}
     >
-      <Icon size={20} color={iconColor} />
-      <View style={styles.tileText}>
+      <Icon size={wide ? 16 : 20} color={iconColor} />
+      <View style={wide ? styles.tileTextWide : styles.tileText}>
         <Text style={styles.tileTitle}>{title}</Text>
         <Text style={styles.tileDescription}>{description}</Text>
       </View>
@@ -129,6 +181,12 @@ const styles = StyleSheet.create((theme) => ({
   scrollContent: {
     flexGrow: 1,
   },
+  recentScrollContent: {
+    alignItems: "center",
+    paddingHorizontal: theme.spacing[6],
+    paddingTop: { xs: theme.spacing[6], md: theme.spacing[16] },
+    paddingBottom: theme.spacing[12],
+  },
   content: {
     position: "relative",
     flexGrow: 1,
@@ -138,6 +196,14 @@ const styles = StyleSheet.create((theme) => ({
     gap: 0,
     padding: theme.spacing[6],
     paddingTop: { xs: theme.spacing[12], md: theme.spacing[6] },
+  },
+  column: {
+    width: "100%",
+    maxWidth: 560,
+    marginTop: { xs: theme.spacing[6], md: theme.spacing[12] },
+  },
+  recent: {
+    marginTop: theme.spacing[12],
   },
   hostError: {
     color: theme.colors.destructive,
@@ -163,6 +229,13 @@ const styles = StyleSheet.create((theme) => ({
     borderRadius: theme.borderRadius.xl,
     gap: theme.spacing[3],
   },
+  tileWide: {
+    width: "100%",
+    minHeight: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    borderRadius: theme.borderRadius.lg,
+  },
   tileHovered: {
     backgroundColor: theme.colors.surface2,
     borderColor: theme.colors.borderAccent,
@@ -171,6 +244,11 @@ const styles = StyleSheet.create((theme) => ({
     opacity: 0.85,
   },
   tileText: {
+    gap: theme.spacing[1],
+  },
+  tileTextWide: {
+    flex: 1,
+    minWidth: 0,
     gap: theme.spacing[1],
   },
   tileTitle: {

@@ -76,6 +76,22 @@ export function isExternalEnd(crash: Pick<CrashInput, "kind" | "signal">): boole
   return Boolean(crash.signal && EXTERNAL_SIGNALS.has(crash.signal));
 }
 
+/**
+ * Whether a run that left its marker behind was ended by someone else, judged from how its
+ * supervisor saw it end. Windows has no kill signal: Task Manager, `taskkill /F`, an installer or
+ * another program's `process.kill` call TerminateProcess, which the supervisor sees as exit code 1
+ * and no signal. A daemon that exits with code 1 on its own runs its exit handler, which removes
+ * the marker, so only a terminated one leaves the marker with that exit.
+ */
+export function isExternalMarkerEnd(
+  marker: RunningMarker,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  if (!marker.exit) return true;
+  if (marker.exit.signal) return EXTERNAL_SIGNALS.has(marker.exit.signal);
+  return platform === "win32" && marker.exit.code === 1;
+}
+
 export function crashReportsDirectory(home: string): string {
   return path.join(home, DIRECTORY);
 }
@@ -182,6 +198,58 @@ function pruneCrashReports(home: string) {
     const surplus = index < files.length - MAXIMUM_REPORTS;
     if (surplus || now - entry.modified > MAXIMUM_AGE_MS) rmSync(entry.file, { force: true });
   });
+}
+
+// When each crash, by key, was last reported and how often it happened since. A file of its own,
+// not `.json`, so the report listing never reads it.
+const REPEATS_FILE = "repeats.state";
+const repeatsSchema = z.record(
+  z.string(),
+  z.object({ reportedAt: z.number(), repeats: z.number().int().nonnegative() }),
+);
+export type CrashRepeat = z.infer<typeof repeatsSchema>[string];
+
+function readRepeats(home: string): Record<string, CrashRepeat> {
+  try {
+    const file = path.join(crashReportsDirectory(home), REPEATS_FILE);
+    return repeatsSchema.parse(JSON.parse(readFileSync(file, "utf8")));
+  } catch {
+    return {};
+  }
+}
+
+function writeRepeats(home: string, repeats: Record<string, CrashRepeat>): void {
+  try {
+    const now = Date.now();
+    const kept = Object.fromEntries(
+      Object.entries(repeats).filter(([, repeat]) => now - repeat.reportedAt < MAXIMUM_AGE_MS),
+    );
+    const directory = crashReportsDirectory(home);
+    mkdirSync(directory, { recursive: true });
+    const target = path.join(directory, REPEATS_FILE);
+    writeFileSync(`${target}.tmp`, JSON.stringify(kept));
+    renameSync(`${target}.tmp`, target);
+  } catch {
+    // The next crash is reported in full; nothing else depends on it.
+  }
+}
+
+/** The last report of the crash with this key, kept across restarts of the process. */
+export function previousCrashReport(home: string, key: string): CrashRepeat | null {
+  return readRepeats(home)[key] ?? null;
+}
+
+/** Counts a crash that is not reported because its last report is recent. */
+export function countRepeatedCrash(home: string, key: string): void {
+  const repeats = readRepeats(home);
+  const repeat = repeats[key];
+  if (!repeat) return;
+  writeRepeats(home, { ...repeats, [key]: { ...repeat, repeats: repeat.repeats + 1 } });
+}
+
+/** Records that the crash with this key was just reported, which restarts its count. */
+export function recordCrashReported(home: string, key: string, reportedAt: number): void {
+  writeRepeats(home, { ...readRepeats(home), [key]: { reportedAt, repeats: 0 } });
 }
 
 /** Reports waiting to be sent, oldest first. Unreadable ones are deleted. */

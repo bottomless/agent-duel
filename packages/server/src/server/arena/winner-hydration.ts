@@ -6,13 +6,13 @@ import type { ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
 
 interface Running {
   key: string;
-  index: number;
+  position: number;
   promise: Promise<void>;
   abort: AbortController;
 }
 
 interface Hydration {
-  completed?: { key: string; index: number };
+  completed?: { key: string; position: number };
   running?: Running;
 }
 
@@ -27,14 +27,12 @@ export async function hydrateArenaWinner(
   supersedeAfterMs: number,
 ): Promise<void> {
   if (snapshot.chat.status !== "ready") return;
-  const applied = snapshot.history.reduce<(typeof snapshot.history)[number] | undefined>(
-    (latest, turn) => {
-      const side = turn.appliedSide ?? turn.resolution?.appliedSide;
-      if (side === undefined || (latest && latest.index >= turn.index)) return latest;
-      return turn;
-    },
-    undefined,
+  // Order winners by their place in the history, not by `turn.index`: a fork's history starts
+  // with the turns it copied, and its own turns number from 0 again.
+  const position = snapshot.history.findLastIndex(
+    (turn) => (turn.appliedSide ?? turn.resolution?.appliedSide) !== undefined,
   );
+  const applied = snapshot.history[position];
   if (!applied) return;
   const key = JSON.stringify([
     snapshot.chat.id,
@@ -51,7 +49,7 @@ export async function hydrateArenaWinner(
   while (state.running) {
     const running = state.running;
     if (running.key === key) return running.promise;
-    if (applied.index < running.index) {
+    if (position < running.position) {
       // An older winner never takes over from a newer one; its caller bounds its own wait.
       await running.promise.catch(() => {});
       continue;
@@ -64,20 +62,20 @@ export async function hydrateArenaWinner(
       state.running = undefined;
     }
   }
-  if (state.completed?.key === key || (state.completed && state.completed.index > applied.index))
+  if (state.completed?.key === key || (state.completed && state.completed.position > position))
     return;
   const current = state;
   const abort = new AbortController();
   const promise = Promise.resolve()
     .then(() => hydrate(abort.signal))
     .then(() => {
-      if (!abort.signal.aborted) current.completed = { key, index: applied.index };
+      if (!abort.signal.aborted) current.completed = { key, position };
       return undefined;
     })
     .finally(() => {
       if (current.running?.abort === abort) current.running = undefined;
     });
-  current.running = { key, index: applied.index, promise, abort };
+  current.running = { key, position, promise, abort };
   return promise;
 }
 

@@ -49,7 +49,7 @@ export function ArenaRunRetry({
       </Button>
       {failed ? (
         <Text style={styles.error} role="alert">
-          {t("arena.retryAgentFailed")}{" "}
+          {t("arena.retryAgentFailed")}
         </Text>
       ) : null}
     </View>

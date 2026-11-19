@@ -232,9 +232,16 @@ jobs:
         with:
           bun-download-url: https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-windows-x64-baseline.zip
 
-      - name: Validate release version
+      - name: Validate release version and signing configuration
         env:
           RELEASE_VERSION: ${{ inputs.version }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          AZURE_SIGNING_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
+          WINDOWS_PUBLISHER_NAME: ${{ vars.WINDOWS_PUBLISHER_NAME }}
         run: |
           node --input-type=module <<'JS'
           import fs from 'node:fs';
@@ -243,6 +250,9 @@ jobs:
           parseReleaseVersion(version);
           for (const file of ['package.json', 'packages/desktop/package.json']) {
             if (JSON.parse(fs.readFileSync(file)).version !== version) throw new Error(`Commit the requested version in ${file} first`);
+          }
+          for (const name of ['AZURE_TENANT_ID', 'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET', 'AZURE_SIGNING_ENDPOINT', 'AZURE_SIGNING_ACCOUNT', 'AZURE_SIGNING_PROFILE', 'WINDOWS_PUBLISHER_NAME']) {
+            if (!process.env[name]) throw new Error(`Missing Windows signing configuration: ${name}`);
           }
           JS
 
@@ -253,27 +263,61 @@ jobs:
         working-directory: arena-backend
         run: bun install --frozen-lockfile
 
-      # Unsigned: without a certificate electron-builder writes no publisherName into
-      # app-update.yml, so the updater skips the signature check. Once builds are signed, every
-      # later build must be signed with the same publisher name.
-      - name: Build x64 installer
+      - name: Build and sign x64 installer
         env:
           NODE_OPTIONS: --max-old-space-size=4096
           PASEO_WEB_PLATFORM: electron
           # The published release is the update feed, so release builds check it.
           PASEO_DESKTOP_UPDATES_ENABLED: "1"
-          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          AZURE_SIGNING_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
+          WINDOWS_PUBLISHER_NAME: ${{ vars.WINDOWS_PUBLISHER_NAME }}
           AGENT_DUEL_BUILD_NUMBER: ${{ github.run_number }}
         run: |
           npm run build:app-deps:clean
           (cd packages/app && npx expo export --platform web --max-workers 1)
-          npm run build --workspace=@getpaseo/desktop -- --publish never --win --x64 -c.buildVersion="$AGENT_DUEL_BUILD_NUMBER"
+          npm run build --workspace=@getpaseo/desktop -- --publish never --win --x64 \
+            -c.buildVersion="$AGENT_DUEL_BUILD_NUMBER" -c.forceCodeSigning=true \
+            -c.win.azureSignOptions.publisherName="$WINDOWS_PUBLISHER_NAME" \
+            -c.win.azureSignOptions.endpoint="$AZURE_SIGNING_ENDPOINT" \
+            -c.win.azureSignOptions.codeSigningAccountName="$AZURE_SIGNING_ACCOUNT" \
+            -c.win.azureSignOptions.certificateProfileName="$AZURE_SIGNING_PROFILE"
+
+      - name: Verify Windows code signatures
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          WINDOWS_PUBLISHER_NAME: ${{ vars.WINDOWS_PUBLISHER_NAME }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $files = @(
+            'packages/desktop/release/win-unpacked/Agent Duel.exe',
+            "packages/desktop/release/Agent-Duel-Setup-$env:RELEASE_VERSION-x64.exe"
+          )
+          foreach ($file in $files) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $file
+            if ($signature.Status -ne 'Valid') {
+              throw "Invalid code signature for ${file}: $($signature.StatusMessage)"
+            }
+            if ($signature.SignerCertificate.Subject -cne $env:WINDOWS_PUBLISHER_NAME) {
+              throw "Unexpected publisher for ${file}: $($signature.SignerCertificate.Subject)"
+            }
+            if ($null -eq $signature.TimeStamperCertificate) {
+              throw "Missing signature timestamp for $file"
+            }
+            Write-Host "Verified $file signed by $($signature.SignerCertificate.Subject)"
+          }
 
       # latest.yml carries the installer's sha512, so nothing may rebuild or re-sign the exe after it.
       - name: Verify installer and update metadata
         env:
           RELEASE_VERSION: ${{ inputs.version }}
           AGENT_DUEL_BUILD_NUMBER: ${{ github.run_number }}
+          WINDOWS_PUBLISHER_NAME: ${{ vars.WINDOWS_PUBLISHER_NAME }}
         run: |
           node <<'JS'
           const crypto = require('node:crypto');
@@ -282,6 +326,10 @@ jobs:
           const yaml = require('js-yaml');
           const dir = 'packages/desktop/release';
           const version = process.env.RELEASE_VERSION;
+          const appUpdate = yaml.load(fs.readFileSync(path.join(dir, 'win-unpacked/resources/app-update.yml'), 'utf8'));
+          if (!Array.isArray(appUpdate.publisherName) || appUpdate.publisherName.length !== 1 || appUpdate.publisherName[0] !== process.env.WINDOWS_PUBLISHER_NAME) {
+            throw new Error('app-update.yml publisherName does not match the Windows signing identity');
+          }
           const name = `Agent-Duel-Setup-${version}-x64.exe`;
           const file = path.join(dir, name);
           const bytes = fs.readFileSync(file);

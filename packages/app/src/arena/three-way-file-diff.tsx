@@ -513,10 +513,10 @@ function FileLimitNotices({
   return (
     <>
       {aligned ? null : (
-        <Text style={[styles.warning, styles.filePad]}>{t("arena.baseReplaced")} </Text>
+        <Text style={[styles.warning, styles.filePad]}>{t("arena.baseReplaced")}</Text>
       )}
       {contentTruncated ? (
-        <Text style={[styles.warning, styles.filePad]}>{t("arena.missingLater")} </Text>
+        <Text style={[styles.warning, styles.filePad]}>{t("arena.missingLater")}</Text>
       ) : null}
     </>
   );
@@ -642,7 +642,7 @@ function ThreeWayFileSection({
             <Text style={[styles.muted, styles.filePad]}>{t("arena.binaryChanged")}</Text>
           ) : null}
           {!file.binary && rows.length === 0 ? (
-            <Text style={[styles.muted, styles.filePad]}>{t("arena.noRetainedText")} </Text>
+            <Text style={[styles.muted, styles.filePad]}>{t("arena.noRetainedText")}</Text>
           ) : null}
           {!file.binary && rows.length > 0 ? (
             <>
@@ -757,7 +757,7 @@ export function ThreeWayDiffViewer({
           <ColumnLabel label={labelA} model={modelA} soloed={mode === "a"} onToggle={toggleA} />
         ) : null}
         <Text numberOfLines={1} style={styles.baseColumnLabel}>
-          {t("arena.baseTitle")}{" "}
+          {t("arena.baseTitle")}
         </Text>
         {showB ? (
           <ColumnLabel label={labelB} model={modelB} soloed={mode === "b"} onToggle={toggleB} />

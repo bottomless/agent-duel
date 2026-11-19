@@ -93,10 +93,10 @@ describe("Arena labels", () => {
 
   it("changes cached diff layout labels in a mounted control", async () => {
     const view = render(<DiffLayoutControl agentId="labels-test" width={900} />);
-    expect(view.getByRole("button", { name: "Side by side" })).toBeTruthy();
+    expect(view.getByRole("radio", { name: "Side by side" })).toBeTruthy();
     await act(() => i18n.changeLanguage("fr"));
-    expect(view.getByRole("button", { name: "Côte à côte" })).toBeTruthy();
-    expect(view.getByRole("button", { name: "Une colonne" })).toBeTruthy();
+    expect(view.getByRole("radio", { name: "Côte à côte" })).toBeTruthy();
+    expect(view.getByRole("radio", { name: "Une colonne" })).toBeTruthy();
   });
 
   it("changes memoized contestant labels and disabled accessibility explanations", async () => {

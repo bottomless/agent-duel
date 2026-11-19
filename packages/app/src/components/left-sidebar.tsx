@@ -8,6 +8,7 @@ import {
   GitBranch,
   Home,
   MessageSquareText,
+  Plus,
   Search,
   Settings,
   type LucideIcon,
@@ -55,6 +56,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import type { Theme } from "@/styles/theme";
 import { HEADER_INNER_HEIGHT, useIsCompactFormFactor } from "@/constants/layout";
 import { getIsElectron } from "@/constants/platform";
+import { useNewChatInLastProjectRoute } from "@/hooks/use-global-new-workspace-action";
 import { useOpenAddProject } from "@/hooks/use-open-add-project";
 import { useShortcutKeys } from "@/hooks/use-shortcut-keys";
 import {
@@ -99,6 +101,7 @@ const foregroundColorMapping = (theme: Theme) => ({ color: theme.colors.foregrou
 const foregroundMutedColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
 const ThemedArchive = withUnistyles(Archive);
 const ThemedArrowLeft = withUnistyles(ArrowLeft);
+const ThemedPlus = withUnistyles(Plus);
 const ThemedSearch = withUnistyles(Search);
 
 const DEV_BUILD_LABEL = process.env.EXPO_PUBLIC_PASEO_DEV_BUILD_LABEL?.trim() || null;
@@ -533,6 +536,10 @@ function MobileSidebar({
   const handleWorkspacePress = useCallback(() => {
     closeSidebar();
   }, [closeSidebar]);
+  const workspaceListActionsElement = useMemo(
+    () => <WorkspaceListActions onBeforeNavigate={closeSidebar} />,
+    [closeSidebar],
+  );
 
   const mobileSidebarInsetStyle = useMemo(
     () => ({
@@ -678,6 +685,11 @@ function DesktopSidebar({
 
   const closeSidebar = usePanelStore((state) => state.showMobileAgent);
   const { gesture: closeGesture, gestureRef: closeGestureRef } = useCloseAgentListGesture(overlay);
+  // Memoized so the sidebar list's listHeaderComponent prop keeps identity across renders.
+  const workspaceListActionsElement = useMemo(
+    () => <WorkspaceListActions onBeforeNavigate={closeSidebar} />,
+    [closeSidebar],
+  );
 
   const resizeSidebarWithKeyboard = useCallback(
     (width: number) => {
@@ -866,16 +878,46 @@ function sidebarHeaderIconButtonStyle({
 }
 
 /** Names the list and holds its tools; the Archived view swaps it for its own header. */
-function WorkspaceListActions() {
+function WorkspaceListActions({ onBeforeNavigate }: { onBeforeNavigate?: () => void }) {
   const { t } = useTranslation();
   const setCommandCenterOpen = useKeyboardShortcutsStore((state) => state.setCommandCenterOpen);
   const setListView = useSidebarViewStore((state) => state.setListView);
   const commandCenterKeys = useShortcutKeys("toggle-command-center");
+  const newChatKeys = useShortcutKeys("new-workspace");
+  const newChatRoute = useNewChatInLastProjectRoute();
+  const handleNewChatPress = useCallback(() => {
+    onBeforeNavigate?.();
+    router.navigate(newChatRoute as never);
+  }, [newChatRoute, onBeforeNavigate]);
   const handleSearchPress = useCallback(() => setCommandCenterOpen(true), [setCommandCenterOpen]);
   const handleArchivedPress = useCallback(() => setListView("archived"), [setListView]);
 
   return (
     <SidebarSectionHeader title={t("sidebar.sections.chats")}>
+      <Tooltip delayDuration={300}>
+        <TooltipTrigger asChild>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={t("sidebar.workspace.actions.newChat")}
+            testID="sidebar-new-chat"
+            style={sidebarHeaderIconButtonStyle}
+            onPress={handleNewChatPress}
+          >
+            {({ hovered, pressed }) => (
+              <ThemedPlus
+                size={15}
+                uniProps={hovered || pressed ? foregroundColorMapping : foregroundMutedColorMapping}
+              />
+            )}
+          </Pressable>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" align="center" offset={8}>
+          <IconTooltipContent
+            label={t("sidebar.workspace.actions.newChat")}
+            shortcutKeys={newChatKeys}
+          />
+        </TooltipContent>
+      </Tooltip>
       <Tooltip delayDuration={300}>
         <TooltipTrigger asChild>
           <Pressable
@@ -979,10 +1021,6 @@ function SidebarArchivedView({ onChatPress }: { onChatPress?: () => void }) {
     </View>
   );
 }
-
-// Stable element so the sidebar list's listHeaderComponent prop keeps identity across
-// renders (WorkspaceListActions takes no props).
-const workspaceListActionsElement = <WorkspaceListActions />;
 
 // Static styles for Animated.Views — must NOT use Unistyles dynamic theme to
 // avoid the "Unable to find node on an unmounted component" crash when Unistyles

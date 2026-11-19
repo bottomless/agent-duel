@@ -11,10 +11,16 @@ export function resolveComposerPillClearance(isCompact: boolean): number {
   return isCompact ? COMPOSER_PILL_CLEARANCE.compact : COMPOSER_PILL_CLEARANCE.wide;
 }
 
+/** The gap between the transcript's last line and whatever floats above the composer. */
+export function resolveComposerTranscriptClearance(isCompact: boolean): number {
+  return isCompact ? SPACING[6] : 20;
+}
+
 export function resolveComposerTrackTailClearance(isCompact: boolean): number {
   const composerClearance = resolveComposerPillClearance(isCompact);
-  const transcriptClearance = isCompact ? SPACING[6] : 20;
-  return transcriptClearance + COMPOSER_PILL_MIN_HEIGHT + composerClearance;
+  return (
+    resolveComposerTranscriptClearance(isCompact) + COMPOSER_PILL_MIN_HEIGHT + composerClearance
+  );
 }
 
 export function resolveComposerTrackControlClearance(isCompact: boolean): number {

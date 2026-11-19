@@ -4,6 +4,7 @@ import type { AgentTimelineCursorState } from "@/stores/session-store";
 import { createUserMessage, type StreamItem } from "@/types/stream";
 import { isResolvingBattleState } from "./battle-result";
 import { orderArenaChat } from "./chat-order";
+import { compareMessageIds } from "./message-order";
 
 export function isArenaBattleUnresolved(snapshot: ArenaSnapshot | undefined): boolean {
   return snapshot?.chat.status === "battle_active" && snapshot.turn?.resolution === undefined;
@@ -154,29 +155,31 @@ interface ArenaAnchorItem {
   messageId?: string;
 }
 
+/**
+ * The battle's own prompt row: its grafted prompt, or for a discarded battle, which grafted
+ * nothing, its projected row (`projectDiscardedArenaPrompts`). Matching a missing canonical ID
+ * against a row's missing message ID put every discarded battle under the first projected prompt.
+ */
 function isCanonicalPrompt(item: ArenaHistoryItem, streamItem: ArenaAnchorItem): boolean {
-  return (
-    streamItem.kind === "user_message" &&
-    (streamItem.messageId === item.canonicalUserMessageID ||
-      streamItem.id === item.canonicalUserMessageID)
-  );
+  if (streamItem.kind !== "user_message") return false;
+  const prompt = item.canonicalUserMessageID;
+  if (!prompt) return streamItem.id === arenaPromptRowId(item.id);
+  return streamItem.messageId === prompt || streamItem.id === prompt;
 }
 
 /**
  * The battle's last prompt in the chat: its own, or the last reply sent inside the battle. Those
  * replies are grafted with the winner as user messages, so the next user message is not where the
- * battle ends. Canonical message IDs ascend, so the battle's prompts are the user messages from its
- * own prompt through the last message the graft copied. A turn grafted before that bound was
- * recorded falls back to its own prompt.
+ * battle ends. Canonical message IDs ascend (`compareMessageIds`), so the battle's prompts are the
+ * user messages from its own prompt through the last message the graft copied. A turn grafted
+ * before that bound was recorded falls back to its own prompt.
  */
 function lastBattlePromptIndex(
   item: ArenaHistoryItem,
   streamItems: ReadonlyArray<ArenaAnchorItem>,
 ): number {
   const first = item.canonicalUserMessageID;
-  // A discarded turn has only its projected prompt (`projectDiscardedArenaPrompts`).
-  if (!first)
-    return streamItems.findIndex((streamItem) => streamItem.id === arenaPromptRowId(item.id));
+  if (!first) return streamItems.findIndex((streamItem) => isCanonicalPrompt(item, streamItem));
   const last = item.canonicalLastMessageID;
   if (!last) return streamItems.findIndex((streamItem) => isCanonicalPrompt(item, streamItem));
   return streamItems.findLastIndex(
@@ -184,29 +187,64 @@ function lastBattlePromptIndex(
       isCanonicalPrompt(item, streamItem) ||
       (streamItem.kind === "user_message" &&
         streamItem.messageId !== undefined &&
-        streamItem.messageId >= first &&
-        streamItem.messageId <= last),
+        compareMessageIds(streamItem.messageId, first) >= 0 &&
+        compareMessageIds(streamItem.messageId, last) <= 0),
   );
 }
 
+/**
+ * Where a decided battle's summary goes: right after the battle's own prompt, so the kept agent's
+ * heading (its model, its time, Show battle) sits above the answer it heads, the way each agent's
+ * name heads its answer while the battle runs.
+ */
 export function arenaSummaryAnchor(
   item: ArenaHistoryItem,
   streamItems: ReadonlyArray<ArenaAnchorItem>,
 ): string | null {
-  const promptIndex = lastBattlePromptIndex(item, streamItems);
-  if (promptIndex < 0) return null;
-  const nextUserOffset = streamItems
-    .slice(promptIndex + 1)
+  return streamItems.find((streamItem) => isCanonicalPrompt(item, streamItem))?.id ?? null;
+}
+
+/**
+ * The rows of a decided battle's kept answer: everything after its own prompt through the end of
+ * the battle, replies sent inside it included. Show battle stands the battle in for them.
+ */
+export function arenaKeptAnswerRowIds(
+  item: ArenaHistoryItem,
+  stream: ArenaPresentedStream,
+): Set<string> {
+  const items = orderArenaChat([...stream.tail, ...stream.head]);
+  const promptIndex = items.findIndex((streamItem) => isCanonicalPrompt(item, streamItem));
+  const lastPromptIndex = lastBattlePromptIndex(item, items);
+  if (promptIndex < 0 || lastPromptIndex < 0) return new Set();
+  const nextUserOffset = items
+    .slice(lastPromptIndex + 1)
     .findIndex((streamItem) => streamItem.kind === "user_message");
-  const endIndex = nextUserOffset < 0 ? streamItems.length - 1 : promptIndex + nextUserOffset;
-  return streamItems[endIndex]?.id ?? null;
+  const endIndex = nextUserOffset < 0 ? items.length - 1 : lastPromptIndex + nextUserOffset;
+  return new Set(items.slice(promptIndex + 1, endIndex + 1).map((streamItem) => streamItem.id));
+}
+
+/**
+ * The prompts that start a turn: every prompt in the chat, battles' and plain turns' alike, except
+ * the replies sent inside a battle, which belong to that battle's turn (`arenaKeptAnswerRowIds`).
+ * The chat draws its turn rule above each of them after its first row.
+ */
+export function arenaTurnStartRowIds(
+  history: readonly ArenaHistoryItem[],
+  stream: ArenaPresentedStream,
+): Set<string> {
+  const inside = new Set<string>();
+  for (const item of history) for (const id of arenaKeptAnswerRowIds(item, stream)) inside.add(id);
+  const ids = new Set<string>();
+  for (const row of [...stream.tail, ...stream.head]) {
+    if (row.kind === "user_message" && !inside.has(row.id)) ids.add(row.id);
+  }
+  return ids;
 }
 
 /**
  * Each summary's anchor, searched over tail and head. A grafted winner sends no turn completion,
  * so its turn can stay in the head until the next canonical event; in a chat whose history has
- * not loaded yet, the whole turn is there. The search runs in the order the chat shows
- * (`orderArenaChat`), so a summary follows the work its turn's answer moved above.
+ * not loaded yet, the whole turn is there.
  */
 export function arenaSummaryAnchors(
   history: readonly ArenaHistoryItem[],
@@ -236,7 +274,7 @@ export function arenaTurnFollowedUp(item: ArenaHistoryItem, stream: ArenaPresent
       (streamItem) =>
         streamItem.kind === "user_message" &&
         streamItem.messageId !== undefined &&
-        streamItem.messageId > last,
+        compareMessageIds(streamItem.messageId, last) > 0,
     )
   );
 }

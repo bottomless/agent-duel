@@ -54,7 +54,7 @@ export const fr: TranslationResources = {
     battle: "Bataille",
     battleMode: "Mode bataille",
     battleHint:
-      "Activé : deux agents répondent à chaque prompt et vous gardez la meilleure réponse. Leurs modèles restent masqués jusqu’à votre vote. Désactivé : un seul agent répond.",
+      "Activé : deux agents répondent à chaque prompt et vous choisissez la meilleure réponse. Leurs modèles restent masqués jusqu’à votre vote. Désactivé : un seul agent répond.",
     autoAccept: "Acceptation automatique",
     askBeforeTools: "Demander avant les outils",
     toolPermissions: "Autorisations des outils",
@@ -89,12 +89,14 @@ export const fr: TranslationResources = {
     loadingBaseChanges: "Chargement des modifications depuis la base…",
     baseChanges: "Modifications depuis la base",
     retryChanges: "Réessayer les modifications",
-    noChangesWhile: "n’a rien modifié ·",
     baseUnavailable: "Les modifications depuis la base sont indisponibles",
     summary: "Résumé des différences",
-    changes: "Modifications",
+    changes: "Fichiers modifiés",
     winningDiscarded: "Modifications gagnantes abandonnées",
     battleDiscarded: "Bataille abandonnée",
+    versus: "contre",
+    resultWon: "Gagnant",
+    resultEarly: "Choisi tôt",
     battleResolved: "Bataille résolue",
     sameChanges:
       "Les deux agents ont effectué les mêmes modifications. Affichage des modifications par rapport à l’original.",
@@ -117,6 +119,13 @@ export const fr: TranslationResources = {
     tryAgain: "Réessayer",
     preparing: "Préparation",
     restoreSplit: "Rétablir la vue divisée",
+    openTerminalIn: "Ouvrir un terminal dans le worktree de l’agent {{side}}",
+    showBattle: "Afficher la bataille",
+    hideBattle: "Masquer la bataille",
+    youChoseSide: "Vous avez choisi {{side}}",
+    youChoseSideEarly: "Vous avez choisi {{side}} tôt",
+    youCalledTie: "Vous avez déclaré une égalité",
+    tieSideApplied: "Modifications de {{side}} appliquées",
     actionFailed: "Échec de l’action de bataille",
     trunkUnavailable: "Tronc indisponible",
     fewerFiles: "Afficher moins de fichiers",
@@ -137,16 +146,16 @@ export const fr: TranslationResources = {
     stopBattle: "Arrêter la bataille",
     tie: "Égalité",
     tieBattle: "Déclarer une égalité",
-    tieHelp: "Une égalité conserve le travail de l’agent A.",
+    tieHelp: "Une égalité applique le travail de l’agent A.",
     resume: "Reprendre",
     resumeBattle: "Reprendre la bataille",
     discard: "Abandonner",
     retryResolution: "Réessayer la résolution",
-    stoppedChoose: "Bataille arrêtée · choisissez quoi conserver",
+    stoppedChoose: "Bataille arrêtée · choisissez un résultat",
     stoppedFailedSide:
-      "L'agent {{side}} a échoué · conserver l'un ou l'autre ne comptera pas comme un vote",
+      "L’agent {{side}} a échoué · choisir l’un ou l’autre ne comptera pas comme un vote",
     stoppedBothFailed:
-      "Les deux agents ont échoué · conserver l'un ou l'autre ne comptera pas comme un vote",
+      "Les deux agents ont échoué · choisir l’un ou l’autre ne comptera pas comme un vote",
     closedBattle: "Agent Duel s’est fermé pendant la bataille · reprendre ou abandonner",
     bothFailedRetry: "Les deux agents ont échoué · réessayer ou abandonner",
     bothFailed: "Les deux agents ont échoué",
@@ -194,8 +203,8 @@ export const fr: TranslationResources = {
     mergeConflicts: "Certains fichiers ont des conflits de fusion",
     discardWinning: "Abandonner les modifications gagnantes",
     winningNotApplied: "Les modifications gagnantes n’ont pas été appliquées",
-    winningKept:
-      "Le résultat gagnant est conservé, mais Arena n’a pas pu l’appliquer à cet espace de travail.",
+    winningSaved:
+      "Le résultat gagnant est enregistré, mais Arena n’a pas pu l’appliquer à cet espace de travail.",
     restoreWorkspace: "Restaurer mon espace de travail",
     partlyApplied: "Seule une partie des modifications gagnantes a été appliquée",
     partialApplyHelp:
@@ -313,7 +322,6 @@ export const fr: TranslationResources = {
     worktreeCopied: "Chemin de l’arbre de travail de l’agent {{side}} copié",
     chooseEarly: "Choisir {{side}} avant la fin",
     choose: "Choisir {{side}}",
-    keepSide: "Conserver {{side}}",
     chooseEarlyTitle: "Choisir {{side}} avant la fin ?",
     chooseEarlyHelp:
       "L’agent {{other}} s’arrête immédiatement et son travail est abandonné. Le travail actuel de l’agent {{side}} devient le résultat de ce tour.",
@@ -321,7 +329,6 @@ export const fr: TranslationResources = {
     subagent: "Sous-agent · {{name}}",
     taskName: "Tâche {{number}}",
     branchesCount: "Branches ({{total}})",
-    changesCount: "Modifications ({{total}})",
     toolPermissionsLabel: "Autorisations des outils : {{label}}",
     allowPermission: "Autoriser {{permission}}",
     sideOriginalChanges: "{{agent}} · Modifications par rapport à l’original",
@@ -355,10 +362,6 @@ export const fr: TranslationResources = {
     startingPreview: "Démarrage de l’aperçu de {{agent}}",
     showDiff: "Afficher les différences de {{file}}",
     hideDiff: "Masquer les différences de {{file}}",
-    showReview: "Afficher {{section}}",
-    hideReview: "Masquer {{section}}",
-    reviewSections: "le résumé des différences et les modifications",
-    reviewChanges: "les modifications",
     expandTransition: "Développer les détails de transition d’environnement",
     collapseTransition: "Réduire les détails de transition d’environnement",
     choseModel: "{{model}} choisi (agent {{side}})",
@@ -371,8 +374,7 @@ export const fr: TranslationResources = {
       "S’applique aux deux concurrents et devient le réglage par défaut des nouveaux chats. Les refus explicites restent applicables.",
     permissionsChat:
       "S’applique à ce chat et devient le réglage par défaut des nouveaux chats. Les refus explicites restent applicables.",
-    waitingSummary:
-      "travaille encore. Le résumé des différences comparera les deux résultats une fois le travail terminé.",
+    waitingSummary: "Le résumé des différences apparaît une fois que les deux agents ont terminé.",
     regionsReplaced:
       "Certaines zones étaient trop grandes pour être alignées précisément. Elles remplacent l’original ; les étiquettes de modifications communes sont indisponibles.",
     sideReplaced:
@@ -2333,6 +2335,14 @@ export const fr: TranslationResources = {
         title: "Associer un appareil",
         description: "Connectez votre téléphone à ce daemon",
       },
+    },
+    recent: {
+      title: "Projets récents sur cet ordinateur",
+      loading: "Recherche de projets...",
+      showAll: "Tout afficher ({{count}})",
+      openLabel: "Démarrer une discussion dans {{name}}",
+      notFound: "Dossier introuvable",
+      openFailed: "Impossible d'ajouter le projet",
     },
   },
   projectPicker: {

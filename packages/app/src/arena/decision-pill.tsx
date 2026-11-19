@@ -1,20 +1,23 @@
 import { i18n } from "@/i18n/i18next";
 import { useTranslation } from "react-i18next";
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Text, View, type LayoutChangeEvent } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import type { ArenaSide, ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
 import {
   ArenaRunningPillButton,
   ArenaSideChoiceButton,
+  ArenaBalancedChoiceGroup,
+  ArenaChoiceGroup,
+  ArenaPastDecision,
+  arenaPastChoice,
   DiscardDecision,
   ResumeDecision,
   VoteDecision,
 } from "./decision-bar";
 import {
   arenaDecisionPhase,
-  arenaRunningDecisionHint,
-  arenaRunningDecisionOrder,
+  arenaRunningWaitingSide,
   type ArenaDecisionPhase,
 } from "./decision-state";
 import { isArenaBattleOnScreen } from "./summary-anchor";
@@ -57,7 +60,7 @@ function BattlePaneDecision({
   }
 
   if (phase.kind === "awaiting_stop_resolution") {
-    return <BattlePaneKeepDecision side={side} phase={phase} actions={actions} />;
+    return <BattlePaneStoppedDecision side={side} phase={phase} actions={actions} />;
   }
 
   if (phase.kind !== "awaiting_vote") return null;
@@ -88,7 +91,11 @@ function BattlePaneDecision({
   );
 }
 
-function BattlePaneKeepDecision({
+/**
+ * A side after a stop, drawn as at the vote: Choose, or Accept for a side that failed, which asks
+ * first because its work can be partial.
+ */
+function BattlePaneStoppedDecision({
   side,
   phase,
   actions,
@@ -101,18 +108,17 @@ function BattlePaneKeepDecision({
   const resolution = side === "a" ? "apply_a" : "apply_b";
   const canKeep = side === "a" ? phase.canKeepA : phase.canKeepB;
   const failed = side === "a" ? phase.failedA : phase.failedB;
-  const handleKeep = useCallback(() => {
-    // A failed side's work can be partial, so it asks first, as Accept does.
-    void (failed ? actions.keepFailed(side) : actions.resolveStop(resolution));
+  const handleChoose = useCallback(() => {
+    void (failed ? actions.acceptStoppedFailed(side) : actions.resolveStop(resolution));
   }, [actions, failed, resolution, side]);
   return (
     <ArenaSideChoiceButton
       side={side}
-      kind="keep"
+      kind={failed ? "accept" : "vote"}
       loading={pendingAction?.kind === "resolve_stop" && pendingAction.resolution === resolution}
       disabled={pending || !canKeep}
-      onPress={handleKeep}
-      testID={`arena-stopped-keep-${side}`}
+      onPress={handleChoose}
+      testID={`arena-stopped-choose-${side}`}
     />
   );
 }
@@ -151,7 +157,8 @@ function stoppedHint(phase: Extract<ArenaDecisionPhase, { kind: "awaiting_stop_r
 
 /** The line above the pill that says why the usual choices changed, if they did. */
 function decisionHint(phase: ArenaDecisionPhase): string | null {
-  if (phase.kind === "running") return arenaRunningDecisionHint(phase);
+  // While running, the side still working is named in its own place in the row instead.
+  if (phase.kind === "running") return null;
   if (phase.kind === "awaiting_stop_resolution") return stoppedHint(phase);
   if (phase.kind !== "awaiting_vote") return null;
   if (phase.canResume) return i18n.t("arena.closedBattle");
@@ -167,8 +174,8 @@ function decisionHint(phase: ArenaDecisionPhase): string | null {
 }
 
 /**
- * The pill is empty only at a vote with no side to take, a Choose or an Accept in a failed side's
- * place; then the failure line's Discard is the only choice and an empty pill would sit under it.
+ * The choices are empty only at a vote with no side to take, a Choose or an Accept in a failed
+ * side's place; then the failure line's Discard is the only choice and the middle stays empty.
  */
 function pillHasChoice(phase: ArenaDecisionPhase): boolean {
   if (phase.kind !== "awaiting_vote" || phase.canResume) return true;
@@ -178,7 +185,7 @@ function pillHasChoice(phase: ArenaDecisionPhase): boolean {
 /**
  * At the vote Discard sits at the end of the line that says a side failed rather than among the
  * vote's choices, so it shows only when that line explains why the battle can be thrown away.
- * After a stop or a restart it stays in the pill.
+ * After a stop or a restart it stays among the choices.
  */
 function DecisionHintRow({
   phase,
@@ -198,7 +205,180 @@ function DecisionHintRow({
   );
 }
 
-/** Lives outside the transcript scroller so the decision stays above the composer. */
+/** Whether the decision row shows for this snapshot: a battle on screen with a choice to make. */
+export function arenaDecisionRowVisible(snapshot: ArenaSnapshot): boolean {
+  const phase = arenaDecisionPhase(snapshot);
+  const showChoices =
+    phase.kind === "running" ||
+    phase.kind === "awaiting_vote" ||
+    phase.kind === "awaiting_stop_resolution";
+  return isArenaBattleOnScreen(snapshot) && showChoices;
+}
+
+/** How long a just-decided battle's result stays in the pill at least. */
+export const ARENA_DECIDED_HOLD_MS = 5000;
+
+/**
+ * The battle just decided in front of the user, while its result holds in the pill: from the
+ * moment a turn the pill showed choices for gets its resolution, through its application, and for
+ * at least `ARENA_DECIDED_HOLD_MS`. The vote is when the models are revealed, and the pill is where
+ * the eye already is, so it names them there before the chat moves on. A chat opened on a decided
+ * battle holds nothing: only a decision seen being made does.
+ */
+function useDecidedHold(snapshot: ArenaSnapshot, live: boolean): ArenaSnapshot["turn"] | null {
+  const turn = snapshot.turn;
+  const turnId = turn?.id ?? null;
+  const resolved = turn?.resolution !== undefined;
+  const [liveTurnId, setLiveTurnId] = useState<string | null>(null);
+  const [decidedTurnId, setDecidedTurnId] = useState<string | null>(null);
+  const [expiredTurnId, setExpiredTurnId] = useState<string | null>(null);
+  useEffect(() => {
+    if (live && turnId) setLiveTurnId(turnId);
+  }, [live, turnId]);
+  useEffect(() => {
+    if (!live && resolved && turnId !== null && turnId === liveTurnId) setDecidedTurnId(turnId);
+  }, [live, liveTurnId, resolved, turnId]);
+  useEffect(() => {
+    if (decidedTurnId === null) return;
+    const timer = setTimeout(() => setExpiredTurnId(decidedTurnId), ARENA_DECIDED_HOLD_MS);
+    return () => clearTimeout(timer);
+  }, [decidedTurnId]);
+  // Decided this render, before the effect above records it: waiting for the effect left one
+  // frame with no pill between the vote's row and its result.
+  const decidedNow = !live && resolved && turnId !== null && turnId === liveTurnId;
+  if (!turn || !resolved || (turnId !== decidedTurnId && !decidedNow)) return null;
+  const applying = isArenaBattleOnScreen(snapshot);
+  return applying || expiredTurnId !== turnId ? turn : null;
+}
+
+/** The decision just made, with the revealed models in place of Agent A and B. */
+function DecidedChoice({ turn }: { turn: NonNullable<ArenaSnapshot["turn"]> }) {
+  const choice = arenaPastChoice(turn);
+  if (!choice) return null;
+  return (
+    <ArenaPastDecision
+      kind={choice.kind}
+      chosen={choice.chosen}
+      identities={turn.identities}
+      reveal
+    />
+  );
+}
+
+/** The choices themselves, centred between the two answers. */
+function DecisionChoices({
+  phase,
+  actions,
+}: {
+  phase: ArenaDecisionPhase;
+  actions: ArenaBattleActions;
+}) {
+  if (phase.kind === "running") {
+    // Stop alone is an action, not a choice between the sides, so it stays a plain button.
+    return (
+      <View style={styles.choices} testID="arena-battle-choice-row">
+        <BattleStopDecision phase={phase} actions={actions} />
+      </View>
+    );
+  }
+  const stopped = phase.kind === "awaiting_stop_resolution";
+  const interrupted = phase.kind === "awaiting_vote" && phase.canResume;
+  if (interrupted) {
+    return (
+      <ArenaChoiceGroup testID="arena-battle-choice-row">
+        <ResumeDecision actions={actions} />
+        <DiscardDecision actions={actions} />
+      </ArenaChoiceGroup>
+    );
+  }
+  // A failed side shows Accept in its Choose's place, or nothing if its result was not saved, and
+  // each failed pane keeps its Retry.
+  const sideA = <BattlePaneDecision side="a" phase={phase} actions={actions} />;
+  const sideB = <BattlePaneDecision side="b" phase={phase} actions={actions} />;
+  let middle: ReactNode = null;
+  if (phase.kind === "awaiting_vote" && phase.canTie) middle = <VoteDecision actions={actions} />;
+  if (stopped) middle = <DiscardDecision actions={actions} />;
+  // With a middle choice the sides share a width, so Tie sits at the exact centre and stays there
+  // when the decision just made puts the models' names in the sides' places.
+  if (middle) {
+    return (
+      <ArenaBalancedChoiceGroup testID="arena-battle-choice-row">
+        {sideA}
+        {middle}
+        {sideB}
+      </ArenaBalancedChoiceGroup>
+    );
+  }
+  return (
+    <ArenaChoiceGroup testID="arena-battle-choice-row">
+      {sideA}
+      {sideB}
+    </ArenaChoiceGroup>
+  );
+}
+
+/** A side still working, named in its own place in the row with its colour. */
+function WorkingStatus({ side }: { side: ArenaSide }) {
+  const { t } = useTranslation();
+  return (
+    <View style={styles.working} testID={`arena-working-${side}`}>
+      <View style={[styles.workingDot, side === "a" ? styles.workingDotA : styles.workingDotB]} />
+      <Text style={styles.workingText}>
+        {t("arena.agentWaiting", { side: side.toUpperCase() })}
+      </Text>
+    </View>
+  );
+}
+
+/**
+ * Once one side has finished, the row is one control, built like the vote's (`ArenaChoiceGroup`):
+ * each side's place holds what applies to it, its Choose early once it has finished, its status
+ * while it works, with Stop between them at the exact centre. The status is the group's quiet part, as Tie is at the
+ * vote, so the running row and the vote read as one control in two states.
+ */
+function RunningSides({
+  phase,
+  actions,
+}: {
+  phase: Extract<ArenaDecisionPhase, { kind: "running" }>;
+  actions: ArenaBattleActions;
+}) {
+  const waiting = arenaRunningWaitingSide(phase);
+  const slot = (side: ArenaSide) => {
+    const canPick = side === "a" ? phase.canPickA : phase.canPickB;
+    if (canPick) return <BattlePaneDecision side={side} phase={phase} actions={actions} />;
+    return waiting === side ? <WorkingStatus side={side} /> : null;
+  };
+  // The sides share a width, so Stop sits at the exact centre, where Tie will be at the vote.
+  return (
+    <ArenaBalancedChoiceGroup testID="arena-battle-choice-row">
+      {slot("a")}
+      <BattleStopDecision phase={phase} actions={actions} />
+      {slot("b")}
+    </ArenaBalancedChoiceGroup>
+  );
+}
+
+/** The running sides once one has finished, otherwise the choices if there are any to make. */
+function DecisionRow({
+  phase,
+  actions,
+}: {
+  phase: ArenaDecisionPhase;
+  actions: ArenaBattleActions;
+}) {
+  if (phase.kind === "running" && (phase.canPickA || phase.canPickB)) {
+    return <RunningSides phase={phase} actions={actions} />;
+  }
+  if (!pillHasChoice(phase)) return null;
+  return <DecisionChoices phase={phase} actions={actions} />;
+}
+
+/**
+ * The battle's decision, fixed above the composer over the end of the transcript, which scrolls
+ * behind it: the choices centred between the two answers. The area around them is transparent and
+ * click-through, so the answers stay readable and reachable under it.
+ */
 export function ArenaDecisionPill({
   serverId,
   agentId,
@@ -213,10 +393,9 @@ export function ArenaDecisionPill({
   useTranslation();
   const actions = useArenaBattleActions(serverId, agentId, snapshot.turn);
   const phase = arenaDecisionPhase(snapshot);
-  const stopped = phase.kind === "awaiting_stop_resolution";
-  const interrupted = phase.kind === "awaiting_vote" && phase.canResume;
-  const showChoices = phase.kind === "running" || phase.kind === "awaiting_vote" || stopped;
-  const visible = isArenaBattleOnScreen(snapshot) && showChoices;
+  const live = arenaDecisionRowVisible(snapshot);
+  const decided = useDecidedHold(snapshot, live);
+  const visible = live || decided !== null;
   const handleLayout = useCallback(
     (event: LayoutChangeEvent) => onHeightChange(event.nativeEvent.layout.height),
     [onHeightChange],
@@ -234,43 +413,20 @@ export function ArenaDecisionPill({
       pointerEvents="box-none"
       testID="arena-decision-pill"
     >
-      <DecisionHintRow phase={phase} actions={actions} />
-      {pillHasChoice(phase) ? (
-        <View style={styles.pill} testID="arena-battle-choice-row">
-          {phase.kind === "running"
-            ? arenaRunningDecisionOrder(phase).map((choice) =>
-                choice === "stop" ? (
-                  <BattleStopDecision key="stop" phase={phase} actions={actions} />
-                ) : (
-                  <BattlePaneDecision key={choice} side={choice} phase={phase} actions={actions} />
-                ),
-              )
-            : null}
-          {interrupted ? (
-            <>
-              <ResumeDecision actions={actions} />
-              <DiscardDecision actions={actions} />
-            </>
-          ) : null}
-          {/* A failed side shows Accept in its Choose's place, or nothing if its result was not
-              saved, and each failed pane keeps its Retry. */}
-          {phase.kind !== "running" && !interrupted ? (
-            <>
-              <BattlePaneDecision side="a" phase={phase} actions={actions} />
-              {phase.kind === "awaiting_vote" && phase.canTie ? (
-                <VoteDecision actions={actions} />
-              ) : null}
-              {stopped ? <DiscardDecision actions={actions} /> : null}
-              <BattlePaneDecision side="b" phase={phase} actions={actions} />
-            </>
-          ) : null}
-        </View>
-      ) : null}
+      {decided && !live ? (
+        <DecidedChoice turn={decided} />
+      ) : (
+        <>
+          <DecisionHintRow phase={phase} actions={actions} />
+          <DecisionRow phase={phase} actions={actions} />
+        </>
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create((theme) => ({
+  // Above the composer, over the end of the transcript, which scrolls behind it.
   container: {
     position: "absolute",
     bottom: "100%",
@@ -283,16 +439,10 @@ const styles = StyleSheet.create((theme) => ({
     paddingBottom: theme.spacing[2],
     gap: theme.spacing[2],
   },
-  pill: {
-    maxWidth: "100%",
+  choices: {
     flexDirection: "row",
     alignItems: "center",
-    gap: theme.spacing[1],
-    padding: theme.spacing[1],
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    borderRadius: theme.borderRadius.full,
-    backgroundColor: theme.colors.surface2,
+    gap: theme.spacing[2],
   },
   hintRow: {
     maxWidth: "100%",
@@ -306,5 +456,29 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.foregroundMuted,
     fontSize: theme.fontSize.sm,
     textAlign: "center",
+  },
+  // The group's quiet part, on the group's own fill, as Tie is at the vote.
+  working: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: theme.spacing[2],
+    paddingHorizontal: theme.spacing[3],
+  },
+  // The side's colour, as on its pane's rule and its Choose button.
+  workingDot: {
+    width: 7,
+    height: 7,
+    borderRadius: theme.borderRadius.full,
+  },
+  workingDotA: {
+    backgroundColor: theme.colors.statusDotRunning,
+  },
+  workingDotB: {
+    backgroundColor: theme.colors.statusDotWarning,
+  },
+  workingText: {
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.base,
   },
 }));

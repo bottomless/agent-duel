@@ -86,7 +86,7 @@ function OpenLink({ url, label }: { url: string; label: string }) {
       textStyle={styles.openText}
       accessibilityLabel={label}
     >
-      {t("arena.open")}{" "}
+      {t("arena.open")}
     </Button>
   );
 }
@@ -359,7 +359,7 @@ function ArenaStoppedCallout({
     <ArenaCallout
       title={t("arena.winningNotApplied")}
       tone="warning"
-      detail={parked.reason ?? t("arena.winningKept")}
+      detail={parked.reason ?? t("arena.winningSaved")}
       testID="arena-application-stopped"
       actions={actions}
     />
@@ -529,7 +529,7 @@ export function ArenaEnvironmentDetails({
               accessibilityLabel={t("arena.retainedPreview")}
               testID="arena-readiness-open-preview"
             >
-              {t("arena.open")}{" "}
+              {t("arena.open")}
             </Button>
           ) : null}
         </View>

@@ -282,7 +282,7 @@ export function SplitFileView({
         </View>
       ) : null}
       {diff.aligned ? null : (
-        <Text style={[styles.warning, styles.pad]}>{t("arena.sideReplaced")} </Text>
+        <Text style={[styles.warning, styles.pad]}>{t("arena.sideReplaced")}</Text>
       )}
     </View>
   );

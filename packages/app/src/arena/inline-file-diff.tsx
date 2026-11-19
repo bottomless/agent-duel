@@ -64,6 +64,7 @@ export function InlineFileDiff({
   waitingFor,
   revision,
   embedded = false,
+  onColumns = false,
 }: {
   serverId: string;
   agentId: string;
@@ -75,6 +76,8 @@ export function InlineFileDiff({
   /** The commits of the comparison listing this file; see `useArenaFileDiff`. */
   revision?: string;
   embedded?: boolean;
+  /** Under a row on the battle's answers' columns: A's code under A, B's under B. */
+  onColumns?: boolean;
 }) {
   const { t } = useTranslation();
   const query = useArenaFileDiff({ serverId, agentId, turnId, file, revision });
@@ -96,6 +99,7 @@ export function InlineFileDiff({
         layout={layout}
         waitingFor={shown.waitingFor}
         embedded={embedded}
+        onColumns={onColumns}
       />
     );
   }
@@ -104,7 +108,7 @@ export function InlineFileDiff({
       <View style={styles.status} accessibilityRole="alert" testID="arena-inline-diff-error">
         <Text style={styles.error}>{toErrorMessage(query.error)}</Text>
         <Button size="sm" variant="ghost" loading={query.isFetching} onPress={retry}>
-          {t("arena.retryDiff")}{" "}
+          {t("arena.retryDiff")}
         </Button>
       </View>
     );

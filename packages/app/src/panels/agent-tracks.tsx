@@ -1,7 +1,6 @@
 import type { AgentAddress } from "@getpaseo/protocol/addresses";
 import { memo, useCallback, useMemo, type ReactElement } from "react";
 import { BackgroundWorkTrack, createHostBackgroundWorkModel } from "@/background-work";
-import { WorkspaceDiffStatPill } from "@/composer/diff-stat-pill";
 import { AgentTaskList } from "@/composer/task-list";
 import { ComposerTrackBar } from "@/composer/tracks";
 import { useIsCompactFormFactor } from "@/constants/layout";
@@ -22,10 +21,9 @@ import type { TodoEntry } from "@/types/stream";
 import { navigateToAgent } from "@/utils/navigate-to-agent";
 import { buildWorkspaceTabPersistenceKey, type WorkspaceTabTarget } from "@/workspace-tabs/model";
 import { openPreferredWorkspaceTarget } from "@/workspace-tabs/open-beside";
-import { openComposerChanges } from "@/workspace-tabs/open-supporting-view";
 
 /**
- * The pane's ambient context — workspace changes, subagents, and tasks — as a row of pills above
+ * The pane's ambient context — subagents, tasks, and plugin pills — as a row of pills above
  * the composer.
  *
  * The row shares the composer's keyboard transform and owns the space between itself and the
@@ -108,16 +106,6 @@ export const AgentTracks = memo(function AgentTracks({
     [openSubagentTarget],
   );
   const sheetTabFor = useSubagentSheetTab(workspaceKey, tabId);
-  const handleOpenChanges = useCallback(() => {
-    if (!workspaceKey) {
-      return;
-    }
-    openComposerChanges({
-      isCompact,
-      workspaceKey,
-      preferences: openInSidePane,
-    });
-  }, [isCompact, openInSidePane, workspaceKey]);
 
   return (
     <ComposerTrackBar>
@@ -141,11 +129,8 @@ export const AgentTracks = memo(function AgentTracks({
         agentId={agentId}
         compact={isCompact}
       />
-      <WorkspaceDiffStatPill
-        serverId={serverId}
-        workspaceId={workspaceId}
-        onPress={handleOpenChanges}
-      />
+      {/* No workspace diff pill: in a battle chat the checkout's diff is not either agent's
+          work, and the header's overflow already opens Changes (docs/upstream-sync.md). */}
     </ComposerTrackBar>
   );
 });

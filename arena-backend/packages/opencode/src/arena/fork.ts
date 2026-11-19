@@ -147,7 +147,9 @@ export const forkSessionInto = Effect.fn("ArenaFork.forkSessionInto")(function* 
   const prune = pruneBefore
     ? { before: pruneBefore, at: Date.now(), worktree: roots.worktree, uploads: uploadDirectories(transcript) }
     : undefined
-  for (const message of transcript) {
+  // Core names copies `<fork ID>_<seq>`, so ID order puts `…_13` before `…_9`; position is the order.
+  const pruneEnd = prune ? transcript.findIndex((message) => message.info.id === prune.before) : -1
+  for (const [index, message] of transcript.entries()) {
     for (const part of message.parts) {
       const localized =
         input.pathMode === "transcript"
@@ -157,8 +159,7 @@ export const forkSessionInto = Effect.fn("ArenaFork.forkSessionInto")(function* 
             })
           : localizeEmbeddedPaths(part, roots)
       const copied = input.part ? input.part(localized, message.info, sources.get(message.info.id)) : localized
-      // Copies keep their source's order, so an older copied message has a smaller id.
-      yield* sessions.updatePart(prune && message.info.id < prune.before ? pruneToolOutput(copied, prune) : copied)
+      yield* sessions.updatePart(prune && index < pruneEnd ? pruneToolOutput(copied, prune) : copied)
     }
   }
   return forked

@@ -1290,6 +1290,15 @@ export interface Interface {
     userID?: string,
   ) => Effect.Effect<Stream.Stream<ArenaStreamFrame, Error>, Error>
   readonly session: (sessionID: string, userID?: string) => Effect.Effect<ReturnType<typeof project>, Error>
+  /**
+   * Remember that `sessionID` is a fork of `sourceSessionID`, with each copied source message
+   * mapped to its copy, so the fork keeps naming the battles that wrote what it copied.
+   */
+  readonly recordFork: (input: {
+    readonly sessionID: string
+    readonly sourceSessionID: string
+    readonly messages: ReadonlyMap<string, string>
+  }) => Effect.Effect<void, Error>
   readonly archiveSession: (sessionID: string) => Effect.Effect<ReturnType<typeof project> | null, Error>
   readonly unarchiveSession: (sessionID: string) => Effect.Effect<ReturnType<typeof project> | null, Error>
   readonly inspectCheckout: (worktreeRoot: string) => Effect.Effect<ArenaCheckoutInspection, Error>
@@ -1330,6 +1339,8 @@ export interface Interface {
   readonly beginNormalTurn: (input: {
     sessionID: SessionID
     messageID: MessageID
+    /** The sender's own ID for the prompt (`paseoClientMessageId`), recorded on its turn. */
+    clientMessageID?: string
     model?: { readonly providerID: ProviderV2.ID; readonly modelID: ModelV2.ID }
   }) => Effect.Effect<NormalTurnStart | undefined, Error>
   readonly recordNormalTurn: (input: { sessionID: SessionID; messageID: MessageID }) => Effect.Effect<void>
@@ -2657,6 +2668,7 @@ export const layer: Layer.Layer<
       rawSessionID: string,
       messageID: MessageID,
       modelSize: SingleAgentModelSize,
+      clientMessageID?: string,
     ) {
       const store = yield* available()
       const existing = yield* promise(() => store.singleAgentRating(rawSessionID, messageID))
@@ -2682,6 +2694,7 @@ export const layer: Layer.Layer<
           ...(owner?.userId ? { userId: owner.userId } : {}),
           sessionID: rawSessionID,
           messageID,
+          ...(clientMessageID ? { clientMessageID } : {}),
           modelSize,
           assignment: assignment(selected, modelSize),
           createdAt: now,
@@ -4402,6 +4415,7 @@ export const layer: Layer.Layer<
     const beginNormalTurn = Effect.fn("Arena.beginNormalTurn")(function* (input: {
       sessionID: SessionID
       messageID: MessageID
+      clientMessageID?: string
       model?: { readonly providerID: ProviderV2.ID; readonly modelID: ModelV2.ID }
     }) {
       if (!enabled()) return undefined
@@ -4412,7 +4426,12 @@ export const layer: Layer.Layer<
           : "medium"
       const pending = yield* recoverInterruptedSingleAgentRating(store, input.sessionID)
       if (pending) return yield* Effect.fail(new Error("Arena frontier result must be rated before another turn"))
-      const assignModel = ensureSingleAgentRating(input.sessionID, input.messageID, requestedModelSize).pipe(
+      const assignModel = ensureSingleAgentRating(
+        input.sessionID,
+        input.messageID,
+        requestedModelSize,
+        input.clientMessageID,
+      ).pipe(
         Effect.map(
           (rating): NormalTurnStart => ({
             model: {
@@ -11521,7 +11540,7 @@ export const layer: Layer.Layer<
       if (resolved.appliedSide) {
         const side = resolved.appliedSide
         if (runs.find((run) => run.side === side)?.applicability === "blocked") {
-          return yield* Effect.fail(new Error("Arena side cannot be kept because its environment setup failed"))
+          return yield* Effect.fail(new Error("Arena side cannot be chosen because its environment setup failed"))
         }
         return yield* promote(store, turn, side, resolved)
       }
@@ -11910,7 +11929,13 @@ export const layer: Layer.Layer<
                 ? store.snapshotTurn(turnID, Number.MAX_SAFE_INTEGER)
                 : store.snapshot(chat._id, Number.MAX_SAFE_INTEGER),
             )
-            if (current.chat._id !== chat._id)
+            // A fork shows the battles it copied from the chat it was forked from (`inheritTurns`).
+            if (
+              current.chat._id !== chat._id &&
+              !(yield* promise(() => store.inheritedHistory(chat.canonicalSessionID))).some(
+                (turn) => turn._id === turnID,
+              )
+            )
               return yield* Effect.fail(new Error("Arena turn does not belong to this session"))
             return yield* projectSnapshot(current, full ? -1 : 0, { controlsOnly: !full, discoverServices: false })
           })
@@ -11964,10 +11989,35 @@ export const layer: Layer.Layer<
         return frames.pipe(Stream.onStart(watchChat(observedChat._id)), Stream.ensuring(unwatchChat(observedChat._id)))
       })
 
+    const recordFork = Effect.fn("Arena.recordFork")(function* (input: {
+      readonly sessionID: string
+      readonly sourceSessionID: string
+      readonly messages: ReadonlyMap<string, string>
+    }) {
+      if (input.messages.size === 0) return
+      const store = yield* available()
+      const source = yield* sessions
+        .messages({ sessionID: SessionID.make(input.sourceSessionID) })
+        .pipe(Effect.mapError(error))
+      const copied = source.filter((message) => input.messages.has(message.info.id))
+      yield* promise(() =>
+        store.recordForkLineage({
+          _id: input.sessionID,
+          sourceSessionID: input.sourceSessionID,
+          messages: Object.fromEntries(input.messages),
+          ...(copied.length > 0
+            ? { throughTime: Math.max(...copied.map((message) => message.info.time.created)) }
+            : {}),
+          createdAt: new Date(),
+        }),
+      )
+    })
+
     return Service.of({
       activity,
       stream,
       session: (sessionID, userID) => ensureChat(sessionID, userID).pipe(Effect.mapError(error)),
+      recordFork: (input) => recordFork(input).pipe(Effect.mapError(error)),
       archiveSession: (sessionID) => archiveSession(sessionID).pipe(Effect.mapError(error)),
       unarchiveSession,
       inspectCheckout,

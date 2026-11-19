@@ -257,6 +257,7 @@ const INBOUND_PERMISSION = {
   "checkout.suggest_branch_name.request": "workspace.read",
   "project.git.initialize.request": "workspace.manage",
   "project.git.inspect.request": "workspace.read",
+  "project.recent.list.request": "workspace.read",
   "terminal.rehome.request": "workspace.write",
   "workspace.recovery.list.request": "workspace.read",
 } as const satisfies Record<InboundOperation, PermissionRequirement>;
@@ -534,6 +535,7 @@ const OUTBOUND_PERMISSION = {
   "checkout.suggest_branch_name.response": "workspace.read",
   "project.git.initialize.response": "workspace.manage",
   "project.git.inspect.response": "workspace.read",
+  "project.recent.list.response": "workspace.read",
   "terminal.rehome.response": "workspace.write",
   "workspace.recovery.list.response": "workspace.read",
 } as const satisfies Record<OutboundOperation, PermissionRequirement>;

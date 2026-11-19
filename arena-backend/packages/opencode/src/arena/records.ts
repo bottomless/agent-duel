@@ -290,6 +290,22 @@ export type CheckoutEvictionDocument = {
   updatedAt: Date
 }
 
+/**
+ * Where a forked chat's canonical session came from. A fork copies the transcript under new message
+ * IDs, while the battles that wrote it stay recorded in the source chat; this keeps the way back,
+ * so the fork still names who answered each copied turn (`inheritTurns`).
+ */
+export type ForkLineageDocument = {
+  /** The fork's canonical session. */
+  readonly _id: Identifier
+  readonly sourceSessionID: string
+  /** Each copied source message ID, to the ID of its copy. */
+  readonly messages: Readonly<Record<string, string>>
+  /** When the last copied source message was written: a battle that copied none came before it. */
+  readonly throughTime?: number
+  readonly createdAt: Date
+}
+
 /** Where the next search for contestant ports starts; one document per store. */
 export type PortCursorDocument = {
   readonly _id: string
@@ -318,6 +334,11 @@ export type SingleAgentRatingDocument = {
   userId?: string
   readonly sessionID: string
   readonly messageID: string
+  /**
+   * The sender's own ID for the prompt. The daemon's chat shows a prompt it sent under this ID
+   * until it reads the session back, so the chat finds the turn by either.
+   */
+  readonly clientMessageID?: string
   /** Older records omitted this field and are frontier ratings. */
   readonly modelSize?: SingleAgentModelSize
   readonly assignment: HiddenAssignment
@@ -1051,6 +1072,8 @@ export type BattleHistoryTurn = Pick<
 export type BattleSnapshot = {
   readonly chat: ChatDocument
   readonly singleAgentRating?: SingleAgentRatingDocument
+  /** Every single-agent turn in the chat, copied ones from its fork sources first. */
+  readonly singleAgentTurns?: readonly SingleAgentRatingDocument[]
   readonly turn?: TurnDocument
   readonly history?: readonly BattleHistoryTurn[]
   readonly runs: readonly RunDocument[]

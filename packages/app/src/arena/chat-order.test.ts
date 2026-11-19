@@ -58,9 +58,45 @@ describe("orderArenaChat", () => {
   });
 
   it("orders each turn on its own", () => {
-    const items = [user("u1"), call("a"), text("t1"), user("u2"), call("b"), text("t2")];
+    const items = [
+      user("u1"),
+      call("a"),
+      text("t1"),
+      call("c"),
+      user("u2"),
+      call("b"),
+      text("t2"),
+      call("d"),
+    ];
 
-    expect(ids(orderArenaChat(items))).toEqual(["u1", "t1", "a", "u2", "t2", "b"]);
+    expect(ids(orderArenaChat(items))).toEqual(["u1", "t1", "a", "c", "u2", "t2", "b", "d"]);
+  });
+
+  it("keeps the work above an answer that is its turn's only text", () => {
+    // A final answer is not followed by the work that led to it.
+    const items = [user("u1"), thought("r1"), call("read"), text("t1"), user("u2"), text("t2")];
+
+    expect(orderArenaChat(items)).toBe(items);
+  });
+
+  it("puts reasoning written after an ended turn's last text above that text", () => {
+    const items = [user("u1"), text("t1"), call("a"), text("t2"), thought("r"), user("u2")];
+
+    expect(ids(orderArenaChat(items))).toEqual(["u1", "t1", "a", "r", "t2", "u2"]);
+  });
+
+  it("leaves reasoning after the last text of a turn still running where it is", () => {
+    // The agent may still act on it; the text may not be the last.
+    const items = [user("u1"), text("t1"), call("a"), text("t2"), thought("r")];
+
+    expect(orderArenaChat(items, { lastTurnOpen: true })).toBe(items);
+    expect(ids(orderArenaChat(items))).toEqual(["u1", "t1", "a", "r", "t2"]);
+  });
+
+  it("keeps a lone answer's reasoning above it, wherever the provider wrote it", () => {
+    const items = [user("u1"), text("t1"), thought("r")];
+
+    expect(ids(orderArenaChat(items))).toEqual(["u1", "r", "t1"]);
   });
 
   it("leaves work in place when the turn writes no text", () => {
@@ -78,9 +114,9 @@ describe("orderArenaChat", () => {
       activity: { type: "created", count: 0 },
       timestamp: new Date(0),
     };
-    const items = [user("u1"), call("a"), todo, call("b"), text("t1")];
+    const items = [user("u1"), call("a"), todo, call("b"), text("t1"), call("c")];
 
-    expect(ids(orderArenaChat(items))).toEqual(["u1", "a", "todo", "t1", "b"]);
+    expect(ids(orderArenaChat(items))).toEqual(["u1", "a", "todo", "t1", "b", "c"]);
   });
 
   it("returns the same list when nothing moves", () => {
@@ -120,12 +156,19 @@ describe("orderArenaChatHead", () => {
   };
 
   it("moves the tail's leading work beneath a text that is still in the head", () => {
+    const tail = [user("u1"), call("read"), thought("r1"), call("ls")];
+    const head = [text("t1"), call("edit")];
+
+    expect(ids(rendered(tail, head))).toEqual(["u1", "t1", "read", "r1", "ls", "edit"]);
+    expect(ids(rendered(tail, head))).toEqual(ids(orderArenaChat([...tail, ...head])));
+  });
+
+  it("keeps the tail's work above an answer in the head that is the turn's only text", () => {
     // The winner's answer stays in the head after the vote: no turn completion commits it.
     const tail = [user("u1"), call("read"), thought("r1"), call("ls")];
     const head = [text("t1")];
 
-    expect(ids(rendered(tail, head))).toEqual(["u1", "t1", "read", "r1", "ls"]);
-    expect(ids(rendered(tail, head))).toEqual(ids(orderArenaChat([...tail, ...head])));
+    expect(ids(rendered(tail, head))).toEqual(["u1", "read", "r1", "ls", "t1"]);
   });
 
   it("leaves both lanes alone when the head has no text yet", () => {

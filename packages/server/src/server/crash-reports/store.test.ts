@@ -8,6 +8,7 @@ import {
   crashReportsAwaitingUser,
   crashReportsDirectory,
   describeUncleanShutdown,
+  isExternalMarkerEnd,
   isReadyToSend,
   pendingCrashReports,
   readLogTail,
@@ -168,6 +169,22 @@ describe("external ends", () => {
     });
     expect(isReadyToSend(approved!)).toBe(true);
     expect(crashReportsAwaitingUser(home).map((report) => report.id)).toEqual([second.id]);
+  });
+
+  it("reads a marker left with exit code 1 on Windows as the daemon being terminated", () => {
+    const marker = { pid: 75796, version: "0.4.0-beta.20", startedAt: "2026-11-17T20:25:33.531Z" };
+    const ended = (
+      exit: { code: number | null; signal: string | null },
+      platform: NodeJS.Platform,
+    ) => isExternalMarkerEnd({ ...marker, exit }, platform);
+
+    expect(isExternalMarkerEnd(marker, "win32")).toBe(true);
+    expect(ended({ code: 1, signal: null }, "win32")).toBe(true);
+    expect(ended({ code: null, signal: "SIGKILL" }, "darwin")).toBe(true);
+    // A native crash on Windows ends with an NTSTATUS code such as an access violation.
+    expect(ended({ code: 3221225477, signal: null }, "win32")).toBe(false);
+    expect(ended({ code: 1, signal: null }, "darwin")).toBe(false);
+    expect(ended({ code: null, signal: "SIGSEGV" }, "linux")).toBe(false);
   });
 
   it("reads reports written before external ends were held back as ready to send", () => {

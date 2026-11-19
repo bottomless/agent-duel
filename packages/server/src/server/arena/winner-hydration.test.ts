@@ -4,7 +4,15 @@ import { hydrateArenaWinner } from "./winner-hydration.js";
 
 const WAIT = 10_000;
 
-function snapshot(index = 1) {
+function turn(id: string, index: number) {
+  return { id, index, state: "complete", appliedSide: "a", createdAt: "date", updatedAt: "date" };
+}
+
+/** A chat whose history holds `turns` turns, each with a kept answer; a newer winner has more. */
+function snapshot(
+  turns = 1,
+  history = Array.from({ length: turns }, (_, i) => turn(`turn-${i + 1}`, i)),
+) {
   return ArenaSnapshotSchema.parse({
     chat: {
       id: "chat",
@@ -16,16 +24,7 @@ function snapshot(index = 1) {
     environment: {},
     runs: [],
     events: [],
-    history: [
-      {
-        id: `turn-${index}`,
-        index,
-        state: "complete",
-        appliedSide: "a",
-        createdAt: "date",
-        updatedAt: "date",
-      },
-    ],
+    history,
   });
 }
 
@@ -286,4 +285,27 @@ it("keeps an older winner waiting on a newer stuck one without polling", async (
   } finally {
     vi.useRealTimers();
   }
+});
+
+it("loads a fork's own winners after the turns it copied, whose indexes they repeat", async () => {
+  const owner = {};
+  const calls: string[] = [];
+  const copied = [turn("source-0", 0), turn("source-1", 1)];
+  const hydrateAs = (name: string) => async () => {
+    calls.push(name);
+  };
+  await hydrateArenaWinner(owner, snapshot(0, copied), hydrateAs("copied"), WAIT);
+  await hydrateArenaWinner(
+    owner,
+    snapshot(0, [...copied, turn("own-0", 0)]),
+    hydrateAs("own-0"),
+    WAIT,
+  );
+  await hydrateArenaWinner(
+    owner,
+    snapshot(0, [...copied, turn("own-0", 0), turn("own-1", 1)]),
+    hydrateAs("own-1"),
+    WAIT,
+  );
+  expect(calls).toEqual(["copied", "own-0", "own-1"]);
 });
