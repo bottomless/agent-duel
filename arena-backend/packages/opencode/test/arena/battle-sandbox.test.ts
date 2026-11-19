@@ -642,6 +642,7 @@ describe("battle shell writes are the forms that write (bench 2026-11-06)", () =
   // Commands that contestants ran in the bench, and v2 refused although they write nothing outside
   // their own worktree and temp directory.
   const safe = [
+    "rm -rf -- -x",
     `curl -sSf -X POST http://127.0.0.1:22015/api/plan -H "Content-Type: application/json" -d '{"job":"Engineer","pain":["wrist","/neck"],"url":"http://127.0.0.1:1/x"}'`,
     `node --input-type=module -e "const r=await fetch('http://127.0.0.1:1/'); console.log(r.status)"`,
     `node -e "require('fs').writeFileSync(process.env.TMPDIR+'/anim.js','x')"`,
@@ -685,6 +686,11 @@ describe("battle shell writes are the forms that write (bench 2026-11-06)", () =
     `find ${f.checkout} -name '*.log' -delete`,
     `bash -c 'touch ${f.checkout}/nested.txt'`,
     `gcc main.c -o ${f.checkout}/a.out`,
+    // An operand after `--` that starts with `-`, from the side's worktree up to the checkout.
+    "rm -rf -- --/../../../src",
+    "rm -rf -- -x/../../../src",
+    "sed -i 's/a/b/' -- -x/../../../file.txt",
+    "perl -pi -e 's/a/b/' -- -x/../../../file.txt",
   ]
   it("still refuses each write outside the contestant's folders", async () => {
     using f = fixture()
