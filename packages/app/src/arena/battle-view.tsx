@@ -23,6 +23,7 @@ import { ArrowDown } from "lucide-react-native";
 import { StyleSheet } from "react-native-unistyles";
 import type {
   ArenaHistoryItem,
+  ArenaReplyTarget,
   ArenaRun,
   ArenaSide,
   ArenaSnapshot,
@@ -61,11 +62,21 @@ import { useArenaCardBleed } from "./content-column";
 import { ArenaPaneActions, ArenaPanePreview } from "./pane-actions";
 import { BATTLE_GUTTER, BATTLE_RAIL, STACKED_PANES_BREAKPOINT } from "./battle-layout";
 import { isArenaBattleOnScreen } from "./summary-anchor";
+import { arenaReplyAnswered, arenaReplyReaches, subscribeArenaReplySent } from "./reply-sent";
+import { useRevealInStream } from "@/agent-stream/reveal-position";
+import { useStableEvent } from "@/hooks/use-stable-event";
 import { arenaPromptAttachmentPills } from "./prompt-attachment-pills";
 import { arenaPromptImages } from "./prompt-images";
 import type { StartingArenaBattle } from "./use-arena-session";
 
 type ArenaPaneView = ArenaSide | "both";
+
+/** A reply whose answers the panes wait for, to bring them back into view when they land. */
+interface AwaitedReply {
+  turnId: string;
+  target: ArenaReplyTarget;
+  started: boolean;
+}
 
 // Room above a message the turns menu scrolls to, so it does not sit against the pane header.
 const JUMP_TO_MESSAGE_INSET = 12;
@@ -433,6 +444,13 @@ function BattlePane({
     setAwayFromLatest(false);
     scrollToLatest();
   }, [scrollToLatest]);
+  // A reply shows at the end of the thread it was sent to, wherever the reader had scrolled to.
+  useEffect(() => {
+    if (!turnId) return;
+    return subscribeArenaReplySent(turnId, (target) => {
+      if (arenaReplyReaches(target, side)) jumpToLatest();
+    });
+  }, [jumpToLatest, side, turnId]);
   // Scrolls the thread so the message sits just below its top, and stops following the latest
   // output. A null message is the turn's prompt, which shows above both panes rather than in the
   // thread, so the first turn starts at the top of the thread.
@@ -580,8 +598,12 @@ function BattlePane({
   );
 }
 
+function runIsFinal(run: ArenaRun | undefined): boolean {
+  return run !== undefined && run.runState !== "pending";
+}
+
 function runsAreFinal(runA: ArenaRun | undefined, runB: ArenaRun | undefined): boolean {
-  return Boolean(runA && runB && runA.runState !== "pending" && runB.runState !== "pending");
+  return runIsFinal(runA) && runIsFinal(runB);
 }
 
 function runHasSettled(runA: ArenaRun | undefined, runB: ArenaRun | undefined): boolean {
@@ -661,6 +683,56 @@ function BattlePanes({
 }) {
   const { width, onLayout } = useContainerWidth();
   const stacked = width > 0 && width < STACKED_PANES_BREAKPOINT;
+  const panesRef = useRef<View>(null);
+  const headersRef = useRef<View>(null);
+  const revealInStream = useRevealInStream();
+  // The reply is in the panes, so that is where a send takes the chat when they are out of view,
+  // and where it goes back to once the answers are in, unless the reader has scrolled since: the
+  // review returns below the panes then. Side by side, the headings stick over the panes' top, so
+  // the panes come into view under them.
+  // Stacked panes are taller together than the chat, so there the pane replied to comes into view.
+  const bothShown = paneView === "both";
+  const revealReply = useStableEvent((target: ArenaReplyTarget, moment: "sent" | "answered") => {
+    const panes = panesRef.current;
+    if (!isWeb || !revealInStream || !(panes instanceof HTMLElement)) return;
+    const onePane = stacked && bothShown && target !== "both";
+    const revealed = onePane ? panes.querySelector(`[data-testid="arena-pane-${target}"]`) : panes;
+    if (!(revealed instanceof HTMLElement)) return;
+    const headers = headersRef.current;
+    const clearance = headers instanceof HTMLElement ? headers.offsetHeight : 0;
+    if (moment === "sent") revealInStream.reveal(revealed, clearance);
+    else revealInStream.revealAgain(revealed, clearance);
+  });
+  const finishedA = runIsFinal(runA);
+  const finishedB = runIsFinal(runB);
+  const finished = useMemo(() => ({ a: finishedA, b: finishedB }), [finishedA, finishedB]);
+  const finishedRef = useRef(finished);
+  finishedRef.current = finished;
+  // A reply sent at the vote reaches runs that are still finished from the last answer; their
+  // next finish counts only once they have started on it.
+  const awaitedReplyRef = useRef<AwaitedReply | null>(null);
+  useEffect(() => {
+    if (!turnId) return;
+    return subscribeArenaReplySent(turnId, (target) => {
+      revealReply(target, "sent");
+      awaitedReplyRef.current = {
+        turnId,
+        target,
+        started: !arenaReplyAnswered(target, finishedRef.current),
+      };
+    });
+  }, [revealReply, turnId]);
+  useEffect(() => {
+    const awaited = awaitedReplyRef.current;
+    if (!awaited || awaited.turnId !== turnId) return;
+    if (!arenaReplyAnswered(awaited.target, finished)) {
+      awaited.started = true;
+      return;
+    }
+    if (!awaited.started) return;
+    awaitedReplyRef.current = null;
+    revealReply(awaited.target, "answered");
+  }, [finished, revealReply, turnId]);
   const jumpRefA = useRef<JumpToMessage | null>(null);
   const jumpRefB = useRef<JumpToMessage | null>(null);
   const jumpA = useCallback<JumpToMessage>((messageId) => jumpRefA.current?.(messageId), []);
@@ -690,7 +762,12 @@ function BattlePanes({
     <>
       {/* A child of the battle, not of the panes, so it stays stuck through the review below. */}
       {stacked ? null : (
-        <View style={[styles.paneHeaders, stickyHeaderStyle]} testID="arena-pane-headers">
+        <View
+          ref={headersRef}
+          collapsable={false}
+          style={[styles.paneHeaders, stickyHeaderStyle]}
+          testID="arena-pane-headers"
+        >
           <View style={[styles.paneHeaderCell, paneView === "b" && styles.paneHidden]}>
             <BattlePaneHeader {...headerProps} side="a" run={runA} onJumpToMessage={jumpA} />
           </View>
@@ -699,7 +776,12 @@ function BattlePanes({
           </View>
         </View>
       )}
-      <View onLayout={onLayout} style={[styles.panes, stacked && styles.panesNarrow]}>
+      <View
+        ref={panesRef}
+        collapsable={false}
+        onLayout={onLayout}
+        style={[styles.panes, stacked && styles.panesNarrow]}
+      >
         <BattlePane
           inlineHeader={stacked}
           jumpRef={jumpRefA}
