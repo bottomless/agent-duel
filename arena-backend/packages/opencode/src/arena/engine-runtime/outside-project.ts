@@ -266,6 +266,15 @@ function executableWords(words: readonly string[]): readonly string[] {
   return executableWords(words.slice(index))
 }
 
+/**
+ * `--` ends the options, so a later word that starts with `-` is still a file (`rm -rf -- -x`). It can also be
+ * an option for the program a command runs (`npm run build -- -o/out`), so callers read it as an option too.
+ */
+function dashOperand(words: readonly string[], index: number) {
+  const end = words.indexOf("--")
+  return end >= 0 && index > end && words[index].startsWith("-") ? [words[index]] : []
+}
+
 function wordPaths(input: readonly string[], skip: ReadonlySet<number> = new Set()) {
   const words = executableWords(input)
   const name = path.basename(words[0] ?? "")
@@ -273,6 +282,7 @@ function wordPaths(input: readonly string[], skip: ReadonlySet<number> = new Set
   for (let index = 1; index < words.length; index++) {
     if (skip.has(index)) continue
     const word = words[index]
+    found.push(...dashOperand(words, index))
     if (name === "git" || name === "gh") {
       const flag = word.startsWith("--") ? word.split("=")[0] : word.slice(0, 2)
       if (TEXT_FLAGS.has(flag) && word.length > flag.length) continue
@@ -424,6 +434,7 @@ function sedOperands(words: readonly string[]): Operand[] {
   const found: Operand[] = []
   for (let index = 1; index < words.length; index++) {
     const word = words[index]
+    for (const part of dashOperand(words, index)) found.push([part, inPlace ? "write" : "read"])
     if (/^(?:-e|--expression=).+/.test(word)) {
       for (const target of scriptPaths("sed", word.replace(/^(?:-e|--expression=)/, ""))) found.push([target, "write"])
       continue
@@ -445,6 +456,7 @@ function inPlaceOperands(words: readonly string[]): Operand[] {
   let code = false
   for (let index = 1; index < words.length; index++) {
     const word = words[index]
+    for (const part of dashOperand(words, index)) found.push([part, inPlace ? "write" : "read"])
     if (/^-[A-Za-z0-9]*[eE]$/.test(word)) {
       code = true
       index++

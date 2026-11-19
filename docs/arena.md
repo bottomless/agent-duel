@@ -357,7 +357,11 @@ an empty box, and the two panes share a row, so the finished side was stretched 
 side's height too. Scrolling away pauses following; reaching the bottom or choosing
 Jump to latest resumes it. Opening or closing activity also pauses following in the pane and holds
 the row's position in the chat (`agent-stream/hold-position.ts`), keeping it under the pointer as
-the pane grows or shrinks. Each agent header has an
+the pane grows or shrinks. A reply to the battle brings the panes it went to into view, on send and
+again when those runs finish, and never sends the chat to its end: the reply shows in the threads,
+and the chat ends on the review below them. Scrolling the chat or choosing Jump to latest after the
+send cancels the return, and a vote while the panes are still in view goes back to the chat's end.
+Each agent header has an
 expand button beside its worktree control to give that thread the full card width; restore returns
 to the split. Both are
 pane chrome at the ghost `xs` tier, borderless and the same height. Headings have no status

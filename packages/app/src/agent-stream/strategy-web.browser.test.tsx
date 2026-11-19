@@ -1,15 +1,26 @@
-import React, { act } from "react";
+import React, { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_CONTENT_MAX_WIDTH } from "@/styles/theme";
 import type { StreamItem } from "@/types/stream";
 import type { DisclosureTriggerEdge, StreamRenderInput, StreamViewportHandle } from "./strategy";
 import { createWebStreamStrategy } from "./strategy-web";
+import { useRevealInStream, type RevealInStream } from "./reveal-position";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 const VIEWPORT_HEIGHT = 100;
 const ROW_HEIGHT = 40;
+// The room a revealed element keeps under the transcript's top edge.
+const REVEAL_TOP_INSET = 12;
+
+// The transcript provides the reveal to what it renders, so a row is where a test picks it up.
+let revealInStream: RevealInStream | null = null;
+
+function RevealCapture() {
+  revealInStream = useRevealInStream();
+  return null;
+}
 
 // A row's height comes from its text, so a disclosure that opens or grows a row is a new item
 // for that row, as it is in the app.
@@ -31,7 +42,12 @@ function renderRow(item: StreamItem) {
     style = { height };
     rowStyleByHeight.set(height, style);
   }
-  return <div style={style}>{item.id}</div>;
+  return (
+    <div style={style}>
+      {item.id}
+      <RevealCapture />
+    </div>
+  );
 }
 
 let root: Root;
@@ -77,29 +93,57 @@ function mountTimeline(historyMounted: StreamItem[]) {
     forwardListContentContainerStyle: null,
     contentMaxWidth: DEFAULT_CONTENT_MAX_WIDTH,
   };
-  const render = (segments: Partial<StreamRenderInput["segments"]>) =>
-    root.render(strategy.render({ ...input, segments: { ...input.segments, ...segments } }));
-  act(() => render({}));
+  let segments = input.segments;
+  let renderers = input.renderers;
+  const render = () => root.render(strategy.render({ ...input, segments, renderers }));
+  act(() => render());
 
   const scrollContainer = host.querySelector<HTMLElement>('[data-testid="agent-chat-scroll"]');
   if (!scrollContainer) throw new Error("Expected agent chat scroll container");
-  const rowElement = (id: string) => {
-    const element = host.querySelector<HTMLElement>(`[data-history-row-id="${id}"]`);
-    if (!element) throw new Error(`Expected row ${id}`);
-    return element;
+  const element = (selector: string) => {
+    const found = host.querySelector<HTMLElement>(selector);
+    if (!found) throw new Error(`Expected ${selector}`);
+    return found;
   };
+  const rowElement = (id: string) => element(`[data-history-row-id="${id}"]`);
+  const topOf = (target: HTMLElement) =>
+    target.getBoundingClientRect().top - scrollContainer.getBoundingClientRect().top;
+  const reveal = (target: HTMLElement, how: keyof RevealInStream = "reveal", clearance = 0) => {
+    const revealIn = revealInStream;
+    if (!revealIn) throw new Error("Expected the transcript to provide a reveal");
+    act(() => revealIn[how](target, clearance));
+  };
+  const panes = () => element('[data-testid="battle-panes"]');
+  // The panes' headings stick over the panes' top, so a reveal keeps clear of them.
+  const paneHeadersHeight = () => element('[data-testid="battle-pane-headers"]').offsetHeight;
 
   return {
-    render: (segments: Partial<StreamRenderInput["segments"]>) => act(() => render(segments)),
+    render: (next: Partial<StreamRenderInput["segments"]>) =>
+      act(() => {
+        segments = { ...segments, ...next };
+        render();
+      }),
+    // The active battle renders after the rows, in the transcript's live area.
+    renderLive: (live: ReactNode) =>
+      act(() => {
+        renderers = { ...renderers, renderLiveAuxiliary: () => live };
+        render();
+      }),
     hold: (rowId: string, apply: () => void, triggerEdge: DisclosureTriggerEdge = "top") =>
       act(() => viewportRef.current!.holdRow(rowId, apply, triggerEdge)),
-    rowTop: (id: string) =>
-      rowElement(id).getBoundingClientRect().top - scrollContainer.getBoundingClientRect().top,
+    reveal: (id: string) => reveal(rowElement(id)),
+    revealPanes: () => reveal(panes(), "reveal", paneHeadersHeight()),
+    revealPanesAgain: () => reveal(panes(), "revealAgain", paneHeadersHeight()),
+    rowTop: (id: string) => topOf(rowElement(id)),
+    panesTop: () => topOf(panes()),
+    paneHeadersTop: () => topOf(element('[data-testid="battle-pane-headers"]')),
     rowBottom: (id: string) =>
       rowElement(id).getBoundingClientRect().bottom - scrollContainer.getBoundingClientRect().top,
     scrollTo: (top: number) => {
       scrollContainer.scrollTop = top;
     },
+    scrollTop: () => scrollContainer.scrollTop,
+    jumpToLatest: () => act(() => viewportRef.current!.scrollToBottom()),
     distanceFromEnd: () =>
       scrollContainer.scrollHeight - scrollContainer.clientHeight - scrollContainer.scrollTop,
     // Resize observers and the hold's settle run on animation frames.
@@ -206,5 +250,178 @@ describe("web disclosure hold", () => {
     timeline.render({ liveHead: [row(8)] });
     await timeline.settle();
     expect(timeline.distanceFromEnd()).toBeLessThanOrEqual(1);
+  });
+});
+
+// A reply to a battle shows in its panes, which sit above the review the chat ends on.
+describe("web reveal", () => {
+  it("leaves an element in view where it is", async () => {
+    const timeline = mountTimeline([1, 2, 3, 4, 5, 6].map((index) => row(index)));
+    await timeline.settle();
+    const top = timeline.rowTop("message-5");
+    expect(top).toBeGreaterThanOrEqual(0);
+
+    timeline.reveal("message-5");
+    await timeline.settle();
+
+    expect(timeline.rowTop("message-5")).toBe(top);
+  });
+
+  it("brings an element above the end to the top of the transcript", async () => {
+    const timeline = mountTimeline([1, 2, 3, 4, 5, 6].map((index) => row(index)));
+    await timeline.settle();
+    expect(timeline.rowBottom("message-3")).toBeLessThanOrEqual(0);
+
+    timeline.reveal("message-3");
+    await timeline.settle();
+
+    expect(timeline.rowTop("message-3")).toBe(REVEAL_TOP_INSET);
+  });
+
+  it("stays on the element when output arrives at the end", async () => {
+    const timeline = mountTimeline([1, 2, 3, 4, 5, 6].map((index) => row(index)));
+    await timeline.settle();
+    timeline.reveal("message-3");
+    await timeline.settle();
+
+    timeline.render({ liveHead: [row(8)] });
+    await timeline.settle();
+
+    expect(timeline.rowTop("message-3")).toBe(REVEAL_TOP_INSET);
+  });
+
+  // The review leaves while a reply runs and comes back when it finishes.
+  it("returns to the element when the content below it goes away and comes back", async () => {
+    const history = [1, 2, 3, 4, 5, 6].map((index) => row(index));
+    const timeline = mountTimeline(history);
+    await timeline.settle();
+    timeline.reveal("message-3");
+    await timeline.settle();
+
+    timeline.render({ historyMounted: history.slice(0, 3) });
+    await timeline.settle();
+    expect(timeline.distanceFromEnd()).toBeLessThanOrEqual(1);
+
+    timeline.render({ historyMounted: [...history, row(7, 200)] });
+    await timeline.settle();
+
+    expect(timeline.rowTop("message-3")).toBe(REVEAL_TOP_INSET);
+  });
+});
+
+// The active battle: the pane headings, which stick to the top of the chat through the battle, its
+// panes, and the review that leaves while a reply runs.
+const PANE_HEADERS_HEIGHT = 40;
+const paneHeadersStyle = {
+  position: "sticky",
+  top: 0,
+  height: PANE_HEADERS_HEIGHT,
+  background: "white",
+} as const;
+const panesStyle = { height: 200 };
+const reviewStyle = { height: 600 };
+
+function battle({ reviewShown }: { reviewShown: boolean }) {
+  return (
+    <div>
+      <RevealCapture />
+      <div data-testid="battle-pane-headers" style={paneHeadersStyle} />
+      <div data-testid="battle-panes" style={panesStyle} />
+      {reviewShown ? <div style={reviewStyle} /> : null}
+    </div>
+  );
+}
+
+// The battle's outcome, which replaces the panes and the review after a vote.
+const outcome = <div style={{ height: 80 }} />;
+
+// A reply was sent: the panes came into view and the review left while the agents answer.
+async function mountRepliedBattle() {
+  host.style.height = "300px";
+  const timeline = mountTimeline([1, 2, 3, 4, 5, 6, 7, 8].map((index) => row(index)));
+  timeline.renderLive(battle({ reviewShown: true }));
+  await timeline.settle();
+  timeline.revealPanes();
+  await timeline.settle();
+  expect(timeline.panesTop()).toBe(REVEAL_TOP_INSET + PANE_HEADERS_HEIGHT);
+  expect(timeline.paneHeadersTop()).toBe(REVEAL_TOP_INSET);
+  timeline.renderLive(battle({ reviewShown: false }));
+  await timeline.settle();
+  return timeline;
+}
+
+describe("web reveal in the live area", () => {
+  it("keeps the panes in place while the review leaves and returns", async () => {
+    const timeline = await mountRepliedBattle();
+
+    timeline.renderLive(battle({ reviewShown: true }));
+    timeline.revealPanesAgain();
+    await timeline.settle();
+
+    expect(timeline.panesTop()).toBe(REVEAL_TOP_INSET + PANE_HEADERS_HEIGHT);
+  });
+
+  it("leaves the reader in an earlier turn when the answers arrive", async () => {
+    const timeline = await mountRepliedBattle();
+    timeline.scrollTo(0);
+    await timeline.settle();
+
+    timeline.renderLive(battle({ reviewShown: true }));
+    timeline.revealPanesAgain();
+    await timeline.settle();
+
+    expect(timeline.scrollTop()).toBe(0);
+  });
+
+  it("leaves the reader on the review when the answers arrive", async () => {
+    const timeline = await mountRepliedBattle();
+    timeline.renderLive(battle({ reviewShown: true }));
+    await timeline.settle();
+    timeline.scrollTo(timeline.scrollTop() + 300);
+    await timeline.settle();
+    const readerTop = timeline.scrollTop();
+
+    timeline.revealPanesAgain();
+    await timeline.settle();
+
+    expect(timeline.scrollTop()).toBe(readerTop);
+  });
+
+  it("stays at the end after Jump to latest when the answers arrive", async () => {
+    const timeline = await mountRepliedBattle();
+    timeline.jumpToLatest();
+    await timeline.settle();
+
+    timeline.renderLive(battle({ reviewShown: true }));
+    timeline.revealPanesAgain();
+    await timeline.settle();
+
+    expect(timeline.distanceFromEnd()).toBeLessThanOrEqual(1);
+  });
+
+  it("follows the end again when a vote replaces the revealed battle", async () => {
+    const timeline = await mountRepliedBattle();
+    timeline.renderLive(battle({ reviewShown: true }));
+    timeline.revealPanesAgain();
+    await timeline.settle();
+
+    timeline.renderLive(outcome);
+    await timeline.settle();
+    expect(timeline.distanceFromEnd()).toBeLessThanOrEqual(1);
+
+    timeline.render({ liveHead: [row(9)] });
+    await timeline.settle();
+    expect(timeline.distanceFromEnd()).toBeLessThanOrEqual(1);
+  });
+
+  it("leaves a reader who scrolled away in place when a vote replaces the battle", async () => {
+    const timeline = await mountRepliedBattle();
+    timeline.scrollTo(0);
+    await timeline.settle();
+
+    timeline.renderLive(outcome);
+    await timeline.settle();
+
+    expect(timeline.scrollTop()).toBe(0);
   });
 });
