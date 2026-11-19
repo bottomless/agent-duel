@@ -21,6 +21,7 @@ import {
   type CalibrationSample,
 } from "./request-calibration"
 import { generationCapture, type CaptureState, type GenerationCapture } from "./generation-capture"
+import { geminiToolResultRetry } from "./gemini-tool-results"
 import { createReasoningRedactor } from "./reasoning"
 import {
   HEARTBEAT_HEADER,
@@ -659,7 +660,7 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
       )
     }
     const limits = modelLimits(routeAssignment.model)
-    const budget = prepareRequest(routed, endpoint, limits)
+    let budget = prepareRequest(routed, endpoint, limits)
     if (await compactionRequired(request, budget, limits, () => readCalibration(db, calibrationKey))) {
       return Response.json(compactionRequiredError(), { status: 413 })
     }
@@ -680,7 +681,7 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
           )
         : undefined
     capture?.request(budget.body)
-    const response = await sending
+    let response = await sending
     upstreamStatus = response.status
     // Awaited so a body that fails to read or parse still gets the 502 below.
     const refusal = {
@@ -689,6 +690,49 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
       assignmentID: assignment.assignmentID,
       generationID,
       model: routeAssignment.model.slug,
+    }
+    const retry =
+      endpoint === "chat" && !request.signal.aborted ? await geminiToolResultRetry(budget.request, response) : undefined
+    if (retry && !request.signal.aborted) {
+      logRefusal(refusal, response.status, retry.refusal)
+      capture?.record(retry.refusal)
+      await capture?.finish("failed", response.status)
+      const retryBudget = prepareRequest(retry.request, endpoint, limits)
+      if (await compactionRequired(request, retryBudget, limits, () => readCalibration(db, calibrationKey))) {
+        return Response.json(compactionRequiredError(), { status: 413 })
+      }
+      if (capture) {
+        // Keep the first attempt under its own ID. The client's generation ID must still load the
+        // actual final request, so captures, usage metrics and replay recovery describe the same call.
+        const refused = generationCapture(
+          db,
+          {
+            ...refusal,
+            endpoint,
+            generationID: `gen_${randomUUID().replaceAll("-", "")}`,
+            retriedByGenerationID: generationID,
+          },
+          context.now,
+        )
+        refused.request(budget.body)
+        refused.record(retry.refusal)
+        await refused.finish("failed", response.status)
+      }
+      request.signal.throwIfAborted()
+      await response.body?.cancel()
+      budget = retryBudget
+      if (capture) {
+        capture = generationCapture(db, { ...refusal, endpoint }, context.now)
+        capture.request(budget.body)
+      }
+      upstreamStatus = undefined
+      response = await context.fetch(upstream, {
+        method: request.method,
+        headers,
+        body: new TextEncoder().encode(budget.body).buffer,
+        signal: request.signal,
+      })
+      upstreamStatus = response.status
     }
     const recordGeneration = async (metrics: StoredGenerationMetrics | undefined) => {
       if (!metrics || !requestedGenerationID) return
