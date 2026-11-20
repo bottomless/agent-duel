@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import * as zlib from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runGitCommand } from "../utils/run-git-command.js";
 import { discoverRecentProjects, type RecentProjectsEnvironment } from "./recent-projects.js";
@@ -29,7 +30,16 @@ function repository(name: string): string {
   return realpathSync(directory);
 }
 
-function write(file: string, text: string, usedAt: Date): void {
+// The workspace's @types/node predates zstd in node:zlib.
+function zstdCompress(text: string): Buffer {
+  const compress: unknown = Reflect.get(zlib, "zstdCompressSync");
+  if (typeof compress !== "function") throw new Error("this Node has no zstd in node:zlib");
+  const compressed: unknown = compress(Buffer.from(text));
+  if (!Buffer.isBuffer(compressed)) throw new Error("zstdCompressSync did not return a Buffer");
+  return compressed;
+}
+
+function write(file: string, text: string | Buffer, usedAt: Date): void {
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(file, text);
   utimesSync(file, usedAt, usedAt);
@@ -131,6 +141,40 @@ describe("discoverRecentProjects", () => {
     }
 
     expect(await discoverRecentProjects(environment({ ignoredRoots: [scratch] }))).toEqual([]);
+  });
+
+  it("reads Codex sessions that Codex stored compressed", async () => {
+    const duel = repository("duel");
+    const coffee = repository("coffee");
+    const day = path.join(home, ".codex", "sessions", "2026", "10", "27");
+    // The working directory is in the first record; the rest of the session follows it.
+    const rollout = [
+      JSON.stringify({ type: "session_meta", payload: { id: "c1", cwd: duel } }),
+      ...Array.from({ length: 2000 }, (_, index) =>
+        JSON.stringify({ type: "response_item", payload: { text: `line ${index}`.repeat(20) } }),
+      ),
+    ].join("\n");
+    write(
+      path.join(day, "rollout-1.jsonl.zst"),
+      zstdCompress(rollout),
+      new Date("2026-10-27T10:00:00Z"),
+    );
+    write(
+      path.join(day, "rollout-2.jsonl"),
+      `${JSON.stringify({ type: "session_meta", payload: { id: "c2", cwd: coffee } })}\n`,
+      new Date("2026-10-27T09:00:00Z"),
+    );
+    // Not a zstd stream: skipped, and the others still count.
+    write(
+      path.join(day, "rollout-3.jsonl.zst"),
+      JSON.stringify({ type: "session_meta", payload: { id: "c3", cwd: coffee } }),
+      new Date("2026-10-27T11:00:00Z"),
+    );
+
+    expect(await discoverRecentProjects(environment())).toEqual([
+      { path: duel, name: "duel", sources: ["codex"], lastUsedAt: "2026-10-27T10:00:00.000Z" },
+      { path: coffee, name: "coffee", sources: ["codex"], lastUsedAt: "2026-10-27T09:00:00.000Z" },
+    ]);
   });
 
   it("finds nothing, without failing, when no tool has history here", async () => {

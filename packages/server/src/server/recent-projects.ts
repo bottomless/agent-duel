@@ -1,7 +1,10 @@
+import { createReadStream } from "node:fs";
 import { open, readdir, realpath, stat } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
+import { Transform } from "node:stream";
 import { fileURLToPath } from "node:url";
+import * as zlib from "node:zlib";
 import type { RecentProject, RecentProjectSource } from "@getpaseo/protocol/messages";
 import { runGitCommand } from "../utils/run-git-command.js";
 
@@ -14,6 +17,7 @@ const RESULT_LIMIT = 30;
 /** History entries read per tool, newest first; older ones rarely add a project. */
 const ENTRY_LIMIT = 300;
 const GIT_CONCURRENCY = 8;
+const READ_CONCURRENCY = 16;
 /**
  * Bytes read from the start of a history file to find its working directory. A Codex session
  * records it in its first line; a Claude Code session in its first message.
@@ -141,8 +145,8 @@ async function claudeSightings(environment: RecentProjectsEnvironment): Promise<
 
 async function codexSightings(environment: RecentProjectsEnvironment): Promise<Sighting[]> {
   const codexHome = environment.env.CODEX_HOME?.trim() || path.join(environment.home, ".codex");
-  // sessions/YYYY/MM/DD/rollout-*.jsonl: walking the dated folders newest first finds the
-  // recent sessions without listing every one ever recorded.
+  // sessions/YYYY/MM/DD/rollout-*.jsonl, or .jsonl.zst once Codex compresses them: walking the
+  // dated folders newest first finds the recent sessions without listing every one ever recorded.
   const files: string[] = [];
   const walk = async (directory: string, depth: number): Promise<void> => {
     if (files.length >= ENTRY_LIMIT) return;
@@ -154,19 +158,19 @@ async function codexSightings(environment: RecentProjectsEnvironment): Promise<S
       if (files.length >= ENTRY_LIMIT) return;
       const entry = path.join(directory, name);
       if (depth < 3) await walk(entry, depth + 1);
-      else if (name.startsWith("rollout-") && name.endsWith(".jsonl")) files.push(entry);
+      else if (name.startsWith("rollout-") && /\.jsonl(\.zst)?$/.test(name)) files.push(entry);
     }
   };
   await walk(path.join(codexHome, "sessions"), 0);
-  const sightings = await Promise.all(
-    files.map(async (file) => {
-      const [head, info] = await Promise.all([readHead(file), stat(file).catch(() => null)]);
-      const directory = workingDirectory(head);
-      return directory && info
-        ? { directory, source: "codex" as const, usedAt: info.mtimeMs }
-        : null;
-    }),
-  );
+  // Capped like the git lookups: each compressed session holds a decompressor while it is read.
+  const sightings = await mapLimit(files, READ_CONCURRENCY, async (file) => {
+    const [head, info] = await Promise.all([
+      file.endsWith(".zst") ? readZstdHead(file) : readHead(file),
+      stat(file).catch(() => null),
+    ]);
+    const directory = workingDirectory(head);
+    return directory && info ? { directory, source: "codex" as const, usedAt: info.mtimeMs } : null;
+  });
   return sightings.filter((sighting) => sighting !== null);
 }
 
@@ -243,6 +247,41 @@ async function readHead(file: string): Promise<string> {
   } finally {
     await handle.close();
   }
+}
+
+// The workspace's @types/node predates zstd in node:zlib (Node 22.15). The daemon runs on
+// Electron's Node 24 when packaged and on the system Node in development, so look it up at
+// runtime; on a Node without it, compressed sessions are skipped.
+function zstdDecompressor(): Transform | null {
+  const create: unknown = Reflect.get(zlib, "createZstdDecompress");
+  if (typeof create !== "function") return null;
+  const stream: unknown = create();
+  return stream instanceof Transform ? stream : null;
+}
+
+/** readHead for a zstd file: the first HEAD_BYTES, without decompressing the rest. */
+async function readZstdHead(file: string): Promise<string> {
+  const decompress = zstdDecompressor();
+  if (!decompress) return "";
+  const input = createReadStream(file, { highWaterMark: 16 * 1024 });
+  const chunks: Buffer[] = [];
+  let length = 0;
+  try {
+    input.on("error", (error) => decompress.destroy(error));
+    input.pipe(decompress);
+    for await (const chunk of decompress) {
+      if (!Buffer.isBuffer(chunk)) continue;
+      chunks.push(chunk);
+      length += chunk.length;
+      if (length >= HEAD_BYTES) break;
+    }
+  } catch {
+    // A truncated or corrupt file still yields whatever decompressed before the error.
+  } finally {
+    input.destroy();
+    decompress.destroy();
+  }
+  return Buffer.concat(chunks).subarray(0, HEAD_BYTES).toString("utf8");
 }
 
 async function subdirectories(directory: string): Promise<string[]> {
