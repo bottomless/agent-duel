@@ -22,6 +22,8 @@ import {
 } from "./request-calibration"
 import { generationCapture, type CaptureState, type GenerationCapture } from "./generation-capture"
 import { createReasoningRedactor } from "./reasoning"
+import { COMPACTION_POLICY_PATH } from "./compaction-policy-contract"
+import { compactionPolicy } from "./compaction-policy"
 import {
   HEARTBEAT_HEADER,
   HEARTBEAT_LINE,
@@ -593,7 +595,10 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
         request.signal,
       )
     }
-    if (request.method !== "POST" || !["/api/v1/chat/completions", "/api/v1/responses"].includes(suffix)) {
+    if (
+      request.method !== "POST" ||
+      !["/api/v1/chat/completions", "/api/v1/responses", COMPACTION_POLICY_PATH].includes(suffix)
+    ) {
       return Response.json({ error: { message: "Arena assignment cannot access this route" } }, { status: 400 })
     }
 
@@ -630,7 +635,8 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
       scopeID: assignment.scopeID,
       assignmentID: assignment.assignmentID,
     })
-    const restored = reasoning.restore(input)
+    const restored = reasoning.restore(input, suffix === COMPACTION_POLICY_PATH)
+    if (suffix === COMPACTION_POLICY_PATH) return Response.json(compactionPolicy(input, restored))
     const generationID = requestedGenerationID || `gen_${randomUUID().replaceAll("-", "")}`
     const startedAt = Date.now()
     const endpoint = suffix === "/api/v1/responses" ? "responses" : "chat"

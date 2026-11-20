@@ -608,11 +608,13 @@ describe("Arena v2 engine runtime", () => {
       const send = (next: typeof mode, kind: "primary" | "title" = "primary") =>
         Effect.suspend(() => {
           mode = next
-          return ai.stream({
-            model,
-            prompt: "hello",
-            headers: requestHeaders({ sessionID, kind }),
-          }).pipe(Stream.runCollect, Effect.provide(clientLayer), Effect.result)
+          return ai
+            .stream({
+              model,
+              prompt: "hello",
+              headers: requestHeaders({ sessionID, kind }),
+            })
+            .pipe(Stream.runCollect, Effect.provide(clientLayer), Effect.result)
         })
       const failure = Effect.fn(function* (next: typeof mode, kind: "primary" | "title" = "primary") {
         const result = yield* send(next, kind)
@@ -862,6 +864,8 @@ describe("Arena v2 engine runtime", () => {
 
     const contestantFetch = async (input: string | URL | Request, init?: RequestInit) => {
       const request = new Request(input, init)
+      // This fixture counts model calls. Measurement is a separate, unpaid control route.
+      if (new URL(request.url).pathname.endsWith("/compaction-policy")) return Response.json({ compact: false })
       const headers = new Headers(request.headers)
       headers.delete("authorization")
       return fetch(`http://127.0.0.1:${server!.port}/v1/chat/completions`, {

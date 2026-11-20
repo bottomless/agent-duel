@@ -219,7 +219,7 @@ export function createReasoningRedactor(apiKey: string, binding: Binding) {
     }
   }
 
-  function restoreMessage(message: Record<string, unknown>) {
+  function restoreMessage(message: Record<string, unknown>, strict = false) {
     if (message.role !== "assistant" || !Array.isArray(message.reasoning_details)) return message
     const details: unknown[] = []
     const restored: Record<string, unknown> = { ...message }
@@ -237,6 +237,7 @@ export function createReasoningRedactor(apiKey: string, binding: Binding) {
       }
       redacted = true
       const packet = open(detail.data)
+      if (strict && packet?.kind !== "chat") return { ...message, reasoning: REDACTED_THINKING }
       if (packet?.kind !== "chat") continue
       rendered += packet.rendered
       for (const field of ["reasoning", "reasoning_content"]) {
@@ -253,10 +254,10 @@ export function createReasoningRedactor(apiKey: string, binding: Binding) {
     return restored
   }
 
-  function restore(input: Record<string, unknown>): Record<string, unknown> {
+  function restore(input: Record<string, unknown>, strict = false): Record<string, unknown> {
     const restored = { ...input }
     if (Array.isArray(input.messages))
-      restored.messages = input.messages.map((message) => (record(message) ? restoreMessage(message) : message))
+      restored.messages = input.messages.map((message) => (record(message) ? restoreMessage(message, strict) : message))
     if (Array.isArray(input.input)) {
       restored.input = input.input.flatMap((item) => {
         if (

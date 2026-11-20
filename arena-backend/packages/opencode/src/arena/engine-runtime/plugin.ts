@@ -52,6 +52,8 @@ import {
   type ToolExecution,
 } from "../../session/tool-execution-gate"
 import { SessionID } from "../../session/schema"
+import { installCompactionPolicy, turnsAfterReply } from "./compaction-policy"
+import { COMPACTION_TURNS_HEADER } from "@agent-duel/arena-service/compaction-policy-contract"
 import { GlobalBus } from "../../bus/global"
 
 export interface ArenaEngineRuntimeOptions {
@@ -390,8 +392,15 @@ function install(context: Context, options: InstalledOptions) {
             }).pipe(
               Effect.map(({ session, history }) => {
                 const assignment = options.assignments?.assignments.get(String(event.sessionID))
+                const userTurns = turnsAfterReply(history)
                 event.headers = {
                   ...event.headers,
+                  // This turn counts only when the idle hook observes a complete final reply.
+                  ...(assignment?.rootSessionID === String(event.sessionID) &&
+                  event.kind === "primary" &&
+                  userTurns >= 2
+                    ? { [COMPACTION_TURNS_HEADER]: String(userTurns) }
+                    : {}),
                   ...requestHeaders({
                     sessionID: String(event.sessionID),
                     kind: event.kind,
@@ -417,6 +426,7 @@ function install(context: Context, options: InstalledOptions) {
         }),
       { providerID: String(PROVIDER_ID) },
     )
+    yield* installCompactionPolicy(context, options.contestantFetch)
 
     yield* context.session.hook("prompt", (event) =>
       Effect.gen(function* () {

@@ -1,9 +1,50 @@
 import { describe, expect, spyOn, test } from "bun:test"
+import { z } from "zod"
 import type { ArenaDb } from "./collection"
 import { defaultPool, mediumModel } from "./default-pool"
 import { probeRouting } from "./openrouter"
 import type { ModelPool } from "./pool"
 import { createArenaService, type ArenaServiceOptions } from "./service"
+import { createReasoningRedactor } from "./reasoning"
+import { COMPACTION_POLICY_PATH } from "./compaction-policy-contract"
+
+test("the compaction policy measures restored reasoning without a paid provider request", async () => {
+  const db = fakeDb({
+    assignmentSets: () => [
+      { userId: "user-1", scopeID: "policy", assignments: [{ assignmentID: "opaque-id", model: pool[0] }] },
+    ],
+  })
+  const proxy = openrouter({ db: async () => db })
+  const redactor = createReasoningRedactor("server-secret", {
+    userId: "user-1",
+    scopeID: "policy",
+    assignmentID: "opaque-id",
+  })
+  const sealed = z.object({ choices: z.array(z.object({ message: z.unknown() })) }).parse(
+    redactor.redact({
+      choices: [{ message: { role: "assistant", content: "done", reasoning: "Think carefully. ".repeat(100) } }],
+    }),
+  )
+  for (const turns of [1, 2]) {
+    const response = await proxy(
+      new Request(`https://control.test/api/openrouter${COMPACTION_POLICY_PATH}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Arena-Assignment-ID": "opaque-id",
+          "X-Arena-Scope-ID": "policy",
+        },
+        body: JSON.stringify({
+          model: "contestant",
+          completedUserTurns: turns,
+          messages: [{ role: "user", content: "task" }, sealed.choices[0]!.message],
+        }),
+      }),
+    )
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ compact: turns === 2 })
+  }
+})
 
 // The proxy never samples from the pool; the service still needs one.
 const pool: ModelPool = [
