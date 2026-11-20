@@ -32,7 +32,8 @@ battle engine, Metro, and Electron. Canonical history stays local under
 
 See [../docs/development.md](../docs/development.md) for ports, parallel
 workspaces, and testing, and [../docs/arena.md](../docs/arena.md) for how a
-battle works.
+battle works. [../docs/upstream-sync.md](../docs/upstream-sync.md) describes the
+weekly merge of upstream OpenCode into this folder.
 
 ## Run the engine alone
 
