@@ -15,7 +15,7 @@ import { useAgentPlugins } from "./use-agent-plugins";
 
 /**
  * Project settings → Plugins: this project's plugins, each switched on or off on its own. An
- * undecided plugin shows as off until the user decides, here or in the banner above the composer.
+ * undecided plugin shows as off until the user decides, here or in the line below the composer.
  */
 export function ProjectPluginsSettings({
   serverId,
