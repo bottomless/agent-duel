@@ -39,6 +39,7 @@ These are the docs this product is built on. Read the relevant one before non-tr
 | Doc                                                  | What's in it                                                                                                                    |
 | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | [docs/arena.md](docs/arena.md)                       | **The battle.** What it is for, settled product decisions, turn lifecycle, blinding, voting, states                             |
+| [docs/agent-plugins.md](docs/agent-plugins.md)       | **Imported plugins.** Claude Code and Codex plugins brought into the engine through rulesync; scopes, rulesync gotchas          |
 | [docs/accounts.md](docs/accounts.md)                 | **Sign-in.** Magic link, Google, GitHub; where accounts live, how the session travels, the ordering traps                       |
 | [docs/architecture.md](docs/architecture.md)         | System design, package layering, WebSocket protocol, agent lifecycle, data flow                                                 |
 | [docs/glossary.md](docs/glossary.md)                 | Authoritative terminology — UI label wins, no synonyms                                                                          |

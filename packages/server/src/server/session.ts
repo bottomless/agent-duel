@@ -654,6 +654,7 @@ export interface SessionOptions {
     listLegacyUsage(): Promise<{ fetchedAt: string; providers: ProviderUsage[] }>;
   };
   orchestrationSkills?: import("./orchestration-skills/index.js").OrchestrationSkills;
+  agentPlugins?: import("./agent-plugins/index.js").AgentPlugins;
   mcpBaseUrl?: string | null;
   stt: Resolvable<SpeechToTextProvider | null>;
   sttLanguage?: string;
@@ -906,6 +907,7 @@ export class Session {
   private readonly pushNotifications: PushNotifications;
   private readonly pluginRuntime: SessionOptions["pluginRuntime"];
   private readonly orchestrationSkills: SessionOptions["orchestrationSkills"];
+  private readonly agentPlugins: SessionOptions["agentPlugins"];
   private unsubscribeAgentEvents: (() => void) | null = null;
   private unsubscribeProjectMutations: (() => void) | null = null;
   private unsubscribePluginChanges: (() => void) | null = null;
@@ -1014,6 +1016,7 @@ export class Session {
       daemonConfigStore,
       pluginRuntime,
       orchestrationSkills,
+      agentPlugins,
       stt,
       sttLanguage,
       tts,
@@ -1074,6 +1077,7 @@ export class Session {
     this.worktreesRoot = worktreesRoot;
     this.pluginRuntime = pluginRuntime;
     this.orchestrationSkills = orchestrationSkills;
+    this.agentPlugins = agentPlugins;
     this.sessionLogger = logger.child({
       module: "session",
       clientId: this.clientId,
@@ -2763,7 +2767,7 @@ export class Session {
       this.dispatchWorkspaceLifecycleMessage(msg) ??
       this.dispatchWorkspaceFileMessage(msg, source) ??
       this.dispatchProviderMessage(msg) ??
-      this.dispatchOrchestrationSkillsMessage(msg) ??
+      this.dispatchAgentExtensionMessage(msg) ??
       this.dispatchPluginDirectoryMessage(msg) ??
       this.dispatchPluginMessage(msg) ??
       this.dispatchPluginRpcMessage(msg) ??
@@ -2818,6 +2822,54 @@ export class Session {
         return this.handleAgentMetadataUpdateRequest(msg);
       case "workspace.metadata.update.request":
         return this.handleWorkspaceMetadataUpdateRequest(msg);
+      default:
+        return undefined;
+    }
+  }
+
+  /** Skills Paseo installs into agents, and the Claude Code and Codex plugins Agent Duel imports. */
+  private dispatchAgentExtensionMessage(msg: SessionInboundMessage): Promise<void> | undefined {
+    return this.dispatchOrchestrationSkillsMessage(msg) ?? this.dispatchAgentPluginsMessage(msg);
+  }
+
+  private dispatchAgentPluginsMessage(msg: SessionInboundMessage): Promise<void> | undefined {
+    const agentPlugins = this.agentPlugins;
+    if (!agentPlugins) return undefined;
+    const reply = (
+      type:
+        | "agent_plugins.get_status.response"
+        | "agent_plugins.save_selection.response"
+        | "agent_plugins.acknowledge_added.response",
+      requestId: string,
+      operation: Promise<import("@getpaseo/protocol/messages").AgentPluginsStatus>,
+    ) =>
+      operation.then((status) => {
+        this.emit({ type, payload: { requestId, ...status } });
+        return undefined;
+      });
+    switch (msg.type) {
+      case "agent_plugins.get_status.request":
+        return reply(
+          "agent_plugins.get_status.response",
+          msg.requestId,
+          agentPlugins.getStatus(msg.cwd),
+        );
+      case "agent_plugins.save_selection.request":
+        return reply(
+          "agent_plugins.save_selection.response",
+          msg.requestId,
+          agentPlugins.saveSelection({
+            scope: msg.scope,
+            enabled: msg.enabled,
+            disabled: msg.disabled,
+          }),
+        );
+      case "agent_plugins.acknowledge_added.request":
+        return reply(
+          "agent_plugins.acknowledge_added.response",
+          msg.requestId,
+          agentPlugins.acknowledgeAdded(msg.ids),
+        );
       default:
         return undefined;
     }

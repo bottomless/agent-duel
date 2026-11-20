@@ -6,6 +6,7 @@ import {
   singleAgentRatingRequired,
   singleAgentTurnsByPrompt,
 } from "@/arena/single-agent";
+import { AgentPluginsBanner } from "@/agent-plugins/project-plugins";
 import { SingleAgentRatingDialog, SingleAgentComposerTooltip } from "@/arena/single-agent-rating";
 import { usePendingArenaPrompt } from "@/arena/use-pending-arena-prompt";
 import { ArenaStreamStatus } from "@/arena/stream-status";
@@ -2984,6 +2985,10 @@ function ActiveAgentComposer({
   const handleMessageSent = useCallback(() => {
     if (!battleReplyEnabled) onMessageSent();
   }, [battleReplyEnabled, onMessageSent]);
+  const pluginsBanner = useMemo(
+    () => (cwd ? <AgentPluginsBanner serverId={serverId} cwd={cwd} /> : undefined),
+    [cwd, serverId],
+  );
 
   return (
     <View style={animatedStaticStyles.inputAreaWrapper} onLayout={onInputAreaLayout}>
@@ -3017,6 +3022,7 @@ function ActiveAgentComposer({
           submitLabel={composerPresentation.submitLabel}
           placeholder={composerPresentation.placeholder}
           maxImages={composerMaxImages}
+          topContent={pluginsBanner}
           leftContent={battleReplyComposer.leftContent}
           isSubmitLoading={
             isSubmitLoading ||
