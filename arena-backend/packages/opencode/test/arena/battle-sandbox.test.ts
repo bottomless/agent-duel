@@ -655,6 +655,8 @@ describe("battle shell writes are the forms that write (bench 2026-11-06)", () =
     `python3 -c "print('a/b'.split('/'))"`,
     "curl -s -o $TMPDIR/page.html https://example.com/",
     "tar -czf $TMPDIR/out.tgz src",
+    // Refused as "/f is outside them" (2026-11-12): `-rf` was read as the file `f` under `/`.
+    `D="$TMPDIR/neg"; rm -rf "$D"; mkdir -p "$D"; cd "$D" && printf 'a,b\\n' > signed.csv; cd /; rm -rf "$D"`,
   ]
   it.each(safe)("runs %s", async (command) => {
     using f = fixture()
@@ -683,6 +685,8 @@ describe("battle shell writes are the forms that write (bench 2026-11-06)", () =
     `tar czf ${f.checkout}/out.tgz src`,
     `dd if=/dev/zero of=${f.checkout}/zero bs=1 count=1`,
     `rm -rf ${f.checkout}/src`,
+    // With a folder `own.txtq` in the side, the backup goes to the checkout's `src`.
+    "patch -b -zq/../../../src own.txt",
     `find ${f.checkout} -name '*.log' -delete`,
     `bash -c 'touch ${f.checkout}/nested.txt'`,
     `gcc main.c -o ${f.checkout}/a.out`,
