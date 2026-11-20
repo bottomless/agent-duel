@@ -7,6 +7,7 @@ import { ScrollView, Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { createNameId } from "mnemonic-id";
 import { useIsFetching, useQuery, useQueryClient } from "@tanstack/react-query";
+import { AgentPluginsBanner } from "@/agent-plugins/project-plugins";
 import { Composer } from "@/composer";
 import { ComposerDock } from "@/composer/dock";
 import { FailedFirstSendNotice } from "@/composer/draft/failed-first-send-notice";
@@ -1663,6 +1664,13 @@ export function NewWorkspaceScreen({
   });
 
   const isComposerFullscreen = composerEditing.isFullscreen;
+  const pluginsBanner = useMemo(
+    () =>
+      selectedServerId && selectedSourceDirectory ? (
+        <AgentPluginsBanner serverId={selectedServerId} cwd={selectedSourceDirectory} />
+      ) : undefined,
+    [selectedServerId, selectedSourceDirectory],
+  );
   return (
     <FileDropZone style={styles.container}>
       <NewWorkspaceLayout
@@ -1702,6 +1710,7 @@ export function NewWorkspaceScreen({
           agentControls={agentControlsWithDisabled}
           maxImages={arenaComposerMaxImages(arenaPreferences.battleMode)}
         />
+        {pluginsBanner}
         {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
       </NewWorkspaceLayout>
       <AdaptiveRenameModal

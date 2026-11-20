@@ -3022,7 +3022,6 @@ function ActiveAgentComposer({
           submitLabel={composerPresentation.submitLabel}
           placeholder={composerPresentation.placeholder}
           maxImages={composerMaxImages}
-          topContent={pluginsBanner}
           leftContent={battleReplyComposer.leftContent}
           isSubmitLoading={
             isSubmitLoading ||
@@ -3040,6 +3039,7 @@ function ActiveAgentComposer({
           isCompactLayout={isCompactComposerLayout}
         />
       </SingleAgentComposerTooltip>
+      {pluginsBanner}
     </View>
   );
 }

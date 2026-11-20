@@ -2,8 +2,8 @@ import { useCallback, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
+import { Puzzle } from "lucide-react-native";
 import type { AgentPlugin } from "@getpaseo/protocol/messages";
-import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { openSettingsSection } from "@/navigation/settings-navigation";
 import { settingsStyles } from "@/styles/settings";
@@ -83,7 +83,7 @@ function ProjectPluginsSheet({
 type BannerAction = "import" | "dismiss";
 
 /**
- * Above the composer while the project has plugins the user has not decided on. Import takes them
+ * Below the composer while the project has plugins the user has not decided on. Import takes them
  * all, as the sheet's default does; Not now turns them off until something new turns up.
  */
 export function AgentPluginsBanner({ serverId, cwd }: ProjectPluginsProps) {
@@ -121,41 +121,44 @@ export function AgentPluginsBanner({ serverId, cwd }: ProjectPluginsProps) {
   const names = pending.map((plugin) => bannerItem(plugin, t)).join(", ");
   const busy = running !== null;
   return (
-    <View style={styles.banner}>
-      <Alert
-        variant={failed ? "error" : "info"}
-        title={bannerTitle(pending, t)}
-        description={failed ? t("agentPlugins.banner.failed") : names}
-        testID="agent-plugins-banner"
-      >
-        <View style={styles.actions}>
-          <Button
-            variant="outline"
-            onPress={dismiss}
-            loading={running === "dismiss"}
-            disabled={busy}
-          >
-            {t("agentPlugins.banner.dismiss")}
-          </Button>
-          <Button
-            variant="outline"
-            onPress={openReview}
-            disabled={busy}
-            testID="agent-plugins-banner-review"
-          >
-            {t("agentPlugins.banner.review")}
-          </Button>
-          <Button
-            variant="outline"
-            onPress={importAll}
-            loading={running === "import"}
-            disabled={busy}
-            testID="agent-plugins-banner-import"
-          >
-            {t("agentPlugins.banner.import")}
-          </Button>
-        </View>
-      </Alert>
+    <View style={styles.banner} testID="agent-plugins-banner">
+      <Puzzle size={14} color={styles.icon.color} />
+      <Text style={styles.text} numberOfLines={1}>
+        <Text style={failed ? styles.error : styles.title}>
+          {failed ? t("agentPlugins.banner.failed") : bannerTitle(pending, t)}
+        </Text>
+        {failed ? null : ` · ${names}`}
+      </Text>
+      <View style={styles.actions}>
+        <Button
+          size="sm"
+          variant="secondary"
+          onPress={importAll}
+          loading={running === "import"}
+          disabled={busy}
+          testID="agent-plugins-banner-import"
+        >
+          {t("agentPlugins.banner.import")}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          onPress={openReview}
+          disabled={busy}
+          testID="agent-plugins-banner-review"
+        >
+          {t("agentPlugins.banner.review")}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          onPress={dismiss}
+          loading={running === "dismiss"}
+          disabled={busy}
+        >
+          {t("agentPlugins.banner.dismiss")}
+        </Button>
+      </View>
       <ProjectPluginsSheet controller={controller} visible={reviewing} onClose={closeReview} />
     </View>
   );
@@ -163,12 +166,33 @@ export function AgentPluginsBanner({ serverId, cwd }: ProjectPluginsProps) {
 
 const styles = StyleSheet.create((theme) => ({
   banner: {
-    marginBottom: theme.spacing[2],
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing[2],
+    // Lines the icon up with the composer's text and the last button with its send button.
+    paddingLeft: theme.spacing[7],
+    paddingRight: theme.spacing[3],
+    marginTop: theme.spacing[1],
+  },
+  icon: {
+    color: theme.colors.foregroundMuted,
+  },
+  text: {
+    flex: 1,
+    minWidth: 0,
+    color: theme.colors.foregroundMuted,
+    fontSize: theme.fontSize.sm,
+  },
+  title: {
+    color: theme.colors.foreground,
+  },
+  error: {
+    color: theme.colors.destructive,
   },
   actions: {
     flexDirection: "row",
-    flexWrap: "wrap",
-    gap: theme.spacing[2],
+    alignItems: "center",
+    gap: theme.spacing[1],
   },
   footnote: {
     flexDirection: "row",

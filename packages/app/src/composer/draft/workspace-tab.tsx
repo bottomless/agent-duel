@@ -685,8 +685,8 @@ export function WorkspaceDraftComposer({
           agentControls={composerAgentControls}
           isCompactLayout={isCompactComposerLayout}
           maxImages={arenaComposerMaxImages(arenaPreferences.battleMode)}
-          topContent={pluginsBanner}
         />
+        {pluginsBanner}
       </View>
     </DraftInputSlot>
   );
