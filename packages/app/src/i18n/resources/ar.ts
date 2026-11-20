@@ -2678,7 +2678,6 @@ export const ar: TranslationResources = {
       runs: "يشغّل {{command}}",
       fromClaude: "Claude Code",
       fromCodex: "Codex",
-      unsupported: "يستخدم تطبيق ChatGPT، الذي لا يعمل إلا في Codex",
       importFailed: "تعذّر الاستيراد: {{reason}}",
     },
     banner: {

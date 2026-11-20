@@ -40,7 +40,6 @@ async function detectClaudeSetup(projectRoot: string): Promise<DetectedPlugin | 
     source: "claude-code",
     kind: "repository",
     contents: { skills: 0, commands: commandFiles.length, agents: agentFiles.length, mcpServers },
-    unsupported: null,
     importer: { kind: "rulesync", target: "claudecode", root: projectRoot, features },
     signature: await modificationSignature([...commandFiles, ...agentFiles, mcpFile]),
   };
@@ -71,7 +70,6 @@ async function detectCodexSetup(projectRoot: string): Promise<DetectedPlugin | n
     source: "codex",
     kind: "repository",
     contents: { skills: 0, commands: 0, agents: agentFiles.length, mcpServers: servers },
-    unsupported: null,
     importer: { kind: "rulesync", target: "codexcli", root: projectRoot, features },
     signature: await modificationSignature([configFile, ...agentFiles]),
   };

@@ -4,7 +4,7 @@ import { useSidebarCallouts } from "@/contexts/sidebar-callout-context";
 import { useToast } from "@/contexts/toast-context";
 import { useLocalDaemonServerId } from "@/hooks/use-is-local-daemon";
 import { GlobalPluginsSheet } from "./global-sheet";
-import { isSelectable, useAgentPlugins } from "./use-agent-plugins";
+import { useAgentPlugins } from "./use-agent-plugins";
 
 /**
  * Mounted once for the app. Plugins live on the user's own computer, so this follows the local
@@ -26,14 +26,14 @@ function LocalPluginsCallout({ serverId }: { serverId: string }) {
   const openReview = useCallback(() => setReviewing(true), []);
   const closeReview = useCallback(() => setReviewing(false), []);
 
-  const selectable = status?.global.plugins.filter(isSelectable).length ?? 0;
-  const needsReview = status !== null && !status.global.reviewed && selectable > 0;
+  const found = status?.global.plugins.length ?? 0;
+  const needsReview = status !== null && !status.global.reviewed && found > 0;
   useEffect(() => {
     if (!needsReview) return;
     return callouts.show({
       id: "agent-plugins-review",
       title: t("agentPlugins.callout.title"),
-      description: t("agentPlugins.callout.description", { count: selectable }),
+      description: t("agentPlugins.callout.description", { count: found }),
       dismissible: false,
       priority: 100,
       actions: [
@@ -41,7 +41,7 @@ function LocalPluginsCallout({ serverId }: { serverId: string }) {
       ],
       testID: "agent-plugins-callout",
     });
-  }, [callouts, needsReview, openReview, selectable, t]);
+  }, [callouts, found, needsReview, openReview, t]);
 
   // Status refreshes can land again before the acknowledgement does; toast each set once.
   const announced = useRef("");

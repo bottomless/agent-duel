@@ -2755,7 +2755,6 @@ export const es: TranslationResources = {
       runs: "Ejecuta {{command}}",
       fromClaude: "Claude Code",
       fromCodex: "Codex",
-      unsupported: "Usa una app de ChatGPT, que solo funciona en Codex",
       importFailed: "No se pudo importar: {{reason}}",
     },
     banner: {

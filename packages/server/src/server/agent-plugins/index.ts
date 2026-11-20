@@ -71,7 +71,6 @@ function toWire(plugin: DetectedPlugin, state: AgentPluginState, errors: BuildEr
     contents: plugin.contents,
     state,
     importError: errors[plugin.id] ?? null,
-    unsupported: plugin.unsupported,
   };
 }
 
@@ -153,7 +152,7 @@ export function createAgentPlugins(options: {
     const off = new Set(state.global.off);
     const stateOf = (plugin: DetectedPlugin): AgentPluginState => {
       if (!reviewed) return "pending";
-      return plugin.unsupported || off.has(plugin.id) ? "off" : "on";
+      return off.has(plugin.id) ? "off" : "on";
     };
     const active = detected.global.filter((plugin) => stateOf(plugin) === "on");
     const errors = await ensureImported({
@@ -178,7 +177,7 @@ export function createAgentPlugins(options: {
     const plugins = await detectProject(detected, root);
     const decisions = state.projects[root] ?? { on: [], off: [] };
     const stateOf = (plugin: DetectedPlugin): AgentPluginState => {
-      if (plugin.unsupported || decisions.off.includes(plugin.id)) return "off";
+      if (decisions.off.includes(plugin.id)) return "off";
       return decisions.on.includes(plugin.id) ? "on" : "pending";
     };
     const active = plugins.filter((plugin) => stateOf(plugin) === "on");

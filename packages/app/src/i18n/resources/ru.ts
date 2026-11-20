@@ -2729,7 +2729,6 @@ export const ru: TranslationResources = {
       runs: "Запускает {{command}}",
       fromClaude: "Claude Code",
       fromCodex: "Codex",
-      unsupported: "Использует приложение ChatGPT, которое работает только в Codex",
       importFailed: "Не удалось импортировать: {{reason}}",
     },
     banner: {

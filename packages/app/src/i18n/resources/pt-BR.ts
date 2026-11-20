@@ -2740,7 +2740,6 @@ export const ptBR: TranslationResources = {
       runs: "Executa {{command}}",
       fromClaude: "Claude Code",
       fromCodex: "Codex",
-      unsupported: "Usa um app do ChatGPT, que só funciona no Codex",
       importFailed: "Não foi possível importar: {{reason}}",
     },
     banner: {

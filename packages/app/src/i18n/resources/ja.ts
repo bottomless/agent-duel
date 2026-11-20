@@ -2722,7 +2722,6 @@ export const ja: TranslationResources = {
       runs: "{{command}} を実行",
       fromClaude: "Claude Code",
       fromCodex: "Codex",
-      unsupported: "ChatGPT アプリを使用します。Codex でのみ動作します",
       importFailed: "インポートできませんでした: {{reason}}",
     },
     banner: {

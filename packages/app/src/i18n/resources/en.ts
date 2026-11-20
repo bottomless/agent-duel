@@ -2718,7 +2718,6 @@ export const en = {
       runs: "Runs {{command}}",
       fromClaude: "Claude Code",
       fromCodex: "Codex",
-      unsupported: "Uses a ChatGPT app, which only runs in Codex",
       importFailed: "Couldn't import: {{reason}}",
     },
     banner: {

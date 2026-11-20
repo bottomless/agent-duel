@@ -2701,7 +2701,6 @@ export const ko: TranslationResources = {
       runs: "{{command}} 실행",
       fromClaude: "Claude Code",
       fromCodex: "Codex",
-      unsupported: "Codex에서만 실행되는 ChatGPT 앱을 사용합니다",
       importFailed: "가져오지 못함: {{reason}}",
     },
     banner: {

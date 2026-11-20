@@ -1886,8 +1886,6 @@ export const AgentPluginSchema = z
     state: AgentPluginStateSchema,
     /** What of this plugin the last import could not convert; the rest of it is in the engine. */
     importError: z.string().nullable(),
-    /** Set when nothing in the plugin can run outside its own tool: Codex plugins built on ChatGPT apps. */
-    unsupported: z.enum(["chatgpt-apps"]).nullable(),
   })
   .strict();
 export type AgentPlugin = z.infer<typeof AgentPluginSchema>;

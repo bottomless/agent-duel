@@ -1,10 +1,6 @@
 import { useCallback, useMemo } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import type {
-  AgentPlugin,
-  AgentPluginScope,
-  AgentPluginsStatus,
-} from "@getpaseo/protocol/messages";
+import type { AgentPluginScope, AgentPluginsStatus } from "@getpaseo/protocol/messages";
 import { useFetchQuery } from "@/data/query";
 import { useHostRuntimeClient } from "@/runtime/host-runtime";
 
@@ -19,11 +15,6 @@ export class AgentPluginsHostUnavailableError extends Error {
     super(`Host ${serverId} is not connected`);
     this.name = "AgentPluginsHostUnavailableError";
   }
-}
-
-/** A plugin the user can switch on: everything but Codex plugins built on ChatGPT apps. */
-export function isSelectable(plugin: AgentPlugin): boolean {
-  return plugin.unsupported === null;
 }
 
 /**

@@ -82,7 +82,7 @@ function displayText(manifest: Record<string, unknown> | null, key: string): str
 /**
  * Whether the plugin needs a ChatGPT app (`.app.json`). Those run through OpenAI's backend under
  * the user's ChatGPT account, and the plugin's skills drive the app's tools, so none of it works
- * outside Codex.
+ * outside Codex and the plugin is left out of the list.
  */
 async function requiresChatGptApp(
   root: string,
@@ -106,8 +106,8 @@ async function describePlugin(input: {
   const skills = skillsDir ? (await listSkillNames(skillsDir)).length : 0;
   const mcpServers = await resolveMcpServers(root, manifest);
   const servers = describeMcpServers(mcpServers);
-  const requiresApp = await requiresChatGptApp(root, manifest);
-  if (skills === 0 && servers.length === 0 && !requiresApp) return null;
+  if (await requiresChatGptApp(root, manifest)) return null;
+  if (skills === 0 && servers.length === 0) return null;
   const name = manifest && typeof manifest.name === "string" ? manifest.name : directory;
   return {
     id: `codex:${directory}@${marketplace}`,
@@ -119,7 +119,6 @@ async function describePlugin(input: {
     source: "codex",
     kind: "plugin",
     contents: { skills, commands: 0, agents: 0, mcpServers: servers },
-    unsupported: requiresApp ? "chatgpt-apps" : null,
     importer: {
       kind: "codex-plugin",
       skillsDir: skills > 0 ? skillsDir : null,

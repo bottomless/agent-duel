@@ -17,8 +17,9 @@ OpenCode config folders the engine reads. Code: `packages/server/src/server/agen
 
 Skills, commands, agents and MCP servers convert. Hooks do not: each battle contestant would run
 them. Skills in `.claude/skills` and `.agents/skills` are left out because the engine reads them
-itself. A Codex plugin whose `.app.json` requires a ChatGPT app is listed as unsupported: its skills
-drive the app's tools, which run only through OpenAI's backend.
+itself. A Codex plugin whose `.app.json` requires a ChatGPT app is left out of every list: its
+skills drive the app's tools, which run only through OpenAI's backend, so the user has nothing to
+decide.
 
 ## Decisions
 

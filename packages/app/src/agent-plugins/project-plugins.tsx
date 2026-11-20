@@ -9,7 +9,7 @@ import { openSettingsSection } from "@/navigation/settings-navigation";
 import { settingsStyles } from "@/styles/settings";
 import { bannerItem, bannerTitle } from "./describe";
 import { AgentPluginsReviewSheet, type AgentPluginsDecision } from "./review-sheet";
-import { isSelectable, useAgentPlugins, type AgentPluginsController } from "./use-agent-plugins";
+import { useAgentPlugins, type AgentPluginsController } from "./use-agent-plugins";
 
 interface ProjectPluginsProps {
   serverId: string;
@@ -21,9 +21,7 @@ function basename(directory: string): string {
 }
 
 function pendingPlugins(controller: AgentPluginsController): AgentPlugin[] {
-  return (controller.status?.project?.plugins ?? []).filter(
-    (plugin) => plugin.state === "pending" && isSelectable(plugin),
-  );
+  return (controller.status?.project?.plugins ?? []).filter((plugin) => plugin.state === "pending");
 }
 
 /** The project's plugins with a pointer to the global ones, which are managed in Settings. */

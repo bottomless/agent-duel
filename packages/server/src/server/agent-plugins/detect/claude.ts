@@ -88,7 +88,6 @@ async function describePlugin(input: {
     source: "claude-code",
     kind: "plugin",
     contents: { skills, commands, agents, mcpServers },
-    unsupported: null,
     importer: { kind: "rulesync", target: "claudecode-plugin", root: installPath, features },
     signature: `${installPath}|${version ?? ""}`,
   };

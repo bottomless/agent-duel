@@ -30,7 +30,7 @@ export type PluginImporter =
 /** A plugin found on disk, before the user's decision about it is applied. */
 export interface DetectedPlugin extends Pick<
   AgentPlugin,
-  "id" | "name" | "description" | "version" | "unsupported"
+  "id" | "name" | "description" | "version"
 > {
   source: AgentPluginSource;
   kind: AgentPluginKind;

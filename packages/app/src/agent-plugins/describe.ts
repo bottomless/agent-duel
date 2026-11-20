@@ -24,7 +24,6 @@ export function contentsSummary(plugin: AgentPlugin, t: TFunction): string {
 
 /** "Claude Code · 9 skills · 5 commands · MCP: slack" */
 export function pluginSummary(plugin: AgentPlugin, t: TFunction): string {
-  if (plugin.unsupported) return t("agentPlugins.plugin.unsupported");
   const source =
     plugin.source === "claude-code"
       ? t("agentPlugins.plugin.fromClaude")

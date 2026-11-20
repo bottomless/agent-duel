@@ -223,7 +223,7 @@ describe("agent plugins", () => {
     expect(acknowledged.global.added).toEqual([]);
   });
 
-  it("imports Codex plugin skills and MCP servers, and marks ChatGPT-app plugins unsupported", async () => {
+  it("imports Codex plugin skills and MCP servers, and leaves out ChatGPT-app plugins", async () => {
     await installCodexPlugin(sandbox, {
       name: "visualize",
       manifest: { skills: "./skills/", interface: { displayName: "Visualize" } },
@@ -259,10 +259,9 @@ describe("agent plugins", () => {
       name: "Visualize",
       state: "on",
     });
-    expect(plugin(status.global, "codex:pages@openai-curated-remote")).toMatchObject({
-      unsupported: "chatgpt-apps",
-      state: "off",
-    });
+    expect(status.global.plugins.map((entry) => entry.id)).not.toContain(
+      "codex:pages@openai-curated-remote",
+    );
     const target = globalImport(sandbox);
     expect(await exists(path.join(target, "skills", "chart", "SKILL.md"))).toBe(true);
     expect(await exists(path.join(target, "skills", "write-page"))).toBe(false);

@@ -2641,7 +2641,6 @@ export const zhCN: TranslationResources = {
       runs: "运行 {{command}}",
       fromClaude: "Claude Code",
       fromCodex: "Codex",
-      unsupported: "使用了 ChatGPT 应用，仅能在 Codex 中运行",
       importFailed: "无法导入：{{reason}}",
     },
     banner: {

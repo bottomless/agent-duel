@@ -9,7 +9,6 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { settingsStyles } from "@/styles/settings";
 import { pluginLabel, pluginSummary } from "./describe";
-import { isSelectable } from "./use-agent-plugins";
 
 export interface AgentPluginsDecision {
   enabled: string[];
@@ -33,9 +32,7 @@ interface AgentPluginsReviewSheetProps {
 
 /** Undecided plugins start checked: importing everything is the default. */
 function initialChecked(plugins: readonly AgentPlugin[]): Record<string, boolean> {
-  return Object.fromEntries(
-    plugins.filter(isSelectable).map((plugin) => [plugin.id, plugin.state !== "off"]),
-  );
+  return Object.fromEntries(plugins.map((plugin) => [plugin.id, plugin.state !== "off"]));
 }
 
 /** Draft form state only; the decision and the import it triggers belong to the host. */
@@ -189,14 +186,12 @@ export function PluginRow({
     : undefined;
   return (
     <SettingsRow label={label} hint={hint} error={error} testID={`agent-plugin-${plugin.id}`}>
-      {isSelectable(plugin) ? (
-        <Switch
-          value={checked}
-          onValueChange={handleValueChange}
-          disabled={disabled}
-          accessibilityLabel={label}
-        />
-      ) : null}
+      <Switch
+        value={checked}
+        onValueChange={handleValueChange}
+        disabled={disabled}
+        accessibilityLabel={label}
+      />
     </SettingsRow>
   );
 }
