@@ -165,10 +165,11 @@ OpenCode version in the hosted leaderboard's FAQ.
 
 Record each decision against an upstream feature here, with where it is cut.
 
-| Feature                                      | Decision                                                                                                       | Where it is cut                                       |
-| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| Fork notice (v2.3.2)                         | Off; it tells a contestant another copy may be running, and the graft would copy it into the chat (2026-11-19) | `core/src/plugin/internal.ts` (vendor patch)          |
-| Background compaction on by default (v2.3.2) | Off; it would be a paid request after the turn, and Arena compacts on its own ceiling (2026-11-19)             | `core/src/config/plugin/compaction.ts` (vendor patch) |
+| Feature                                      | Decision                                                                                                        | Where it is cut                                       |
+| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| Fork notice (v2.3.2)                         | Off; it tells a contestant another copy may be running, and the graft would copy it into the chat (2026-11-19)  | `core/src/plugin/internal.ts` (vendor patch)          |
+| Background compaction on by default (v2.3.2) | Off; it would be a paid request after the turn, and Arena compacts on its own ceiling (2026-11-19)              | `core/src/config/plugin/compaction.ts` (vendor patch) |
+| CLAUDE.md fallback (v2.3.2)                  | Off; contestants read AGENTS.md only, as before, until we decide how project and global files load (2026-11-20) | `routeOptions` in `opencode/src/server/server.ts`     |
 
 ## Paseo
 
