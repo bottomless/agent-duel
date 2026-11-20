@@ -40,6 +40,23 @@ function contestantRequest(url = dataUrl) {
   })
 }
 
+// Two 3 MB screenshots: each fits one upload, together they pass the hosted body limit inline.
+const large = [1, 2].map((fill) => `data:image/png;base64,${Buffer.alloc(3_000_000, fill).toString("base64")}`)
+function largeRequest() {
+  return new Request("http://arena.invalid/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Session-Id": "session-root",
+      "x-arena-request-id": `00000000-0000-4000-8000-${String(++requests).padStart(12, "0")}`,
+    },
+    body: JSON.stringify({
+      model: "contestant",
+      messages: [{ role: "user", content: large.map((url) => ({ type: "image_url", image_url: { url } })) }],
+    }),
+  })
+}
+
 function registry() {
   const value = new AssignmentRegistry()
   value.assign("session-root", assignment)
@@ -180,11 +197,12 @@ describe("media by reference", () => {
     const upstream = "http://control-refusing.invalid/api/openrouter"
     const bodies: string[] = []
     let uploads = 0
+    let closed = 0
     const execute = async (input: string | URL | Request, init?: RequestInit) => {
       const path = new URL(String(input instanceof Request ? input.url : input)).pathname
       if (path.endsWith("/media")) {
         uploads++
-        return Response.json({ error: { message: "Unavailable" } }, { status: 503 })
+        return new Response(new ReadableStream({ cancel: () => void closed++ }), { status: 503 })
       }
       bodies.push(String(init?.body))
       return answer()
@@ -199,26 +217,12 @@ describe("media by reference", () => {
     }
     // A refusal is not a missing route: the next request tries the upload again.
     expect(uploads).toBe(2)
+    expect(closed).toBe(2)
     for (const body of bodies) expect(body).toContain(dataUrl)
     expect(referencesConfirmed(upstream)).toBe(false)
   })
 
   test("a body sized for references that cannot go inline fails in a way the engine retries", async () => {
-    // Two 3 MB screenshots: each fits one upload, together they pass the hosted body limit inline.
-    const large = [1, 2].map((fill) => `data:image/png;base64,${Buffer.alloc(3_000_000, fill).toString("base64")}`)
-    const request = () =>
-      new Request("http://arena.invalid/api/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Session-Id": "session-root",
-          "x-arena-request-id": `00000000-0000-4000-8000-${String(++requests).padStart(12, "0")}`,
-        },
-        body: JSON.stringify({
-          model: "contestant",
-          messages: [{ role: "user", content: large.map((url) => ({ type: "image_url", image_url: { url } })) }],
-        }),
-      })
     for (const [status, expected] of [
       [404, 503],
       [500, 500],
@@ -231,10 +235,42 @@ describe("media by reference", () => {
         completions++
         return answer()
       }
-      const response = await proxy(request(), registry(), { upstream, fetch: execute, mediaByReference: true })
+      const response = await proxy(largeRequest(), registry(), { upstream, fetch: execute, mediaByReference: true })
       expect(response.status).toBe(expected)
       expect(completions).toBe(0)
     }
+  })
+
+  test("a request sized for references before another found the route missing is retried, not sent", async () => {
+    const upstream = "http://control-gone.invalid/api/openrouter"
+    let completions = 0
+    const execute = async (input: string | URL | Request) => {
+      const path = new URL(String(input instanceof Request ? input.url : input)).pathname
+      if (path.endsWith("/media")) return Response.json({ error: "Not found" }, { status: 404 })
+      completions++
+      return answer()
+    }
+    const options = { upstream, fetch: execute, mediaByReference: true }
+    expect((await proxy(contestantRequest(), registry(), options)).status).toBe(200)
+    expect(completions).toBe(1)
+    // This one was sized while the route still counted, so inline it would pass the limit.
+    expect((await proxy(largeRequest(), registry(), options)).status).toBe(503)
+    expect(completions).toBe(1)
+  })
+
+  test("an upload that cannot be sent at all sends the media inline when the body fits", async () => {
+    const upstream = "http://control-unreachable.invalid/api/openrouter"
+    const bodies: string[] = []
+    const execute = async (input: string | URL | Request, init?: RequestInit) => {
+      const path = new URL(String(input instanceof Request ? input.url : input)).pathname
+      if (path.endsWith("/media")) throw new Error("socket closed")
+      bodies.push(String(init?.body))
+      return answer()
+    }
+    const response = await proxy(contestantRequest(), registry(), { upstream, fetch: execute, mediaByReference: true })
+    expect(response.status).toBe(200)
+    expect(bodies).toHaveLength(1)
+    expect(bodies[0]).toContain(dataUrl)
   })
 
   test("a BYOK request keeps its media inline", async () => {

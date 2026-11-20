@@ -157,8 +157,11 @@ describe("media by reference", () => {
     const proxy = service(store.db, "user-1", () => calls++)
     await proxy(upload(png))
     const reference = mediaReference(digest, "image/png")
+    // A refusal for the media, not the compaction refusal a request this size also earns.
+    const tooMuchMedia = { error: { message: "Arena request carries too much media", type: "arena_media_too_large" } }
     const repeated = await proxy(contestant(Array.from({ length: 201 }, () => reference)))
     expect(repeated.status).toBe(413)
+    expect(await repeated.json()).toEqual(tooMuchMedia)
 
     // 9 MB is 12 MB of base64: two copies fit the 32 MB a request may carry, three do not.
     const large = new Uint8Array(9_000_000).fill(7)
@@ -167,6 +170,7 @@ describe("media by reference", () => {
     const loads = store.loads()
     const tooLarge = await proxy(contestant([largeReference, largeReference, largeReference]))
     expect(tooLarge.status).toBe(413)
+    expect(await tooLarge.json()).toEqual(tooMuchMedia)
     expect(store.loads()).toBe(loads)
     expect(calls).toBe(0)
     expect((await proxy(contestant([largeReference, largeReference]))).status).toBe(200)

@@ -25,6 +25,9 @@ import { REQUEST_BYTES_LIMIT } from "./engine-runtime/request-size"
 // The control plane lost its upload route after this request was sized for references.
 const MEDIA_RESIZE_ERROR = { error: { message: "Arena media has to be sent inline", type: "arena_media_inline" } }
 
+/** An upload that did not succeed: refused, a control plane without the route, or a failure to send. */
+type UploadFailure = Response | "unsupported" | { readonly thrown: unknown }
+
 export type Assignment = {
   readonly runID: string
   readonly rootSessionID: string
@@ -723,36 +726,56 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
             ? { [COMPACTION_HEADER]: COMPACTION_OFFER }
             : {}),
         },
-        body: JSON.stringify(outgoing),
+        body: outgoing === rewritten ? inlineText() : JSON.stringify(outgoing),
         signal: dispatch.signal,
       })
+    let inline: string | undefined
+    const inlineText = () => (inline ??= JSON.stringify(rewritten))
+    const fitsInline = () => Buffer.byteLength(inlineText()) <= REQUEST_BYTES_LIMIT
     const referenced =
       options.mediaByReference && !referencesUnsupported(upstream) ? referenceMedia(rewritten) : undefined
-    const upload = (media: Iterable<Media>) =>
-      uploadMedia({
-        execute,
-        upstream,
-        routing: { "X-Arena-Assignment-ID": assignment.assignmentID, "X-Arena-Scope-ID": assignment.scopeID },
-        media,
-        signal: dispatch.signal,
-      })
+    const upload = async (media: Iterable<Media>): Promise<UploadFailure | undefined> => {
+      try {
+        return await uploadMedia({
+          execute,
+          upstream,
+          routing: { "X-Arena-Assignment-ID": assignment.assignmentID, "X-Arena-Scope-ID": assignment.scopeID },
+          media,
+          signal: dispatch.signal,
+        })
+      } catch (error) {
+        if (dispatch.signal.aborted) throw error
+        return { thrown: error }
+      }
+    }
     // When an upload fails, the media goes inline if the body still fits: the size check counts media
     // in full until this process has seen an upload succeed. A body sized for references that does
-    // not fit answers the upload's own failure, or a retryable one after a 404, so the next attempt
-    // is sized again, inline.
-    const sendInline = (refusal: Response | "unsupported") => {
-      if (Buffer.byteLength(JSON.stringify(rewritten)) <= REQUEST_BYTES_LIMIT) {
+    // not fit answers the upload's own failure. After a 404 it answers a retryable failure instead,
+    // and the retry is sized inline, because the route is now known to be missing.
+    const sendInline = async (failure: UploadFailure) => {
+      if (fitsInline()) {
+        if (failure instanceof Response) await failure.body?.cancel().catch(() => undefined)
         outgoing = rewritten
         return send()
       }
-      return refusal === "unsupported" ? Promise.resolve(Response.json(MEDIA_RESIZE_ERROR, { status: 503 })) : refusal
+      if (failure === "unsupported") return Response.json(MEDIA_RESIZE_ERROR, { status: 503 })
+      if (failure instanceof Response) return failure
+      throw failure.thrown
     }
     let response: Response
     try {
       const referencing = referenced && referenced.media.size > 0 ? referenced : undefined
       const refusal = referencing ? await upload(referencing.media.values()) : undefined
       if (referencing && refusal === undefined) outgoing = referencing.body
-      response = refusal === undefined ? await send() : await sendInline(refusal)
+      // Another request may have found the route missing after this one was sized for references.
+      const resize =
+        options.mediaByReference && !referenced && !fitsInline() && referenceMedia(rewritten).media.size > 0
+      response =
+        refusal !== undefined
+          ? await sendInline(refusal)
+          : resize
+            ? Response.json(MEDIA_RESIZE_ERROR, { status: 503 })
+            : await send()
       const missing =
         referenced && outgoing !== rewritten && response.status === 409
           ? readMediaMissing(await response.clone().text())
