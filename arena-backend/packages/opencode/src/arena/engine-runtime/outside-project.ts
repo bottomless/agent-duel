@@ -160,6 +160,26 @@ const PATH_FLAGS: Record<string, string> = {
   cc: "o",
   clang: "o",
 }
+// File commands whose short options are switches (`rm -rf`) except the ones listed, which take a path
+// or part of one (a backup prefix, patch's backup suffix, a macOS `mktemp -t` prefix).
+const FILE_PATH_FLAGS: Record<string, string> = {
+  chgrp: "",
+  chmod: "",
+  chown: "",
+  mkdir: "",
+  mkfifo: "",
+  mknod: "",
+  mktemp: "pt",
+  mv: "t",
+  patch: "oidrBYz",
+  rm: "",
+  rmdir: "",
+  shred: "",
+  tee: "",
+  touch: "r",
+  truncate: "r",
+  unlink: "",
+}
 
 /** Device files a shell may name. They are not paths on disk; on Windows they would resolve to `C:\dev\...`. */
 export const DEVICE_PATH = /^\/dev\/(?:null|std(?:in|out|err)|fd\/\d+)$/
@@ -236,6 +256,15 @@ function wordParts(word: string, name: string) {
   if (word.startsWith("-") && !word.startsWith("--") && PATH_FLAGS[name]) {
     const at = [...word.slice(1)].findIndex((letter) => PATH_FLAGS[name].includes(letter))
     if (at >= 0) attached = word.slice(at + 2)
+  }
+  const fileFlags = FILE_PATH_FLAGS[name]
+  if (word.startsWith("-") && !word.startsWith("--") && fileFlags !== undefined) {
+    const switches = /^-([A-Za-z]*)/.exec(word)![1]
+    const at = Array.from(switches).findIndex((letter) => fileFlags.includes(letter))
+    attached = at >= 0 ? word.slice(at + 2) : undefined
+    // The suffix goes on the end of the file name, so it can only leave the folder through a `/`, or a `\`
+    // in Git Bash on Windows.
+    if (name === "patch" && switches[at] === "z" && !/[/\\]/.test(attached ?? "")) attached = undefined
   }
   const pieces = word.search(/[=,:]/) < 0 ? [] : word.split(/[=,:]/)
   return [word, ...(attached ? [attached] : []), ...pieces]
@@ -314,24 +343,7 @@ function wordPaths(input: readonly string[], skip: ReadonlySet<number> = new Set
  */
 type Operand = readonly [word: string, operation: "read" | "write"]
 
-const WRITERS = new Set([
-  "chgrp",
-  "chmod",
-  "chown",
-  "mkdir",
-  "mkfifo",
-  "mknod",
-  "mktemp",
-  "mv",
-  "patch",
-  "rm",
-  "rmdir",
-  "shred",
-  "tee",
-  "touch",
-  "truncate",
-  "unlink",
-])
+const WRITERS = new Set(Object.keys(FILE_PATH_FLAGS))
 // Every operand but the destination is a read.
 const COPIES = new Set(["cp", "install", "ln", "rsync", "scp"])
 const FIND_WRITES = ["-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprintf"]

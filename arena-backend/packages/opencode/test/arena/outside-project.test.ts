@@ -14,7 +14,12 @@ import { Session } from "@opencode/schema/session"
 import { SessionMessage } from "@opencode/schema/session-message"
 import { AssignmentRegistry } from "@/arena/proxy"
 import { createArenaEnginePlugin, permissionRules, sandboxForSession } from "@/arena/engine-runtime"
-import { askOutsideProject, isTrusted, shellOutsideDirectories } from "@/arena/engine-runtime/outside-project"
+import {
+  askOutsideProject,
+  isTrusted,
+  shellOutsideDirectories,
+  shellPaths,
+} from "@/arena/engine-runtime/outside-project"
 
 const OUT = "/outside/dir"
 const project = "/work/project"
@@ -247,6 +252,55 @@ describe("paths that are not at the start of a word (round 2, issue 2)", async (
   it("reads an attached .. path", async () => {
     expect(await outside("tar -C../sib -xf a.tar")).toEqual(["/work/*"])
     expect(await outside("gcc -osrc/../../x a.c")).toEqual(["/work/*"])
+  })
+
+  // A contestant cleaning up its $TMPDIR folder was refused for "/f is outside them" (2026-11-12).
+  it.each([['cd / && rm -rf "$D"'], ['cd / && rm -fr "$D"'], ['cd / && mkdir -pv "$D"'], ['cd / && mv -fv "$A" "$B"']])(
+    "does not read a switch cluster as a battle write in %s",
+    async (command) => {
+      expect(await shellPaths(command, project, "write")).toEqual([])
+    },
+  )
+
+  it("still names only the real operand of rm -rf", async () => {
+    expect(await shellPaths("rm -rf build", project, "write")).toEqual([`${project}/build`])
+  })
+
+  it("still reads a compiler's attached path, which is not a file command", async () => {
+    expect(await shellPaths("gcc -I/usr/include main.c", project, "read")).toContain("/usr/include")
+  })
+
+  it.each([
+    [`mv -t${OUT}/x a`],
+    [`touch -r${OUT}/x a`],
+    [`mktemp -p${OUT}/x`],
+    [`patch -o${OUT}/x a.c`],
+    // A backup prefix and a macOS mktemp prefix are part of the file name written (#239 review).
+    [`patch -Y${OUT}/x a.c`],
+    [`mktemp -t${OUT}/x`],
+  ])("still reads an attached path option in %s", async (command) => {
+    expect(await outside(command)).toContain(`${OUT}/*`)
+  })
+
+  it.each([
+    ["patch -Y../../x/ a.c", ["/x/*"]],
+    ["mktemp -t../../x", ["/*"]],
+    // Once a folder `a.cq` exists, patch writes this backup to `a.cq/../../x`.
+    ["patch -b -zq/../../x a.c", ["/work/*"]],
+  ])("still reads the relative prefix or suffix in %s", async (command, expected) => {
+    expect(await outside(command)).toEqual(expected)
+  })
+
+  // A backup suffix without a `/` stays in the file's folder (#239 review).
+  it.each([['cd / && patch -b -z.orig "$F"'], ['cd / && mv -bS.bak "$A" "$B"']])(
+    "does not read a backup suffix as a battle write in %s",
+    async (command) => {
+      expect(await shellPaths(command, project, "write")).toEqual([])
+    },
+  )
+
+  it("still reads a patch suffix with a backslash, a folder separator on Windows", async () => {
+    expect(await shellPaths("patch -b -z'q\\..\\..\\x' a.c", project, "write")).toContain(`${project}/q\\..\\..\\x`)
   })
 })
 
