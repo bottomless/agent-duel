@@ -90,8 +90,9 @@ contestant call as OpenRouter received it, with the real model, routing, cache k
 reasoning, and its raw response (`arena-service/src/generation-capture.ts`, `captureGenerations`).
 Messages, tools and images are stored once per account by content, because each call resends the
 whole history. Single-agent chats, keep-alive pings and the service's own comparison and metadata
-calls are not kept. BYOK leaves capture off: its store is on the voter's machine, and those fields
-name the model.
+calls are not kept. A retried Carbon call (see [Request](#blinding)) keeps its refused attempt as a
+separate record under a new generation id, linked by `retriedByGenerationID`. BYOK leaves capture
+off: its store is on the voter's machine, and those fields name the model.
 
 The control plane also adds the endpoint's quantization to each stored request row, from a catalog of
 OpenRouter's endpoint lists that it saves itself (`arena-service/src/endpoint-label.ts`, `recordEndpointLabels`).
@@ -1327,7 +1328,11 @@ field. Each layer has its own file:
   that stays the same across the chat. The same refusal rule applies to both fields, and the catalog
   check cannot see it: run `probeRouting` (`arena-service/src/openrouter.ts`) on a pool before it
   ships. A provider that slows down mid-turn keeps the conversation; OpenRouter leaves it only when
-  that provider is unavailable.
+  that provider is unavailable. Gemini Carbon on Google AI Studio sometimes refuses a request that
+  ends on plain-text tool results with a bare 400 `INVALID_ARGUMENT`, and accepts the same text in
+  an object. On that exact refusal the proxy wraps each plain-text result in the pending tool batch
+  as `{"output": …}` and sends the request once more, before anything reaches the desktop
+  (`arena-service/src/gemini-tool-results.ts`). Every other model and error passes through unchanged.
   Resolution disables further routing without deleting the assignment.
 - **Keep-alive** (`arena/keep-alive.ts`) — preserve Anthropic's five-minute prompt cache during long
   tool, permission and child-agent waits by pinging waiting sessions every four minutes, for at most
