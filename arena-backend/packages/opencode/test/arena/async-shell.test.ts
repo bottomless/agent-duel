@@ -21,12 +21,17 @@ import { InstanceStore } from "@/project/instance-store"
 import { AssignmentRegistry } from "@/arena/proxy"
 import { createArenaEnginePlugin } from "@/arena/engine-runtime/plugin"
 import {
+  awaitedShells,
   cancelSessionShells,
   closeShellTurn,
   contestantShellInput,
+  MAX_FOREGROUND_TIMEOUT_MS,
   openShellTurn,
+  pendingShellsOf,
   shellNotification,
+  type PendingShell,
 } from "@/arena/engine-runtime/shell"
+import { defaultServiceAdapter } from "@/arena/services"
 
 test("contestant foreground timeouts default to two minutes and honor requests up to ten minutes", () => {
   for (const [requested, applied] of [
@@ -349,6 +354,69 @@ test("open contestants receive completed output; ordinary sessions keep Core's d
         },
       ])
     }
+  })
+}, 30_000)
+
+test("a side waits for its running commands and undelivered results, not for a server or a command past the limit", async () => {
+  const now = 1_000_000_000
+  const servers = new Set([3])
+  const checked: number[] = []
+  const awaited = (shells: PendingShell[]) =>
+    Effect.runPromise(
+      awaitedShells(shells, now, (pid) =>
+        Effect.sync(() => {
+          checked.push(pid)
+          return servers.has(pid)
+        }),
+      ),
+    )
+  // A build that outlived its call, and one whose result Core is still delivering.
+  expect(await awaited([{ shellID: "sh_build", running: true, started: now - 130_000, pid: 1 }])).toBe(1)
+  expect(await awaited([{ shellID: "sh_done", running: false, started: now - 200_000, pid: 2 }])).toBe(1)
+  // A server is kept for Preview, and a command still running after the limit would hold the side forever.
+  expect(await awaited([{ shellID: "sh_server", running: true, started: now - 130_000, pid: 3 }])).toBe(0)
+  const hung = { shellID: "sh_hung", running: true, started: now - MAX_FOREGROUND_TIMEOUT_MS, pid: 4 }
+  expect(await awaited([hung])).toBe(0)
+  expect(await awaited([{ shellID: "sh_unknown", running: true, started: now - 1_000 }])).toBe(1)
+  expect(checked).toEqual([1, 3])
+})
+
+test("a background command stays pending until its result is delivered, and a server shows its port", async () => {
+  await fixture(async ({ execute, root, jobs, shell }) => {
+    const pending = () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          return pendingShellsOf(yield* jobs.backgroundJobs, yield* shell.list(), root.id)
+        }),
+      )
+    const until = async (check: () => Promise<boolean>) => {
+      const deadline = Date.now() + 10_000
+      while (!(await check())) {
+        if (Date.now() > deadline) throw new Error("timed out")
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      }
+    }
+    const build = await execute(root.id, { command: "sleep 1; printf built", background: true })
+    const buildID = build.metadata?.shellID
+    if (typeof buildID !== "string") throw new Error("shell ID missing")
+    expect((await pending()).find((item) => item.shellID === buildID)).toMatchObject({
+      running: true,
+      pid: expect.any(Number),
+    })
+    // Delivery to the open contestant removes it.
+    await until(async () => !(await pending()).some((item) => item.shellID === buildID))
+
+    const server = await execute(root.id, {
+      command: `node -e "require('http').createServer().listen(0, '127.0.0.1'); setInterval(() => {}, 1000)"`,
+      background: true,
+    })
+    const serverID = server.metadata?.shellID
+    if (typeof serverID !== "string") throw new Error("shell ID missing")
+    const pid = (await pending()).find((item) => item.shellID === serverID)?.pid
+    if (pid === undefined) throw new Error("server pid missing")
+    // The shell leads the process group its server listens from.
+    await until(async () => ((await defaultServiceAdapter.listenersForProcessGroup?.(pid)) ?? []).length > 0)
+    await Effect.runPromise(shell.stop(serverID, "killed").pipe(Effect.ignore))
   })
 }, 30_000)
 

@@ -6,6 +6,7 @@ import { Database } from "@opencode/core/database/database"
 import { Form } from "@opencode/core/form"
 import { Permission as CorePermission } from "@opencode/core/permission"
 import { Job } from "@opencode/core/job"
+import { Shell } from "@opencode/core/shell"
 import { Location } from "@opencode/core/location"
 import { LocationServiceMap } from "@opencode/core/location-service-map"
 import { Session as CoreSession } from "@opencode/core/session"
@@ -38,7 +39,7 @@ import { getArenaAutoAccept, idleRecovery, setArenaAutoAccept } from "@/arena/en
 import { ArenaResponseRecovery } from "@/arena/response-recovery"
 import { shellRestartInput } from "@/arena/shell-restart"
 import { battleResumeInput } from "@/arena/resume-note"
-import { cancelSessionShells } from "@/arena/engine-runtime/shell"
+import { cancelSessionShells, pendingShellsOf, type PendingShell } from "@/arena/engine-runtime/shell"
 import { EXTERNAL_WRITE } from "@/arena/contestant"
 import type {
   ArenaMessageInfo,
@@ -176,6 +177,8 @@ export interface PromptInterface {
   readonly holdChildResults: (sessionIDs: readonly SessionSchema.ID[]) => Effect.Effect<void, Error>
   /** Whether the session has a run, a running job, or a job result that has not reached its parent. */
   readonly working: (sessionID: SessionSchema.ID) => Effect.Effect<boolean, Error>
+  /** The session's background shell commands whose result has not reached it: running, or being delivered. */
+  readonly pendingShells: (sessionID: SessionSchema.ID) => Effect.Effect<readonly PendingShell[], Error>
   readonly prepare: () => Effect.Effect<void, Error>
 }
 
@@ -916,6 +919,21 @@ const promptLayer: Layer.Layer<
           // deliver. Foreground jobs have none, and their results are already in the tool call.
           return job !== undefined && (job.status === "running" || job.notificationID !== undefined)
         }),
+      pendingShells: (sessionID) =>
+        normalizeError(
+          Effect.gen(function* () {
+            const items = yield* jobs.backgroundJobs
+            if (!items.some((item) => item.kind === "shell" && item.sessionID === sessionID)) return []
+            const ref = yield* directory.ref()
+            const shells = yield* directory.provide(
+              ref,
+              Effect.gen(function* () {
+                return yield* (yield* Shell.Service).list()
+              }),
+            )
+            return pendingShellsOf(items, shells, sessionID)
+          }),
+        ),
       prepare: () => Effect.void,
     })
   }),

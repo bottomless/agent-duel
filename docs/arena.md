@@ -1269,15 +1269,19 @@ the session's model, so a fill moves the canonical transcript hash. The guard re
 `message`: the generated client keeps an error body only for a status the route declares, every
 session route declares 400, and a 409 reached the app as a bare `UnexpectedStatus: 409`.
 
-**Finalize** (`finalizeSide` in `arena/service.ts`). Each side settles on its own. A background shell
-does not delay the final answer or the vote. Its service stays available for Preview under the
-[contestant environment lifetime](#the-canonical-spine-and-contestant-environments). Stop ends
-session-owned shells. Once the side closes, drop its
-background shell notifications; they must not change a reviewed answer or enter the winner's
-history on a later turn. A contestant's foreground shell defaults to two minutes when the timeout
-is omitted or zero. An explicit positive timeout is honored up to a ten-minute hard limit. Use
-`background: true` for a server or a long-running command; timeout results state the applied limit
-and give that advice.
+**Finalize** (`finalizeSide` in `arena/service.ts`). Each side settles on its own. A side waits for a
+background command its contestant started, as it waits for background child agents, until the
+command's result reaches the contestant, so a build or test that outlives its call is part of the
+answer the user votes on. A command listening on a port is a server: it does not hold the side and
+stays available for Preview under the
+[contestant environment lifetime](#the-canonical-spine-and-contestant-environments). Neither does a
+command still running after the ten-minute foreground limit, which a command that never ends would
+otherwise turn into a side that never ends. Stop ends session-owned shells. Once the side closes, drop
+its background shell notifications; they must not change a reviewed answer or enter the winner's
+history on a later turn. A contestant's foreground shell defaults to two minutes when the timeout is
+omitted or zero, and an explicit positive timeout is honored up to the ten-minute limit. Core moves a
+foreground command that outlives its timeout to the background, where the side waits for it like any
+other.
 
 Terminal state and the actual Git state are recorded under the generation's private battle refs, numstat is stored, and
 applicability is set to `applicable` only when the frozen base is an ancestor of the result. A
