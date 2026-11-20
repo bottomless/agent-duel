@@ -148,6 +148,7 @@ function makeRoutes<AuthError, AuthServices, A = never, E = never, R = never>(
         claude: options.config?.claude,
         file: options.config?.file,
         content: options.config?.content,
+        imported: options.config?.imported,
       }),
     ),
     InstructionDiscovery.node.replace(InstructionDiscovery.configured({ project: options.config?.project })),

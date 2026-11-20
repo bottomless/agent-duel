@@ -15,6 +15,32 @@ const sources: ConfigDiscovery.Sources = {
 }
 
 describe("ConfigWatch.plan", () => {
+  test("watches imported plugin dirs, and their parents so the daemon's first write is seen", () => {
+    const imported = path.resolve("watch-plan-imports")
+    const global = AbsolutePath.make(path.join(imported, "global"))
+    const projectImport = AbsolutePath.make(path.join(imported, "projects", "0123"))
+    const plan = (present: boolean) =>
+      Array.from(
+        ConfigWatch.plan({
+          direct: [],
+          project: [],
+          claude: [],
+          agents: [],
+          imported: { global: { path: global, present }, project: [{ path: projectImport, present }] },
+        }).values(),
+      )
+
+    expect(plan(false)).toEqual([
+      { path: imported, type: "entries", names: ["global"] },
+      { path: path.join(imported, "projects"), type: "entries", names: ["0123"] },
+    ])
+    expect(plan(true)).toEqual([
+      { path: global, type: "directory", ignore: FSUtil.ignoreGlobs },
+      { path: projectImport, type: "directory", ignore: FSUtil.ignoreGlobs },
+      ...plan(false),
+    ])
+  })
+
   test("groups missing candidates and keeps parent watches when roots appear", () => {
     const missing = ConfigWatch.plan(sources)
     expect(Array.from(missing.values())).toEqual([

@@ -38,6 +38,7 @@ export const ServerOptions = Schema.Struct({
       claude: Schema.optional(Schema.Boolean),
       file: Schema.optional(Schema.String),
       content: Schema.optional(Schema.String),
+      imported: Schema.optional(Schema.String),
     }),
   ),
   windows: Schema.optional(

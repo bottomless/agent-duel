@@ -1,5 +1,6 @@
 export * as ConfigDiscovery from "./discovery.js"
 
+import { createHash } from "crypto"
 import os from "os"
 import path from "path"
 import { Effect } from "effect"
@@ -22,6 +23,31 @@ export interface Sources {
   readonly project: readonly { readonly path: AbsolutePath; readonly present: boolean }[]
   readonly claude: readonly AbsolutePath[]
   readonly agents: readonly AbsolutePath[]
+  /** Config dirs Agent Duel imports from the user's Claude Code and Codex plugins (`options.imported`). */
+  readonly imported?: {
+    readonly global?: Root
+    /** One candidate per ancestor of the location, outermost first. */
+    readonly project: readonly Root[]
+  }
+}
+
+interface Root {
+  readonly path: AbsolutePath
+  readonly present: boolean
+}
+
+/**
+ * The imported config dir of the project at `root`, a resolved path. The daemon writes it under the
+ * same name (`packages/server/src/server/agent-plugins/layout.ts`), so keep the two in step.
+ */
+export function importedProjectDirectory(imported: string, root: string) {
+  const key = createHash("sha256").update(root).digest("hex").slice(0, 32)
+  return AbsolutePath.make(path.join(imported, "projects", key))
+}
+
+function ancestors(directory: string): string[] {
+  const parent = path.dirname(directory)
+  return parent === directory ? [directory] : [...ancestors(parent), directory]
 }
 
 /** Platform system configuration directory (`/Library/Application Support/opencode`, `/etc/opencode`, `%ProgramData%\opencode`). */
@@ -60,6 +86,7 @@ export const discover = Effect.fn("ConfigDiscovery.discover")(function* (options
   const fs = yield* FSUtil.Service
   const global = yield* Global.Service
   const location = yield* Location.Service
+  const root = (item: AbsolutePath) => fs.isDir(item).pipe(Effect.map((present) => ({ path: item, present })))
   const system = (() => {
     if (options?.system === false) return
     if (typeof options?.system === "string") return AbsolutePath.make(path.resolve(options.system))
@@ -113,6 +140,18 @@ export const discover = Effect.fn("ConfigDiscovery.discover")(function* (options
   )
 
   const globalEnabled = options?.global !== false
+  // Every ancestor is a candidate, so a battle slot under `<checkout>/.agent-duel/` finds the
+  // checkout's imports and both sides of a battle load the same set.
+  const importedRoot = options?.imported
+  const imported = importedRoot
+    ? {
+        global: globalEnabled ? yield* root(AbsolutePath.make(path.join(importedRoot, "global"))) : undefined,
+        project:
+          directories.length === 0
+            ? []
+            : yield* Effect.forEach(ancestors(current), (item) => root(importedProjectDirectory(importedRoot, item))),
+      }
+    : undefined
   const globalFiles = yield* Effect.forEach(
     configDirectories.flatMap((directory) => names.map((name) => path.join(directory, name))),
     (file) => fs.resolve(file),
@@ -149,6 +188,7 @@ export const discover = Effect.fn("ConfigDiscovery.discover")(function* (options
           : fs.isDir(entry.item).pipe(Effect.map((present) => ({ path: entry.item, present }))),
       { concurrency: "unbounded" },
     ),
+    imported,
     claude:
       options?.claude === false
         ? []

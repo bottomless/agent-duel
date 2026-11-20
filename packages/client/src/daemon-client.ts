@@ -178,6 +178,8 @@ import type {
   AgentSkillSelection,
   AgentSkillsStatus,
   AgentSkillsSaveResult,
+  AgentPluginScope,
+  AgentPluginsStatus,
 } from "@getpaseo/protocol/messages";
 import type {
   AgentOptionControl,
@@ -7069,6 +7071,40 @@ export class DaemonClient {
         selection,
       },
       responseType: "agent.skills.import_legacy_selection.response",
+    });
+  }
+
+  async getAgentPluginsStatus(cwd: string | null): Promise<AgentPluginsStatus> {
+    const requestId = this.createRequestId();
+    return this.sendCorrelatedSessionRequest({
+      message: { type: "agent_plugins.get_status.request", requestId, cwd },
+      responseType: "agent_plugins.get_status.response",
+    });
+  }
+
+  async saveAgentPluginsSelection(input: {
+    scope: AgentPluginScope;
+    enabled: readonly string[];
+    disabled: readonly string[];
+  }): Promise<AgentPluginsStatus> {
+    const requestId = this.createRequestId();
+    return this.sendCorrelatedSessionRequest({
+      message: {
+        type: "agent_plugins.save_selection.request",
+        requestId,
+        scope: input.scope,
+        enabled: [...input.enabled],
+        disabled: [...input.disabled],
+      },
+      responseType: "agent_plugins.save_selection.response",
+    });
+  }
+
+  async acknowledgeAddedAgentPlugins(ids: readonly string[]): Promise<AgentPluginsStatus> {
+    const requestId = this.createRequestId();
+    return this.sendCorrelatedSessionRequest({
+      message: { type: "agent_plugins.acknowledge_added.request", requestId, ids: [...ids] },
+      responseType: "agent_plugins.acknowledge_added.response",
     });
   }
 

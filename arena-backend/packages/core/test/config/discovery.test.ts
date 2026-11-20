@@ -24,6 +24,7 @@ function discoverWith(
   directory: string,
   projectDirectory = directory,
   wrapFs?: (base: FSUtil.Interface) => Partial<FSUtil.Interface>,
+  imported?: string,
 ) {
   const globalDir = path.join(root, "global")
   const fsLayer = wrapFs
@@ -33,7 +34,7 @@ function discoverWith(
       ).pipe(Layer.provide(AppNodeBuilder.build(FSUtil.node)))
     : AppNodeBuilder.build(FSUtil.node)
 
-  return ConfigDiscovery.discover({ system: false }).pipe(
+  return ConfigDiscovery.discover({ system: false, imported }).pipe(
     Effect.provide(
       Layer.mergeAll(
         fsLayer,
@@ -53,6 +54,55 @@ function discoverWith(
 }
 
 describe("ConfigDiscovery.discover", () => {
+  it.live("finds the checkout's imported plugins from a battle slot inside it", () =>
+    Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const root = yield* Effect.promise(() => fs.realpath(tmp.path))
+          const imported = path.join(root, "agent-plugins")
+          const checkout = path.join(root, "repo")
+          const slot = path.join(checkout, ".agent-duel", "worktrees", "0123456789abcdef", "generation-1-a")
+          const projectImport = ConfigDiscovery.importedProjectDirectory(imported, checkout)
+          yield* Effect.promise(async () => {
+            await fs.mkdir(slot, { recursive: true })
+            await fs.mkdir(path.join(imported, "global"), { recursive: true })
+            await fs.mkdir(projectImport, { recursive: true })
+          })
+
+          const sources = yield* discoverWith(root, slot, slot, undefined, imported)
+
+          expect(sources.imported?.global).toEqual({
+            path: AbsolutePath.make(path.join(imported, "global")),
+            present: true,
+          })
+          expect(sources.imported?.project.filter((entry) => entry.present)).toEqual([
+            { path: projectImport, present: true },
+          ])
+          expect(sources.imported?.project.at(-1)).toEqual({
+            path: ConfigDiscovery.importedProjectDirectory(imported, slot),
+            present: false,
+          })
+        }),
+      ),
+    ),
+  )
+
+  it.live("has no imported sources unless the engine is given an imported root", () =>
+    Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const root = yield* Effect.promise(() => fs.realpath(tmp.path))
+          const project = path.join(root, "repo")
+          yield* Effect.promise(() => fs.mkdir(project, { recursive: true }))
+
+          const sources = yield* discoverWith(root, project)
+
+          expect(sources.imported).toBeUndefined()
+        }),
+      ),
+    ),
+  )
+
   it.live("skips resolve and stat calls for absent ancestor candidates while keeping watch paths", () =>
     Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
       Effect.flatMap((tmp) =>
