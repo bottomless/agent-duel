@@ -87,8 +87,9 @@ export const SERVER_CHECK_INTERVAL_MS = 1_000
  * The background commands a side still waits for, as it waits for background child agents, so a build or
  * test that outlives its call reaches the contestant before the vote. A side ends when its contestant stops,
  * and a result that arrives after that is dropped (`shellNotification`). A command listening on a port is
- * a server kept for Preview, so it does not hold the side. Neither does one still running after the
- * foreground limit: a command that never ends would otherwise hold the side forever.
+ * a server kept for Preview, so it does not hold the side. Neither does a command started more than the
+ * foreground limit ago: one that never ends, or whose result never arrives, would otherwise hold the side
+ * until the child wait limit.
  */
 export function awaitedShells(
   shells: readonly PendingShell[],
@@ -98,12 +99,12 @@ export function awaitedShells(
   return Effect.gen(function* () {
     let count = 0
     for (const shell of shells) {
+      if (now - shell.started >= MAX_FOREGROUND_TIMEOUT_MS) continue
       // Core keeps a finished command listed until its result is delivered, so that result is on its way.
       if (!shell.running) {
         count++
         continue
       }
-      if (now - shell.started >= MAX_FOREGROUND_TIMEOUT_MS) continue
       if (shell.pid !== undefined && (yield* isServer(shell.pid))) continue
       count++
     }

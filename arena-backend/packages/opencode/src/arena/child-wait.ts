@@ -17,7 +17,7 @@ export function withChildWaitLimit<A, E, R, E2, R2>(
       duration: Duration.millis(limitMs),
       orElse: () => {
         const reason = new Error(
-          `Background child agents exceeded the ${Duration.format(Duration.millis(limitMs))} wait time limit`,
+          `Background child agents or commands exceeded the ${Duration.format(Duration.millis(limitMs))} wait time limit`,
         )
         return Effect.gen(function* () {
           yield* Effect.logWarning(reason.message, { runID: options.runID, limitMs })

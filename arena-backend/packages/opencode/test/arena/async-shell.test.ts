@@ -377,6 +377,8 @@ test("a side waits for its running commands and undelivered results, not for a s
   expect(await awaited([{ shellID: "sh_server", running: true, started: now - 130_000, pid: 3 }])).toBe(0)
   const hung = { shellID: "sh_hung", running: true, started: now - MAX_FOREGROUND_TIMEOUT_MS, pid: 4 }
   expect(await awaited([hung])).toBe(0)
+  // A result that never arrives stops holding the side at the same limit.
+  expect(await awaited([{ ...hung, shellID: "sh_lost", running: false }])).toBe(0)
   expect(await awaited([{ shellID: "sh_unknown", running: true, started: now - 1_000 }])).toBe(1)
   expect(checked).toEqual([1, 3])
 })

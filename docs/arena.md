@@ -1276,8 +1276,8 @@ command's result reaches the contestant, so a build or test that outlives its ca
 answer the user votes on. A command listening on a port is a server: it does not hold the side and
 stays available for Preview under the
 [contestant environment lifetime](#the-canonical-spine-and-contestant-environments). Neither does a
-command still running after the ten-minute foreground limit, which a command that never ends would
-otherwise turn into a side that never ends. Stop ends session-owned shells. Once the side closes, drop
+command started more than the ten-minute foreground limit ago, which a command that never ends, or a
+result that never arrives, would otherwise turn into a side that never ends. Stop ends session-owned shells. Once the side closes, drop
 its background shell notifications; they must not change a reviewed answer or enter the winner's
 history on a later turn. A contestant's foreground shell defaults to two minutes when the timeout is
 omitted or zero, and an explicit positive timeout is honored up to the ten-minute limit. Core moves a
