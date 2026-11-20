@@ -161,7 +161,7 @@ const PATH_FLAGS: Record<string, string> = {
   clang: "o",
 }
 // File commands whose short options are switches (`rm -rf`) except the ones listed, which take a path
-// or part of one (a backup prefix or suffix, a macOS `mktemp -t` prefix).
+// or part of one (a backup prefix, patch's backup suffix, a macOS `mktemp -t` prefix).
 const FILE_PATH_FLAGS: Record<string, string> = {
   chgrp: "",
   chmod: "",
@@ -170,7 +170,7 @@ const FILE_PATH_FLAGS: Record<string, string> = {
   mkfifo: "",
   mknod: "",
   mktemp: "pt",
-  mv: "tS",
+  mv: "t",
   patch: "oidrBYz",
   rm: "",
   rmdir: "",
@@ -262,6 +262,9 @@ function wordParts(word: string, name: string) {
     const switches = /^-([A-Za-z]*)/.exec(word)![1]
     const at = Array.from(switches).findIndex((letter) => fileFlags.includes(letter))
     attached = at >= 0 ? word.slice(at + 2) : undefined
+    // The suffix goes on the end of the file name, so it can only leave the folder through a `/`, or a `\`
+    // in Git Bash on Windows.
+    if (name === "patch" && switches[at] === "z" && !/[/\\]/.test(attached ?? "")) attached = undefined
   }
   const pieces = word.search(/[=,:]/) < 0 ? [] : word.split(/[=,:]/)
   return [word, ...(attached ? [attached] : []), ...pieces]

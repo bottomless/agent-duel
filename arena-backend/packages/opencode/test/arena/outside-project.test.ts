@@ -275,11 +275,9 @@ describe("paths that are not at the start of a word (round 2, issue 2)", async (
     [`touch -r${OUT}/x a`],
     [`mktemp -p${OUT}/x`],
     [`patch -o${OUT}/x a.c`],
-    // A backup prefix or suffix and a macOS mktemp prefix are part of the file name written (#239 review).
+    // A backup prefix and a macOS mktemp prefix are part of the file name written (#239 review).
     [`patch -Y${OUT}/x a.c`],
-    [`patch -z${OUT}/x a.c`],
     [`mktemp -t${OUT}/x`],
-    [`mv -bS${OUT}/x a b`],
   ])("still reads an attached path option in %s", async (command) => {
     expect(await outside(command)).toContain(`${OUT}/*`)
   })
@@ -287,8 +285,22 @@ describe("paths that are not at the start of a word (round 2, issue 2)", async (
   it.each([
     ["patch -Y../../x/ a.c", ["/x/*"]],
     ["mktemp -t../../x", ["/*"]],
-  ])("still reads the relative prefix in %s", async (command, expected) => {
+    // Once a folder `a.cq` exists, patch writes this backup to `a.cq/../../x`.
+    ["patch -b -zq/../../x a.c", ["/work/*"]],
+  ])("still reads the relative prefix or suffix in %s", async (command, expected) => {
     expect(await outside(command)).toEqual(expected)
+  })
+
+  // A backup suffix without a `/` stays in the file's folder (#239 review).
+  it.each([['cd / && patch -b -z.orig "$F"'], ['cd / && mv -bS.bak "$A" "$B"']])(
+    "does not read a backup suffix as a battle write in %s",
+    async (command) => {
+      expect(await shellPaths(command, project, "write")).toEqual([])
+    },
+  )
+
+  it("still reads a patch suffix with a backslash, a folder separator on Windows", async () => {
+    expect(await shellPaths("patch -b -z'q\\..\\..\\x' a.c", project, "write")).toContain(`${project}/q\\..\\..\\x`)
   })
 })
 

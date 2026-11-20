@@ -684,6 +684,8 @@ describe("battle shell writes are the forms that write (bench 2026-11-06)", () =
     `tar czf ${f.checkout}/out.tgz src`,
     `dd if=/dev/zero of=${f.checkout}/zero bs=1 count=1`,
     `rm -rf ${f.checkout}/src`,
+    // With a folder `own.txtq` in the side, the backup goes to the checkout's `src`.
+    "patch -b -zq/../../../src own.txt",
     `find ${f.checkout} -name '*.log' -delete`,
     `bash -c 'touch ${f.checkout}/nested.txt'`,
     `gcc main.c -o ${f.checkout}/a.out`,
