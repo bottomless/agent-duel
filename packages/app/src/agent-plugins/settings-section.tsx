@@ -14,7 +14,7 @@ import { useAgentPlugins } from "./use-agent-plugins";
 
 /**
  * Settings → Plugins: the global plugins, managed here after the first review. Project plugins are
- * managed from the chat's composer.
+ * managed in each project's settings.
  */
 export function AgentPluginsSection({ serverId }: { serverId: string }) {
   const { t } = useTranslation();
@@ -108,7 +108,7 @@ export function AgentPluginsSection({ serverId }: { serverId: string }) {
   );
 }
 
-function SettingsPluginRow({
+export function SettingsPluginRow({
   plugin,
   disabled,
   onToggle,

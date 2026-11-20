@@ -2707,7 +2707,7 @@ export const ja: TranslationResources = {
         "このリポジトリの .claude/skills と .agents/skills にあるスキルは自動で読み込まれます。",
       globalIncluded_one: "ほかにグローバルプラグイン {{count}} 件",
       globalIncluded_other: "ほかにグローバルプラグイン {{count}} 件",
-      manageGlobal: "設定で管理",
+      manageGlobal: "グローバルプラグインを管理",
     },
     plugin: {
       repositoryClaude: "このリポジトリの Claude Code 設定",
@@ -2726,18 +2726,17 @@ export const ja: TranslationResources = {
       importFailed: "インポートできませんでした: {{reason}}",
     },
     banner: {
-      title_one:
-        "このプロジェクトには Claude Code または Codex のプラグインが {{count}} 件あります",
-      title_other:
-        "このプロジェクトには Claude Code または Codex のプラグインが {{count}} 件あります",
+      titleClaude: "このプロジェクトの Claude Code の設定を Agent Duel で使う",
+      titleCodex: "このプロジェクトの Codex の設定を Agent Duel で使う",
+      titleBoth: "このプロジェクトの Claude Code と Codex の設定を Agent Duel で使う",
       review: "確認",
       import: "インポート",
       dismiss: "後で",
       failed: "プラグインをインポートできませんでした。もう一度お試しください。",
     },
-    composer: {
-      label: "プラグイン",
-      accessibilityLabel: "このプロジェクトのプラグイン: {{count}}",
+    project: {
+      info: "このプロジェクトで見つかった Claude Code と Codex のプラグインと設定です。オンにしたものがこのプロジェクトのチャットとバトルで読み込まれます。",
+      empty: "このプロジェクトには Claude Code や Codex のプラグインが見つかりません。",
     },
     settings: {
       sectionTitle: "Claude Code and Codex",

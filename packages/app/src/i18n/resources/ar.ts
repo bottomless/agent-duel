@@ -2663,7 +2663,7 @@ export const ar: TranslationResources = {
         "تُحمَّل المهارات الموجودة في .claude/skills و.agents/skills في هذا المستودع تلقائياً.",
       globalIncluded_one: "بالإضافة إلى {{count}} إضافة عامة",
       globalIncluded_other: "بالإضافة إلى {{count}} إضافات عامة",
-      manageGlobal: "الإدارة في الإعدادات",
+      manageGlobal: "إدارة الإضافات العامة",
     },
     plugin: {
       repositoryClaude: "إعداد Claude Code في هذا المستودع",
@@ -2682,16 +2682,17 @@ export const ar: TranslationResources = {
       importFailed: "تعذّر الاستيراد: {{reason}}",
     },
     banner: {
-      title_one: "يحتوي هذا المشروع على {{count}} إضافة من Claude Code أو Codex",
-      title_other: "يحتوي هذا المشروع على {{count}} إضافات من Claude Code أو Codex",
+      titleClaude: "استخدم إعداد Claude Code لهذا المشروع في Agent Duel",
+      titleCodex: "استخدم إعداد Codex لهذا المشروع في Agent Duel",
+      titleBoth: "استخدم إعداد Claude Code وCodex لهذا المشروع في Agent Duel",
       review: "مراجعة",
       import: "استيراد",
       dismiss: "ليس الآن",
       failed: "تعذّر استيراد الإضافات. حاول مرة أخرى.",
     },
-    composer: {
-      label: "الإضافات",
-      accessibilityLabel: "الإضافات في هذا المشروع: {{count}}",
+    project: {
+      info: "إضافات وإعدادات Claude Code وCodex التي عُثر عليها لهذا المشروع. يتم تحميل المفعّل منها في محادثات هذا المشروع ومبارزاته.",
+      empty: "لم يتم العثور على إضافات Claude Code أو Codex لهذا المشروع.",
     },
     settings: {
       sectionTitle: "Claude Code and Codex",

@@ -23,8 +23,9 @@ drive the app's tools, which run only through OpenAI's backend.
 ## Decisions
 
 Global plugins wait for one review (the sidebar callout); after it, new global plugins import on
-their own and the app shows a toast. Project plugins wait for a decision in that project (the
-banner above the composer). Every undecided plugin starts checked. Decisions live in
+their own and the app shows a toast; Settings → Plugins switches them later. Project plugins wait
+for a decision in that project (the banner above the composer), and the project's settings page
+switches them later. Every undecided plugin starts checked. Decisions live in
 `$PASEO_HOME/agent-plugins/state.json`, never in the user's repository or OpenCode config.
 
 ## Where the engine finds them

@@ -2714,7 +2714,7 @@ export const ru: TranslationResources = {
         "Навыки из .claude/skills и .agents/skills этого репозитория загружаются сами.",
       globalIncluded_one: "И ещё {{count}} глобальный плагин",
       globalIncluded_other: "И ещё глобальные плагины: {{count}}",
-      manageGlobal: "Управлять в настройках",
+      manageGlobal: "Управлять глобальными плагинами",
     },
     plugin: {
       repositoryClaude: "Настройка Claude Code этого репозитория",
@@ -2733,16 +2733,17 @@ export const ru: TranslationResources = {
       importFailed: "Не удалось импортировать: {{reason}}",
     },
     banner: {
-      title_one: "В этом проекте есть {{count}} плагин из Claude Code или Codex",
-      title_other: "Плагины из Claude Code или Codex в этом проекте: {{count}}",
+      titleClaude: "Используйте настройки Claude Code этого проекта в Agent Duel",
+      titleCodex: "Используйте настройки Codex этого проекта в Agent Duel",
+      titleBoth: "Используйте настройки Claude Code и Codex этого проекта в Agent Duel",
       review: "Просмотреть",
       import: "Импортировать",
       dismiss: "Не сейчас",
       failed: "Не удалось импортировать плагины. Попробуйте ещё раз.",
     },
-    composer: {
-      label: "Плагины",
-      accessibilityLabel: "Плагины в этом проекте: {{count}}",
+    project: {
+      info: "Плагины и настройки Claude Code и Codex, найденные для этого проекта. Включённые загружаются в чатах и дуэлях этого проекта.",
+      empty: "Для этого проекта не найдено плагинов Claude Code или Codex.",
     },
     settings: {
       sectionTitle: "Claude Code and Codex",

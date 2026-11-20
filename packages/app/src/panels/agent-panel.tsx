@@ -6,7 +6,7 @@ import {
   singleAgentRatingRequired,
   singleAgentTurnsByPrompt,
 } from "@/arena/single-agent";
-import { AgentPluginsBanner, AgentPluginsComposerButton } from "@/agent-plugins/project-plugins";
+import { AgentPluginsBanner } from "@/agent-plugins/project-plugins";
 import { SingleAgentRatingDialog, SingleAgentComposerTooltip } from "@/arena/single-agent-rating";
 import { usePendingArenaPrompt } from "@/arena/use-pending-arena-prompt";
 import { ArenaStreamStatus } from "@/arena/stream-status";
@@ -2989,16 +2989,6 @@ function ActiveAgentComposer({
     () => (cwd ? <AgentPluginsBanner serverId={serverId} cwd={cwd} /> : undefined),
     [cwd, serverId],
   );
-  const battleReplyLeftContent = battleReplyComposer.leftContent;
-  const composerLeftContent = useMemo(
-    () => (
-      <>
-        {battleReplyLeftContent}
-        {cwd ? <AgentPluginsComposerButton serverId={serverId} cwd={cwd} /> : null}
-      </>
-    ),
-    [battleReplyLeftContent, cwd, serverId],
-  );
 
   return (
     <View style={animatedStaticStyles.inputAreaWrapper} onLayout={onInputAreaLayout}>
@@ -3033,7 +3023,7 @@ function ActiveAgentComposer({
           placeholder={composerPresentation.placeholder}
           maxImages={composerMaxImages}
           topContent={pluginsBanner}
-          leftContent={composerLeftContent}
+          leftContent={battleReplyComposer.leftContent}
           isSubmitLoading={
             isSubmitLoading ||
             arenaStart.isPending ||

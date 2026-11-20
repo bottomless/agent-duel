@@ -2703,7 +2703,7 @@ export const en = {
         "Skills in this repository's .claude/skills and .agents/skills load on their own.",
       globalIncluded_one: "Plus {{count}} global plugin",
       globalIncluded_other: "Plus {{count}} global plugins",
-      manageGlobal: "Manage in Settings",
+      manageGlobal: "Manage global plugins",
     },
     plugin: {
       repositoryClaude: "This repository's Claude Code setup",
@@ -2722,16 +2722,17 @@ export const en = {
       importFailed: "Couldn't import: {{reason}}",
     },
     banner: {
-      title_one: "This project has {{count}} plugin from Claude Code or Codex",
-      title_other: "This project has {{count}} plugins from Claude Code or Codex",
+      titleClaude: "Use this project's Claude Code setup in Agent Duel",
+      titleCodex: "Use this project's Codex setup in Agent Duel",
+      titleBoth: "Use this project's Claude Code and Codex setup in Agent Duel",
       review: "Review",
       import: "Import",
       dismiss: "Not now",
       failed: "Couldn't import the plugins. Try again.",
     },
-    composer: {
-      label: "Plugins",
-      accessibilityLabel: "Plugins in this project: {{count}}",
+    project: {
+      info: "Claude Code and Codex plugins and setup found for this project. The ones switched on load in this project's chats and battles.",
+      empty: "No Claude Code or Codex plugins found for this project.",
     },
     settings: {
       sectionTitle: "Claude Code and Codex",

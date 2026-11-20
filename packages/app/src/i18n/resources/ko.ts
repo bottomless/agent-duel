@@ -2686,7 +2686,7 @@ export const ko: TranslationResources = {
         "이 저장소의 .claude/skills 및 .agents/skills에 있는 스킬은 자동으로 불러옵니다.",
       globalIncluded_one: "전역 플러그인 {{count}}개 추가 포함",
       globalIncluded_other: "전역 플러그인 {{count}}개 추가 포함",
-      manageGlobal: "설정에서 관리",
+      manageGlobal: "전역 플러그인 관리",
     },
     plugin: {
       repositoryClaude: "이 저장소의 Claude Code 설정",
@@ -2705,16 +2705,17 @@ export const ko: TranslationResources = {
       importFailed: "가져오지 못함: {{reason}}",
     },
     banner: {
-      title_one: "이 프로젝트에 Claude Code 또는 Codex 플러그인 {{count}}개가 있습니다",
-      title_other: "이 프로젝트에 Claude Code 또는 Codex 플러그인 {{count}}개가 있습니다",
+      titleClaude: "이 프로젝트의 Claude Code 설정을 Agent Duel에서 사용하세요",
+      titleCodex: "이 프로젝트의 Codex 설정을 Agent Duel에서 사용하세요",
+      titleBoth: "이 프로젝트의 Claude Code 및 Codex 설정을 Agent Duel에서 사용하세요",
       review: "검토",
       import: "가져오기",
       dismiss: "나중에",
       failed: "플러그인을 가져오지 못했습니다. 다시 시도하세요.",
     },
-    composer: {
-      label: "플러그인",
-      accessibilityLabel: "이 프로젝트의 플러그인: {{count}}",
+    project: {
+      info: "이 프로젝트에서 찾은 Claude Code 및 Codex 플러그인과 설정입니다. 켜진 항목은 이 프로젝트의 채팅과 대결에서 로드됩니다.",
+      empty: "이 프로젝트에서 Claude Code 또는 Codex 플러그인을 찾지 못했습니다.",
     },
     settings: {
       sectionTitle: "Claude Code and Codex",

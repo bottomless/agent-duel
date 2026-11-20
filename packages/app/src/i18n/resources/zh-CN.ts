@@ -2626,7 +2626,7 @@ export const zhCN: TranslationResources = {
       alreadyAvailableHint: "此仓库 .claude/skills 和 .agents/skills 中的 skill 会自动加载。",
       globalIncluded_one: "另有 {{count}} 个全局插件",
       globalIncluded_other: "另有 {{count}} 个全局插件",
-      manageGlobal: "在设置中管理",
+      manageGlobal: "管理全局插件",
     },
     plugin: {
       repositoryClaude: "此仓库的 Claude Code 配置",
@@ -2645,16 +2645,17 @@ export const zhCN: TranslationResources = {
       importFailed: "无法导入：{{reason}}",
     },
     banner: {
-      title_one: "此项目有 {{count}} 个来自 Claude Code 或 Codex 的插件",
-      title_other: "此项目有 {{count}} 个来自 Claude Code 或 Codex 的插件",
+      titleClaude: "在 Agent Duel 中使用此项目的 Claude Code 配置",
+      titleCodex: "在 Agent Duel 中使用此项目的 Codex 配置",
+      titleBoth: "在 Agent Duel 中使用此项目的 Claude Code 和 Codex 配置",
       review: "查看",
       import: "导入",
       dismiss: "暂不",
       failed: "无法导入插件，请重试。",
     },
-    composer: {
-      label: "插件",
-      accessibilityLabel: "此项目中的插件：{{count}}",
+    project: {
+      info: "为此项目找到的 Claude Code 和 Codex 插件与配置。已开启的会在此项目的聊天和对战中加载。",
+      empty: "未找到此项目的 Claude Code 或 Codex 插件。",
     },
     settings: {
       sectionTitle: "Claude Code and Codex",

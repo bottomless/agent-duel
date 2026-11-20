@@ -2725,7 +2725,7 @@ export const ptBR: TranslationResources = {
         "Skills em .claude/skills e .agents/skills deste repositório são carregadas automaticamente.",
       globalIncluded_one: "Mais {{count}} plugin global",
       globalIncluded_other: "Mais {{count}} plugins globais",
-      manageGlobal: "Gerenciar em Configurações",
+      manageGlobal: "Gerenciar plugins globais",
     },
     plugin: {
       repositoryClaude: "Configuração do Claude Code deste repositório",
@@ -2744,16 +2744,17 @@ export const ptBR: TranslationResources = {
       importFailed: "Não foi possível importar: {{reason}}",
     },
     banner: {
-      title_one: "Este projeto tem {{count}} plugin do Claude Code ou do Codex",
-      title_other: "Este projeto tem {{count}} plugins do Claude Code ou do Codex",
+      titleClaude: "Use a configuração do Claude Code deste projeto no Agent Duel",
+      titleCodex: "Use a configuração do Codex deste projeto no Agent Duel",
+      titleBoth: "Use a configuração do Claude Code e do Codex deste projeto no Agent Duel",
       review: "Revisar",
       import: "Importar",
       dismiss: "Agora não",
       failed: "Não foi possível importar os plugins. Tente novamente.",
     },
-    composer: {
-      label: "Plugins",
-      accessibilityLabel: "Plugins neste projeto: {{count}}",
+    project: {
+      info: "Plugins e configuração do Claude Code e do Codex encontrados para este projeto. Os ativados são carregados nos chats e duelos deste projeto.",
+      empty: "Nenhum plugin do Claude Code ou do Codex encontrado para este projeto.",
     },
     settings: {
       sectionTitle: "Claude Code and Codex",

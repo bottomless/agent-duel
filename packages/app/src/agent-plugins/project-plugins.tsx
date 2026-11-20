@@ -2,14 +2,12 @@ import { useCallback, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
-import { Puzzle } from "lucide-react-native";
 import type { AgentPlugin } from "@getpaseo/protocol/messages";
-import { AgentControlTrigger } from "@/composer/agent-controls/control";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { openSettingsSection } from "@/navigation/settings-navigation";
 import { settingsStyles } from "@/styles/settings";
-import { pluginLabel } from "./describe";
+import { bannerItem, bannerTitle } from "./describe";
 import { AgentPluginsReviewSheet, type AgentPluginsDecision } from "./review-sheet";
 import { isSelectable, useAgentPlugins, type AgentPluginsController } from "./use-agent-plugins";
 
@@ -55,9 +53,11 @@ function ProjectPluginsSheet({
   const footnote = useMemo(
     () => (
       <View style={styles.footnote}>
-        <Text style={settingsStyles.rowHint}>
-          {t("agentPlugins.sheet.globalIncluded", { count: globalOn })}
-        </Text>
+        {globalOn > 0 ? (
+          <Text style={settingsStyles.rowHint}>
+            {t("agentPlugins.sheet.globalIncluded", { count: globalOn })}
+          </Text>
+        ) : null}
         <Button variant="ghost" onPress={manageGlobal} testID="agent-plugins-manage-global">
           {t("agentPlugins.sheet.manageGlobal")}
         </Button>
@@ -120,13 +120,13 @@ export function AgentPluginsBanner({ serverId, cwd }: ProjectPluginsProps) {
   const closeReview = useCallback(() => setReviewing(false), []);
 
   if (pending.length === 0) return null;
-  const names = pending.map((plugin) => pluginLabel(plugin, t)).join(", ");
+  const names = pending.map((plugin) => bannerItem(plugin, t)).join(", ");
   const busy = running !== null;
   return (
     <View style={styles.banner}>
       <Alert
         variant={failed ? "error" : "info"}
-        title={t("agentPlugins.banner.title", { count: pending.length })}
+        title={bannerTitle(pending, t)}
         description={failed ? t("agentPlugins.banner.failed") : names}
         testID="agent-plugins-banner"
       >
@@ -160,34 +160,6 @@ export function AgentPluginsBanner({ serverId, cwd }: ProjectPluginsProps) {
       </Alert>
       <ProjectPluginsSheet controller={controller} visible={reviewing} onClose={closeReview} />
     </View>
-  );
-}
-
-/** A toolbar control with the number of plugins on in this project; it opens the project sheet. */
-export function AgentPluginsComposerButton({ serverId, cwd }: ProjectPluginsProps) {
-  const { t } = useTranslation();
-  const controller = useAgentPlugins({ serverId, cwd });
-  const [open, setOpen] = useState(false);
-  const show = useCallback(() => setOpen(true), []);
-  const hide = useCallback(() => setOpen(false), []);
-  const plugins = controller.status?.project?.plugins;
-  const selectable = useMemo(() => (plugins ?? []).filter(isSelectable), [plugins]);
-  if (selectable.length === 0) return null;
-  const count = selectable.filter((plugin) => plugin.state === "on").length;
-  return (
-    <>
-      <AgentControlTrigger
-        icon={Puzzle}
-        surface="toolbar"
-        label={t("agentPlugins.composer.label")}
-        value={String(count)}
-        open={open}
-        onPress={show}
-        accessibilityLabel={t("agentPlugins.composer.accessibilityLabel", { count })}
-        testID="agent-plugins-composer-button"
-      />
-      <ProjectPluginsSheet controller={controller} visible={open} onClose={hide} />
-    </>
   );
 }
 

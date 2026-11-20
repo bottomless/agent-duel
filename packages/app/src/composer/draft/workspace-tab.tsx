@@ -1,5 +1,5 @@
 import { SINGLE_AGENT_MODELS } from "@/arena/single-agent";
-import { AgentPluginsBanner, AgentPluginsComposerButton } from "@/agent-plugins/project-plugins";
+import { AgentPluginsBanner } from "@/agent-plugins/project-plugins";
 import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
 import type { JsonValue } from "@getpaseo/protocol/agent-types";
 import { Keyboard, StyleSheet as RNStyleSheet, Text, View } from "react-native";
@@ -650,11 +650,6 @@ export function WorkspaceDraftComposer({
     () => (workingDir ? <AgentPluginsBanner serverId={serverId} cwd={workingDir} /> : undefined),
     [serverId, workingDir],
   );
-  const pluginsButton = useMemo(
-    () =>
-      workingDir ? <AgentPluginsComposerButton serverId={serverId} cwd={workingDir} /> : undefined,
-    [serverId, workingDir],
-  );
   return (
     <DraftInputSlot startingBattle={isStartingBattle}>
       <View style={animatedStaticStyles.inputAreaWrapper} onLayout={onInputAreaLayout}>
@@ -691,7 +686,6 @@ export function WorkspaceDraftComposer({
           isCompactLayout={isCompactComposerLayout}
           maxImages={arenaComposerMaxImages(arenaPreferences.battleMode)}
           topContent={pluginsBanner}
-          leftContent={pluginsButton}
         />
       </View>
     </DraftInputSlot>
