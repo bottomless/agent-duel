@@ -71,6 +71,8 @@ type CaptureDocument = CaptureKey & {
   readonly createdAt: Date
   readonly request: CapturedRequest
   readonly response?: CapturedResponse
+  /** A refused attempt archived separately before this logical generation was retried. */
+  readonly retriedByGenerationID?: string
 }
 
 type PartDocument = {
@@ -220,6 +222,7 @@ async function storeParts(db: ArenaDb, userId: string, split: ReturnType<typeof 
 type CaptureInput = CaptureKey & {
   readonly model: string
   readonly endpoint: string
+  readonly retriedByGenerationID?: string
 }
 
 export type GenerationCapture = ReturnType<typeof generationCapture>
@@ -261,6 +264,7 @@ export function generationCapture(db: ArenaDb, input: CaptureInput, now: () => D
             scopeID: input.scopeID,
             assignmentID: input.assignmentID,
             generationID: input.generationID,
+            ...(input.retriedByGenerationID ? { retriedByGenerationID: input.retriedByGenerationID } : {}),
             model: input.model,
             endpoint: input.endpoint,
             createdAt,

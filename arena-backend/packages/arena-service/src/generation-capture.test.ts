@@ -15,6 +15,19 @@ const model = {
   routing: { sort: "throughput" },
 }
 
+const gemini = { ...model, slug: "google/gemini-4-carbon" }
+const geminiRefusal = JSON.stringify({
+  error: {
+    code: 400,
+    metadata: {
+      provider_name: "Google AI Studio",
+      raw: JSON.stringify({
+        error: { code: 400, status: "INVALID_ARGUMENT", message: "Request contains an invalid argument." },
+      }),
+    },
+  },
+})
+
 type Row = Record<string, unknown> & { _id: string }
 
 function matches(row: Row, filter: Record<string, unknown>) {
@@ -27,7 +40,9 @@ function matches(row: Row, filter: Record<string, unknown>) {
 }
 
 /** Keeps every collection the proxy writes in memory. `single` makes the assignment a single-agent one. */
-function memoryDb(input: { readonly single?: boolean; readonly failCaptures?: boolean } = {}) {
+function memoryDb(
+  input: { readonly single?: boolean; readonly failCaptures?: boolean; readonly model?: typeof model } = {},
+) {
   const collections = new Map<string, Map<string, Row>>()
   const rows = (name: string) => {
     if (!collections.has(name)) collections.set(name, new Map())
@@ -36,7 +51,9 @@ function memoryDb(input: { readonly single?: boolean; readonly failCaptures?: bo
   const assignmentSet = {
     userId: "user-1",
     scopeID: "turn-1",
-    assignments: [{ assignmentID: "opaque-id", model, ...(input.single ? { modelSize: "frontier" } : {}) }],
+    assignments: [
+      { assignmentID: "opaque-id", model: input.model ?? model, ...(input.single ? { modelSize: "frontier" } : {}) },
+    ],
   }
   const db = {
     collection: (name: string) => {
@@ -138,6 +155,164 @@ function recordingFetch(sent: string[]) {
 }
 
 describe("generation capture", () => {
+  test("captures both the refused Gemini request and the successful tool-result retry", async () => {
+    const store = memoryDb({ model: gemini })
+    const sent: string[] = []
+    const refusal = geminiRefusal
+    const messages = [
+      { role: "user", content: "Inspect the report" },
+      {
+        role: "assistant",
+        content: "",
+        tool_calls: [{ id: "call-1", type: "function", function: { name: "read", arguments: "{}" } }],
+        reasoning_details: [
+          { type: "reasoning.encrypted", data: "opaque-signature", format: "google-gemini-v1", id: "call-1" },
+        ],
+      },
+      { role: "tool", tool_call_id: "call-1", name: "read", content: "Report output\r\nwith plain text" },
+    ]
+    const reply = recordingFetch(sent)
+    const errors = spyOn(console, "error").mockImplementation(() => undefined)
+    try {
+      const send = proxy(store.db, async (input, init) => {
+        if (sent.length > 0) return reply(input, init)
+        sent.push(await new Response(init?.body).text())
+        return new Response(refusal, { status: 400 })
+      })
+      const response = await send(contestantRequest(messages))
+      expect(response.status).toBe(200)
+      const delivered = await response.text()
+      expect(delivered).toContain("[DONE]")
+      expect(delivered).not.toContain("Google AI Studio")
+      expect(sent).toHaveLength(2)
+      const first = JSON.parse(sent[0]!)
+      const second = JSON.parse(sent[1]!)
+      expect(first.messages).toEqual(messages)
+      expect(second).toEqual({
+        ...first,
+        messages: [
+          ...messages.slice(0, -1),
+          {
+            ...messages.at(-1),
+            content: JSON.stringify({ output: messages.at(-1)!.content }),
+          },
+        ],
+      })
+      const final = await loadGenerationCapture(store.db, "user-1", generationID)
+      expect(final?.verified).toBe(true)
+      expect(JSON.stringify(final!.body)).toBe(sent[1]!)
+      expect(final!.capture.response).toMatchObject({ state: "complete", status: 200, body: upstreamStream.join("") })
+      const captures = store.rows("arenaGenerationCaptures")
+      expect(captures).toHaveLength(2)
+      const refused = captures.find((row) => row.generationID !== generationID)!
+      expect(refused.retriedByGenerationID).toBe(generationID)
+      const original = await loadGenerationCapture(store.db, "user-1", String(refused.generationID))
+      expect(original?.verified).toBe(true)
+      expect(JSON.stringify(original!.body)).toBe(sent[0]!)
+      expect(original!.capture.response).toMatchObject({ state: "failed", status: 400, body: refusal })
+    } finally {
+      errors.mockRestore()
+    }
+  })
+
+  test.each([400, 429, 500])("stops after one retry and captures its %i refusal", async (status) => {
+    const store = memoryDb({ model: gemini })
+    let calls = 0
+    const errors = spyOn(console, "error").mockImplementation(() => undefined)
+    try {
+      const send = proxy(store.db, async () => {
+        calls++
+        return new Response(geminiRefusal, { status: calls === 1 ? 400 : status })
+      })
+      const response = await send(contestantRequest([{ role: "tool", tool_call_id: "call-1", content: "output" }]))
+      expect(calls).toBe(2)
+      expect(response.status).toBe(status)
+      expect(await response.json()).toEqual({
+        error: { message: "Arena contestant request failed", type: "arena_upstream_error" },
+      })
+      const loaded = await loadGenerationCapture(store.db, "user-1", generationID)
+      expect(loaded?.verified).toBe(true)
+      expect(loaded!.body.messages).toEqual([{ role: "tool", tool_call_id: "call-1", content: '{"output":"output"}' }])
+      expect(loaded!.capture.response).toMatchObject({ state: "failed", status, body: geminiRefusal })
+      expect(store.rows("arenaGenerationCaptures")).toHaveLength(2)
+    } finally {
+      errors.mockRestore()
+    }
+  })
+
+  test("closes a retry capture when its fetch rejects, without inheriting the first status", async () => {
+    const store = memoryDb({ model: gemini })
+    let calls = 0
+    const errors = spyOn(console, "error").mockImplementation(() => undefined)
+    try {
+      const send = proxy(store.db, async () => {
+        calls++
+        if (calls === 1) return new Response(geminiRefusal, { status: 400 })
+        throw new Error("network unavailable")
+      })
+      const response = await send(contestantRequest([{ role: "tool", content: "output" }]))
+      expect(calls).toBe(2)
+      expect(response.status).toBe(502)
+      const loaded = await loadGenerationCapture(store.db, "user-1", generationID)
+      expect(loaded?.verified).toBe(true)
+      expect(loaded!.capture.response).toMatchObject({ state: "failed", body: "" })
+      expect(loaded!.capture.response?.status).toBeUndefined()
+    } finally {
+      errors.mockRestore()
+    }
+  })
+
+  test("does not retry a cancelled request", async () => {
+    const store = memoryDb({ model: gemini })
+    const controller = new AbortController()
+    let calls = 0
+    const errors = spyOn(console, "error").mockImplementation(() => undefined)
+    try {
+      const send = proxy(store.db, async () => {
+        calls++
+        controller.abort()
+        return new Response(geminiRefusal, { status: 400 })
+      })
+      const request = new Request(contestantRequest([{ role: "tool", content: "output" }]), {
+        signal: controller.signal,
+      })
+      expect((await send(request)).status).toBe(400)
+      expect(calls).toBe(1)
+      expect(store.rows("arenaGenerationCaptures")).toHaveLength(1)
+    } finally {
+      errors.mockRestore()
+    }
+  })
+
+  test("can retry with capture disabled and keeps the upstream authentication and abort signal", async () => {
+    const store = memoryDb({ model: gemini })
+    const sent: string[] = []
+    const options: (RequestInit | undefined)[] = []
+    const reply = recordingFetch(sent)
+    const errors = spyOn(console, "error").mockImplementation(() => undefined)
+    try {
+      const send = proxy(
+        store.db,
+        async (input, init) => {
+          options.push(init)
+          if (options.length > 1) return reply(input, init)
+          return new Response(geminiRefusal, { status: 400 })
+        },
+        { captureGenerations: false },
+      )
+      const response = await send(contestantRequest([{ role: "tool", content: "output" }]))
+      await response.text()
+      expect(response.status).toBe(200)
+      expect(options).toHaveLength(2)
+      expect(options[1]!.signal).toBe(options[0]!.signal)
+      expect(options[1]!.headers).toEqual(options[0]!.headers)
+      expect(new Headers(options[1]!.headers).get("authorization")).toBe("Bearer server-secret")
+      expect(store.rows("arenaGenerationCaptures")).toHaveLength(0)
+    } finally {
+      errors.mockRestore()
+    }
+  })
+
   test("keeps the body OpenRouter received and its raw response, and shares parts across calls", async () => {
     const store = memoryDb()
     const sent: string[] = []
