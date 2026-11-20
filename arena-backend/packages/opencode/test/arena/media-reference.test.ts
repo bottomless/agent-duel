@@ -69,7 +69,7 @@ const answer = () =>
     choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: "ok" } }],
   })
 
-/** The parts and the battle's assignment set, in memory. */
+/** The uploads and the battle's assignment set, in memory. */
 function memoryDb() {
   const parts = new Map<string, Record<string, unknown> & { _id: string }>()
   return {
@@ -87,8 +87,9 @@ function memoryDb() {
         find: (filter: { _id: { $in: string[] } }) => ({
           toArray: async () => filter._id.$in.flatMap((id) => parts.get(id) ?? []),
         }),
-        insertOne: async (document: Record<string, unknown> & { _id: string }) => {
-          parts.set(document._id, document)
+        findOne: async (filter: { _id: string }) => parts.get(filter._id) ?? null,
+        replaceOne: async (filter: { _id: string }, document: Record<string, unknown> & { _id: string }) => {
+          parts.set(filter._id, document)
           return { acknowledged: true, matchedCount: 0, modifiedCount: 0 }
         },
       }

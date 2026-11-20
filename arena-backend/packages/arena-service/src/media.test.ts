@@ -20,14 +20,18 @@ function matches(row: Row, filter: Record<string, unknown>) {
     if (expected && typeof expected === "object" && "$in" in expected) {
       return (expected.$in as unknown[]).includes(row[key])
     }
+    if (expected && typeof expected === "object" && "$gt" in expected) {
+      return (row[key] as Date).getTime() > (expected.$gt as Date).getTime()
+    }
     return row[key] === expected
   })
 }
 
-/** Keeps the parts in memory; every account owns the same assignment, so only part scoping differs. */
+/** Keeps the uploads in memory; every account owns the same assignment, so only upload scoping differs. */
 function memoryDb(assigned = model) {
-  const parts = new Map<string, Row>()
-  let inserts = 0
+  const tables = new Map<string, Map<string, Row>>()
+  const table = (name: string) => tables.get(name) ?? tables.set(name, new Map()).get(name)!
+  let writes = 0
   let loads = 0
   const db = {
     collection: (name: string) => {
@@ -47,29 +51,37 @@ function memoryDb(assigned = model) {
           }),
         }
       }
-      if (name !== "arenaGenerationParts") throw new Error(`Unexpected Arena collection: ${name}`)
+      if (name !== "arenaMediaUploads") throw new Error(`Unexpected Arena collection: ${name}`)
+      const rows = table(name)
       return {
         find: (filter: Record<string, unknown>, options?: { projection?: unknown }) => ({
           toArray: async () => {
             // A find without a projection reads the media itself.
             if (!options?.projection) loads++
-            return [...parts.values()].filter((row) => matches(row, filter))
+            return [...rows.values()].filter((row) => matches(row, filter))
           },
         }),
-        insertOne: async (document: Row) => {
-          if (parts.has(document._id)) throw Object.assign(new Error("duplicate"), { code: 11000 })
-          inserts++
-          parts.set(document._id, document)
+        findOne: async (filter: Record<string, unknown>) =>
+          [...rows.values()].find((row) => matches(row, filter)) ?? null,
+        replaceOne: async (filter: { _id: string }, document: Row) => {
+          writes++
+          rows.set(filter._id, document)
           return { acknowledged: true, matchedCount: 0, modifiedCount: 0 }
         },
       }
     },
   } as unknown as ArenaDb
-  return { db, inserts: () => inserts, loads: () => loads }
+  return { db, writes: () => writes, loads: () => loads, rows: (name: string) => [...table(name).values()] }
 }
 
-function service(db: ArenaDb, user = "user-1", upstream: (body: string) => void = () => {}) {
+function service(
+  db: ArenaDb,
+  user = "user-1",
+  upstream: (body: string) => void = () => {},
+  now: () => Date = () => new Date(),
+) {
   return createArenaService({
+    now,
     resolveCaller: async () => ({ id: user }),
     db: async () => db,
     pool: [],
@@ -119,7 +131,33 @@ describe("media by reference", () => {
     expect(first.status).toBe(200)
     expect(await first.json()).toEqual({ sha256: digest })
     expect((await proxy(upload(png))).status).toBe(200)
-    expect(store.inserts()).toBe(1)
+    expect(store.writes()).toBe(1)
+  })
+
+  test("an upload expires after 72 hours, and the same reference works again once it is uploaded again", async () => {
+    // Its own account, so no earlier test's warm copy answers for it.
+    const store = memoryDb()
+    let time = Date.parse("2026-11-20T00:00:00Z")
+    let calls = 0
+    const proxy = service(
+      store.db,
+      "user-expiring",
+      () => calls++,
+      () => new Date(time),
+    )
+    const reference = mediaReference(digest, "image/png")
+    expect((await proxy(upload(png))).status).toBe(200)
+    expect(store.rows("arenaMediaUploads")[0]?.expiresAt).toEqual(new Date(time + 72 * 60 * 60 * 1000))
+    time += 71 * 60 * 60 * 1000
+    expect((await proxy(contestant(reference))).status).toBe(200)
+    // Past its time it is missing, even while the TTL index has not deleted it and the function keeps it warm.
+    time += 2 * 60 * 60 * 1000
+    const expired = await proxy(contestant(reference))
+    expect(expired.status).toBe(409)
+    expect(readMediaMissing(await expired.text())).toEqual([digest])
+    expect((await proxy(upload(png))).status).toBe(200)
+    expect((await proxy(contestant(reference))).status).toBe(200)
+    expect(calls).toBe(2)
   })
 
   test("an upload needs a supported type and a live assignment", async () => {

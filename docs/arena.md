@@ -1066,7 +1066,10 @@ reply takes the same attachments as a chat message, and both contestants get ide
   its images and PDFs by reference: the engine uploads each file once
   (`/api/openrouter/api/v1/arena/media`, `arena/media-reference.ts`), names it
   `arena-media:sha256:<digest>:<type>`, and the proxy puts the data back before OpenRouter sees the
-  body (arena-service `media.ts`). Files are stored per account, with the generation-capture parts.
+  body (arena-service `media.ts`). Uploads are stored per account for 72 hours, apart from the
+  generation-capture parts, because single-agent chats are not kept; a battle's capture stores its
+  own copy of what the call sent. An expired file is missing, and the engine uploads it again under
+  the same reference, so the prompt and its cache do not change.
   The route is its own Vercel function in the control-plane repository, which must ship it before a
   desktop release relies on it; a control plane without it answers 404, and the engine sends the
   media inline. Until an upload has succeeded in the engine process, the size check counts media in

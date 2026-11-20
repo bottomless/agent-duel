@@ -6,7 +6,7 @@ import { MEDIA_REFERENCE } from "./generation-capture"
  * oldest out to fit rewrote the prompt prefix, which costs Claude a full cache write each time. So
  * the engine uploads each image or PDF once to `MEDIA_PATH`, the request names it with
  * `mediaReference`, and the proxy puts the data back before OpenRouter sees the body. Media is
- * stored per account, keyed by the SHA-256 of its bytes, in the parts generation captures keep.
+ * stored per account, keyed by the SHA-256 of its bytes, for 72 hours (`generation-capture.ts`).
  */
 export const MEDIA_PATH = "/api/v1/arena/media"
 /** The upload's media type; its body is the raw bytes. */

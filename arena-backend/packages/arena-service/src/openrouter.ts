@@ -612,7 +612,7 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
       const db = await context.db()
       const routeAssignment = await reserveRoutingAssignment(db, caller.id, assignment.scopeID, assignment.assignmentID)
       if (!routeAssignment) return Response.json({ error: { message: "Arena assignment is invalid" } }, { status: 403 })
-      const digest = await storeMedia(db, caller.id, Buffer.from(body), mimeType, context.now())
+      const digest = await storeMedia(db, caller.id, Buffer.from(body), context.now())
       return Response.json({ sha256: digest })
     }
     if (request.method !== "POST" || !["/api/v1/chat/completions", "/api/v1/responses"].includes(suffix)) {
@@ -653,7 +653,7 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
       assignmentID: assignment.assignmentID,
     })
     // Images and PDFs the engine uploaded come back here, before the budget counts them (`media.ts`).
-    const media = await resolveMedia(db, caller.id, reasoning.restore(input))
+    const media = await resolveMedia(db, caller.id, reasoning.restore(input), context.now())
     // Only Claude pings get this far, so a ping with media the proxy cannot send answers like every
     // other ping, or a made-up reference would tell the sides apart.
     if (keepAlive && (media.tooLarge || media.missing.length > 0)) {
