@@ -178,9 +178,21 @@ const counted = (plugin: BunPlugin): BunPlugin => ({
   },
 })
 
+// Image.Photon resizes images in a worker it starts from "./photon-worker.js" beside the main entry. Without
+// that entry the engine logs "photon worker unavailable" and resizes on its event loop, stalling it for
+// hundreds of milliseconds per large image. Upstream's CLI build adds the same second entrypoint
+// (packages/cli/src/photon-worker.ts).
+const photonWorker = path.resolve(import.meta.dirname, "../../core/src/image/photon-worker.ts")
+const photonWorkerUrl = 'new URL("./photon-worker.js", import.meta.url)'
+const photonSource = path.join(path.dirname(photonWorker), "photon.ts")
+if (!readFileSync(photonSource, "utf8").includes(photonWorkerUrl))
+  throw new Error(`${photonSource} no longer starts its worker from ${photonWorkerUrl}; update the worker entrypoint`)
+
 const providers = desktopProviders()
 const result = await Bun.build({
-  entrypoints: [path.resolve(import.meta.dirname, "../src/index.ts")],
+  entrypoints: [path.resolve(import.meta.dirname, "../src/index.ts"), photonWorker],
+  // Without it the worker keeps its path under the entrypoints' common directory (core/src/image/).
+  naming: { entry: "[name].[ext]" },
   conditions: ["browser"],
   define,
   plugins: [providers.plugin, ...replaced.map(counted)],
