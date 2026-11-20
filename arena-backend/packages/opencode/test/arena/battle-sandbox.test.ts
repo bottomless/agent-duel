@@ -16,6 +16,8 @@ import { FileAccess } from "@opencode/core/file-access"
 import { FileMutation } from "@opencode/core/file-mutation"
 import { FileWrite } from "@opencode/core/file-write"
 import { Environment } from "@opencode/core/environment/index"
+import { Config } from "@opencode/core/config"
+import { Flag } from "@opencode/core/flag"
 import { Formatter } from "@opencode/core/formatter"
 import { Location } from "@opencode/core/location"
 import { Permission } from "@opencode/core/permission"
@@ -192,8 +194,11 @@ function harness(f: ReturnType<typeof fixture>, battle = true, capturedDirectory
       Formatter.node,
       Permission.node,
       Location.node,
+      Config.node,
+      Flag.node,
     ]),
     [
+      Config.node.replace(Config.testLayer()),
       Location.node.replace(Layer.succeed(Location.Service, active)),
       Permission.node.replace(Layer.mock(Permission.Service, { assert })),
       Formatter.node.replace(Layer.mock(Formatter.Service, { file: () => Effect.succeed(false) })),

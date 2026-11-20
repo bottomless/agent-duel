@@ -157,6 +157,8 @@ function fixedBytes(message: Message, carriage: MediaCarriage) {
   let wire = 0
   let media = 0
   const json = JSON.stringify(message, function (key, value) {
+    // Core hands hooks each stored message's metadata and strips it before the request is sent.
+    if (key === "metadata" && this === message) return undefined
     if (key === "media" && this?.type === "media") {
       if (!isImage(this.media.mediaType)) {
         const bytes = mediaBytes(this)

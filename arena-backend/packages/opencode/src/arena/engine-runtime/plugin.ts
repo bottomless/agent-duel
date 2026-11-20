@@ -6,7 +6,7 @@ import type { Message, SystemPart } from "@opencode/ai"
 import { createOpenRouter } from "@openrouter/ai-sdk-provider"
 import { AISDK } from "@opencode/core/aisdk"
 import { ShellTool } from "@opencode/core/tool/plugin/shell"
-import { contestantShellInput, contestantShellTimeoutMessage, shellNotification } from "./shell"
+import { contestantShellInput, shellNotification } from "./shell"
 import { WindowsJob } from "@opencode/util/windows-job"
 import { define } from "@opencode/plugin/effect/plugin"
 import type { Context } from "@opencode/plugin/effect/plugin"
@@ -43,7 +43,7 @@ import { withHeldToolCalls } from "./tool-stream"
 import { boundRequestSize, type MediaCarriage } from "./request-size"
 import { MODEL_IDLE_TIMEOUT_MS } from "../model-idle"
 import { ArenaResponseRecovery } from "../response-recovery"
-import { idleBudgetFetch, idleExhausted, idleTimeout, resetIdleBudget } from "./idle"
+import { idleBudgetFetch, idleExhausted, idleRecoveryNote, idleTimeout, resetIdleBudget } from "./idle"
 import { ArenaShellLedger } from "./shell-ledger"
 import {
   toolExecutionProvider,
@@ -472,13 +472,7 @@ function install(context: Context, options: InstalledOptions) {
       (event) =>
         Effect.sync(() => {
           if (!arenaSession(options, String(event.sessionID)) || !idleTimeout(event.error)) return
-          const message = event.message
-          const hasReply =
-            message?.type === "assistant" &&
-            message.content.some(
-              (part) => part.type === "tool" || (part.type === "text" && part.text.trim().length > 0),
-            )
-          event.text = hasReply ? ArenaResponseRecovery.IDLE_CONTINUE : ArenaResponseRecovery.IDLE_RESTART
+          event.text = idleRecoveryNote(event.message)
         }),
       { providerID: String(PROVIDER_ID) },
     )
@@ -625,7 +619,6 @@ function install(context: Context, options: InstalledOptions) {
             if (assignment?.telemetry) {
               return yield* execute(contestantShellInput(input as Record<string, unknown>), call).pipe(
                 Effect.provideService(ShellTool.Notification, shellNotification(assignment.rootSessionID)),
-                Effect.provideService(ShellTool.TimeoutMessage, contestantShellTimeoutMessage),
               )
             }
             const { directory, project } = context.location

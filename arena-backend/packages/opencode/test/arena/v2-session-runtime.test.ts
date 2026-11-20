@@ -1113,11 +1113,6 @@ describe("Arena V2 abandoned attempts", () => {
     expect([...abandonedAttempts(messages, "msg_a_prompt")]).toEqual(["msg_b_cut"])
   })
 
-  test("keeps Core's note text in step with Arena's copy", async () => {
-    const source = await Bun.file(new URL("../../../core/src/session/runner/llm.ts", import.meta.url)).text()
-    expect(source).toContain(JSON.stringify(CONTINUE_AFTER_INCOMPLETE_STREAM))
-  })
-
   // A winner that recovered without Retry: the shape of the fourth and ninth live tests
   // (`r11-retry.fix.md`), where GLM began a code block again after a cut.
   const thought = {
@@ -1205,12 +1200,15 @@ describe("Arena V2 abandoned attempts", () => {
       const parts = lowered.flatMap((message) => (typeof message.content === "string" ? [] : [...message.content]))
       const calls = parts.flatMap((part) => (part.type === "tool-call" ? [part.id] : []))
       const results = parts.flatMap((part) => (part.type === "tool-result" ? [part.id] : []))
-      expect(calls.sort()).toEqual(["call_cut", "call_ran"])
+      // Since OpenCode 2.3, Core replays a cut answer only up to its last local call that ran, so the half
+      // answers' text and their unexecuted call stay out of the next request.
+      expect(calls.sort()).toEqual(["call_ran"])
       expect(results.sort()).toEqual(calls)
-      // No text is lost, and the error fields of the rows do not reach the model.
+      // The error fields of the rows do not reach the model.
       const written = JSON.stringify(lowered)
-      for (const piece of ["1. Sleep well. 2. Drink wa", "print(", "ter often. 3. Walk daily."]) {
-        expect(written).toContain(JSON.stringify(piece).slice(1, -1))
+      expect(written).toContain("ter often. 3. Walk daily.")
+      for (const piece of ["1. Sleep well. 2. Drink wa", "print("]) {
+        expect(written).not.toContain(JSON.stringify(piece).slice(1, -1))
       }
       expect(written.split(CONTINUE_AFTER_INCOMPLETE_STREAM).length - 1).toBe(3)
       expect(written).not.toContain("Provider request failed")

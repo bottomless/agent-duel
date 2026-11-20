@@ -1,4 +1,5 @@
 import { Effect } from "effect"
+import type { SessionMessage } from "@opencode/core/session/message"
 import { ArenaResponseRecovery } from "../response-recovery"
 
 type Fetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>
@@ -36,6 +37,23 @@ function timeoutError(error: unknown, depth = 0): boolean {
 export function idleTimeout(error: { readonly type: string; readonly message: string }) {
   const message = error.message.replace(/^Connection lost while reading the response: /, "")
   return error.type === "provider.transport" && TIMEOUT_MESSAGES.has(message)
+}
+
+/**
+ * The note for a retry after a model stopped sending output. Core replays a cut answer only up to its last
+ * local call that ran, so that is the partial reply the model can continue; text after it and calls that never
+ * ran are not replayed, and the model starts again.
+ */
+export function idleRecoveryNote(message: SessionMessage.Info | undefined) {
+  const continues =
+    message?.type === "assistant" &&
+    message.content.some(
+      (part) =>
+        part.type === "tool" &&
+        part.executed !== true &&
+        (part.time.ran !== undefined || part.state.status === "completed"),
+    )
+  return continues ? ArenaResponseRecovery.IDLE_CONTINUE : ArenaResponseRecovery.IDLE_RESTART
 }
 
 /** True for the failure that ends a turn whose timeout budget is spent. */

@@ -431,21 +431,31 @@ async function boundary(
   return response
 }
 
+/** The options the engine's route graph runs with. */
+export function routeOptions(options: ServerOptions): ServerOptions {
+  return {
+    ...databaseOptions(options),
+    // Arena supplies its two opaque models through the Arena provider. Avoid the
+    // upstream models.dev fetch, which adds latency and can fail before the daemon
+    // reaches its authenticated native boundary. Explicit test/CLI options may opt in.
+    models: { fetch: false, ...options.models },
+    // Contestants read AGENTS.md only. OpenCode 2.3 falls back to CLAUDE.md in a directory without
+    // an AGENTS.md and to ~/.claude/CLAUDE.md without a global AGENTS.md; that would put a user's
+    // personal Claude Code instructions into both contestants' prompts. Off until Agent Duel
+    // decides how project and global instruction files should load.
+    instructions: { claude: false, ...options.instructions },
+    // The daemon has its own private control-token boundary. Do not enable
+    // upstream Basic-auth middleware on the embedded route graph.
+    password: undefined,
+    app: { version: opencodeVersion, ...(options.app ?? {}) },
+  }
+}
+
 async function buildRuntime(options: ServerOptions): Promise<Runtime> {
   const scope = Scope.makeUnsafe()
   try {
     const routes = createRoutes(
-      {
-        ...databaseOptions(options),
-        // Arena supplies its two opaque models through the Arena provider. Avoid the
-        // upstream models.dev fetch, which adds latency and can fail before the daemon
-        // reaches its authenticated native boundary. Explicit test/CLI options may opt in.
-        models: { fetch: false, ...options.models },
-        // The daemon has its own private control-token boundary. Do not enable
-        // upstream Basic-auth middleware on the embedded route graph.
-        password: undefined,
-        app: { version: opencodeVersion, ...(options.app ?? {}) },
-      },
+      routeOptions(options),
       () => [],
       [],
       Layer.merge(arenaRouteLayer, fenceLegacyEnginesLayer),

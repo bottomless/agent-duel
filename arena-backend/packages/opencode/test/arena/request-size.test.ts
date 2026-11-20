@@ -98,6 +98,15 @@ describe("request size", () => {
     expect(bound(messages).report).toBeUndefined()
   })
 
+  test("stored message metadata does not count, since it is never sent", () => {
+    // Core passes hooks each message with its stored metadata, the way model-request.ts builds them.
+    // Inline, the two slides alone come close to the hosted body limit.
+    const withMetadata = { ...user("Check these slides"), metadata: { arenaSystem: "x".repeat(400_000) } } as Message
+    const messages = [withMetadata, ...step([["slide-1.jpg", 2.1]]), ...step([["slide-2.jpg", 2.1]])]
+    expect(bound(messages, "inline").report).toBeUndefined()
+    expect(bound([user("Check these slides"), ...messages.slice(1)], "inline").report).toBeUndefined()
+  })
+
   test("images and PDFs an upload can carry do not count against the hosted body limit", () => {
     // 3.3 MB of text, a 3 MB PDF and 4.5 MB of renders: only references go to the control plane.
     const messages = [

@@ -232,6 +232,7 @@ export function update(adapter: Adapter, event: SessionEvent.DurableEvent) {
                 draft.rawFinish = undefined
                 draft.native = undefined
                 draft.time.created = DateTime.makeUnsafe(event.data.started)
+                draft.time.firstToken = undefined
                 draft.time.streamed = undefined
                 draft.time.completed = undefined
                 if (event.data.snapshot) draft.snapshot = { ...draft.snapshot, start: event.data.snapshot }
@@ -261,6 +262,11 @@ export function update(adapter: Adapter, event: SessionEvent.DurableEvent) {
             }),
           )
         }),
+      "session.step.first-token": (event) => {
+        return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
+          draft.time.firstToken = created
+        })
+      },
       "session.step.streamed": (event) => {
         return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
           draft.time.streamed = created
