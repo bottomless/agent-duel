@@ -152,15 +152,15 @@ function inlineMedia(value: unknown, media: ReadonlyMap<string, Buffer>) {
   })
 }
 
-/** The digests of the media references in a request body, each once. */
+/** The digests of the media references in a request body, with how often the body names each. */
 export function mediaReferences(value: unknown) {
-  const digests = new Set<string>()
+  const counts = new Map<string, number>()
   walkStrings(value, (text) => {
     const digest = MEDIA_REFERENCE_PATTERN.exec(text)?.[1]
-    if (digest) digests.add(digest)
+    if (digest) counts.set(digest, (counts.get(digest) ?? 0) + 1)
     return undefined
   })
-  return digests
+  return counts
 }
 
 function componentOf(kind: CaptureComponentKind, value: unknown, role?: string): SplitComponent {
@@ -253,25 +253,58 @@ function cacheMedia(id: string, data: Buffer) {
   }
 }
 
-/**
- * Puts the account's stored media back in place of its references. Returns the body, or the digests
- * of the references it has no media for.
- */
-export async function resolveMedia(db: ArenaDb, userId: string, body: unknown) {
-  const digests = [...mediaReferences(body)]
-  if (digests.length === 0) return { body, missing: [] as string[] }
+// The engine keeps a request under 90 images and 16 MB of media (`request-size.ts` in opencode), and
+// Anthropic refuses more than 100 images or 32 MB. A body that names more is refused before its media
+// loads: each reference expands to its whole file, so a few kilobytes could otherwise build gigabytes.
+const MAX_MEDIA_REFERENCES = 200
+const MAX_RESOLVED_MEDIA_BYTES = 32_000_000
+
+const encodedBytes = (bytes: number) => Math.ceil(bytes / 3) * 4
+
+export type ResolvedMedia = {
+  readonly body: unknown
+  /** Digests the account has no media for. */
+  readonly missing: string[]
+  /** The body names more media than any provider takes. */
+  readonly tooLarge: boolean
+}
+
+/** Puts the account's stored media back in place of its references. */
+export async function resolveMedia(db: ArenaDb, userId: string, body: unknown): Promise<ResolvedMedia> {
+  const counts = mediaReferences(body)
+  if (counts.size === 0) return { body, missing: [], tooLarge: false }
+  let named = 0
+  for (const count of counts.values()) named += count
+  if (named > MAX_MEDIA_REFERENCES) return { body, missing: [], tooLarge: true }
   const media = new Map<string, Buffer>()
   const unknown: string[] = []
-  for (const digest of digests) {
+  for (const digest of counts.keys()) {
     const data = cachedMedia(partID(userId, "media", digest))
     if (data) media.set(digest, data)
     else unknown.push(digest)
   }
-  const stored =
+  // Sizes first, so a body that names large files never loads more than the limit.
+  const sizes =
     unknown.length === 0
       ? []
       : await parts(db)
-          .find({ _id: { $in: unknown.map((digest) => partID(userId, "media", digest)) }, userId })
+          .find(
+            { _id: { $in: unknown.map((digest) => partID(userId, "media", digest)) }, userId },
+            { projection: { _id: 1, sha256: 1, bytes: 1 } },
+          )
+          .toArray()
+  const found = new Set(sizes.map((part) => part.sha256))
+  const absent = unknown.filter((digest) => !found.has(digest))
+  if (absent.length > 0) return { body, missing: absent, tooLarge: false }
+  let resolvedBytes = 0
+  for (const [digest, data] of media) resolvedBytes += encodedBytes(data.byteLength) * (counts.get(digest) ?? 0)
+  for (const part of sizes) resolvedBytes += encodedBytes(part.bytes) * (counts.get(part.sha256) ?? 0)
+  if (resolvedBytes > MAX_RESOLVED_MEDIA_BYTES) return { body, missing: [], tooLarge: true }
+  const stored =
+    sizes.length === 0
+      ? []
+      : await parts(db)
+          .find({ _id: { $in: sizes.map((part) => part._id) }, userId })
           .toArray()
   for (const part of stored) {
     const data = binary(part.data)
@@ -279,14 +312,18 @@ export async function resolveMedia(db: ArenaDb, userId: string, body: unknown) {
     media.set(part.sha256, data)
     cacheMedia(part._id, data)
   }
-  const missing = digests.filter((digest) => !media.has(digest))
-  if (missing.length > 0) return { body, missing }
+  const missing = [...counts.keys()].filter((digest) => !media.has(digest))
+  if (missing.length > 0) return { body, missing, tooLarge: false }
+  const encoded = new Map<string, string>()
   const resolved = walkStrings(body, (text) => {
     const match = MEDIA_REFERENCE_PATTERN.exec(text)
     const data = match && media.get(match[1]!)
-    return data ? `data:${match[2]};base64,${data.toString("base64")}` : undefined
+    if (!match || !data) return undefined
+    const base64 = encoded.get(match[1]!) ?? data.toString("base64")
+    encoded.set(match[1]!, base64)
+    return `data:${match[2]};base64,${base64}`
   })
-  return { body: resolved, missing }
+  return { body: resolved, missing, tooLarge: false }
 }
 
 async function storeParts(db: ArenaDb, userId: string, split: ReturnType<typeof splitRequest>, createdAt: Date) {

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { createHash } from "crypto"
 import type { ArenaDb } from "./collection"
+import { KEEP_ALIVE_HEADER } from "./keep-alive"
 import { MEDIA_PATH, MEDIA_TYPE_HEADER, mediaReference, readMediaMissing } from "./media"
 import { createArenaService } from "./service"
 
@@ -24,9 +25,10 @@ function matches(row: Row, filter: Record<string, unknown>) {
 }
 
 /** Keeps the parts in memory; every account owns the same assignment, so only part scoping differs. */
-function memoryDb() {
+function memoryDb(assigned = model) {
   const parts = new Map<string, Row>()
   let inserts = 0
+  let loads = 0
   const db = {
     collection: (name: string) => {
       if (name === "arenaAssignmentSets") {
@@ -34,15 +36,25 @@ function memoryDb() {
           find: (filter: { userId: string; scopeID: string }) => ({
             toArray: async () =>
               filter.scopeID === "turn-1"
-                ? [{ userId: filter.userId, scopeID: "turn-1", assignments: [{ assignmentID: "opaque-id", model }] }]
+                ? [
+                    {
+                      userId: filter.userId,
+                      scopeID: "turn-1",
+                      assignments: [{ assignmentID: "opaque-id", model: assigned }],
+                    },
+                  ]
                 : [],
           }),
         }
       }
       if (name !== "arenaGenerationParts") throw new Error(`Unexpected Arena collection: ${name}`)
       return {
-        find: (filter: Record<string, unknown>) => ({
-          toArray: async () => [...parts.values()].filter((row) => matches(row, filter)),
+        find: (filter: Record<string, unknown>, options?: { projection?: unknown }) => ({
+          toArray: async () => {
+            // A find without a projection reads the media itself.
+            if (!options?.projection) loads++
+            return [...parts.values()].filter((row) => matches(row, filter))
+          },
         }),
         insertOne: async (document: Row) => {
           if (parts.has(document._id)) throw Object.assign(new Error("duplicate"), { code: 11000 })
@@ -53,7 +65,7 @@ function memoryDb() {
       }
     },
   } as unknown as ArenaDb
-  return { db, inserts: () => inserts }
+  return { db, inserts: () => inserts, loads: () => loads }
 }
 
 function service(db: ArenaDb, user = "user-1", upstream: (body: string) => void = () => {}) {
@@ -84,13 +96,15 @@ const upload = (data: Uint8Array<ArrayBuffer>, mimeType = "image/png", scope = "
     body: data,
   })
 
-const contestant = (url: string) =>
+const contestant = (url: string | string[], headers: Record<string, string> = {}) =>
   new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
     method: "POST",
-    headers: { ...routing, "Content-Type": "application/json" },
+    headers: { ...routing, "Content-Type": "application/json", ...headers },
     body: JSON.stringify({
       model: "contestant",
-      messages: [{ role: "user", content: [{ type: "image_url", image_url: { url } }] }],
+      messages: [
+        { role: "user", content: [url].flat().map((item) => ({ type: "image_url", image_url: { url: item } })) },
+      ],
     }),
   })
 
@@ -134,6 +148,41 @@ describe("media by reference", () => {
     const response = await proxy(contestant(mediaReference(digest, "image/png")))
     expect(response.status).toBe(409)
     expect(readMediaMissing(await response.text())).toEqual([digest])
+    expect(calls).toBe(0)
+  })
+
+  test("a request that names more media than any provider takes is refused before its media loads", async () => {
+    const store = memoryDb()
+    let calls = 0
+    const proxy = service(store.db, "user-1", () => calls++)
+    await proxy(upload(png))
+    const reference = mediaReference(digest, "image/png")
+    const repeated = await proxy(contestant(Array.from({ length: 201 }, () => reference)))
+    expect(repeated.status).toBe(413)
+
+    // 9 MB is 12 MB of base64: two copies fit the 32 MB a request may carry, three do not.
+    const large = new Uint8Array(9_000_000).fill(7)
+    const largeReference = mediaReference(createHash("sha256").update(large).digest("hex"), "image/png")
+    await proxy(upload(large))
+    const loads = store.loads()
+    const tooLarge = await proxy(contestant([largeReference, largeReference, largeReference]))
+    expect(tooLarge.status).toBe(413)
+    expect(store.loads()).toBe(loads)
+    expect(calls).toBe(0)
+    expect((await proxy(contestant([largeReference, largeReference]))).status).toBe(200)
+    expect(calls).toBe(1)
+  })
+
+  test("a keep-alive ping answers the same whether or not the proxy has its media", async () => {
+    const claude = { ...model, slug: "anthropic/hidden", canonicalSlug: "anthropic/hidden" }
+    let calls = 0
+    const ping = { [KEEP_ALIVE_HEADER]: "1" }
+    const unknown = mediaReference("0".repeat(64), "image/png")
+    for (const assigned of [model, claude]) {
+      const response = await service(memoryDb(assigned).db, "user-1", () => calls++)(contestant(unknown, ping))
+      expect(response.status).toBe(204)
+      expect(response.headers.get(KEEP_ALIVE_HEADER)).toBe("1")
+    }
     expect(calls).toBe(0)
   })
 

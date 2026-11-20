@@ -73,6 +73,19 @@ describe("ArenaKeepAlive", () => {
     expect(pings).toEqual([4 * MINUTE])
   })
 
+  test("an answer's first ping counts from when its request started, not from the session's last use", async () => {
+    const { clock, keepAlive, pings, ping } = setup()
+    // A failed call leaves no ping, so the session last used its prompt ten minutes before the next.
+    keepAlive.begin("session")()
+    await clock.advance(10 * MINUTE)
+    const end = keepAlive.begin("session", ping)
+    await clock.advance(1 * MINUTE)
+    expect(pings).toEqual([])
+    await clock.advance(3 * MINUTE)
+    expect(pings).toEqual([14 * MINUTE])
+    end()
+  })
+
   test("a session that goes idle stops the pings of an answer still out", async () => {
     const { clock, keepAlive, pings, ping } = setup()
     keepAlive.begin("session", ping)

@@ -20,6 +20,10 @@ import { KEEP_ALIVE_HEADER } from "@agent-duel/arena-service/keep-alive"
 import { readMediaMissing } from "@agent-duel/arena-service/media"
 import type { KeepAlive, Ping, PingResult } from "./keep-alive"
 import { forgetUploads, referenceMedia, referencesUnsupported, uploadMedia, type Media } from "./media-reference"
+import { REQUEST_BYTES_LIMIT } from "./engine-runtime/request-size"
+
+// The control plane lost its upload route after this request was sized for references.
+const MEDIA_RESIZE_ERROR = { error: { message: "Arena media has to be sent inline", type: "arena_media_inline" } }
 
 export type Assignment = {
   readonly runID: string
@@ -732,16 +736,23 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
         media,
         signal: dispatch.signal,
       })
+    // When an upload fails, the media goes inline if the body still fits: the size check counts media
+    // in full until this process has seen an upload succeed. A body sized for references that does
+    // not fit answers the upload's own failure, or a retryable one after a 404, so the next attempt
+    // is sized again, inline.
+    const sendInline = (refusal: Response | "unsupported") => {
+      if (Buffer.byteLength(JSON.stringify(rewritten)) <= REQUEST_BYTES_LIMIT) {
+        outgoing = rewritten
+        return send()
+      }
+      return refusal === "unsupported" ? Promise.resolve(Response.json(MEDIA_RESIZE_ERROR, { status: 503 })) : refusal
+    }
     let response: Response
     try {
-      let refusal: Response | "unsupported" | undefined
-      if (referenced && referenced.media.size > 0) {
-        refusal = await upload(referenced.media.values())
-        // A control plane without the upload route takes the media inline. The size check counts
-        // media in full until an upload succeeds, so that body fits its limit.
-        if (refusal === undefined) outgoing = referenced.body
-      }
-      response = refusal instanceof Response ? refusal : await send()
+      const referencing = referenced && referenced.media.size > 0 ? referenced : undefined
+      const refusal = referencing ? await upload(referencing.media.values()) : undefined
+      if (referencing && refusal === undefined) outgoing = referencing.body
+      response = refusal === undefined ? await send() : await sendInline(refusal)
       const missing =
         referenced && outgoing !== rewritten && response.status === 409
           ? readMediaMissing(await response.clone().text())
@@ -750,8 +761,7 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
         await response.body?.cancel().catch(() => undefined)
         forgetUploads(upstream, missing)
         const again = await upload(missing.flatMap((digest) => referenced?.media.get(digest) ?? []))
-        if (again === "unsupported") outgoing = rewritten
-        response = again instanceof Response ? again : await send()
+        response = again === undefined ? await send() : await sendInline(again)
       }
     } catch (error) {
       preHeaderTransportFailure = !request.signal.aborted && retryableTransport(error)

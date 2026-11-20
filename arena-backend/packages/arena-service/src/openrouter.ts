@@ -28,7 +28,7 @@ import {
   type GenerationCapture,
 } from "./generation-capture"
 import { geminiToolResultRetry } from "./gemini-tool-results"
-import { MEDIA_PATH, MEDIA_TYPE_HEADER, mediaMissingError, sendsByReference } from "./media"
+import { MEDIA_PATH, MEDIA_TYPE_HEADER, mediaMissingError, mediaTooLargeError, sendsByReference } from "./media"
 import { createReasoningRedactor } from "./reasoning"
 import {
   HEARTBEAT_HEADER,
@@ -654,6 +654,10 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
     })
     // Images and PDFs the engine uploaded come back here, before the budget counts them (`media.ts`).
     const media = await resolveMedia(db, caller.id, reasoning.restore(input))
+    // Only Claude pings get this far, so a ping with media the proxy cannot send answers like every
+    // other ping, or a made-up reference would tell the sides apart.
+    if (keepAlive && (media.tooLarge || media.missing.length > 0)) return keepAliveAnswer()
+    if (media.tooLarge) return Response.json(mediaTooLargeError(), { status: 413 })
     if (media.missing.length > 0) return Response.json(mediaMissingError(media.missing), { status: 409 })
     const restored = media.body as Record<string, unknown>
     const generationID = requestedGenerationID || `gen_${randomUUID().replaceAll("-", "")}`

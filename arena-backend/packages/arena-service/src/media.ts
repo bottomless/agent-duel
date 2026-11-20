@@ -30,6 +30,11 @@ export function mediaMissingError(missing: ReadonlyArray<string>) {
   return { error: { message: "Arena media is missing", type: MEDIA_MISSING_TYPE, missing: [...missing] } }
 }
 
+/** The request names more media than any provider takes. Refused before it is built, not retried. */
+export function mediaTooLargeError() {
+  return { error: { message: "Arena request carries too much media", type: "arena_media_too_large" } }
+}
+
 /** The digests a `mediaMissingError` body names, or undefined for any other body. */
 export function readMediaMissing(body: string | undefined) {
   if (!body) return undefined

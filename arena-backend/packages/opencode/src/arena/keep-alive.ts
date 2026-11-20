@@ -125,7 +125,8 @@ export class KeepAlive {
   private armAnswering(sessionID: string, entry: Entry, flight: NonNullable<Entry["answering"]>, startedAt: number) {
     if (!this.supported) return
     const now = this.now()
-    const due = Math.max(now, entry.usedAt + this.everyMs)
+    // The request read the cached prompt when it started, later than any earlier use of the session.
+    const due = Math.max(now, Math.max(entry.usedAt, startedAt) + this.everyMs)
     if (due - startedAt > this.maxWaitMs) return
     flight.cancel = this.schedule(async () => {
       flight.cancel = undefined
