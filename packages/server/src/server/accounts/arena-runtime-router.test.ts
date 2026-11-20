@@ -586,6 +586,48 @@ describe("Arena runtime proxy", () => {
     expect(new Headers(init?.headers).get("authorization")).toBe("Bearer account-session-token");
   });
 
+  it("forwards an uploaded image as raw bytes with its media type", async () => {
+    installArenaCredentials({
+      mode: "hosted",
+      researchPartition: "test-research-partition",
+      researchAccountID: "test-account",
+      token: "account-session-token",
+      controlPlaneUrl: "https://control.agentduel.test",
+    });
+    const runtime = issueRuntimeCapability();
+    upstream.mockResolvedValue(Response.json({ sha256: "digest" }));
+    const bytes = new Uint8Array([137, 80, 78, 71, 0, 255]);
+
+    const response = await fetch(`${baseUrl}/api/arena-runtime/api/openrouter/api/v1/arena/media`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${runtime.token}`,
+        "Content-Type": "application/octet-stream",
+        "X-Arena-Assignment-ID": "opaque-id",
+        "X-Arena-Scope-ID": "turn-1",
+        "X-Arena-Media-Type": "image/png",
+      },
+      body: bytes,
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ sha256: "digest" });
+    const [url, init] = upstream.mock.calls[0]!;
+    expect(url).toBe("https://control.agentduel.test/api/openrouter/api/v1/arena/media");
+    const headers = new Headers(init?.headers);
+    expect(headers.get("content-type")).toBe("application/octet-stream");
+    expect(headers.get("x-arena-media-type")).toBe("image/png");
+    expect(new Uint8Array(init?.body as ArrayBuffer)).toEqual(bytes);
+
+    const json = await fetch(`${baseUrl}/api/arena-runtime/api/openrouter/api/v1/arena/media`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${runtime.token}`, "Content-Type": "application/json" },
+      body: "{}",
+    });
+    expect(json.status).toBe(415);
+    expect(upstream).toHaveBeenCalledTimes(1);
+  });
+
   it("forwards a contestant replay and the heartbeat period the engine times out on", async () => {
     installArenaCredentials({
       mode: "hosted",

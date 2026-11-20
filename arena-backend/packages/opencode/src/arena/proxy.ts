@@ -17,7 +17,16 @@ import {
 import { COMPACTION_HEADER, COMPACTION_OFFER } from "@agent-duel/arena-service/request-budget"
 import { HEARTBEAT_HEADER, REPLAY_PATH, REPLAY_UNAVAILABLE_LINE } from "@agent-duel/arena-service/stream-recovery"
 import { KEEP_ALIVE_HEADER } from "@agent-duel/arena-service/keep-alive"
+import { readMediaMissing } from "@agent-duel/arena-service/media"
 import type { KeepAlive, Ping, PingResult } from "./keep-alive"
+import { forgetUploads, referenceMedia, referencesUnsupported, uploadMedia, type Media } from "./media-reference"
+import { REQUEST_BYTES_LIMIT } from "./engine-runtime/request-size"
+
+// The control plane lost its upload route after this request was sized for references.
+const MEDIA_RESIZE_ERROR = { error: { message: "Arena media has to be sent inline", type: "arena_media_inline" } }
+
+/** An upload that did not succeed: refused, a control plane without the route, or a failure to send. */
+type UploadFailure = Response | "unsupported" | { readonly thrown: unknown }
 
 export type Assignment = {
   readonly runID: string
@@ -85,6 +94,8 @@ export type ProxyOptions = {
   readonly fetch?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>
   readonly telemetry?: Telemetry
   readonly keepAlive?: KeepAlive
+  /** Upload images and PDFs once and name them in the request (`media-reference.ts`): the hosted control plane. */
+  readonly mediaByReference?: boolean
 }
 
 type StreamProgress = {
@@ -685,12 +696,14 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
     const execute = options.fetch ?? fetch
     const url = `${upstream}${upstreamPath(request)}`
     const classification = request.headers.get("x-arena-generation-classification")
+    // What goes to the control plane: the body itself, or the body naming its uploaded media.
+    let outgoing: Readonly<Record<string, unknown>> = rewritten
+    const ping: Ping | undefined =
+      classification === "generation" ? () => keepAlivePing(execute, url, assignment, outgoing) : undefined
     // A compaction ends the wait with no ping: the next call continues its summary, not this prompt.
     if (classification === "generation" || classification === "compaction") {
-      endWait = options.keepAlive?.begin(sessionID)
+      endWait = options.keepAlive?.begin(sessionID, ping)
     }
-    const ping: Ping | undefined =
-      classification === "generation" ? () => keepAlivePing(execute, url, assignment, rewritten) : undefined
     const routing = {
       "X-Arena-Assignment-ID": assignment.assignmentID,
       "X-Arena-Scope-ID": assignment.scopeID,
@@ -701,23 +714,78 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
     const dispatch = new AbortController()
     if (request.signal.aborted) dispatch.abort(request.signal.reason)
     else request.signal.addEventListener("abort", () => dispatch.abort(request.signal.reason), { once: true })
-    const responsePromise = execute(url, {
-      method: "POST",
-      headers: {
-        ...routing,
-        Accept: request.headers.get("accept") || "text/event-stream, application/json",
-        "X-OpenRouter-Metadata": "enabled",
-        // Lets the control plane compact this step at the hidden model's level.
-        ...(request.headers.get(COMPACTION_HEADER) === COMPACTION_OFFER
-          ? { [COMPACTION_HEADER]: COMPACTION_OFFER }
-          : {}),
-      },
-      body: JSON.stringify(rewritten),
-      signal: dispatch.signal,
-    })
+    const send = () =>
+      execute(url, {
+        method: "POST",
+        headers: {
+          ...routing,
+          Accept: request.headers.get("accept") || "text/event-stream, application/json",
+          "X-OpenRouter-Metadata": "enabled",
+          // Lets the control plane compact this step at the hidden model's level.
+          ...(request.headers.get(COMPACTION_HEADER) === COMPACTION_OFFER
+            ? { [COMPACTION_HEADER]: COMPACTION_OFFER }
+            : {}),
+        },
+        body: outgoing === rewritten ? inlineText() : JSON.stringify(outgoing),
+        signal: dispatch.signal,
+      })
+    let inline: string | undefined
+    const inlineText = () => (inline ??= JSON.stringify(rewritten))
+    const fitsInline = () => Buffer.byteLength(inlineText()) <= REQUEST_BYTES_LIMIT
+    const referenced =
+      options.mediaByReference && !referencesUnsupported(upstream) ? referenceMedia(rewritten) : undefined
+    const upload = async (media: Iterable<Media>): Promise<UploadFailure | undefined> => {
+      try {
+        return await uploadMedia({
+          execute,
+          upstream,
+          routing: { "X-Arena-Assignment-ID": assignment.assignmentID, "X-Arena-Scope-ID": assignment.scopeID },
+          media,
+          signal: dispatch.signal,
+        })
+      } catch (error) {
+        if (dispatch.signal.aborted) throw error
+        return { thrown: error }
+      }
+    }
+    // When an upload fails, the media goes inline if the body still fits: the size check counts media
+    // in full until this process has seen an upload succeed. A body sized for references that does
+    // not fit answers the upload's own failure. After a 404 it answers a retryable failure instead,
+    // and the retry is sized inline, because the route is now known to be missing.
+    const sendInline = async (failure: UploadFailure) => {
+      if (fitsInline()) {
+        if (failure instanceof Response) await failure.body?.cancel().catch(() => undefined)
+        outgoing = rewritten
+        return send()
+      }
+      if (failure === "unsupported") return Response.json(MEDIA_RESIZE_ERROR, { status: 503 })
+      if (failure instanceof Response) return failure
+      throw failure.thrown
+    }
     let response: Response
     try {
-      response = await responsePromise
+      const referencing = referenced && referenced.media.size > 0 ? referenced : undefined
+      const refusal = referencing ? await upload(referencing.media.values()) : undefined
+      if (referencing && refusal === undefined) outgoing = referencing.body
+      // Another request may have found the route missing after this one was sized for references.
+      const resize =
+        options.mediaByReference && !referenced && !fitsInline() && referenceMedia(rewritten).media.size > 0
+      response =
+        refusal !== undefined
+          ? await sendInline(refusal)
+          : resize
+            ? Response.json(MEDIA_RESIZE_ERROR, { status: 503 })
+            : await send()
+      const missing =
+        referenced && outgoing !== rewritten && response.status === 409
+          ? readMediaMissing(await response.clone().text())
+          : undefined
+      if (missing) {
+        await response.body?.cancel().catch(() => undefined)
+        forgetUploads(upstream, missing)
+        const again = await upload(missing.flatMap((digest) => referenced?.media.get(digest) ?? []))
+        response = again === undefined ? await send() : await sendInline(again)
+      }
     } catch (error) {
       preHeaderTransportFailure = !request.signal.aborted && retryableTransport(error)
       throw error

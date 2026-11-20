@@ -10,6 +10,13 @@ import { isDuplicateKeyError, type ArenaCollection, type ArenaDb } from "./colle
 
 const CAPTURES = "arenaGenerationCaptures"
 const PARTS = "arenaGenerationParts"
+// Media the engine uploads to send by reference (`media.ts`). Kept apart from the capture parts so it
+// can expire: a single-agent chat is never captured, and a battle's capture stores its own copy of
+// what the call sent. A TTL index on `expiresAt` deletes old uploads; the control plane creates it by
+// migration. An expired file is uploaded again on the next call that names it, and its reference,
+// and so the prompt, stays the same.
+const UPLOADS = "arenaMediaUploads"
+const UPLOAD_TTL_MS = 72 * 60 * 60 * 1000
 // A MongoDB document holds at most 16 MiB; the rest is room for the fields around the data. A larger
 // part is left out and reported missing on load.
 const MAX_PART_BYTES = 15 * 1024 * 1024
@@ -17,7 +24,9 @@ const MAX_RESPONSE_BYTES = 15 * 1024 * 1024
 
 // A base64 data URL anywhere in a message: pasted screenshots, images a tool read, PDFs as `file_data`.
 const DATA_URL = /^data:([^;,]+);base64,/
-const MEDIA_REFERENCE = "arena-media:sha256:"
+/** `arena-media:sha256:<digest>:<mime>` names a stored media part in place of its data URL. */
+export const MEDIA_REFERENCE = "arena-media:sha256:"
+const MEDIA_REFERENCE_PATTERN = /^arena-media:sha256:([0-9a-f]{64}):([\w.+-]+\/[\w.+-]+)$/
 
 export type CaptureComponentKind = "params" | "system" | "tools" | "message"
 
@@ -86,6 +95,16 @@ type PartDocument = {
   readonly createdAt: Date
 }
 
+type UploadDocument = {
+  readonly _id: string
+  readonly userId: string
+  readonly sha256: string
+  readonly bytes: number
+  readonly data?: Uint8Array
+  readonly createdAt: Date
+  readonly expiresAt: Date
+}
+
 type SplitComponent = CaptureComponent & { readonly text: string }
 type SplitMedia = CaptureMedia & { readonly data: Buffer }
 
@@ -95,6 +114,10 @@ function captures(db: ArenaDb): ArenaCollection<CaptureDocument> {
 
 function parts(db: ArenaDb): ArenaCollection<PartDocument> {
   return db.collection<PartDocument>(PARTS)
+}
+
+function uploads(db: ArenaDb): ArenaCollection<UploadDocument> {
+  return db.collection<UploadDocument>(UPLOADS)
 }
 
 function sha256(value: string | Uint8Array) {
@@ -150,6 +173,17 @@ function inlineMedia(value: unknown, media: ReadonlyMap<string, Buffer>) {
   })
 }
 
+/** The digests of the media references in a request body, with how often the body names each. */
+export function mediaReferences(value: unknown) {
+  const counts = new Map<string, number>()
+  walkStrings(value, (text) => {
+    const digest = MEDIA_REFERENCE_PATTERN.exec(text)?.[1]
+    if (digest) counts.set(digest, (counts.get(digest) ?? 0) + 1)
+    return undefined
+  })
+  return counts
+}
+
 function componentOf(kind: CaptureComponentKind, value: unknown, role?: string): SplitComponent {
   const text = JSON.stringify(value)
   return { kind, ...(role ? { role } : {}), sha256: sha256(text), bytes: Buffer.byteLength(text), text }
@@ -178,31 +212,17 @@ export function splitRequest(body: Readonly<Record<string, unknown>>) {
   return { components, media: [...media.values()] }
 }
 
-async function storeParts(db: ArenaDb, userId: string, split: ReturnType<typeof splitRequest>, createdAt: Date) {
-  const candidates = [
-    ...split.media.map(
-      (item): PartDocument => ({
-        _id: partID(userId, "media", item.sha256),
-        userId,
-        kind: "media",
-        sha256: item.sha256,
-        bytes: item.bytes,
-        data: item.data,
-        createdAt,
-      }),
-    ),
-    ...split.components.map(
-      (component): PartDocument => ({
-        _id: partID(userId, "component", component.sha256),
-        userId,
-        kind: "component",
-        sha256: component.sha256,
-        bytes: component.bytes,
-        text: component.text,
-        createdAt,
-      }),
-    ),
-  ].filter((part) => part.bytes <= MAX_PART_BYTES)
+const mediaPart = (userId: string, item: SplitMedia, createdAt: Date): PartDocument => ({
+  _id: partID(userId, "media", item.sha256),
+  userId,
+  kind: "media",
+  sha256: item.sha256,
+  bytes: item.bytes,
+  data: item.data,
+  createdAt,
+})
+
+async function insertNewParts(db: ArenaDb, userId: string, candidates: ReadonlyArray<PartDocument>) {
   const unique = [...new Map(candidates.map((part) => [part._id, part])).values()]
   const stored = await parts(db)
     .find({ _id: { $in: unique.map((part) => part._id) }, userId }, { projection: { _id: 1 } })
@@ -217,6 +237,160 @@ async function storeParts(db: ArenaDb, userId: string, split: ReturnType<typeof 
         if (!isDuplicateKeyError(error)) throw error
       })
   }
+}
+
+/** Keeps one media file the engine sends by reference until `UPLOAD_TTL_MS` passes, and returns its digest. */
+export async function storeMedia(db: ArenaDb, userId: string, data: Buffer, createdAt: Date) {
+  const digest = sha256(data)
+  if (data.byteLength > MAX_PART_BYTES) throw new Error("Arena media is too large to store")
+  const id = partID(userId, "media", digest)
+  // Both sides of a battle upload the same file at the same moment; the second finds the first.
+  const stored = await uploads(db).findOne({ _id: id, userId }, { projection: { _id: 1, expiresAt: 1 } })
+  if (stored && stored.expiresAt.getTime() > createdAt.getTime()) return digest
+  // An expired upload the TTL index has not deleted yet starts its time again.
+  await uploads(db)
+    .replaceOne(
+      { _id: id },
+      {
+        _id: id,
+        userId,
+        sha256: digest,
+        bytes: data.byteLength,
+        data,
+        createdAt,
+        expiresAt: new Date(createdAt.getTime() + UPLOAD_TTL_MS),
+      },
+      { upsert: true },
+    )
+    .catch((error: unknown) => {
+      if (!isDuplicateKeyError(error)) throw error
+    })
+  return digest
+}
+
+// A chat sends the same images on every call, so a warm function keeps the last ones it loaded
+// instead of reading them from the store again each time. Keyed by part id, so by account too, and
+// dropped when the upload expires.
+const MEDIA_CACHE_BYTES = 64 * 1024 * 1024
+const mediaCache = new Map<string, { readonly data: Buffer; readonly expiresAt: Date }>()
+let mediaCacheBytes = 0
+
+function cachedMedia(id: string, now: Date) {
+  const entry = mediaCache.get(id)
+  if (!entry) return undefined
+  mediaCache.delete(id)
+  if (entry.expiresAt.getTime() <= now.getTime()) {
+    mediaCacheBytes -= entry.data.byteLength
+    return undefined
+  }
+  mediaCache.set(id, entry)
+  return entry.data
+}
+
+function cacheMedia(id: string, data: Buffer, expiresAt: Date) {
+  if (mediaCache.has(id) || data.byteLength > MEDIA_CACHE_BYTES / 4) return
+  mediaCache.set(id, { data, expiresAt })
+  mediaCacheBytes += data.byteLength
+  for (const [oldest, value] of mediaCache) {
+    if (mediaCacheBytes <= MEDIA_CACHE_BYTES) break
+    mediaCache.delete(oldest)
+    mediaCacheBytes -= value.data.byteLength
+  }
+}
+
+// The engine keeps a request under 90 images and 16 MB of media (`request-size.ts` in opencode), and
+// Anthropic refuses more than 100 images or 32 MB. A body that names more is refused before its media
+// loads: each reference expands to its whole file, so a few kilobytes could otherwise build gigabytes.
+const MAX_MEDIA_REFERENCES = 200
+const MAX_RESOLVED_MEDIA_BYTES = 32_000_000
+
+const encodedBytes = (bytes: number) => Math.ceil(bytes / 3) * 4
+
+export type ResolvedMedia = {
+  readonly body: unknown
+  /** Digests the account has no media for. */
+  readonly missing: string[]
+  /** The body names more media than any provider takes. */
+  readonly tooLarge: boolean
+}
+
+/** Puts the account's uploaded media back in place of its references. An expired upload is missing. */
+export async function resolveMedia(db: ArenaDb, userId: string, body: unknown, now: Date): Promise<ResolvedMedia> {
+  const counts = mediaReferences(body)
+  if (counts.size === 0) return { body, missing: [], tooLarge: false }
+  let named = 0
+  for (const count of counts.values()) named += count
+  if (named > MAX_MEDIA_REFERENCES) return { body, missing: [], tooLarge: true }
+  const media = new Map<string, Buffer>()
+  const unknown: string[] = []
+  for (const digest of counts.keys()) {
+    const data = cachedMedia(partID(userId, "media", digest), now)
+    if (data) media.set(digest, data)
+    else unknown.push(digest)
+  }
+  // Sizes first, so a body that names large files never loads more than the limit.
+  const sizes =
+    unknown.length === 0
+      ? []
+      : await uploads(db)
+          .find(
+            {
+              _id: { $in: unknown.map((digest) => partID(userId, "media", digest)) },
+              userId,
+              expiresAt: { $gt: now },
+            },
+            { projection: { _id: 1, sha256: 1, bytes: 1, expiresAt: 1 } },
+          )
+          .toArray()
+  const found = new Set(sizes.map((part) => part.sha256))
+  const absent = unknown.filter((digest) => !found.has(digest))
+  if (absent.length > 0) return { body, missing: absent, tooLarge: false }
+  let resolvedBytes = 0
+  for (const [digest, data] of media) resolvedBytes += encodedBytes(data.byteLength) * (counts.get(digest) ?? 0)
+  for (const part of sizes) resolvedBytes += encodedBytes(part.bytes) * (counts.get(part.sha256) ?? 0)
+  if (resolvedBytes > MAX_RESOLVED_MEDIA_BYTES) return { body, missing: [], tooLarge: true }
+  const stored =
+    sizes.length === 0
+      ? []
+      : await uploads(db)
+          .find({ _id: { $in: sizes.map((part) => part._id) }, userId })
+          .toArray()
+  for (const part of stored) {
+    const data = binary(part.data)
+    if (!data || sha256(data) !== part.sha256) continue
+    media.set(part.sha256, data)
+    cacheMedia(part._id, data, part.expiresAt)
+  }
+  const missing = [...counts.keys()].filter((digest) => !media.has(digest))
+  if (missing.length > 0) return { body, missing, tooLarge: false }
+  const encoded = new Map<string, string>()
+  const resolved = walkStrings(body, (text) => {
+    const match = MEDIA_REFERENCE_PATTERN.exec(text)
+    const data = match && media.get(match[1]!)
+    if (!match || !data) return undefined
+    const base64 = encoded.get(match[1]!) ?? data.toString("base64")
+    encoded.set(match[1]!, base64)
+    return `data:${match[2]};base64,${base64}`
+  })
+  return { body: resolved, missing, tooLarge: false }
+}
+
+async function storeParts(db: ArenaDb, userId: string, split: ReturnType<typeof splitRequest>, createdAt: Date) {
+  const candidates = [
+    ...split.media.map((item) => mediaPart(userId, item, createdAt)),
+    ...split.components.map(
+      (component): PartDocument => ({
+        _id: partID(userId, "component", component.sha256),
+        userId,
+        kind: "component",
+        sha256: component.sha256,
+        bytes: component.bytes,
+        text: component.text,
+        createdAt,
+      }),
+    ),
+  ].filter((part) => part.bytes <= MAX_PART_BYTES)
+  await insertNewParts(db, userId, candidates)
 }
 
 type CaptureInput = CaptureKey & {

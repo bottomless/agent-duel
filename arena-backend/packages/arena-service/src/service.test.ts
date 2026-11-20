@@ -3,6 +3,7 @@ import type { MongoClient } from "mongodb"
 import type { Caller } from "./context"
 import type { EndpointCatalog } from "./endpoint-label"
 import { loadGenerationCapture } from "./generation-capture"
+import { MEDIA_PATH, MEDIA_TYPE_HEADER, mediaReference } from "./media"
 import { connectMongoDb, type MongoDb } from "./mongo"
 import { DEFAULT_MODEL_OUTPUT_LIMIT, type ModelPool } from "./pool"
 import { createArenaService, type ArenaService, type ArenaServiceOptions } from "./service"
@@ -62,6 +63,7 @@ beforeEach(async () => {
   await db.collection("arenaAssignmentGenerationMetrics").deleteMany({})
   await db.collection("arenaGenerationCaptures").deleteMany({})
   await db.collection("arenaGenerationParts").deleteMany({})
+  await db.collection("arenaMediaUploads").deleteMany({})
   await db.collection("arenaEndpointCatalog").deleteMany({})
 })
 
@@ -351,6 +353,47 @@ describe("Arena service", () => {
     expect(loaded!.capture.response?.body).toContain("hidden-provider")
     const media = await db.collection("arenaGenerationParts").findOne({ userId: "user-1", kind: "media" })
     expect(media).not.toBeNull()
+  })
+
+  test("a battle call that names an upload keeps its own copy, apart from the expiring upload", async () => {
+    const { service, upstream } = createService({ captureGenerations: true })
+    await send(service, assignmentsRequest({ action: "create", kind: "battle", scopeID: "turn-1" }))
+    const routing = {
+      Authorization: "Bearer user-1",
+      "X-Arena-Assignment-ID": "assignment-a",
+      "X-Arena-Scope-ID": "turn-1",
+    }
+    const bytes = Buffer.from([9, 8, 7, 6, 5, 4])
+    const uploaded = await send(
+      service,
+      new Request(`https://control.test/api/openrouter${MEDIA_PATH}`, {
+        method: "POST",
+        headers: { ...routing, "Content-Type": "application/octet-stream", [MEDIA_TYPE_HEADER]: "image/png" },
+        body: bytes,
+      }),
+    )
+    const { sha256 } = (await uploaded.json()) as { sha256: string }
+    const request = new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+      method: "POST",
+      headers: { ...routing, "Content-Type": "application/json", "X-Arena-Generation-ID": generationID },
+      body: JSON.stringify({
+        model: "contestant",
+        messages: [
+          { role: "user", content: [{ type: "image_url", image_url: { url: mediaReference(sha256, "image/png") } }] },
+        ],
+        stream: false,
+      }),
+    })
+    expect((await send(service, request)).status).toBe(200)
+    expect(JSON.stringify(upstream[0]!.body)).toContain(bytes.toString("base64"))
+
+    const loaded = await loadGenerationCapture(db, "user-1", generationID)
+    expect(loaded?.verified).toBe(true)
+    expect(
+      await db.collection("arenaGenerationParts").findOne({ userId: "user-1", kind: "media", sha256 }),
+    ).not.toBeNull()
+    const upload = await db.collection<{ _id: string; expiresAt: Date }>("arenaMediaUploads").findOne({ sha256 })
+    expect(upload?.expiresAt).toEqual(new Date(fixedNow.getTime() + 72 * 60 * 60 * 1000))
   })
 
   const labelledPool = [
