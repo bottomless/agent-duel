@@ -34,7 +34,7 @@ function writeNotFound(response: ServerResponse): void {
 
 function writeMethodNotAllowed(response: ServerResponse): void {
   response.writeHead(405, {
-    allow: "POST",
+    allow: "GET, POST",
     "cache-control": "no-store",
   });
   response.end("Method not allowed");
@@ -153,11 +153,11 @@ export function createAccountsReturnServer(input: {
       return;
     }
 
-    if (request.method !== "POST") {
+    if (request.method !== "GET" && request.method !== "POST") {
       writeMethodNotAllowed(response);
       return;
     }
-    if (hasRequestBody(request)) {
+    if (request.method === "POST" && hasRequestBody(request)) {
       request.resume();
       writeNotFound(response);
       return;
@@ -169,6 +169,10 @@ export function createAccountsReturnServer(input: {
       writeFocusError(response);
       return;
     }
+
+    // The success page links here: Safari warns about a non-secure form when an
+    // HTTPS page submits one to loopback. Builds before the link still get the
+    // form's POST. No Content keeps the browser on the success page either way.
     writeNoContent(response);
   }
 
