@@ -15,6 +15,22 @@ describe("appearanceStyleBoundaryKey", () => {
       appearanceStyleBoundaryKey(darkTheme),
     );
   });
+
+  it("produces the same key when only syntax colors change", () => {
+    const syntaxOnlyChange = {
+      ...darkTheme,
+      colors: {
+        ...darkTheme.colors,
+        syntax: Object.fromEntries(
+          Object.keys(darkTheme.colors.syntax).map((key) => [key, "#123456"]),
+        ) as typeof darkTheme.colors.syntax,
+      },
+    };
+
+    expect(appearanceStyleBoundaryKey(syntaxOnlyChange)).toBe(
+      appearanceStyleBoundaryKey(darkTheme),
+    );
+  });
 });
 
 // This is a placement contract against the production JSX, not a simulated native mount.
