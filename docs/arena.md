@@ -1294,7 +1294,13 @@ answer the user votes on. A command listening on a port is a server: it does not
 stays available for Preview under the
 [contestant environment lifetime](#the-canonical-spine-and-contestant-environments). Neither does a
 command started more than the ten-minute foreground limit ago, which a command that never ends, or a
-result that never arrives, would otherwise turn into a side that never ends. Stop ends session-owned shells. Once the side closes, drop
+result that never arrives, would otherwise turn into a side that never ends. Nor does a command that
+died with an earlier engine: Core keeps its job list in the engine database, so after a crash or a
+forced stop (seen on a Windows dev-stack quit and a macOS kill), a resumed side still finds the job,
+running or finished with its result undelivered. Nothing will end it or deliver that result: Core does
+that only in its own restart recovery, which the Arena engine does not run. A job whose shell the
+current engine does not have is not waited for (`pendingShellsOf`).
+Stop ends session-owned shells. Once the side closes, drop
 its background shell notifications; they must not change a reviewed answer or enter the winner's
 history on a later turn. A contestant's foreground shell defaults to two minutes when the timeout is
 omitted or zero, and an explicit positive timeout is honored up to the ten-minute limit. Core moves a
