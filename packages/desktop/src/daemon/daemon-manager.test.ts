@@ -4,6 +4,8 @@ import { hostname, tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { DaemonInstanceError } from "@getpaseo/server/daemon-control";
+
 import { DEFAULT_DESKTOP_SETTINGS } from "../settings/desktop-settings";
 import { ExternalCliCommandError } from "./cli/external";
 import {
@@ -408,6 +410,9 @@ describe("desktop stops and terminals", () => {
       input: {
         home: "/tmp/paseo-home",
         instance,
+        // Pinned rather than the host's: the keep-terminals stop never runs on Windows, and there
+        // the stop is forced, so these tests would take the Windows path on a Windows host.
+        platform: "darwin" as const,
         stopInstance,
         runCliJson,
         log: (message: string) => logged.push(message),
@@ -470,6 +475,101 @@ describe("desktop stops and terminals", () => {
       );
     },
   );
+
+  // What `taskkill /T /F` makes tree-kill reject with when it cannot end some descendant.
+  const taskkillFailure = () =>
+    new Error(
+      "Command failed: taskkill /pid 4242 /T /F\r\nERROR: The process with PID 5150 (child process of PID 4242) could not be terminated.",
+    );
+
+  function windowsStopHarness(stillRunningChecks: number) {
+    const calls: Array<{ force: boolean | undefined }> = [];
+    const logged: Array<{ message: string; details?: Record<string, unknown> }> = [];
+    let checks = 0;
+    const instance = {
+      pid: 4242,
+      startedAt: "2026-11-21T00:00:00.000Z",
+      hostname: "host",
+      uid: 0,
+      listen: "127.0.0.1:6767",
+    };
+    const stopInstance = (async (_home: string, options: { force?: boolean }) => {
+      calls.push({ force: options.force });
+      if (options.force) throw taskkillFailure();
+      checks += 1;
+      if (checks <= stillRunningChecks) {
+        throw new DaemonInstanceError(
+          "STOP_NO_GRACEFUL_CHANNEL",
+          "PID 4242 has no graceful shutdown channel.",
+        );
+      }
+      return { action: "not_running", pid: instance.pid, forced: false, usedLifecycleRpc: false };
+    }) as unknown as NonNullable<Parameters<typeof stopCapturedDaemon>[0]["stopInstance"]>;
+    return {
+      calls,
+      logged,
+      input: {
+        home: "C:/Users/tester/.paseo",
+        instance,
+        platform: "win32" as const,
+        stopInstance,
+        runCliJson: async () => ({}),
+        log: (message: string, details?: Record<string, unknown>) =>
+          logged.push({ message, details }),
+        exitConfirmMs: 1_000,
+      },
+    };
+  }
+
+  it("treats a forced Windows stop whose taskkill failed as stopped once the supervisor is gone", async () => {
+    const harness = windowsStopHarness(1);
+
+    const result = await stopCapturedDaemon({
+      ...harness.input,
+      reason: "app_update",
+      keepTerminals: false,
+    });
+
+    // Forced and not over the RPC, so stopDesktopDaemon releases the crash marker.
+    expect(result).toEqual({ action: "stopped", pid: 4242, forced: true, usedLifecycleRpc: false });
+    expect(harness.calls).toEqual([{ force: true }, { force: false }, { force: false }]);
+    expect(harness.logged).toEqual([
+      expect.objectContaining({
+        message: "the forced stop reported an error, but the daemon exited",
+      }),
+    ]);
+  });
+
+  it("keeps the taskkill error when the supervisor is still running", async () => {
+    const harness = windowsStopHarness(Number.POSITIVE_INFINITY);
+
+    await expect(
+      stopCapturedDaemon({
+        ...harness.input,
+        reason: "app_update",
+        keepTerminals: false,
+        exitConfirmMs: 300,
+      }),
+    ).rejects.toThrow("Command failed: taskkill");
+    expect(harness.logged).toEqual([]);
+  });
+
+  it("does not second-guess a failed stop off Windows", async () => {
+    const harness = windowsStopHarness(0);
+    const stopInstance = (async () => {
+      throw new Error("kill failed");
+    }) as unknown as NonNullable<Parameters<typeof stopCapturedDaemon>[0]["stopInstance"]>;
+
+    await expect(
+      stopCapturedDaemon({
+        ...harness.input,
+        platform: "darwin",
+        stopInstance,
+        reason: "quit",
+        keepTerminals: false,
+      }),
+    ).rejects.toThrow("kill failed");
+  });
 
   it("does not retry a keep stop that failed for another reason", async () => {
     const harness = stopHarness(async () => {

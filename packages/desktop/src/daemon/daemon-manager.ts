@@ -406,7 +406,11 @@ export interface StopCapturedDaemonInput {
   stopInstance?: typeof stopDaemonInstance;
   runCliJson?: typeof runExternalCliJsonCommand;
   log?: typeof logDesktopDaemonLifecycle;
+  /** How long a failed forced stop waits for the supervisor to be gone before it gives up. */
+  exitConfirmMs?: number;
 }
+
+const FORCED_STOP_EXIT_CONFIRM_MS = 5_000;
 
 /** Stops the supervisor desktop captured, keeping its terminals when asked and supported. */
 export async function stopCapturedDaemon(
@@ -438,8 +442,51 @@ export async function stopCapturedDaemon(
         ]);
       },
     });
+  // The forced stop ends the process tree with `taskkill /T /F`, which exits non-zero when it cannot
+  // end some descendant, and the stop then throws though the tree is gone a moment later. On a
+  // beta.23 update that aborted Install & restart and left the app without a daemon. What matters is
+  // whether the supervisor exited: asked again without force or the CLI, a supervisor that is gone
+  // comes back as not running, with its pid lock released and its terminals closed.
+  const confirmExited = async () => {
+    const deadline = Date.now() + (input.exitConfirmMs ?? FORCED_STOP_EXIT_CONFIRM_MS);
+    for (;;) {
+      try {
+        const result = await stopInstance(input.home, {
+          instance: input.instance,
+          timeoutMs: 0,
+          force: false,
+          keepTerminals: false,
+        });
+        return result.action === "not_running";
+      } catch (error) {
+        // Still running: Windows has no other way to ask it, so it refuses without force.
+        const running =
+          error instanceof DaemonInstanceError && error.code === "STOP_NO_GRACEFUL_CHANNEL";
+        if (!running || Date.now() >= deadline) return false;
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+    }
+  };
+  const stopOrConfirm = async (keep: boolean) => {
+    try {
+      return await stop(keep);
+    } catch (error) {
+      if (!force || !(await confirmExited())) throw error;
+      logLifecycle("the forced stop reported an error, but the daemon exited", {
+        reason: input.reason,
+        pid: input.instance.pid,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return {
+        action: "stopped" as const,
+        pid: input.instance.pid,
+        forced: true,
+        usedLifecycleRpc: false,
+      };
+    }
+  };
   try {
-    return await stop(input.keepTerminals);
+    return await stopOrConfirm(input.keepTerminals);
   } catch (error) {
     // Keeping terminals only goes over the CLI's lifecycle RPC. Each refusal below comes before
     // anything reaches the daemon, so it is still running and a plain stop (SIGTERM off Windows)
@@ -453,7 +500,7 @@ export async function stopCapturedDaemon(
       reason: input.reason,
       pid: input.instance.pid,
     });
-    return await stop(false);
+    return await stopOrConfirm(false);
   }
 }
 
