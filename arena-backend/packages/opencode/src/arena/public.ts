@@ -382,6 +382,8 @@ export function project(snapshot: BattleSnapshot) {
               turn.state === "application_failed" &&
               ["review", "manual", "blocked", "failed"].includes(turn.gitApplication?.state ?? ""),
             revealed,
+            ...(turn.lowDiskSpace ? { lowDiskSpace: turn.lowDiskSpace } : {}),
+            ...(turn.waitingForDiskSince ? { waitingForDiskSince: turn.waitingForDiskSince } : {}),
             // Background cleanup can update updatedAt after ordinary chat resumes.
             endedAt: turn.transitionTimestamps.complete ?? turn.transitionTimestamps.discarded,
             createdAt: turn.createdAt,
@@ -424,7 +426,8 @@ export function project(snapshot: BattleSnapshot) {
         worktree: run.worktree,
         worktreeName: run.worktreeName ?? basename(run.worktree),
         ...(run.branchAtRun ? { branchAtRun: run.branchAtRun } : {}),
-        worktreeActive: !run.worktreeRemovedAt,
+        // A worktree whose files were released has nothing to open until a reply writes them again.
+        worktreeActive: !run.worktreeRemovedAt && !run.filesReleasedAt,
         ...(run.copyOmissions ? { copyOmissions: copyOmissions(run.copyOmissions) } : {}),
         ...(run.portAliases ? { portAliases: run.portAliases } : {}),
         ...(run.services

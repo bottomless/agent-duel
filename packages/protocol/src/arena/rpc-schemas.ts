@@ -486,6 +486,10 @@ export const ArenaSnapshotSchema = z
       canRetryResolution: z.boolean(),
       canDiscardWinner: z.boolean().optional(),
       revealed: z.boolean(),
+      // The disk was short when the battle started; it runs anyway (`ArenaDiskSpace`).
+      lowDiskSpace: z.object({ freeBytes: z.number(), neededBytes: z.number() }).optional(),
+      // Saving the battle waits for disk space; it goes on once there is room.
+      waitingForDiskSince: z.string().optional(),
     })
       .passthrough()
       .optional(),

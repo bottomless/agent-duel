@@ -200,6 +200,12 @@ export const fr: TranslationResources = {
     noneRunning: "Aucun en cours",
     letResolve: "Laisser un agent résoudre",
     battlesPaused: "Les batailles sont en pause",
+    diskFull: "Le disque est plein",
+    diskFullDetail:
+      "Agent Duel ne peut pas enregistrer cette bataille tant que le disque n'a pas de place. Libérez de l'espace, par exemple avec Libérer dans Paramètres, et elle se termine d'elle-même.",
+    lowDisk: "Espace disque faible",
+    lowDiskDetail:
+      "Cette bataille a besoin d'environ {{needed}} libres et le disque en a {{free}}. Si le disque se remplit, la bataille attend de l'espace au lieu d'échouer.",
     mergeConflicts: "Certains fichiers ont des conflits de fusion",
     discardWinning: "Abandonner les modifications gagnantes",
     winningNotApplied: "Les modifications gagnantes n’ont pas été appliquées",

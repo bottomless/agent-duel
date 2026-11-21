@@ -1,12 +1,4 @@
-import type {
-  BattleState,
-  DiscardReason,
-  DiscardStage,
-  Resolution,
-  Side,
-  Vote,
-  VoteDiscardedReason,
-} from "./domain"
+import type { BattleState, DiscardReason, DiscardStage, Resolution, Side, Vote, VoteDiscardedReason } from "./domain"
 import type { ArenaActiveOperation, ArenaOperationProgress } from "./operation-tracker"
 import type { RefChange, RefOutcome } from "./ref-types"
 import type { GenerationMetrics, UsageTotals } from "@agent-duel/arena-service/metrics"
@@ -416,6 +408,13 @@ export type TurnDocument = {
    * from `transitionTimestamps` because the battle is still `running` then.
    */
   firstResultAt?: Date
+  /**
+   * The disk had less free than this battle's estimated writes plus headroom when it started, after
+   * other chats' worktrees on it were released (`ArenaDiskSpace`). The battle runs anyway.
+   */
+  lowDiskSpace?: { readonly freeBytes: number; readonly neededBytes: number }
+  /** Since when saving this battle has waited for disk space; null once the save went through. */
+  waitingForDiskSince?: Date | null
   comparisonState: "pending" | "running" | "complete" | "skipped" | "failed"
   comparisonID?: Identifier
   failureReason?: string
@@ -606,6 +605,12 @@ export type RunDocument = {
   selectable?: boolean
   finalizedAt?: Date
   worktreeRemovedAt?: Date
+  /**
+   * When the worktree's files were deleted while its battle waited for a vote (`ArenaUnvotedRelease`).
+   * Its `.git` link and host stay, so the worktree is still this run's; a reply, retry or resume
+   * writes the files again from the recorded result and sets this back to null.
+   */
+  filesReleasedAt?: Date | null
   projectRegistrationRemovedAt?: Date
   readonly createdAt: Date
   updatedAt: Date

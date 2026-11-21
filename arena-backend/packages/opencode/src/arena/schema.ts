@@ -354,6 +354,8 @@ export const Snapshot = Schema.Struct({
       canRetryResolution: Schema.Boolean,
       canDiscardWinner: Schema.Boolean,
       revealed: Schema.Boolean,
+      lowDiskSpace: Schema.optional(Schema.Struct({ freeBytes: Schema.Number, neededBytes: Schema.Number })),
+      waitingForDiskSince: Schema.optional(Schema.Unknown),
     }),
   ),
   history: Schema.Array(HistoryItem),

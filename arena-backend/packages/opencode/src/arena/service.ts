@@ -63,6 +63,10 @@ import { Form } from "@opencode/schema/form"
 const QuestionID = Form.ID
 import { hostRepoPath, isolatedRoot, Worktree } from "@/worktree"
 import { TRASH_DIRNAME } from "@/util/discard-tree"
+import { ArenaOrphanPools } from "./orphan-pools"
+import { ArenaUnvotedRelease } from "./unvoted-release"
+import { arenaDirectory } from "./database-upgrade"
+import { ArenaDiskSpace } from "./disk-space"
 import { LOCAL_STATE_DIRNAME, localStatePath, PRIVATE_REF_PREFIXES } from "@/worktree/layout"
 import { ignoreForFileProviderSync } from "@/util/file-provider-ignore"
 import { isRecord } from "@/util/record"
@@ -1308,6 +1312,8 @@ export interface Interface {
   readonly prepareCheckout: (worktreeRoot: string) => Effect.Effect<void, Error>
   readonly releaseCheckout: (worktreeRoot: string) => Effect.Effect<void, Error>
   readonly trimEnvironments: (keep: number, volumeOf?: string) => Effect.Effect<ArenaEnvironmentTrim, Error>
+  /** Delete worktree pools no Arena home owns under these checkouts; see `removeOrphanPools`. */
+  readonly removeOrphanPools: (checkouts: readonly string[]) => Effect.Effect<{ readonly removed: number }, Error>
   /** Build a repository's spare pair for its first battle in the background; see `prewarmProject`. */
   readonly prewarmProject: (directory: string) => Effect.Effect<void, Error>
   readonly snapshot: (chatID: string, afterSequence?: number) => Effect.Effect<ReturnType<typeof project>, Error>
@@ -5140,6 +5146,48 @@ export const layer: Layer.Layer<
       return result
     })
 
+    /**
+     * Save a side, waiting for disk space when the disk is full rather than losing the result: the
+     * contestant's work is still in its worktree, and finalize moves the side's refs on from
+     * whatever an earlier attempt wrote. The battle shows it waits (`waitingForDiskSince`) and
+     * goes on by itself once a save goes through. A stop, a resolution or a discard ends the wait,
+     * and the side then fails as it did before.
+     */
+    const finalizeWhenDiskAllows = Effect.fn("Arena.finalizeWhenDiskAllows")(function* <A, E>(
+      store: Store,
+      turn: TurnDocument,
+      attempt: () => Effect.Effect<A, E>,
+    ) {
+      let outcome = yield* Effect.exit(attempt())
+      let waiting = false
+      while (Exit.isFailure(outcome) && ArenaDiskSpace.isDiskFull(Cause.pretty(outcome.cause))) {
+        const latest = yield* promise(() => store.turn(turn._id)).pipe(Effect.orElseSucceed(() => undefined))
+        if (
+          latest &&
+          (latest.resolution !== undefined || latest.state === "stopping" || latest.state === "discarded")
+        ) {
+          break
+        }
+        if (!waiting) {
+          waiting = true
+          yield* Effect.logWarning("Arena is waiting for disk space to save a battle", {
+            turnID: turn._id,
+            cause: Cause.pretty(outcome.cause),
+          })
+          // The store may be on the same full disk; the battle's own state still says it waits.
+          yield* promise(() => store.updateTurn(turn._id, { waitingForDiskSince: new Date() })).pipe(Effect.ignore)
+        }
+        yield* Effect.sleep(Duration.millis(ArenaDiskSpace.diskRetryMs()))
+        outcome = yield* Effect.exit(attempt())
+      }
+      if (waiting) {
+        yield* promise(() => store.updateTurn(turn._id, { waitingForDiskSince: null })).pipe(Effect.ignore)
+        if (Exit.isSuccess(outcome))
+          yield* Effect.logInfo("Arena saved a battle once disk space returned", { turnID: turn._id })
+      }
+      return outcome
+    })
+
     const settleSide = Effect.fn("Arena.settleSide")(function* (
       store: Store,
       turn: TurnDocument,
@@ -5196,7 +5244,9 @@ export const layer: Layer.Layer<
           ),
         )
       }
-      const outcome = yield* Effect.exit(finalizeSide(store, turn, run, promptExit, stopped))
+      const outcome = yield* finalizeWhenDiskAllows(store, turn, () =>
+        finalizeSide(store, turn, run, promptExit, stopped),
+      )
       // The run's state now routes a reply, so the closing mark has done its job.
       closingRuns.delete(run.runID)
       if (Exit.isSuccess(outcome)) {
@@ -6530,6 +6580,51 @@ export const layer: Layer.Layer<
       return yield* finalizeRuns(outcomeA, outcomeB)
     })
 
+    /**
+     * Whether the disk has room for a battle's new worktrees plus `diskHeadroomBytes`, after
+     * releasing other chats' worktrees on it when it does not (`ArenaDiskSpace`). Returns what the
+     * battle shows when it is still short; the battle starts anyway. Never fails the send.
+     */
+    const checkBattleDiskSpace = Effect.fn("Arena.checkBattleDiskSpace")(function* (input: {
+      readonly chat: ChatDocument
+      readonly root: string
+      readonly baseTree: string
+      readonly manifest: CopyManifest
+      readonly warmPath: TurnSetupTimings["warmPath"]
+    }) {
+      // A prepared pair is already on disk; one refreshed in place rewrites only what differs.
+      const worktrees = input.warmPath === "cold" ? 2 + (input.chat.turnCount === 0 ? 1 : 0) : 0
+      const copied = input.manifest.entries.filter((entry) => entry.state === "copied")
+      const cloned = copied.length > 0 ? copied.some((entry) => entry.method !== "copy") : process.platform === "darwin"
+      let estimate = 0
+      if (worktrees > 0) {
+        const listing = yield* git.run(["ls-tree", "-r", "-l", "-z", input.baseTree], { cwd: input.root })
+        const objects = cloned ? undefined : yield* git.run(["count-objects", "-v"], { cwd: input.root })
+        estimate = ArenaDiskSpace.battleWriteEstimate({
+          worktrees,
+          cloned,
+          trackedBytes: listing.exitCode === 0 ? ArenaDiskSpace.trackedBytesFromListing(listing.text()) : 0,
+          objectBytes: objects?.exitCode === 0 ? ArenaDiskSpace.objectBytesFromCount(objects.text()) : 0,
+          copiedIgnoredBytes: copied.reduce((total, entry) => total + (entry.logicalBytes ?? 0), 0),
+        })
+      }
+      const neededBytes = estimate + ArenaDiskSpace.diskHeadroomBytes()
+      const before = yield* Effect.promise(() => ArenaDiskSpace.freeBytes(input.root))
+      if (before === undefined || before >= neededBytes) return undefined
+      const trimmed = yield* trimEnvironments(0, input.root, input.chat._id)
+      const freeBytes = (yield* Effect.promise(() => ArenaDiskSpace.freeBytes(input.root))) ?? before
+      yield* Effect.logWarning("Arena is starting a battle with little disk space", {
+        chatID: input.chat._id,
+        freeBefore: before,
+        freeBytes,
+        neededBytes,
+        estimate,
+        cloned,
+        released: trimmed.released,
+      })
+      return freeBytes >= neededBytes ? undefined : { freeBytes, neededBytes }
+    })
+
     const startTurnUnlocked = Effect.fn("Arena.startTurnUnlocked")(function* (
       store: Store,
       id: string,
@@ -6710,6 +6805,19 @@ export const layer: Layer.Layer<
         ))
       const warmMs = Date.now() - warmStartedAt
       const warmPath: TurnSetupTimings["warmPath"] = reused ? "reused" : warmPreparation ? "refreshed" : "cold"
+      const lowDiskSpace = yield* checkBattleDiskSpace({
+        chat,
+        root: base.root,
+        baseTree: base.baseTree,
+        manifest: copyManifest,
+        warmPath,
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Arena could not check disk space before a battle", { chatID: chat._id, cause }).pipe(
+            Effect.as(undefined),
+          ),
+        ),
+      )
       // Before the pair is placed: nothing a contestant or a terminal left beside a worktree since
       // the pair was prepared reaches this turn's contestants.
       yield* sweepSlotPool(
@@ -6761,6 +6869,7 @@ export const layer: Layer.Layer<
           ignoredSeedID,
           resolvedPolicy: copyManifest.resolvedPolicy,
         },
+        ...(lowDiskSpace ? { lowDiskSpace } : {}),
         setupTimings: {
           preCreationMs: now.getTime() - sendStartedAt,
           admissionWaitMs,
@@ -6959,6 +7068,58 @@ export const layer: Layer.Layer<
      * without one. The turn then finalizes again once every side has settled. A failure after the
      * claim parks the battle for Stop's resolution rather than leaving it waiting on a side forever.
      */
+    /**
+     * Write a released side's files again before its contestant works in them: its recorded result
+     * through the same sync every slot gets, the checkout's ignored content cloned anew, and the
+     * result refs its next finalize moves on from (`ArenaUnvotedRelease`).
+     */
+    const restoreReleasedRun = Effect.fn("Arena.restoreReleasedRun")(function* (
+      store: Store,
+      turn: TurnDocument,
+      run: RunDocument,
+    ) {
+      if (!run.filesReleasedAt) return
+      if (!run.rawHead || !run.finalCommit || !run.finalTree || !run.finalIndexTree || !run.permanentRef) {
+        return yield* Effect.fail(new Error(`Arena side ${run.side.toUpperCase()} has no recorded result to restore`))
+      }
+      const chat = yield* promise(() => store.chat(turn.chatID))
+      if (!chat) return yield* Effect.fail(new Error(`Arena chat not found: ${turn.chatID}`))
+      const manifest = yield* copyManifestForTurn(store, turn)
+      const started = performance.now()
+      yield* syncSlotContent({
+        chat,
+        directory: run.worktree,
+        ...(run.finalBranch ? { branch: run.finalBranch } : {}),
+        base: { frozenHead: run.rawHead, indexTree: run.finalIndexTree, workingTree: run.finalTree },
+        manifest,
+        observeSlot: Effect.succeed({
+          complete: false,
+          changed: new Set(),
+          reason: "its files were released while the battle waited for a vote",
+        }),
+        indexRebuilt: true,
+      })
+      // The sync takes Arena's refs out of the host, and the side's next finalize advances these
+      // from the recorded result.
+      for (const [ref, value] of [
+        [run.permanentRef, run.finalCommit],
+        [`${run.permanentRef}-index`, run.finalIndexTree],
+      ] as const) {
+        const written = yield* git.run(["update-ref", ref, value], { cwd: run.worktree })
+        if (written.exitCode !== 0) {
+          return yield* Effect.fail(
+            new Error(`Could not restore ${ref} in ${run.worktree}: ${written.stderr.toString("utf8").trim()}`),
+          )
+        }
+      }
+      yield* promise(() => store.updateRun(run._id, { filesReleasedAt: null }))
+      yield* Effect.logInfo("Arena restored a released contestant worktree", {
+        runID: run._id,
+        worktree: run.worktree,
+        durationMs: Math.round(performance.now() - started),
+      })
+    })
+
     const resumeSettledRuns = Effect.fn("Arena.resumeSettledRuns")(function* (
       store: Store,
       turn: TurnDocument,
@@ -6978,7 +7139,9 @@ export const layer: Layer.Layer<
         if (turn.state === "awaiting_vote") {
           yield* promise(() => store.clearComparison(turn._id, input.comparisonID))
         }
-        return yield* Effect.forEach(runs, (run) => input.reset(run).pipe(Effect.tap(bindRun)))
+        return yield* Effect.forEach(runs, (run) =>
+          restoreReleasedRun(store, turn, run).pipe(Effect.andThen(input.reset(run)), Effect.tap(bindRun)),
+        )
       }).pipe(
         Effect.catchCause((cause) =>
           Effect.gen(function* () {
@@ -7465,6 +7628,8 @@ export const layer: Layer.Layer<
 
     const retainedRunMatchesResult = Effect.fn("Arena.retainedRunMatchesResult")(function* (run: RunDocument) {
       if (!run.rawHead || !run.finalCommit || !run.finalTree || !run.finalIndexTree) return false
+      // Released while its battle waited for the vote: nothing in it is newer than its result.
+      if (run.filesReleasedAt) return true
       const current = yield* Effect.exit(
         withGit(snapshotBase({ canonical: run.worktree })).pipe(Effect.mapError(error)),
       )
@@ -7705,8 +7870,20 @@ export const layer: Layer.Layer<
     const releaseChatEnvironments = Effect.fn("Arena.releaseChatEnvironments")(function* (
       store: Store,
       chatID: string,
+      /** False when the caller holds another chat's start lock: a busy chat is skipped, not waited for. */
+      waitForLock = true,
     ) {
-      const outcome = yield* turnStartLock(chatID).withPermits(1)(
+      const locked = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        waitForLock
+          ? turnStartLock(chatID).withPermits(1)(effect)
+          : turnStartLock(chatID)
+              .withPermitsIfAvailable(1)(effect)
+              .pipe(
+                Effect.map((done) =>
+                  Option.getOrElse(done, () => ({ kind: "kept", reason: "a send to the chat is starting" }) as const),
+                ),
+              )
+      const outcome = yield* locked(
         Effect.gen(function* () {
           const kept = (reason: string): EnvironmentRelease => ({ kind: "kept", reason })
           const wanted = () =>
@@ -7833,6 +8010,102 @@ export const layer: Layer.Layer<
     })
 
     /**
+     * Delete the files of a battle that has waited `unvotedReleaseMs` for its vote with its chat
+     * closed, keeping what the vote, a reply and a retry need (`ArenaUnvotedRelease`). The same
+     * things keep it as keep an idle chat's worktrees (`releaseChatEnvironments`), checked under
+     * the chat's start lock before anything is stopped and again before anything is deleted. Free
+     * worktrees in the pool, a spare or the previous winner's, go whole: the pair after the vote is
+     * built again.
+     */
+    const releaseUnvotedBattle = Effect.fn("Arena.releaseUnvotedBattle")(function* (store: Store, chatID: string) {
+      const outcome = yield* turnStartLock(chatID).withPermits(1)(
+        Effect.gen(function* () {
+          const kept = (reason: string) => ({ kind: "kept" as const, reason })
+          const wanted = () =>
+            watchedChats.has(chatID)
+              ? "the app shows the chat"
+              : waitingStarts.has(chatID)
+                ? "a send to the chat is waiting"
+                : undefined
+          const chat = yield* promise(() => store.chat(chatID))
+          if (!chat?.activeTurnID || chat.status === "archived" || chat.checkoutEvicted) {
+            return kept("the chat has no battle waiting")
+          }
+          const turn = yield* promise(() => store.turn(chat.activeTurnID!))
+          const since = turn ? ArenaUnvotedRelease.waitingSince(turn, unwatchedSince.get(chatID)) : undefined
+          if (!turn || since === undefined || Date.now() - since < ArenaUnvotedRelease.unvotedReleaseMs()) {
+            return kept("the battle has not waited long enough")
+          }
+          const shown = wanted()
+          if (shown) return kept(shown)
+          if (activeNormalTurns.active(chat.canonicalSessionID)) return kept("the chat's agent is working")
+          const runs = yield* promise(() => store.runsForTurn(turn._id))
+          if (runs.every((run) => run.filesReleasedAt)) return { kind: "absent" as const }
+          if (!ArenaUnvotedRelease.resultsRecorded(runs)) return kept("a side's result is not recorded whole")
+          const pool = slotPool(chat)
+          const identities = [
+            resolvePath(pool),
+            yield* Effect.promise(() => realpath(pool).catch(() => resolvePath(pool))),
+          ]
+          if (yield* Effect.promise(() => terminalOpenUnder(identities))) {
+            return kept("a terminal is open in one of its worktrees")
+          }
+          for (const run of runs) {
+            const stopped = yield* stopRunServices(store, run)
+            if (stopped.some((record) => record.status === "failed" || !record.verified)) {
+              return kept("its services could not be stopped")
+            }
+          }
+          yield* endSlotWork(chat._id)
+          const entries = yield* Effect.promise(() => readdir(pool).catch(() => [] as string[]))
+          const worktreesInPool = entries.flatMap((name) =>
+            name === TRASH_DIRNAME || hostedWorktree(name) !== undefined ? [] : [join(pool, name)],
+          )
+          for (const directory of worktreesInPool) {
+            yield* stopPreparation(directory)
+            yield* instances.disposeDirectory(directory)
+          }
+          const inPool = (listed: readonly WorkingProcess[]) =>
+            listed.some((entry) => identities.some((identity) => namesBelow(identity, entry.directory) !== undefined))
+          let listed = yield* Effect.promise(() => processDirectories())
+          if (listed && inPool(listed)) {
+            // A disposed instance's language server can still be exiting.
+            yield* Effect.sleep(Duration.millis(SLOT_PROCESS_RELIST_MS))
+            listed = yield* Effect.promise(() => processDirectories())
+          }
+          if (!listed) return kept("its processes could not be listed")
+          if (inPool(listed)) return kept("a process is still working in one of its worktrees")
+          const reached = wanted()
+          if (reached) return kept(reached)
+
+          const owned = new Set(runs.map((run) => directoryIdentity(run.worktree)))
+          const trash = join(pool, TRASH_DIRNAME)
+          const at = new Date()
+          for (const run of runs) {
+            if (run.filesReleasedAt) continue
+            yield* forgetSlot(run.worktree)
+            yield* Effect.promise(() => ArenaUnvotedRelease.emptyWorktree(run.worktree, trash))
+            yield* promise(() => store.updateRun(run._id, { filesReleasedAt: at }))
+          }
+          yield* retireLitter(
+            chat,
+            worktreesInPool.filter((directory) => !owned.has(directoryIdentity(directory))),
+            "Arena could not retire a free worktree of an unvoted battle",
+          )
+          return { kind: "released" as const, chat }
+        }),
+      )
+      if (outcome.kind !== "released") return outcome
+      yield* sweepSlotTrash(outcome.chat, { wait: true }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Arena could not delete an unvoted battle's files", { chatID, cause }),
+        ),
+      )
+      yield* Effect.logInfo("Arena released the files of a battle nobody voted on", { chatID })
+      return outcome
+    })
+
+    /**
      * Keep contestant worktrees for the `keep` chats with the latest battle activity and release
      * every other chat's, oldest first. The worktrees are what makes the next send start warm;
      * an older chat is more likely to hold disk than to be sent to. A chat that cannot release
@@ -7841,10 +8114,15 @@ export const layer: Layer.Layer<
      * With `volumeOf`, only chats whose worktrees are on that path's volume count: a full disk is
      * freed only by releasing what is on it.
      */
-    const trimEnvironments = Effect.fn("Arena.trimEnvironments")(function* (keep: number, volumeOf?: string) {
+    const trimEnvironments = Effect.fn("Arena.trimEnvironments")(function* (
+      keep: number,
+      volumeOf?: string,
+      /** A send making room for itself: its own chat is left out, and busy chats are skipped. */
+      sending?: string,
+    ) {
       const store = yield* available()
       const chats = (yield* promise(() => store.chats.find({}).toArray())).filter(
-        (chat) => chat.status !== "archived" && !chat.checkoutEvicted,
+        (chat) => chat.status !== "archived" && !chat.checkoutEvicted && chat._id !== sending,
       )
       const deviceOf = (path: string) =>
         Effect.promise(() =>
@@ -7855,6 +8133,29 @@ export const layer: Layer.Layer<
         )
       const device = volumeOf === undefined ? undefined : yield* deviceOf(volumeOf)
       if (volumeOf !== undefined && device === undefined) return { chats: 0, released: 0, kept: 0 }
+      let released = 0
+      let kept = 0
+      // A battle that waited long enough for its vote gives up its files whatever the limit says:
+      // only ready chats are released below.
+      for (const chat of chats) {
+        if (!chat.activeTurnID) continue
+        const turn = yield* promise(() => store.turn(chat.activeTurnID!))
+        const since = turn ? ArenaUnvotedRelease.waitingSince(turn, unwatchedSince.get(chat._id)) : undefined
+        if (since === undefined || Date.now() - since < ArenaUnvotedRelease.unvotedReleaseMs()) continue
+        if (device !== undefined && (yield* deviceOf(slotPool(chat))) !== device) continue
+        const outcome = yield* releaseUnvotedBattle(store, chat._id).pipe(
+          Effect.catchCause((cause) =>
+            Effect.succeed({ kind: "kept" as const, reason: `its release failed: ${Cause.pretty(cause)}` }),
+          ),
+        )
+        if (outcome.kind === "released") released += 1
+        if (outcome.kind === "kept") {
+          yield* Effect.logInfo("Arena kept the files of a battle waiting for its vote", {
+            chatID: chat._id,
+            reason: outcome.reason,
+          })
+        }
+      }
       const holding: Array<{ readonly chat: ChatDocument; readonly activity: number }> = []
       for (const chat of chats) {
         const entries = yield* Effect.promise(() => readdir(slotPool(chat)).catch(() => [] as string[]))
@@ -7862,14 +8163,15 @@ export const layer: Layer.Layer<
         if (device !== undefined && (yield* deviceOf(slotPool(chat))) !== device) continue
         const turns = yield* promise(() => store.turnsForChat(chat._id))
         const runs = yield* promise(() => store.runsForChat(chat._id))
+        // A battle whose files are released holds only its hosts, and takes no place in the limit.
+        const active = runs.filter((run) => run.turnID === chat.activeTurnID)
+        if (active.length > 0 && active.every((run) => run.filesReleasedAt)) continue
         const activity = latestArenaChatActivity(turns, runs) ?? chat.createdAt
         holding.push({ chat, activity: activity.getTime() })
       }
       holding.sort((left, right) => right.activity - left.activity || left.chat._id.localeCompare(right.chat._id))
-      let released = 0
-      let kept = 0
       for (const { chat } of holding.slice(Math.max(0, keep)).reverse()) {
-        const outcome = yield* releaseChatEnvironments(store, chat._id).pipe(
+        const outcome = yield* releaseChatEnvironments(store, chat._id, sending === undefined).pipe(
           Effect.catchCause((cause) =>
             Effect.succeed<EnvironmentRelease>({ kind: "kept", reason: `its release failed: ${Cause.pretty(cause)}` }),
           ),
@@ -7891,6 +8193,47 @@ export const layer: Layer.Layer<
         })
       }
       return { chats: holding.length, released, kept } satisfies ArenaEnvironmentTrim
+    })
+
+    /**
+     * Delete the worktree pools no Arena home owns under `checkouts` and this store's chats'
+     * checkouts, after marking every pool those chats keep as this home's so another home's sweep
+     * leaves them alone (`ArenaOrphanPools`).
+     */
+    const removeOrphanPools = Effect.fn("Arena.removeOrphanPools")(function* (checkouts: readonly string[]) {
+      const store = yield* available()
+      const chats = yield* promise(() => store.chats.find({}).toArray())
+      const sweep = yield* Effect.promise(() =>
+        ArenaOrphanPools.sweepOrphanPools({
+          home: resolvePath(arenaDirectory()),
+          chats: chats.map((chat) => ({
+            id: chat._id,
+            checkout: chat.repository.root,
+            archived: chat.status === "archived",
+          })),
+          checkouts,
+          working: processDirectories,
+        }),
+      )
+      if (sweep.unlisted) {
+        yield* Effect.logWarning("Arena left orphaned worktree pools: processes could not be listed", {
+          pools: sweep.pools.map((pool) => pool.directory).join(", "),
+        })
+      }
+      for (const pool of sweep.pools) {
+        const detail = {
+          pool: pool.directory,
+          reason: pool.reason,
+          ...(pool.owner ? { home: pool.owner.home, chatID: pool.owner.chatID } : {}),
+        }
+        if (pool.result === "removed") yield* Effect.logInfo("Arena removed an orphaned worktree pool", detail)
+        else if (pool.result === "stuck")
+          yield* Effect.logWarning("Arena could not move an orphaned worktree pool away", detail)
+        else if (!sweep.unlisted)
+          yield* Effect.logInfo("Arena kept an orphaned worktree pool a process works in", detail)
+      }
+      for (const directory of sweep.staged) yield* Effect.logInfo("Arena removed a clone left staged", { directory })
+      return { removed: sweep.pools.filter((pool) => pool.result === "removed").length }
     })
 
     /** Whether the retained winner still accepts connections on a port it was given or opened. */
@@ -12047,6 +12390,7 @@ export const layer: Layer.Layer<
       prepareCheckout,
       releaseCheckout,
       trimEnvironments,
+      removeOrphanPools,
       prewarmProject,
       snapshot,
       turn: turnSnapshot,

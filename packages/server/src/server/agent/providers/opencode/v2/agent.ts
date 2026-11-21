@@ -237,6 +237,15 @@ export class OpenCodeV2AgentClient implements AgentClient {
         if (!response.ok) throw new Error(`Arena environment trim failed: ${response.status}`);
         return ArenaEnvironmentTrimSchema.parse(await response.json());
       },
+      removeOrphanPools: async (checkouts) => {
+        const response = await this.arenaRequest("/arena/environments/orphans", sourceRepoRoot, {
+          method: "POST",
+          body: { checkouts },
+          hold,
+        });
+        if (!response.ok) throw new Error(`Arena orphan pool sweep failed: ${response.status}`);
+        return z.object({ removed: z.number() }).parse(await response.json()).removed;
+      },
       close: () => hold.close(),
     };
   }

@@ -100,6 +100,7 @@ async function setup(
       released.push(root);
     },
     trimEnvironments: async () => ({ chats: 0, released: 0, kept: 0 }),
+    removeOrphanPools: async () => 0,
     close: async () => {},
   };
   const seeded: Array<{ sourceCwd: string; worktreePath: string }> = [];
@@ -380,6 +381,7 @@ async function environmentSetup(
   await registry.archive("workspace-1", "2026-03-02T00:00:00.000Z");
   await registry.upsert(record(2, { lastChatActivityAt: "2026-02-15T00:00:00.000Z" }));
   const trims: Array<{ anchor: string; keep: number; volumeOf?: string }> = [];
+  const sweeps: Array<{ anchor: string; checkouts: readonly string[] }> = [];
   const service = new WorkspaceCleanupService({
     paseoHome: directory,
     registry,
@@ -395,6 +397,10 @@ async function environmentSetup(
               await backend.gate;
               return { chats: 3, released: 1, kept: 0 };
             },
+            removeOrphanPools: async (checkouts) => {
+              sweeps.push({ anchor, checkouts });
+              return 0;
+            },
             close: async () => {},
           }
         : null,
@@ -404,7 +410,7 @@ async function environmentSetup(
     freeBytes: async (path) => disk.byPath?.[path] ?? disk.free,
   });
   services.push(service);
-  return { projects, service, trims, logger };
+  return { projects, service, trims, sweeps, logger };
 }
 
 test("trims battle environments to the configured limit through the latest open workspace", async () => {
@@ -448,6 +454,21 @@ test("a sweep inside the trim interval trims once the interval ends", async () =
   } finally {
     vi.useRealTimers();
   }
+});
+
+test("sweeps orphaned battle pools under every open checkout, with the limit off too", async () => {
+  const { projects, service, trims, sweeps } = await environmentSetup({ keep: null });
+  await service.initialize();
+  // The limit only counts chats a store knows; pools no store knows are swept regardless.
+  await vi.waitFor(() => expect(sweeps).toHaveLength(1));
+  expect(trims).toEqual([]);
+  expect(sweeps[0]?.anchor).toBe(projects[2]);
+  // The archived workspace's checkout is not named.
+  expect([...sweeps[0]!.checkouts].sort()).toEqual([projects[0], projects[2]].sort());
+
+  // Free up sweeps too.
+  await service.trimEnvironments(0);
+  expect(sweeps).toHaveLength(2);
 });
 
 test("leaves every chat's battle environments when the limit is off", async () => {

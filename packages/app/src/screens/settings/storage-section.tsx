@@ -19,21 +19,13 @@ import { SettingsSection } from "@/components/settings/headings/settings-section
 import { SettingsSelectTrigger } from "@/screens/settings/settings-select-trigger";
 import { settingsStyles } from "@/styles/settings";
 import { toErrorMessage } from "@/utils/error-messages";
+import { formatGigabytes } from "@/utils/format-gigabytes";
 
 /** `null` keeps them all. */
 type Limit = number | null;
 type LimitField = "worktreeRetention" | "arenaEnvironmentRetention";
 const WORKTREE_OPTIONS: readonly Limit[] = [5, 10, 15, 25, 50, null];
 const ENVIRONMENT_OPTIONS: readonly Limit[] = [3, 5, 10, 20, null];
-
-/** Gigabytes in the reader's locale, counted as Finder counts them (10^9 bytes). */
-function formatGigabytes(bytes: number, locale: string): string {
-  return new Intl.NumberFormat(locale, {
-    style: "unit",
-    unit: "gigabyte",
-    maximumFractionDigits: 0,
-  }).format(bytes / 1_000_000_000);
-}
 
 interface LimitMenuItemProps {
   value: Limit;

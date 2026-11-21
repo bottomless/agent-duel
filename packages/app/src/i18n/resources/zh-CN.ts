@@ -188,6 +188,12 @@ export const zhCN: TranslationResources = {
     noneRunning: "无运行项",
     letResolve: "让智能体解决",
     battlesPaused: "对战已暂停",
+    diskFull: "磁盘已满",
+    diskFullDetail:
+      "磁盘有空间之前，Agent Duel 无法保存这场对战。腾出一些空间（例如使用设置中的“释放”），它会自动完成。",
+    lowDisk: "磁盘空间不足",
+    lowDiskDetail:
+      "这场对战需要约 {{needed}} 的可用空间，磁盘目前有 {{free}}。如果磁盘写满，对战会等待空间，而不会失败。",
     mergeConflicts: "部分文件存在合并冲突",
     discardWinning: "放弃获胜更改",
     winningNotApplied: "获胜更改未应用",

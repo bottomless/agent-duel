@@ -193,6 +193,12 @@ export const ja: TranslationResources = {
     noneRunning: "実行中のものはありません",
     letResolve: "エージェントに解決を任せる",
     battlesPaused: "バトルは一時停止中です",
+    diskFull: "ディスクがいっぱいです",
+    diskFullDetail:
+      "ディスクに空きができるまで、Agent Duel はこのバトルを保存できません。設定の「解放」などで空き容量を作ると、自動的に完了します。",
+    lowDisk: "ディスクの空き容量が少なくなっています",
+    lowDiskDetail:
+      "このバトルには約 {{needed}} の空き容量が必要ですが、ディスクの空きは {{free}} です。ディスクがいっぱいになっても、バトルは失敗せずに空きができるまで待ちます。",
     mergeConflicts: "一部のファイルにマージ競合があります",
     discardWinning: "勝者の変更を破棄",
     winningNotApplied: "勝者の変更は適用されませんでした",

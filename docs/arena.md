@@ -948,6 +948,38 @@ a full disk fails the git writes every battle and vote depends on. Chats on othe
 limit, since releasing them frees nothing on the full one. The Storage page shows the fullest
 volume's free space and says when this applies.
 
+A battle waiting for its vote, or for a decision after Stop, is outside that rule, and users leave
+many there for weeks. Once one has waited 72 hours since it entered that state or its chat was last
+closed (`unvotedReleaseMs` in `arena/unvoted-release.ts`), each trim deletes its worktrees' files
+under the same checks as a release, whatever the limit, and its chat takes no place in the limit
+after. It keeps what the vote, a reply and a retry read: each side's result under `refs/battles/`,
+the contestant sessions the vote grafts, and each worktree's `.git` link and host. Do not rebuild a
+released side's host from the checkout: the checkout holds the other side's result from finalize,
+and a reply would let the contestant read it. The run records `filesReleasedAt`, and the app hides
+the side's terminal, files and worktree menu (`worktreeActive` is false). A reply, a retry or a
+resume first writes the side again from its recorded result and the checkout's ignored content
+(`restoreReleasedRun`), and restores the result refs its next finalize advances. Ignored files the
+contestant wrote, such as installed packages or a build, and its running servers are gone. After a
+vote, the released slots are adopted for the next pair like any free slot. A side that did not
+record its whole result keeps its files.
+
+The limit counts only the chats a store knows, and only the store whose chat owns a pool releases or
+archives it, at the path the chat recorded when it was made. Nothing updates that path. So a pool is
+left for good when its store is gone (its home was deleted or reset), when its checkout was moved or
+renamed and stays there (the pools travel with it, and the chat turns blocked), and when the
+checkout was copied with them. After every trim, with the limit off too, and from Free up, the
+daemon names every open workspace's checkouts and the engine deletes those pools
+(`arena/orphan-pools.ts`, `/arena/environments/orphans`). Deleting a checkout needs nothing: its
+pools go with it. A source build's dev home works in the same projects as the installed app, so a
+pool no chat of this store owns can still be another home's. Each engine therefore marks the pools
+of its own chats in `.agent-duel/worktrees/.owners/` with its home, and a pool marked by a home
+whose `arena.sqlite` still exists is never touched. A pool marked by this home or by a gone home goes
+once it is a day untouched, which leaves time to move a checkout back as its blocked chat asks. An
+unmarked pool goes after fourteen days: pools from before markers, and a home on an older build,
+which still renames its slots every turn it is used. A pool a process works in stays, and nothing
+goes when processes cannot be listed. The sweep also removes markers whose pool is gone and clones a
+stopped engine left in `.staging`.
+
 Cleanup runs in the background, oldest chat activity first. Viewing a workspace does not update that
 order. Pinned workspaces, foreground work, active agents or terminals, and unresolved battles stay
 protected. If no safe candidate exists, the count can remain above the limit without blocking creation.
@@ -1740,6 +1772,23 @@ sides are cancelled and settled, so no pane keeps reading as working, its worktr
 is ready again. A turn startup finds in `creation_failed`, because the previous process stopped
 while ending it, is ended the same way rather than parked for Keep or Discard, which would name the
 pair. `interrupted_recovery` is where a turn lands when the daemon dies mid-battle.
+
+A full disk does not end a battle (`arena/disk-space.ts`). Saving a side that meets one waits and
+tries again every 15 seconds (`finalizeWhenDiskAllows`): the contestant's work is still in its
+worktree, and finalize moves the side's refs on from whatever an earlier attempt wrote. Event writes
+it refused leave a gap marker, written once there is room, and the battle goes on; any other refused
+event write still fails the turn. While either waits, the turn has `waitingForDiskSince` and the app
+says the disk is full. A stop, a resolution or a discard ends the wait, and the side fails as it did
+before. Production saw full disks only on Linux, where every contestant worktree is a real copy.
+
+Before a battle builds its worktrees, the engine estimates what they will write. Each new worktree
+gets the tracked files fresh, and where the checkout cannot clone, also the object store and the
+copied ignored content. A prepared pair it reuses or refreshes counts as nothing. When the volume
+would keep less than 10 GB, the daemon's low-disk line, the engine first releases other idle chats'
+worktrees on it, skipping a chat whose start lock is busy so two short sends cannot wait on each
+other. If it is still short, the battle starts anyway with `lowDiskSpace` on the turn, and the app
+warns how much it needs. The headroom covers what contestants write, a build or an install, which
+nothing can estimate.
 
 A battle already awaiting its vote keeps its prompt, both results and vote controls after an engine
 restart. Reopen the workspace after signing back in; no daemon restart is required. Sign-out and
