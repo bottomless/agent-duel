@@ -410,6 +410,9 @@ describe("desktop stops and terminals", () => {
       input: {
         home: "/tmp/paseo-home",
         instance,
+        // Pinned rather than the host's: the keep-terminals stop never runs on Windows, and there
+        // the stop is forced, so these tests would take the Windows path on a Windows host.
+        platform: "darwin" as const,
         stopInstance,
         runCliJson,
         log: (message: string) => logged.push(message),
