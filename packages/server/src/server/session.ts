@@ -9100,13 +9100,29 @@ export class Session {
   }
 
   // Archive the workspace's battle chats in the Arena engine before the workspace itself.
-  private async archiveArenaSessionsInWorkspace(workspaceId: string): Promise<void> {
-    const arenaSessions = this.agentManager
+  private async archiveArenaSessionsInWorkspace(
+    workspaceId: string,
+    emptyDraftAgentId?: string | null,
+  ): Promise<void> {
+    const agents = this.agentManager
       .listAgents()
-      .filter((agent) => agent.workspaceId === workspaceId && agent.session?.arena)
-      .map((agent) => agent.session!.arena!);
+      .filter((agent) => agent.workspaceId === workspaceId);
+    if (emptyDraftAgentId !== undefined) {
+      const matchesEmptyDraft =
+        emptyDraftAgentId === null
+          ? agents.length === 0
+          : agents.length === 1 &&
+            agents[0]?.id === emptyDraftAgentId &&
+            !!agents[0].session?.arena;
+      if (!matchesEmptyDraft) throw new Error("Workspace no longer matches the empty draft");
+    }
+    const arenaSessions = agents.flatMap((agent) =>
+      agent.session?.arena ? [agent.session.arena] : [],
+    );
     for (const arena of new Set(arenaSessions)) {
-      const snapshot = await arena.archive();
+      const snapshot = await arena.archive(
+        emptyDraftAgentId === undefined ? undefined : { onlyIfEmpty: true },
+      );
       if (snapshot) this.syncArenaPreviewRoutes(snapshot);
     }
   }
@@ -9127,7 +9143,10 @@ export class Session {
           if (!existing) {
             throw new Error(`Workspace not found: ${request.workspaceId}`);
           }
-          await this.archiveArenaSessionsInWorkspace(existing.workspaceId);
+          await this.archiveArenaSessionsInWorkspace(
+            existing.workspaceId,
+            request.emptyDraftAgentId,
+          );
           return archiveByScope(
             {
               paseoHome: this.paseoHome,

@@ -1244,6 +1244,7 @@ export class Store {
           state: to,
           updatedAt: at,
           [`transitionTimestamps.${to}`]: at,
+          ...(to === "stopping" ? { comparisonState: "skipped" as const } : {}),
         },
       },
       { returnDocument: "after" },

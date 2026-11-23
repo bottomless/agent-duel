@@ -1008,9 +1008,12 @@ APFS a slot's clones share blocks with the checkout until something writes to th
 ## A turn
 
 **Start** (`startTurn` in `arena/service.ts`). Refuses unless the chat is `ready`, no turn is active, and no
-ordinary turn is in flight. A failed first send returns the saved message to New chat. Keep its
-error and retry instruction in the scrolling setup area until dismissed, so a long startup error
-cannot cover the composer. Freezes canonical `HEAD` together with the exact staged, unstaged, and
+ordinary turn is in flight. Return a refused first send to New chat only when it left the workspace
+empty. Archive under the same lock as battle admission; a timeout or disconnect leaves the outcome
+unknown even if a snapshot has no turn yet. Keep that workspace and draft, and hand off the battle
+if the engine confirms admission. Keep the error and retry instruction in the scrolling setup area
+until dismissed, so a long startup error cannot cover the composer. Start freezes canonical `HEAD`
+together with the exact staged, unstaged, and
 nonignored-untracked state in `refs/battles/<chat>/turn-<n>/base`, then draws a pair. Both agents
 work from that frozen state, so later canonical movement cannot shift the ground under a running
 battle.
@@ -1379,8 +1382,10 @@ field. Each layer has its own file:
   defensive boundary. The shared service seals reasoning text, summaries, signatures, and encrypted
   provider blocks before they leave the cloud (`arena-service/src/reasoning.ts`). Each reasoning
   chunk still crosses the stream, with one neutral `Thinking redacted` marker and opaque continuation
-  envelopes, so thinking does not trigger the model-idle deadline. The service restores the original
-  blocks on the next request; tool continuation must not see the marker in place of its reasoning.
+  envelopes, so thinking does not trigger the model-idle deadline. Replay structured provider
+  blocks and preserve plaintext from chunks without them. Replaying both copies of a structured
+  chunk grows the request and can change the cached prefix. Tool continuation must not see the
+  marker in place of its reasoning.
   Envelopes are authenticated against the account, scope, and assignment using a key derived from the
   service's OpenRouter key. The service drops an envelope that does not open instead of failing the
   request. Reasoning never carries into a later battle, even if both contestants have the same
@@ -1510,11 +1515,14 @@ actually verified. Use one utility request; increase evidence quality before add
   `arena/service.ts`). The engine records a side chosen there as `stopped` with `apply_a` or
   `apply_b`, but the app never shows the difference: the pill reads `Choose`, the result `Won`, as
   at the vote. The owner wants a battle that was stopped to read like one that ran to the end; only
-  a discard reads differently. Do not bring back `Keep` or `Kept`. A stopped battle gets no summary, so the move to `stopping` marks
-  it `skipped` in the same write (`transitionTurn` in `arena/mongo.ts`). Left `pending`, the decision
-  showed a summary on its way, and a restart failed it and offered Retry summary
-  (`interruptedComparisonState`). Keeping a side when the other had already failed, rather than
-  merely stopped, carries the same `voteDiscardedReason`, so metrics do not file it as a win.
+  a discard reads differently. Do not bring back `Keep` or `Kept`. Stop acknowledges the durable
+  claim before canceling agents; a repeat returns the current state. That claim skips comparison
+  in the same write, so the decision never promises a report and a restart cannot offer to retry it.
+  The stopping status shows the active step. After ten seconds, offer Discard and keep it available
+  if the watchdog moves the stop to recovery. Bound Git steps so recovery can preserve a finished
+  side and reach a decision even when Git cannot save the other side. Keeping a side when the other
+  had already failed, rather than merely stopped, carries the same `voteDiscardedReason`, so metrics
+  do not file it as a win.
 
 **Applying** (`promoteImpl` in `arena/service.ts`) records the resolution and enters `applying`
 in one compare-and-set. Acknowledge votes, kept sides, and review answers after that durable claim

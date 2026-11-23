@@ -1,5 +1,8 @@
 import type { Href } from "expo-router";
 import type { DraftInput } from "@/stores/draft-store";
+import type { ArenaPromptAttachments, DaemonClient } from "@getpaseo/client/internal/daemon-client";
+import { ARENA_CONTROL_PLANE_FAILED_CODE } from "@getpaseo/protocol/accounts/schemas";
+import type { ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
 import { create } from "zustand";
 
 interface FailedFirstSendNoticeState {
@@ -15,17 +18,73 @@ export const useFailedFirstSendNotice = create<FailedFirstSendNoticeState>((set)
   dismiss: () => set({ message: null }),
 }));
 
-/**
- * The first send of a new chat failed after its agent was created. Carries that agent, so the
- * chat it went into can be recognised as holding nothing else.
- */
-export class FirstSendError extends Error {
-  readonly agentId: string;
-
-  constructor(cause: unknown, agentId: string) {
+/** The send did not admit a turn. Any created agent was checked for a turn before reporting this. */
+export class UnadmittedFirstSendError extends Error {
+  constructor(
+    cause: unknown,
+    readonly agentId: string | null,
+  ) {
     super(cause instanceof Error ? cause.message : String(cause), { cause });
-    this.name = "FirstSendError";
-    this.agentId = agentId;
+    this.name = "UnadmittedFirstSendError";
+  }
+}
+
+function isPreAdmissionRefusal(error: unknown): boolean {
+  if (!(error instanceof Error) || error.name !== "DaemonRpcError" || !("code" in error)) {
+    return false;
+  }
+  // Access checks and the assignment draw precede admission. Generic handler errors, including
+  // transport failures between the daemon and engine, do not establish where the start failed.
+  if (error.code === "access_denied" || error.code === ARENA_CONTROL_PLANE_FAILED_CODE) return true;
+  // The attachment validator reports this refusal before allocating a turn, without a code.
+  return (
+    error.code === "handler_error" &&
+    "userMessage" in error &&
+    typeof error.userMessage === "string" &&
+    /^Request failed: Battles cannot include \S+ images$/.test(error.userMessage)
+  );
+}
+
+function hasTurn(snapshot: ArenaSnapshot): boolean {
+  return (
+    snapshot.chat.status === "battle_active" ||
+    snapshot.chat.activeTurnID !== undefined ||
+    snapshot.turn !== undefined ||
+    snapshot.history.length > 0 ||
+    snapshot.singleAgent !== undefined ||
+    (snapshot.singleAgentTurns?.length ?? 0) > 0
+  );
+}
+
+export function hasDraftBattle(snapshot: ArenaSnapshot, prompt: string): boolean {
+  return (
+    snapshot.turn?.prompt === prompt || snapshot.history.some((turn) => turn.prompt === prompt)
+  );
+}
+
+interface StartFirstBattleInput {
+  client: Pick<DaemonClient, "arenaStart" | "arenaSnapshot">;
+  agentId: string;
+  chatId: string;
+  prompt: string;
+  attachments: ArenaPromptAttachments;
+  presentError: (error: unknown) => unknown;
+}
+
+export async function startFirstBattle(input: StartFirstBattleInput): Promise<ArenaSnapshot> {
+  const { client, agentId, chatId, prompt, attachments, presentError } = input;
+  try {
+    return await client.arenaStart(agentId, chatId, prompt, attachments);
+  } catch (error) {
+    const snapshot = await client.arenaSnapshot(agentId, chatId).catch(() => null);
+    if (snapshot && hasDraftBattle(snapshot, prompt)) return snapshot;
+
+    const failure = presentError(error);
+    // An empty snapshot can overtake a still-running start whose response the app lost.
+    if (snapshot && !hasTurn(snapshot) && isPreAdmissionRefusal(error)) {
+      throw new UnadmittedFirstSendError(failure, agentId);
+    }
+    throw failure;
   }
 }
 
@@ -52,27 +111,22 @@ export interface FailedFirstSendDeps {
   showError: (message: string) => void;
   retryMessage: string;
   diskFullMessage: string;
-  archiveWorkspace: (serverId: string, workspaceId: string) => Promise<void>;
-  /** Permanently removes the empty agent this failed send created, so it never lands in Archived. */
-  deleteAgent: (agentId: string) => Promise<void>;
+  archiveWorkspace: (
+    serverId: string,
+    workspaceId: string,
+    emptyDraftAgentId: string | null,
+  ) => Promise<void>;
 }
 
-/**
- * New chat creates the chat's workspace before it sends the first message, so a send that fails
- * leaves an empty, untitled chat behind. Archive the workspace (retiring any Arena resources first),
- * delete the empty agent this send created so it never pollutes Archived chats, and put the message
- * back into New chat, where the user wrote it. Returns false, leaving the chat alone, when the
- * workspace holds an agent this send did not create.
- */
+/** Return a failed send to New chat only when it left an empty workspace. */
 export function returnFailedFirstSendToNewChat(
   input: FailedFirstSend,
   deps: FailedFirstSendDeps,
 ): boolean {
-  const createdAgentId = input.error instanceof FirstSendError ? input.error.agentId : null;
-  const otherAgents = deps
-    .readWorkspaceAgentIds(input.serverId, input.workspaceId)
-    .filter((agentId) => agentId !== createdAgentId);
-  if (otherAgents.length > 0) return false;
+  if (!(input.error instanceof UnadmittedFirstSendError)) return false;
+  const createdAgentId = input.error.agentId;
+  const workspaceAgentIds = deps.readWorkspaceAgentIds(input.serverId, input.workspaceId);
+  if (workspaceAgentIds.some((agentId) => agentId !== createdAgentId)) return false;
 
   const route = deps.resolveNewChatRoute(input.serverId, input.workspaceId);
   deps.saveNewChatDraft(input.draft);
@@ -84,15 +138,7 @@ export function returnFailedFirstSendToNewChat(
     ? deps.diskFullMessage
     : deps.retryMessage;
   deps.showError(`${message}\n\n${nextStep}`);
-  void (async () => {
-    try {
-      await deps.archiveWorkspace(input.serverId, input.workspaceId);
-    } finally {
-      if (createdAgentId) {
-        await deps.deleteAgent(createdAgentId);
-      }
-    }
-  })().catch((error) => {
+  void deps.archiveWorkspace(input.serverId, input.workspaceId, createdAgentId).catch((error) => {
     console.error("[WorkspaceDraft] Failed to clean up the chat of a failed first send", error);
   });
   return true;

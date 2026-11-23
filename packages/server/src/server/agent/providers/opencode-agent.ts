@@ -4398,10 +4398,11 @@ class OpenCodeAgentSession implements AgentSession {
             body: { ratingID: ratingId, vote, participantID: participantId },
           },
         ),
-      archive: () =>
-        this.arenaOptionalRequest(`/arena/sessions/${encodeURIComponent(this.sessionId)}/archive`, {
-          method: "POST",
-        }),
+      archive: (options) =>
+        this.arenaOptionalRequest(
+          `/arena/sessions/${encodeURIComponent(this.sessionId)}/archive${options?.onlyIfEmpty ? "?onlyIfEmpty=true" : ""}`,
+          { method: "POST" },
+        ),
       snapshot: (chatId) => this.arenaRequest(`/arena/chats/${encodeURIComponent(chatId)}`),
       turn: (turnId) => this.arenaRequest(`/arena/turns/${encodeURIComponent(turnId)}`),
       start: (chatId, prompt, participantId, autoAccept, attachments) =>

@@ -32,6 +32,7 @@ import { installOpenRouterStub, waitForTurn } from "./harness"
 afterEach(() => {
   delete process.env.OPENCODE_ARENA
   delete process.env.OPENCODE_ARENA_STOP_WATCHDOG_MS
+  delete process.env.OPENCODE_ARENA_FINALIZATION_GIT_TIMEOUT_MS
   setStoreForTest(undefined)
   registry.assignments.clear()
 })
@@ -166,6 +167,14 @@ function inProgressMessages(sessionID: SessionID, directory: string, promptText:
 type SecondSideBehavior = "cancelable" | "stuck"
 
 function createFixtureLayer(root: string, canonicalID: SessionID, secondSideBehavior: SecondSideBehavior) {
+  let hungGitDirectory: string | undefined
+  const gitLayer = Layer.effect(
+    Git.Service,
+    Effect.map(Git.Service, (git) => ({
+      ...git,
+      run: (args, options) => (options.cwd === hungGitDirectory ? Effect.never : git.run(args, options)),
+    })),
+  ).pipe(Layer.provide(LayerNode.compile(Git.node)))
   const sessions = new Map<string, SessionRecord>()
   sessions.set(canonicalID, { info: makeSessionInfo(canonicalID, root, "Canonical"), messages: [] })
 
@@ -194,7 +203,7 @@ function createFixtureLayer(root: string, canonicalID: SessionID, secondSideBeha
             }),
           disposeDirectory: () => Effect.void,
         }),
-        LayerNode.compile(Git.node),
+        gitLayer,
         Layer.mock(Session, {
           get: (id) =>
             Effect.sync(() => {
@@ -369,7 +378,13 @@ function createFixtureLayer(root: string, canonicalID: SessionID, secondSideBeha
     ),
   )
 
-  return { layer, sessions }
+  return {
+    layer,
+    sessions,
+    hangGitIn: (directory: string) => {
+      hungGitDirectory = directory
+    },
+  }
 }
 
 async function createRepo() {
@@ -406,6 +421,31 @@ async function waitForRun(store: Store, turnID: string, predicate: (run: RunDocu
 }
 
 describe("Arena stop recovery, watchdog, and finalization timings", () => {
+  test("archives an empty draft without admitting a turn", async () => {
+    const { repo, dataDir, cleanup } = await createRepo()
+    const store = await connectLocalStore({ directory: dataDir })
+    const canonicalID = nextSessionID()
+    const fixture = createFixtureLayer(repo, canonicalID, "cancelable")
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(store)
+
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const arena = yield* ArenaService.Service
+          const empty = yield* arena.session(canonicalID)
+          expect(empty.chat.status).toBe("ready")
+          const archived = yield* arena.archiveSession(canonicalID, { onlyIfEmpty: true })
+          expect(archived?.chat.status).toBe("archived")
+          expect(archived?.history).toEqual([])
+        }).pipe(Effect.provide(fixture.layer)),
+      )
+    } finally {
+      await store.close()
+      await cleanup()
+    }
+  }, 30_000)
+
   test("preserves a completed side on live Stop and records finalization timings", async () => {
     const { repo, dataDir, cleanup } = await createRepo()
     const store = await connectLocalStore({ directory: dataDir })
@@ -424,6 +464,10 @@ describe("Arena stop recovery, watchdog, and finalization timings", () => {
             const resolved = yield* arena.session(canonicalID)
             const started = yield* arena.startTurn(resolved.chat.id, "Side 1 completes before stop.")
             const turnID = started.turn!.id
+            // A snapshot taken before admission was empty. The cleanup must recheck at the engine.
+            const cleanupAttempt = yield* arena.archiveSession(canonicalID, { onlyIfEmpty: true }).pipe(Effect.flip)
+            expect(cleanupAttempt.message).toBe("Arena draft already has a turn")
+            expect((yield* Effect.promise(() => store.chat(resolved.chat.id)))?.activeTurnID).toBe(turnID)
 
             const finished = yield* Effect.promise(() =>
               waitForRun(
@@ -444,6 +488,7 @@ describe("Arena stop recovery, watchdog, and finalization timings", () => {
 
             yield* arena.stop(turnID)
             yield* Effect.promise(() => waitForTurn(store, turnID, "awaiting_stop_resolution"))
+            expect((yield* arena.stop(turnID)).turn?.state).toBe("awaiting_stop_resolution")
 
             const runs = yield* Effect.promise(() => store.runsForTurn(turnID))
             const preserved = runs.find((run) => run._id === finished._id)
@@ -549,62 +594,110 @@ describe("Arena stop recovery, watchdog, and finalization timings", () => {
     }
   }, 30_000)
 
-  test("stopping watchdog interrupts a stuck side and recovers without restarting", async () => {
-    const { repo, dataDir, cleanup } = await createRepo()
-    const store = await connectLocalStore({ directory: dataDir })
-    const router = installOpenRouterStub()
-    process.env.OPENCODE_ARENA = "1"
-    process.env.OPENCODE_ARENA_STOP_WATCHDOG_MS = "150"
-    setStoreForTest(store)
+  test.each(["recover", "timeout", "discard"] as const)(
+    "watchdog recovery: %s",
+    async (scenario) => {
+      const { repo, dataDir, cleanup } = await createRepo()
+      const store = await connectLocalStore({ directory: dataDir })
+      const router = installOpenRouterStub()
+      process.env.OPENCODE_ARENA = "1"
+      process.env.OPENCODE_ARENA_STOP_WATCHDOG_MS = "150"
+      if (scenario === "timeout") process.env.OPENCODE_ARENA_FINALIZATION_GIT_TIMEOUT_MS = "1000"
+      setStoreForTest(store)
 
-    const canonicalID = nextSessionID()
-    const fixture = createFixtureLayer(repo, canonicalID, "stuck")
+      const canonicalID = nextSessionID()
+      const fixture = createFixtureLayer(repo, canonicalID, "stuck")
 
-    try {
-      await Effect.runPromise(
-        Effect.scoped(
-          Effect.gen(function* () {
-            const arena = yield* ArenaService.Service
-            const resolved = yield* arena.session(canonicalID)
-            const started = yield* arena.startTurn(resolved.chat.id, "Watchdog recovers stuck stopping side.")
-            const turnID = started.turn!.id
+      try {
+        await Effect.runPromise(
+          Effect.scoped(
+            Effect.gen(function* () {
+              const arena = yield* ArenaService.Service
+              const resolved = yield* arena.session(canonicalID)
+              const started = yield* arena.startTurn(resolved.chat.id, "Watchdog recovers stuck stopping side.")
+              const turnID = started.turn!.id
 
-            const finished = yield* Effect.promise(() =>
-              waitForRun(
-                store,
-                turnID,
-                (run) => run.runState === "complete" && run.finalizedAt !== undefined,
-                "first side finalized before stop",
-              ),
-            )
+              const finished = yield* Effect.promise(() =>
+                waitForRun(
+                  store,
+                  turnID,
+                  (run) => run.runState === "complete" && run.finalizedAt !== undefined,
+                  "first side finalized before stop",
+                ),
+              )
 
-            const stopping = yield* arena.stop(turnID)
-            expect(stopping.turn?.state).toBe("stopping")
-            expect(stopping.turn?.canDiscardBattle).toBe(true)
-            expect(stopping.turn?.stoppingAt).toBeDefined()
+              if (scenario !== "recover") {
+                const stuck = yield* Effect.promise(() =>
+                  waitForRun(store, turnID, (run) => run._id !== finished._id, "stuck side"),
+                )
+                fixture.hangGitIn(stuck.worktree)
+              }
+              const [stopping, repeated] = yield* Effect.all([arena.stop(turnID), arena.stop(turnID)], {
+                concurrency: 2,
+              })
+              expect(stopping.turn?.state).toBe("stopping")
+              expect(repeated.turn?.stoppingAt).toBe(stopping.turn?.stoppingAt)
+              expect(stopping.turn?.canDiscardBattle).toBe(true)
+              expect(stopping.turn?.stoppingAt).toBeDefined()
 
-            // Without restarting, the watchdog fires, interrupts the hung fiber, runs
-            // interrupted_recovery, and lands in awaiting_stop_resolution while preserving Side 1.
-            const settled = yield* Effect.promise(() => waitForTurn(store, turnID, "awaiting_stop_resolution"))
-            expect(settled.transitionTimestamps.interrupted_recovery).toBeDefined()
+              if (scenario !== "recover") {
+                const recovering = yield* Effect.promise(() => waitForTurn(store, turnID, "interrupted_recovery"))
+                expect(recovering.transitionTimestamps.stopping).toEqual(new Date(stopping.turn!.stoppingAt!))
+                yield* Effect.gen(function* () {
+                  while (true) {
+                    const turn = yield* Effect.promise(() => store.turn(turnID))
+                    if (turn?.activeOperations?.includes("snapshotting_changes")) return
+                    yield* Effect.sleep("5 millis")
+                  }
+                }).pipe(Effect.timeout("2 seconds"))
+                const stillStopping = yield* arena.stop(turnID)
+                expect(stillStopping.turn).toMatchObject({
+                  state: "interrupted_recovery",
+                  canDiscardBattle: true,
+                  stoppingAt: stopping.turn?.stoppingAt,
+                  activeOperations: expect.arrayContaining(["snapshotting_changes"]),
+                })
+                if (scenario === "discard") {
+                  // The Git test double never returns. Discard must interrupt it, not await its deadline.
+                  const discarded = yield* arena.resolveStop(turnID, "discard").pipe(Effect.timeout("5 seconds"))
+                  expect(discarded.chat.status).toBe("ready")
+                  expect((yield* Effect.promise(() => store.turn(turnID)))?.state).toBe("discarded")
+                  return
+                }
+              }
 
-            const runs = yield* Effect.promise(() => store.runsForTurn(turnID))
-            const preserved = runs.find((run) => run._id === finished._id)
-            const recoveredSide = runs.find((run) => run._id !== finished._id)
-            expect(preserved?.runState).toBe("complete")
-            expect(preserved?.selectable).toBe(true)
-            expect(preserved?.error).toBeUndefined()
-            expect(recoveredSide?.runState).toBe("stopped")
-            expect(recoveredSide?.finalizedAt).toBeDefined()
-          }),
-        ).pipe(Effect.provide(fixture.layer)),
-      )
-    } finally {
-      router.restore()
-      await store.close()
-      await cleanup()
-    }
-  }, 30_000)
+              // Without restarting, the watchdog fires, interrupts the hung fiber, runs
+              // interrupted_recovery, and lands in awaiting_stop_resolution while preserving Side 1.
+              const settled = yield* Effect.promise(() => waitForTurn(store, turnID, "awaiting_stop_resolution"))
+              expect(settled.transitionTimestamps.interrupted_recovery).toBeDefined()
+
+              const runs = yield* Effect.promise(() => store.runsForTurn(turnID))
+              const preserved = runs.find((run) => run._id === finished._id)
+              const recoveredSide = runs.find((run) => run._id !== finished._id)
+              expect(preserved?.runState).toBe("complete")
+              expect(preserved?.selectable).toBe(true)
+              expect(preserved?.error).toBeUndefined()
+              expect(recoveredSide?.runState).toBe("stopped")
+              expect(recoveredSide?.finalizedAt).toBeDefined()
+              if (scenario === "timeout") {
+                expect(recoveredSide?.applicability).toBe("blocked")
+                expect(recoveredSide?.error).toContain("Git timed out while reading result refs")
+                expect(recoveredSide?.finalizationTimings).toMatchObject({
+                  failedStep: "snapshotting_changes",
+                  gitFinalizeMs: expect.any(Number),
+                })
+              }
+            }),
+          ).pipe(Effect.provide(fixture.layer)),
+        )
+      } finally {
+        router.restore()
+        await store.close()
+        await cleanup()
+      }
+    },
+    30_000,
+  )
 
   test("allows discarding a battle directly from a stuck stopping state", async () => {
     const { repo, dataDir, cleanup } = await createRepo()

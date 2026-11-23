@@ -6230,10 +6230,14 @@ test("archive_workspace_request hides non-destructive workspace records", async 
   expect(response?.payload.error).toBeNull();
 });
 
-test("archive_workspace_request releases Arena resources before archiving its source agent", async () => {
+test.each([
+  { label: "releases Arena resources before archiving its source agent", onlyIfEmpty: false },
+  { label: "leaves a draft alone when Arena refuses its archive", onlyIfEmpty: true },
+])("archive_workspace_request $label", async ({ onlyIfEmpty }) => {
   const order: string[] = [];
   const arenaArchive = vi.fn(async () => {
     order.push("arena");
+    if (onlyIfEmpty) throw new Error("Arena draft already has a turn");
     return null;
   });
   const workspace = createPersistedWorkspaceRecord({
@@ -6276,11 +6280,14 @@ test("archive_workspace_request releases Arena resources before archiving its so
     type: "archive_workspace_request",
     workspaceId: workspace.workspaceId,
     requestId: "req-arena-archive",
+    ...(onlyIfEmpty ? { emptyDraftAgentId: managed.id } : {}),
   });
 
-  expect(arenaArchive).toHaveBeenCalledOnce();
-  expect(order).toEqual(["arena", "agent"]);
-  expect(workspace.archivedAt).toBeTruthy();
+  expect(arenaArchive).toHaveBeenCalledExactlyOnceWith(
+    onlyIfEmpty ? { onlyIfEmpty: true } : undefined,
+  );
+  expect(order).toEqual(onlyIfEmpty ? ["arena"] : ["arena", "agent"]);
+  expect(Boolean(workspace.archivedAt)).toBe(!onlyIfEmpty);
 });
 
 test("arena vote responds before winner timeline hydration finishes", async () => {

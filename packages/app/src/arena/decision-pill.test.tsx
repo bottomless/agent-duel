@@ -458,7 +458,7 @@ describe("ArenaDecisionBar stuck stopping discard", () => {
     vi.useRealTimers();
   });
 
-  function stoppingSnapshot(stoppingAt: string): ArenaSnapshot {
+  function stoppingSnapshot(stoppingAt: string, recovering = false): ArenaSnapshot {
     const base = awaitingVote(
       [
         run({ id: "run-a", side: "a", runState: "complete", selectable: true }),
@@ -470,8 +470,9 @@ describe("ArenaDecisionBar stuck stopping discard", () => {
       ...base,
       turn: {
         ...base.turn!,
-        state: "stopping",
+        state: recovering ? "interrupted_recovery" : "stopping",
         stoppingAt,
+        ...(recovering ? { activeOperations: ["snapshotting_changes"] } : {}),
       },
     };
   }
@@ -501,6 +502,17 @@ describe("ArenaDecisionBar stuck stopping discard", () => {
       vi.advanceTimersByTime(1);
     });
     expect(view.queryByTestId("arena-stopped-discard")).not.toBeNull();
+
+    view.rerender(
+      <ArenaDecisionBar
+        serverId="server"
+        agentId="agent"
+        snapshot={stoppingSnapshot(now.toISOString(), true)}
+        onHeightChange={noop}
+      />,
+    );
+    expect(view.getByText("Stopping the battle · Saving worktree changes")).not.toBeNull();
+    expect(view.getByTestId("arena-stopped-discard")).not.toBeNull();
   });
 
   it("offers Discard immediately when reopening a battle already stuck in stopping", () => {

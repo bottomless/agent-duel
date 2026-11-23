@@ -74,8 +74,10 @@ import { useSessionStore } from "@/stores/session-store";
 import { buildWorkspaceArchiveRedirectRoute } from "@/utils/workspace-archive-navigation";
 import { archiveWorkspaceOptimistically } from "@/workspace/workspace-archive";
 import {
-  FirstSendError,
+  hasDraftBattle,
   returnFailedFirstSendToNewChat,
+  startFirstBattle,
+  UnadmittedFirstSendError,
   useFailedFirstSendNotice,
   type FailedFirstSendDeps,
 } from "@/composer/draft/failed-first-send";
@@ -84,10 +86,8 @@ import { noticeAccountSessionRejection } from "@/accounts/session-rejected";
 import { neutralBattleStartError } from "@/arena/battle-start-error";
 import { forgetLastWorkspaceSelection } from "@/stores/navigation-active-workspace-store";
 
-// Before createAgent, so a folder that cannot battle leaves no agent behind.
-async function checkBattleCanStart(input: { client: DaemonClient; cwd: string }): Promise<void> {
-  await arenaByokKey.ensure(input.client);
-  await ensureBattleRepository({ client: input.client, cwd: input.cwd });
+function presentBattleStartError(error: unknown): unknown {
+  return neutralBattleStartError(noticeAccountSessionRejection(error));
 }
 
 async function submitDraftCreateRequest(input: {
@@ -134,10 +134,17 @@ async function submitDraftCreateRequest(input: {
     providerOptions: input.providerOptions,
   });
 
-  if (arenaPreferences.battleMode) {
-    await checkBattleCanStart({ client, cwd });
+  let imagesData: Awaited<ReturnType<typeof encodeImages>>;
+  try {
+    // Before createAgent, so a folder that cannot battle leaves no agent behind.
+    if (arenaPreferences.battleMode) {
+      await arenaByokKey.ensure(client);
+      await ensureBattleRepository({ client, cwd });
+    }
+    imagesData = await encodeImages(images);
+  } catch (error) {
+    throw new UnadmittedFirstSendError(error, null);
   }
-  const imagesData = await encodeImages(images);
   const attachmentsArray = Array.isArray(attachments) ? attachments : undefined;
   // A battle's prompt and its attachments ride on arenaStart below, never on the agent itself.
   const promptAttachments = {
@@ -161,14 +168,7 @@ async function submitDraftCreateRequest(input: {
   }
   if (arenaPreferences.battleMode) {
     if (!result.id) throw new Error("Created OpenCode agent did not return an id");
-    try {
-      await startDraftBattle({ ...input, client, agentId: result.id, promptAttachments });
-    } catch (error) {
-      throw new FirstSendError(
-        neutralBattleStartError(noticeAccountSessionRejection(error)),
-        result.id,
-      );
-    }
+    await startDraftBattle({ ...input, client, agentId: result.id, promptAttachments });
   }
 
   return {
@@ -188,8 +188,11 @@ async function startDraftBattle(input: {
   queueBattlePrompt: (agentId: string, text: string, images: UserMessageImageAttachment[]) => void;
 }): Promise<void> {
   const { client, agentId, text, images, promptAttachments } = input;
-  const snapshot = await client.arenaResolve(agentId);
-  if (!canStartBattleOnChat(snapshot.chat)) {
+  const snapshot = await client.arenaResolve(agentId).catch((error: unknown) => {
+    throw presentBattleStartError(error);
+  });
+  const admitted = hasDraftBattle(snapshot, text);
+  if (!admitted && !canStartBattleOnChat(snapshot.chat)) {
     // The daemon would refuse this start. The agent panel mounts the arena query and explains
     // the pause instead of burning the send on a toast.
     //
@@ -204,7 +207,16 @@ async function startDraftBattle(input: {
     input.queueBattlePrompt(agentId, text, images ?? []);
     return;
   }
-  const started = await client.arenaStart(agentId, snapshot.chat.id, text, promptAttachments);
+  const started = admitted
+    ? snapshot
+    : await startFirstBattle({
+        client,
+        agentId,
+        chatId: snapshot.chat.id,
+        prompt: text,
+        attachments: promptAttachments,
+        presentError: presentBattleStartError,
+      });
   // Hand the started battle to the workspace this draft is about to become. Without it the
   // agent panel mounts with nothing, renders its empty state, and waits up to a poll for a
   // battle that has already begun — which is the blank chat between the draft's panes going
@@ -237,13 +249,15 @@ function failedFirstSendDeps(input: {
     showError: input.showError,
     retryMessage: input.retryMessage,
     diskFullMessage: input.diskFullMessage,
-    archiveWorkspace: async (serverId, workspaceId) => {
+    archiveWorkspace: async (serverId, workspaceId, emptyDraftAgentId) => {
       await archiveWorkspaceOptimistically({
-        client: input.client,
+        client: {
+          archiveWorkspace: (id) =>
+            input.client.archiveWorkspace(id, undefined, { emptyDraftAgentId }),
+        },
         workspace: { serverId, workspaceId },
       });
     },
-    deleteAgent: (agentId) => input.client.deleteAgent(agentId),
   };
 }
 

@@ -419,21 +419,25 @@ export function canTie(
   )
 }
 
-/**
- * May the voter discard this battle instead of applying either result?
- *
- * After a stop and at every vote, whatever the two results are, and when the engine's restart cut
- * the battle off (`canResumeBattle`). The service refuses what this refuses, and the app shows
- * Discard from it.
- */
+export function isStoppingBattle(turn: {
+  readonly state: BattleState
+  readonly transitionTimestamps?: Partial<Record<BattleState, Date>>
+}) {
+  return (
+    turn.state === "stopping" ||
+    (turn.state === "interrupted_recovery" && turn.transitionTimestamps?.stopping !== undefined)
+  )
+}
+
+/** A stop in recovery is still a Stop for the voter, even though its worker changed. */
 export function canDiscardBattle(
-  turn: { readonly state: BattleState; readonly resolution?: unknown },
+  turn: Parameters<typeof isStoppingBattle>[0] & { readonly resolution?: unknown },
   runs: ReadonlyArray<DecidedRun>,
 ): boolean {
   if (turn.resolution !== undefined) return false
   // `awaiting_vote` includes a battle `canResumeBattle` reopened; `stopping` allows discarding a
   // stop that is taking too long or got stuck.
-  return turn.state === "awaiting_stop_resolution" || turn.state === "awaiting_vote" || turn.state === "stopping"
+  return turn.state === "awaiting_stop_resolution" || turn.state === "awaiting_vote" || isStoppingBattle(turn)
 }
 
 /**

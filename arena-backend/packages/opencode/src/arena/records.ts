@@ -199,6 +199,7 @@ export type RunFinalizationTimings = {
   readonly importRefsMs: number
   readonly archiveMs: number
   readonly totalMs: number
+  readonly failedStep?: ArenaActiveOperation
 }
 
 export type ConfigurationHashes = {

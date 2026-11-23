@@ -3090,6 +3090,7 @@ export const ProjectGithubCloneRequestSchema = z.object({
 export const ArchiveWorkspaceRequestSchema = z.object({
   type: z.literal("archive_workspace_request"),
   workspaceId: z.string(),
+  emptyDraftAgentId: z.string().nullable().optional(),
   requestId: z.string(),
 });
 

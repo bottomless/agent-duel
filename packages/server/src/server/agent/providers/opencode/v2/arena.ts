@@ -156,9 +156,9 @@ export function createArenaSessionApi(options: ArenaSessionApiOptions): ArenaApi
         method: "POST",
         body: { ratingID, vote, participantID },
       }),
-    archive: () =>
+    archive: (archiveOptions) =>
       request(
-        `/arena/sessions/${encodeURIComponent(options.sessionId)}/archive`,
+        `/arena/sessions/${encodeURIComponent(options.sessionId)}/archive${archiveOptions?.onlyIfEmpty ? "?onlyIfEmpty=true" : ""}`,
         ArenaSnapshotSchema.nullable(),
         { method: "POST", allowNotFound: true, unbounded: true },
       ),

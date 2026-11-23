@@ -1,6 +1,6 @@
 import { i18n } from "@/i18n/i18next";
 import type { ArenaRun, ArenaSide, ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
-import { arenaSetupStatus } from "./transition-progress";
+import { arenaSetupStatus, operationStatus } from "./transition-progress";
 import { resolutionRetryDetail } from "./battle-result";
 import { arenaParkedPromotion } from "./conflict-guard";
 import { isArenaBattleUnresolved } from "./summary-anchor";
@@ -159,9 +159,11 @@ function failedSide(canChooseA: boolean, canChooseB: boolean): ArenaSide | null 
 }
 
 function stoppingPhase(turn: NonNullable<ArenaSnapshot["turn"]>): ArenaDecisionPhase {
+  const label = i18n.t("arena.stoppingBattle");
+  const step = operationStatus(turn.activeOperations ?? []);
   return {
     kind: "transitional",
-    label: i18n.t("arena.stoppingBattle"),
+    label: step ? `${label} · ${step}` : label,
     busy: true,
     ...(turn.canDiscardBattle ? { canDiscard: true } : {}),
     ...(turn.stoppingAt ? { stoppingAt: turn.stoppingAt } : {}),
@@ -216,7 +218,7 @@ export function arenaDecisionPhase(snapshot: ArenaSnapshot): ArenaDecisionPhase 
     case "finalization_failed":
       return transitional(i18n.t("arena.failedFinish"), false);
     case "interrupted_recovery":
-      return transitional(i18n.t("arena.recovering"), true);
+      return turn.stoppingAt ? stoppingPhase(turn) : transitional(i18n.t("arena.recovering"), true);
     default:
       // This only covers a snapshot caught between two polls.
       return transitional(i18n.t("arena.resolving"), true);
