@@ -98,7 +98,8 @@ deb:
   # Setting depends replaces electron-builder's default list, so it is written out in full. The
   # default leaves out libgbm1 and libasound2, so the app would not start on a minimal install
   # (Ubuntu 22.04 does not pull libgbm1 in through GTK). Battles need git, and capturing contestant
-  # services needs lsof and ps.
+  # services needs lsof and ps. desktop-file-utils provides update-desktop-database, which the
+  # install script runs so GTK and xdg-open find the paseo:// handler.
   depends:
     - libgtk-3-0
     - libnotify4
@@ -114,6 +115,7 @@ deb:
     - git
     - lsof
     - procps
+    - desktop-file-utils
 rpm:
   afterInstall: scripts/linux-sandbox/after-install.tpl
 # The static type-2 runtime runs without libfuse2, which Ubuntu 24.04 does not install. The default
