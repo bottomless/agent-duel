@@ -86,6 +86,11 @@ import {
   useFailedFirstSendNotice,
   type FailedFirstSendDeps,
 } from "@/composer/draft/failed-first-send";
+import {
+  useLateFirstBattleStore,
+  watchLateFirstBattleAdmission,
+  type LateFirstBattle,
+} from "@/composer/draft/late-first-battle";
 import { openWorkspaceSidePanelTab } from "@/workspace/side-panel-command";
 import { noticeAccountSessionRejection } from "@/accounts/session-rejected";
 import { neutralBattleStartError } from "@/arena/battle-start-error";
@@ -115,6 +120,8 @@ async function submitDraftCreateRequest(input: {
   handOffStartedBattle: (agentId: string, snapshot: ArenaSnapshot) => void;
   /** Hold the typed prompt and its images as the agent's next battle when nothing will send it now. */
   queueBattlePrompt: (agentId: string, text: string, images: UserMessageImageAttachment[]) => void;
+  /** Watch for a start whose response was lost; the engine may still admit it after the failure. */
+  watchLateBattleAdmission: (battle: Omit<LateFirstBattle, "serverId">) => void;
 }): Promise<{
   agentId: string | null;
   result: AgentSnapshotPayload;
@@ -176,7 +183,7 @@ async function submitDraftCreateRequest(input: {
   }
   if (arenaPreferences.battleMode) {
     if (!result.id) throw new Error("Created OpenCode agent did not return an id");
-    await startDraftBattle({ ...input, client, agentId: result.id, promptAttachments });
+    await startDraftBattle({ ...input, client, agentId: result.id, promptAttachments, result });
   }
 
   return {
@@ -192,46 +199,58 @@ async function startDraftBattle(input: {
   text: string;
   images?: UserMessageImageAttachment[];
   promptAttachments: ArenaPromptAttachments;
+  result: AgentSnapshotPayload;
   handOffStartedBattle: (agentId: string, snapshot: ArenaSnapshot) => void;
   queueBattlePrompt: (agentId: string, text: string, images: UserMessageImageAttachment[]) => void;
+  watchLateBattleAdmission: (battle: Omit<LateFirstBattle, "serverId">) => void;
 }): Promise<void> {
   const { client, agentId, text, images, promptAttachments } = input;
-  const snapshot = await resolveFirstBattle({
-    client,
-    agentId,
-    presentError: presentBattleStartError,
-  });
-  const admitted = hasDraftBattle(snapshot, text);
-  if (!admitted && !canStartBattleOnChat(snapshot.chat)) {
-    // The daemon would refuse this start. The agent panel mounts the arena query and explains
-    // the pause instead of burning the send on a toast.
-    //
-    // A battle prompt is withheld from createAgent above so arenaStart can carry it, so skipping
-    // the start leaves nothing holding the text. It used to be dropped here and the guard then
-    // prefilled the resolve prompt into the empty composer, which read as the app replacing what
-    // you wrote.
-    //
-    // It becomes the queued next battle rather than composer text: resolving conflicts is a
-    // conversation, and an agent that asks which side of a hunk to keep needs the composer the
-    // parked prompt would have been sitting in. The queue drains itself once the trunk is clean.
-    input.queueBattlePrompt(agentId, text, images ?? []);
-    return;
+  try {
+    const snapshot = await resolveFirstBattle({
+      client,
+      agentId,
+      presentError: presentBattleStartError,
+    });
+    const admitted = hasDraftBattle(snapshot, text);
+    if (!admitted && !canStartBattleOnChat(snapshot.chat)) {
+      // The daemon would refuse this start. The agent panel mounts the arena query and explains
+      // the pause instead of burning the send on a toast.
+      //
+      // A battle prompt is withheld from createAgent above so arenaStart can carry it, so skipping
+      // the start leaves nothing holding the text. It used to be dropped here and the guard then
+      // prefilled the resolve prompt into the empty composer, which read as the app replacing what
+      // you wrote.
+      //
+      // It becomes the queued next battle rather than composer text: resolving conflicts is a
+      // conversation, and an agent that asks which side of a hunk to keep needs the composer the
+      // parked prompt would have been sitting in. The queue drains itself once the trunk is clean.
+      input.queueBattlePrompt(agentId, text, images ?? []);
+      return;
+    }
+    const started = admitted
+      ? snapshot
+      : await startFirstBattle({
+          client,
+          agentId,
+          chatId: snapshot.chat.id,
+          prompt: text,
+          attachments: promptAttachments,
+          presentError: presentBattleStartError,
+        });
+    // Hand the started battle to the workspace this draft is about to become. Without it the
+    // agent panel mounts with nothing, renders its empty state, and waits up to a poll for a
+    // battle that has already begun — which is the blank chat between the draft's panes going
+    // and the real ones arriving.
+    input.handOffStartedBattle(agentId, started);
+  } catch (error) {
+    // Only a confirmed refusal is final. Anything else (a lost start response, a resolve the
+    // daemon never answered) can still end in the engine admitting this prompt, so keep watching
+    // the created agent's stream instead of waiting for a second send.
+    if (!(error instanceof UnadmittedFirstSendError)) {
+      input.watchLateBattleAdmission({ agentId, prompt: text, result: input.result });
+    }
+    throw error;
   }
-  const started = admitted
-    ? snapshot
-    : await startFirstBattle({
-        client,
-        agentId,
-        chatId: snapshot.chat.id,
-        prompt: text,
-        attachments: promptAttachments,
-        presentError: presentBattleStartError,
-      });
-  // Hand the started battle to the workspace this draft is about to become. Without it the
-  // agent panel mounts with nothing, renders its empty state, and waits up to a poll for a
-  // battle that has already begun — which is the blank chat between the draft's panes going
-  // and the real ones arriving.
-  input.handOffStartedBattle(agentId, started);
 }
 
 function failedFirstSendDeps(input: {
@@ -452,6 +471,49 @@ export function WorkspaceDraftComposer({
     [serverId, workspaceId],
   );
 
+  const handOffStartedBattle = useCallback(
+    (agentId: string, snapshot: ArenaSnapshot) => {
+      queryClient.setQueryData(arenaSessionQueryKey(serverId, agentId), snapshot);
+      markArenaBattleHandoff({ serverId, agentId });
+    },
+    [queryClient, serverId],
+  );
+  const handleCreateSucceeded = useCallback(
+    (result: AgentSnapshotPayload) => {
+      useLateFirstBattleStore.getState().clear(draftId);
+      clearDraftInput("sent");
+      clearWorkspaceAttachments({ scopeKey: draftAttachmentScopeKey });
+      useWorkspaceDraftSubmissionStore.getState().clearDraftSetup({ draftId });
+      onCreated(result);
+    },
+    [clearDraftInput, clearWorkspaceAttachments, draftAttachmentScopeKey, draftId, onCreated],
+  );
+  const handleLateBattleAdmitted = useCallback(
+    (battle: LateFirstBattle, snapshot: ArenaSnapshot) => {
+      handOffStartedBattle(battle.agentId, snapshot);
+      // The abandoned create record stood in for the failed send; the admitted battle replaces
+      // it, the same way an accepted start drops the record instead of marking it sent.
+      useCreateFlowStore.getState().clear({ draftId });
+      handleCreateSucceeded(battle.result);
+    },
+    [draftId, handOffStartedBattle, handleCreateSucceeded],
+  );
+  const lateBattle = useLateFirstBattleStore((state) => state.byDraftId[draftId] ?? null);
+  useEffect(() => {
+    if (!lateBattle || !client || lateBattle.serverId !== serverId) return;
+    return watchLateFirstBattleAdmission({
+      queryClient,
+      client,
+      agentId: lateBattle.agentId,
+      queryKey: arenaSessionQueryKey(serverId, lateBattle.agentId),
+      prompt: lateBattle.prompt,
+      onAdmitted: (snapshot) => {
+        useLateFirstBattleStore.getState().clear(draftId);
+        handleLateBattleAdmitted(lateBattle, snapshot);
+      },
+    });
+  }, [lateBattle, client, draftId, queryClient, serverId, handleLateBattleAdmitted]);
+
   const {
     machine,
     formErrorMessage,
@@ -480,6 +542,10 @@ export function WorkspaceDraftComposer({
         (document.activeElement as HTMLElement | null)?.blur?.();
       }
       Keyboard.dismiss();
+    },
+    onCreateStart: () => {
+      // A new submission owns the outcome; the previous attempt's watcher must not race it.
+      useLateFirstBattleStore.getState().clear(draftId);
     },
     buildDraftAgent: (attempt) =>
       buildDraftAgentSnapshot({
@@ -512,15 +578,15 @@ export function WorkspaceDraftComposer({
         }),
         metadata: composerState.metadata,
         createdPreferenceKey: (agentId) => arenaAgentPreferenceKey(serverId, agentId),
-        handOffStartedBattle: (agentId, snapshot) => {
-          queryClient.setQueryData(arenaSessionQueryKey(serverId, agentId), snapshot);
-          markArenaBattleHandoff({ serverId, agentId });
-        },
+        handOffStartedBattle,
         queueBattlePrompt: (agentId, promptText, promptImages) => {
           // Held, not sent. It never enters the in-memory queue, because that queue drains
           // itself and a battle must not start while the user is still talking through the
           // conflict.
           savePendingBattlePrompt({ serverId, agentId, text: promptText, images: promptImages });
+        },
+        watchLateBattleAdmission: (battle) => {
+          useLateFirstBattleStore.getState().set(draftId, { serverId, ...battle });
         },
       });
     },
@@ -540,12 +606,7 @@ export function WorkspaceDraftComposer({
         }),
       );
     },
-    onCreateSuccess: ({ result }) => {
-      clearDraftInput("sent");
-      clearWorkspaceAttachments({ scopeKey: draftAttachmentScopeKey });
-      useWorkspaceDraftSubmissionStore.getState().clearDraftSetup({ draftId });
-      onCreated(result);
-    },
+    onCreateSuccess: ({ result }) => handleCreateSucceeded(result),
   });
   useAgentControlCommandCenterActions({
     sourceId: `draft:${serverId}:${tabId}`,

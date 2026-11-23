@@ -2,6 +2,7 @@ import { $ } from "bun"
 import { afterEach, describe, expect, test } from "bun:test"
 import { Deferred, Effect, Exit, Layer, Logger } from "effect"
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises"
+import { existsSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { LayerNode } from "@opencode/util/effect/layer-node"
@@ -170,6 +171,7 @@ function createFixtureLayer(root: string, canonicalID: SessionID, secondSideBeha
   let hungGitDirectory: string | undefined
   let hangNextGit = false
   let interruptedGit: readonly string[] | undefined
+  let failNextWorktreeRemove = false
   const gitLayer = Layer.effect(
     Git.Service,
     Effect.map(Git.Service, (git) => ({
@@ -379,8 +381,14 @@ function createFixtureLayer(root: string, canonicalID: SessionID, secondSideBeha
               }
             }),
           remove: ({ directory }) =>
-            Effect.promise(async () => {
-              await rm(directory, { recursive: true, force: true }).catch(() => undefined)
+            Effect.suspend(() => {
+              if (failNextWorktreeRemove) {
+                failNextWorktreeRemove = false
+                return Effect.fail(new Error("Simulated worktree removal failure"))
+              }
+              return Effect.promise(async () => {
+                await rm(directory, { recursive: true, force: true }).catch(() => undefined)
+              })
             }),
           retire: (directory) =>
             Effect.promise(async () => {
@@ -412,6 +420,9 @@ function createFixtureLayer(root: string, canonicalID: SessionID, secondSideBeha
     interruptedGit: () => interruptedGit,
     hangGitIn: (directory: string) => {
       hungGitDirectory = directory
+    },
+    failNextWorktreeRemove: () => {
+      failNextWorktreeRemove = true
     },
   }
 }
@@ -853,6 +864,132 @@ describe("Arena stop recovery, watchdog, and finalization timings", () => {
             expect(runs.every((run) => run.worktreeRemovedAt !== undefined)).toBe(true)
           }),
         ).pipe(Effect.provide(fixture.layer)),
+      )
+    } finally {
+      router.restore()
+      await store.close()
+      await cleanup()
+    }
+  }, 30_000)
+
+  test("restart recovery skips a hung canonical inspection instead of blocking", async () => {
+    const { repo, dataDir, cleanup } = await createRepo()
+    let store = await connectLocalStore({ directory: dataDir })
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(store)
+    const canonicalID = nextSessionID()
+    const fixture1 = createFixtureLayer(repo, canonicalID, "cancelable")
+    let chatID = ""
+
+    try {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const arena = yield* ArenaService.Service
+            const resolved = yield* arena.session(canonicalID)
+            expect(resolved.chat.status).toBe("ready")
+            chatID = resolved.chat.id
+          }),
+        ).pipe(Effect.provide(fixture1.layer)),
+      )
+
+      // Reopen with Git hung in the canonical checkout. The inspection deadline must let recovery
+      // finish and leave the chat ready, not block the instance load or block the checkout.
+      await store.close()
+      store = await connectLocalStore({ directory: dataDir })
+      setStoreForTest(store)
+      const fixture2 = createFixtureLayer(repo, canonicalID, "cancelable")
+      process.env.OPENCODE_ARENA_FINALIZATION_GIT_TIMEOUT_MS = "500"
+      fixture2.hangGitIn(repo)
+
+      const started = Date.now()
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const arena = yield* ArenaService.Service
+            const recovered = yield* arena.session(canonicalID)
+            expect(recovered.chat.status).toBe("ready")
+          }),
+        ).pipe(Effect.provide(fixture2.layer)),
+      )
+      expect(Date.now() - started).toBeLessThan(10_000)
+      expect((await store.chat(chatID))?.status).toBe("ready")
+    } finally {
+      await store.close()
+      await cleanup()
+    }
+  }, 30_000)
+
+  test("retries a worktree cleanup a failed removal left behind", async () => {
+    const { repo, dataDir, cleanup } = await createRepo()
+    let store = await connectLocalStore({ directory: dataDir })
+    const router = installOpenRouterStub()
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(store)
+    const canonicalID = nextSessionID()
+    const fixture1 = createFixtureLayer(repo, canonicalID, "cancelable")
+
+    let turnID = ""
+    let strandedRunID = ""
+    let strandedWorktree = ""
+
+    try {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const arena = yield* ArenaService.Service
+            const resolved = yield* arena.session(canonicalID)
+            const started = yield* arena.startTurn(resolved.chat.id, "Cleanup fails once.")
+            turnID = started.turn!.id
+            yield* Effect.promise(() =>
+              waitForRun(store, turnID, (run) => run.runState === "complete" && !!run.finalizedAt, "first side"),
+            )
+            yield* arena.stop(turnID)
+            yield* Effect.promise(() => waitForTurn(store, turnID, "awaiting_stop_resolution"))
+
+            // One worktree removal fails (as a Git timeout would). Discard still completes, but the
+            // run is marked so a later pass removes the worktree it left on disk.
+            fixture1.failNextWorktreeRemove()
+            const discarded = yield* arena.resolveStop(turnID, "discard")
+            expect(discarded.chat.status).toBe("ready")
+
+            const runs = yield* Effect.promise(() => store.runsForTurn(turnID))
+            const stranded = runs.find((run) => run.retention === "cleanup_failed" && !run.worktreeRemovedAt)
+            expect(stranded).toBeDefined()
+            strandedRunID = stranded!._id
+            strandedWorktree = stranded!.worktree
+            expect((yield* Effect.promise(() => store.turn(turnID)))?.cleanup?.state).toBe("failed")
+            expect(existsSync(strandedWorktree)).toBe(true)
+          }),
+        ).pipe(Effect.provide(fixture1.layer)),
+      )
+
+      // Restart: recovery retries the failed cleanup in the background and removes the worktree.
+      await store.close()
+      store = await connectLocalStore({ directory: dataDir })
+      setStoreForTest(store)
+      const fixture2 = createFixtureLayer(repo, canonicalID, "cancelable")
+      for (const run of await store.runsForTurn(turnID)) {
+        const sid = SessionID.make(run.rootSessionID)
+        fixture2.sessions.set(sid, {
+          info: makeSessionInfo(sid, run.worktree, `Side ${run.side}`),
+          messages: completedMessages(sid, run.worktree, "Cleanup fails once."),
+        })
+      }
+
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const arena = yield* ArenaService.Service
+            yield* arena.session(canonicalID)
+            const removed = yield* Effect.promise(() =>
+              waitForRun(store, turnID, (run) => run._id === strandedRunID && !!run.worktreeRemovedAt, "retry removal"),
+            )
+            expect(removed.retention).toBe("none")
+            expect((yield* Effect.promise(() => store.turn(turnID)))?.cleanup?.state).toBe("complete")
+            expect(existsSync(strandedWorktree)).toBe(false)
+          }),
+        ).pipe(Effect.provide(fixture2.layer)),
       )
     } finally {
       router.restore()

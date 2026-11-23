@@ -2,7 +2,7 @@ export * as Git from "./git.js"
 
 import os from "os"
 import path from "path"
-import { Cause, Context, Deferred, Effect, Exit, Layer, Option, Schedule, Schema } from "effect"
+import { Cause, Context, Deferred, Duration, Effect, Exit, Layer, Option, Schedule, Schema } from "effect"
 import { ChildProcess } from "effect/process"
 import { AbsolutePath, RelativePath } from "./schema.js"
 import { FSUtil } from "@opencode/util/fs-util"
@@ -52,6 +52,23 @@ const temporaryIndexPrefix = "index.opencode-"
 const argumentBudget = process.platform === "win32" ? 24_000 : 128 * 1024
 const looseObjectLimit = 2048
 const packCountLimit = 16
+
+// Agent Duel vendor patch: bound the per-folder layout `rev-parse`. A hung discovery blocked every
+// instance load, and with it Arena startup recovery and any Discard waiting behind it.
+function discoverTimeoutMs() {
+  const configured = Number(process.env.OPENCODE_GIT_DISCOVER_TIMEOUT_MS)
+  return Number.isFinite(configured) && configured > 0 ? configured : 45_000
+}
+
+/** Same deadline for the other per-folder startup reads (remote, root commit, worktree list). */
+export function discoverDeadline<A, E, R>(effect: Effect.Effect<A, E, R>) {
+  return effect.pipe(
+    Effect.timeoutOrElse({
+      duration: Duration.millis(discoverTimeoutMs()),
+      orElse: () => Effect.fail(new Error("Git discovery timed out")),
+    }),
+  )
+}
 
 export interface CaptureInput {
   readonly repository: Repository
@@ -204,7 +221,7 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Git") {}
 
-const layer = Layer.effect(
+export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const fs = yield* FSUtil.Service
@@ -229,31 +246,40 @@ const layer = Layer.effect(
       const key = yield* Effect.promise(() => GitLayout.layoutKey(dotgit))
       const known = key === undefined ? undefined : layouts.get(key)
       if (known) return known
-      const git = (args: string[]) => run(cwd, proc, args)
       // One process where the checkout has a working tree, which is every case but a bare
       // repository or a cwd inside `.git`: each process start costs tens of milliseconds on
       // Windows, and every instance and snapshot location asks.
-      const combined = yield* git(["rev-parse", "--show-toplevel", "--git-dir", "--git-common-dir"])
-      const lines = combined.text.split(/\r?\n/)
-      const [topLevel, gitDir, commonDir] =
-        combined.exitCode === 0 && lines.length >= 3
-          ? [
-              { exitCode: 0, text: lines[0]! },
-              { exitCode: 0, text: lines[1]! },
-              { exitCode: 0, text: lines[2]! },
-            ]
-          : [
-              yield* git(["rev-parse", "--show-toplevel"]),
-              yield* git(["rev-parse", "--git-dir"]),
-              yield* git(["rev-parse", "--git-common-dir"]),
-            ]
-      if (gitDir.exitCode !== 0 || commonDir.exitCode !== 0) return undefined
-
-      const repository = new Repository({
-        worktree: AbsolutePath.make(topLevel.exitCode === 0 ? resolvePath(cwd, topLevel.text) : cwd),
-        gitDirectory: AbsolutePath.make(resolvePath(cwd, gitDir.text)),
-        commonDirectory: AbsolutePath.make(resolvePath(cwd, commonDir.text)),
-      })
+      const repository = yield* Effect.gen(function* () {
+        const git = (args: string[]) => run(cwd, proc, args)
+        const combined = yield* git(["rev-parse", "--show-toplevel", "--git-dir", "--git-common-dir"])
+        const lines = combined.text.split(/\r?\n/)
+        const [topLevel, gitDir, commonDir] =
+          combined.exitCode === 0 && lines.length >= 3
+            ? [
+                { exitCode: 0, text: lines[0]! },
+                { exitCode: 0, text: lines[1]! },
+                { exitCode: 0, text: lines[2]! },
+              ]
+            : [
+                yield* git(["rev-parse", "--show-toplevel"]),
+                yield* git(["rev-parse", "--git-dir"]),
+                yield* git(["rev-parse", "--git-common-dir"]),
+              ]
+        if (gitDir.exitCode !== 0 || commonDir.exitCode !== 0) return undefined
+        return new Repository({
+          worktree: AbsolutePath.make(topLevel.exitCode === 0 ? resolvePath(cwd, topLevel.text) : cwd),
+          gitDirectory: AbsolutePath.make(resolvePath(cwd, gitDir.text)),
+          commonDirectory: AbsolutePath.make(resolvePath(cwd, commonDir.text)),
+        })
+      }).pipe(
+        // Agent Duel vendor patch: a hung layout read returns "not discovered" instead of blocking
+        // the instance load; the next pass asks again.
+        Effect.timeoutOrElse({
+          duration: Duration.millis(discoverTimeoutMs()),
+          orElse: () => Effect.succeed(undefined),
+        }),
+      )
+      if (!repository) return undefined
       if (key !== undefined) {
         if (layouts.size >= LAYOUT_CACHE_SIZE) layouts.delete(layouts.keys().next().value!)
         layouts.set(key, repository)

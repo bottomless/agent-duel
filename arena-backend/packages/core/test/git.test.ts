@@ -2,8 +2,10 @@ import { describe, expect } from "bun:test"
 import { $ } from "bun"
 import fs from "fs/promises"
 import path from "path"
-import { Effect, Exit } from "effect"
+import { Effect, Exit, Layer } from "effect"
 import { LayerNode } from "@opencode/util/effect/layer-node"
+import { AppProcess } from "@opencode/util/process"
+import { FSUtil } from "@opencode/util/fs-util"
 import { Git } from "@opencode/core/git"
 import { AbsolutePath, RelativePath } from "@opencode/core/schema"
 import { VcsPatch } from "@opencode/core/vcs/patch"
@@ -712,6 +714,40 @@ describe("Git capture recovery", () => {
       yield* Effect.promise(() => fs.rename(moved, project))
       expect(yield* Effect.promise(() => Bun.file(path.join(repository.gitDirectory, "index")).exists())).toBe(true)
       expect(yield* capture()).toBe(before)
+    }),
+  )
+})
+
+describe("Git.repo.discover deadline", () => {
+  // Agent Duel vendor patch regression: a hung layout rev-parse must not block the instance load.
+  const hung = testEffect(
+    Git.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          LayerNode.compile(FSUtil.node),
+          Layer.mock(AppProcess.Service, { run: () => Effect.never }),
+        ),
+      ),
+    ),
+  )
+
+  hung.live("returns undefined when the layout rev-parse hangs", () =>
+    Effect.gen(function* () {
+      const root = yield* tmpdirScoped()
+      yield* Effect.promise(() => initRepo(root.path))
+      const directory = AbsolutePath.make(yield* Effect.promise(() => fs.realpath(root.path)))
+      const previous = process.env.OPENCODE_GIT_DISCOVER_TIMEOUT_MS
+      process.env.OPENCODE_GIT_DISCOVER_TIMEOUT_MS = "100"
+      const git = yield* Git.Service
+      const started = Date.now()
+      const repository = yield* git.repo
+        .discover(directory)
+        .pipe(Effect.ensuring(Effect.sync(() => {
+          if (previous === undefined) delete process.env.OPENCODE_GIT_DISCOVER_TIMEOUT_MS
+          else process.env.OPENCODE_GIT_DISCOVER_TIMEOUT_MS = previous
+        })))
+      expect(repository).toBeUndefined()
+      expect(Date.now() - started).toBeLessThan(5_000)
     }),
   )
 })

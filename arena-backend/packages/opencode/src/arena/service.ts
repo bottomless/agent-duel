@@ -2983,12 +2983,13 @@ export const layer: Layer.Layer<
             return yield* Effect.fail(new Error("Canonical checkout no longer belongs to the recorded repository"))
           }
           return { state, commonGitDir }
-        }),
+        }).pipe(gitDeadline("inspecting the canonical checkout")),
       )
       if (Exit.isFailure(inspection)) {
         const detail = Cause.pretty(inspection.cause)
-        // Git was busy, not missing. Skip this pass and let the next poll read it.
-        if (isGitLockContention(detail)) {
+        // Git was busy, not missing — a lock or a hung subprocess. Skip this pass and let the
+        // next poll read it, rather than blocking a checkout that may be fine.
+        if (isGitLockContention(detail) || Cause.squash(inspection.cause) instanceof GitDeadlineError) {
           yield* Effect.logDebug("Arena skipped a canonical inspection while git was locked", {
             chatID: chat._id,
           })
@@ -2997,7 +2998,11 @@ export const layer: Layer.Layer<
         // Without a git that runs, the checkout was never read: the trunk may be fine. The chat is
         // left as it is, so a send reaches the battle's git check and says what to install. That
         // check runs here outside the trunk, which may really be gone.
-        if (Exit.isFailure(yield* Effect.exit(withGit(requireBattleGit(process.cwd()))))) {
+        if (
+          Exit.isFailure(
+            yield* Effect.exit(withGit(requireBattleGit(process.cwd())).pipe(gitDeadline("probing git"))),
+          )
+        ) {
           yield* Effect.logWarning("Arena skipped a canonical inspection because git does not run", {
             chatID: chat._id,
           })
@@ -9601,11 +9606,19 @@ export const layer: Layer.Layer<
           }).pipe(
             Effect.as(undefined),
             Effect.catchCause((cause) =>
-              Effect.logWarning("Arena worktree cleanup failed", {
-                turnID: turn._id,
-                runID: run._id,
-                cause,
-              }).pipe(Effect.as({ runID: run._id, error: Cause.pretty(cause) })),
+              Effect.gen(function* () {
+                const latest = yield* promise(() => store.run(run._id))
+                // A removal Git never finished reads as an owned worktree, so no pool sweep retires
+                // it. The marker puts it on the retry path (`retryFailedRunCleanups`) instead.
+                if (latest && !latest.worktreeRemovedAt)
+                  yield* promise(() => store.updateRun(run._id, { retention: "cleanup_failed" }))
+                yield* Effect.logWarning("Arena worktree cleanup failed", {
+                  turnID: turn._id,
+                  runID: run._id,
+                  cause,
+                })
+                return { runID: run._id, error: Cause.pretty(cause) }
+              }),
             ),
           ),
         { concurrency: 2 },
@@ -10261,6 +10274,21 @@ export const layer: Layer.Layer<
               yield* reconcileWarmPair(store, currentChat)
               // Trees a previous process moved aside and did not finish deleting.
               yield* sweepSlotTrash(currentChat)
+              // Worktrees a failed cleanup left behind (a Git timeout, a service that would not
+              // stop) go here too, so they do not wait for the developer's next send. Skipped while
+              // a send holds the start lock: that send retries the same cleanups itself.
+              yield* turnStartLock(currentChat._id)
+                .withPermitsIfAvailable(1)(
+                  retryFailedRunCleanups(store, currentChat, "").pipe(
+                    Effect.catchCause((cause) =>
+                      Effect.logWarning("Arena could not retry failed worktree cleanups", {
+                        chatID: currentChat._id,
+                        cause,
+                      }),
+                    ),
+                  ),
+                )
+                .pipe(Effect.forkIn(scope))
               const stranded = turns.at(-1)
               if (
                 stranded?.state !== "cleanup_pending" ||

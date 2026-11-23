@@ -687,8 +687,11 @@ describe("Project.resolve", () => {
     }),
   )
 
-  const counted = (fail?: (args: readonly string[]) => boolean) => {
-    const counter = countingSpawner(fail)
+  const counted = (
+    fail?: (args: readonly string[]) => boolean,
+    hang?: (args: readonly string[]) => boolean,
+  ) => {
+    const counter = countingSpawner(fail, hang)
     return {
       spawns: counter.spawns,
       layer: AppNodeBuilder.build(LayerNode.group([Project.node, Database.node, Bus.node]), [counter.node]),
@@ -740,6 +743,34 @@ describe("Project.resolve", () => {
         )
         expect((yield* project.resolve(abs(tmp.path))).id).toBe(remoteID("github.com/owner/repo"))
       }).pipe(Effect.provide(layer))
+    }),
+  )
+
+  testEffect(Layer.empty).live("does not block resolve when a startup git read hangs", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      yield* Effect.promise(() => initRepo(tmp.path, { commit: true, remote: "git@github.com:owner/repo.git" }))
+      const previous = process.env.OPENCODE_GIT_DISCOVER_TIMEOUT_MS
+      process.env.OPENCODE_GIT_DISCOVER_TIMEOUT_MS = "200"
+      // The remote read never returns; the discovery deadline must fall back to the root commit
+      // instead of blocking the instance load (and Arena startup recovery behind it).
+      const { layer } = counted(undefined, (args) => args.includes("remote"))
+      yield* Effect.gen(function* () {
+        const project = yield* Project.Service
+        const started = Date.now()
+        expect((yield* project.resolve(abs(tmp.path))).id).toBe(
+          Project.ID.make(yield* Effect.promise(() => rootCommit(tmp.path))),
+        )
+        expect(Date.now() - started).toBeLessThan(5_000)
+      }).pipe(
+        Effect.provide(layer),
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (previous === undefined) delete process.env.OPENCODE_GIT_DISCOVER_TIMEOUT_MS
+            else process.env.OPENCODE_GIT_DISCOVER_TIMEOUT_MS = previous
+          }),
+        ),
+      )
     }),
   )
 

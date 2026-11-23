@@ -361,14 +361,17 @@ const layer = Layer.effect(
           return value
         })
       const previous = yield* cached(repo.commonDirectory)
+      // Agent Duel vendor patch: each startup git read carries the discovery deadline, so a hung
+      // remote or worktree read resolves like a failure instead of blocking the instance load.
       const id =
-        (yield* remote(repo).pipe(fallback(undefined))) ??
+        (yield* remote(repo).pipe(Git.discoverDeadline, fallback(undefined))) ??
         previous ??
-        (yield* rootCommit(repo).pipe(fallback(undefined)))
+        (yield* rootCommit(repo).pipe(Git.discoverDeadline, fallback(undefined)))
       const canonical =
         repo.gitDirectory === repo.commonDirectory
           ? repo.worktree
           : yield* git.worktree.list(repo).pipe(
+              Git.discoverDeadline,
               Effect.map((items) => items.find((item) => item.kind === "main")?.directory ?? repo.worktree),
               fallback(repo.worktree),
             )
