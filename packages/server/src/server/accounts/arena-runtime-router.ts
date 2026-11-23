@@ -20,9 +20,6 @@ import {
   singleAgentAllowanceBody,
 } from "./control-plane-outcomes.js";
 
-// The only route whose body is raw bytes rather than JSON.
-const mediaRoute = "/api/openrouter/api/v1/arena/media";
-
 const allowedRoutes = new Set([
   "/api/arena/assignments",
   "/api/arena/comparison",
@@ -35,8 +32,10 @@ const allowedRoutes = new Set([
   // A contestant stream whose connection died fetches its recorded response here
   // (arena-service `stream-recovery.ts`).
   "/api/openrouter/api/v1/arena/replay",
-  // An image or PDF a contestant request then names by reference (arena-service `media.ts`).
-  mediaRoute,
+  // Upload URLs for the images and PDFs a contestant request then names by reference
+  // (arena-service `media.ts`). The engine sends the bytes to the storage host itself, not through
+  // here: that host must not get the account session.
+  "/api/openrouter/api/v1/arena/media-upload",
 ]);
 
 type Fetch = typeof fetch;
@@ -123,15 +122,13 @@ function sendFailure(res: express.Response, path: string, error: unknown): void 
   sendUnavailable(res, path);
 }
 
-// Keep-alive marks cache pings; compaction marks steps the control plane can ask to summarize;
-// media type names an uploaded file's type.
+// Keep-alive marks cache pings; compaction marks steps the control plane can ask to summarize.
 const forwardedRequestHeaders = [
   "x-arena-assignment-id",
   "x-arena-scope-id",
   "x-arena-generation-id",
   "x-arena-keep-alive",
   "x-arena-compaction",
-  "x-arena-media-type",
 ];
 
 function forwardedHeaders(
@@ -142,7 +139,7 @@ function forwardedHeaders(
   const headers: Record<string, string> = {
     Accept: req.header("accept") ?? "application/json",
     Authorization: `Bearer ${token}`,
-    "Content-Type": req.path === mediaRoute ? "application/octet-stream" : "application/json",
+    "Content-Type": "application/json",
     ...clientHeaders(appVersion),
   };
   for (const name of forwardedRequestHeaders) {
@@ -253,12 +250,7 @@ export function createArenaRuntimeRouter(options: {
   const router = express.Router();
   const execute = options.fetchImpl ?? fetch;
 
-  router.use(
-    express.raw({
-      type: ["application/json", "application/octet-stream"],
-      limit: Number.POSITIVE_INFINITY,
-    }),
-  );
+  router.use(express.raw({ type: "application/json", limit: Number.POSITIVE_INFINITY }));
   async function handleRequest(req: express.Request, res: express.Response): Promise<void> {
     const authorization = req.header("authorization") ?? "";
     const token = authorization.startsWith("Bearer ") ? authorization.slice(7).trim() : "";
@@ -271,11 +263,8 @@ export function createArenaRuntimeRouter(options: {
       res.status(404).json({ error: "Arena runtime route is not available" });
       return;
     }
-    const expectedType = req.path === mediaRoute ? "application/octet-stream" : "application/json";
-    if (!Buffer.isBuffer(req.body) || !req.is(expectedType)) {
-      res
-        .status(415)
-        .json({ error: `Arena runtime requests to this route must use ${expectedType}` });
+    if (!Buffer.isBuffer(req.body)) {
+      res.status(415).json({ error: "Arena runtime requests must use application/json" });
       return;
     }
 

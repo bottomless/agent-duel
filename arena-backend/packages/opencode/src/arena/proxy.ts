@@ -96,6 +96,11 @@ export type ProxyOptions = {
   readonly keepAlive?: KeepAlive
   /** Upload images and PDFs once and name them in the request (`media-reference.ts`): the hosted control plane. */
   readonly mediaByReference?: boolean
+  /**
+   * Sends an uploaded file to its storage URL. Defaults to a plain `fetch`, and is never `fetch`
+   * above: the storage host must not get the account's credential.
+   */
+  readonly mediaUpload?: (input: string, init: RequestInit) => Promise<Response>
 }
 
 type StreamProgress = {
@@ -738,6 +743,7 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
       try {
         return await uploadMedia({
           execute,
+          put: options.mediaUpload,
           upstream,
           routing: { "X-Arena-Assignment-ID": assignment.assignmentID, "X-Arena-Scope-ID": assignment.scopeID },
           media,

@@ -8,6 +8,7 @@ import {
   type ToolResultPart,
 } from "@opencode/ai"
 import type { Content } from "@opencode/schema/tool"
+import { MEDIA_FILE_BYTES } from "@agent-duel/arena-service/media"
 
 /**
  * Keeps a contestant request within what it can carry. Images are what grows a request: every image
@@ -15,11 +16,11 @@ import type { Content } from "@opencode/schema/tool"
  *
  * Two limits apply. The hosted control plane takes at most about 4.5 MB per request (Vercel refuses
  * more before Arena's code runs, and the side fails on a bare 413), but a hosted request names each
- * image or PDF one upload can carry instead of including it (`media-reference.ts`), so those count
- * only their reference there. That holds only once the control plane has taken an upload: until
- * then, and for one without the upload route, media counts in full (`MediaCarriage`). The provider
- * takes `UPSTREAM_IMAGES` images and `UPSTREAM_MEDIA_BYTES` of media in one request, whatever the
- * mode.
+ * image or PDF instead of including it (`media-reference.ts`): the file goes straight to the control
+ * plane's object store, so it counts only its reference there, whatever its size. That holds only
+ * once the store has taken an upload: until then, and for a control plane without the upload route,
+ * media counts in full (`MediaCarriage`). The provider takes `UPSTREAM_IMAGES` images and
+ * `UPSTREAM_MEDIA_BYTES` of media in one request, whatever the mode.
  *
  * Past a limit, a request leaves out its oldest tool images until it is `IMAGE_ROOM_KEPT` of the way
  * to each one. Each removal rewrites the prompt prefix, and Claude, which caches only from one
@@ -48,19 +49,25 @@ const HOSTED_REQUEST_LIMIT = 4_494_157
 // The account token and the x-arena-* and x-opencode-* ids, which are well under this.
 const HEADER_ALLOWANCE = 4_096
 export const REQUEST_BYTES_LIMIT = HOSTED_REQUEST_LIMIT - HEADER_ALLOWANCE
-// One upload of a file sent by reference is one hosted request too, its body the raw bytes.
-export const MEDIA_UPLOAD_BYTES = REQUEST_BYTES_LIMIT
+// The largest file sent by reference. Its upload goes to the store, not through a hosted function,
+// so the body limit above does not bound it: this is the most an upload URL takes, which is more
+// than `UPSTREAM_MEDIA_BYTES` lets one file be.
+export const MEDIA_UPLOAD_BYTES = MEDIA_FILE_BYTES
 // What one provider request carries. Guesses, kept under the lowest published limits in the pool:
 // Anthropic takes 100 images and 32 MB a request, and Google's inline data stops near 20 MB.
 export const UPSTREAM_IMAGES = 90
 export const UPSTREAM_MEDIA_BYTES = 16_000_000
+// The most one image may be, encoded. Claude takes 10 MB an image from Anthropic and 5 MB through
+// Bedrock and Vertex, which OpenRouter can route it to. The hosted body limit used to keep every
+// image under this; by reference nothing else does, so a hosted request applies it. BYOK does not.
+export const UPSTREAM_IMAGE_BYTES = 5_000_000
 // How far toward each limit a trim goes. A guess: the 30% it frees holds many steps of screenshots
 // before the next trim, while most of the images a chat has read stay in the request.
 export const IMAGE_ROOM_KEPT = 0.7
 
 /**
- * How a request's images and PDFs travel. `reference`: to a hosted control plane that has taken an
- * upload, by reference (`media-reference.ts`). `inline`: to a hosted control plane in the body,
+ * How a request's images and PDFs travel. `reference`: to a hosted control plane whose store has
+ * taken an upload, by reference (`media-reference.ts`). `inline`: to a hosted control plane in the body,
  * because it has no upload route or this process has not seen one succeed yet. `local`: in process
  * (BYOK), where the hosted body limit does not apply.
  */
@@ -94,7 +101,7 @@ interface Slot {
   readonly item?: number
   /** Encoded size, which the provider receives. */
   readonly bytes: number
-  /** What it adds to the control plane's body: its reference, or itself when no upload can carry it. */
+  /** What it adds to the control plane's body: its reference, or itself when it travels in the body. */
   readonly wire: number
   readonly name?: string
   readonly user: boolean
@@ -103,6 +110,8 @@ interface Slot {
   decision: Decision
   /** Room an oversized image had, for its note. */
   room?: number
+  /** It is over `UPSTREAM_IMAGE_BYTES` on its own, whatever else the request holds. */
+  overImageLimit?: boolean
 }
 
 // JSON keys, quotes and the provider's per-message wrapping that a part's own JSON does not show.
@@ -229,7 +238,10 @@ function note(slot: Slot) {
     return `[${image} was not attached: the images read in one step must fit in one request together, and this one did not fit with the others. Read it again in a separate step. Older images are removed from later requests to make room, so write down what you need from each image as soon as you see it.]`
   if (slot.decision === "exhausted")
     return `[${image} was not attached: it was already removed twice, because a request cannot hold it together with the other images you are using. Work from what you wrote down about it.]`
-  return `[${image} was not attached: it is ${megabytes(slot.bytes)} MB encoded, and a request has room for about ${megabytes(slot.room ?? 0)} MB of images. Crop it or export it at a lower resolution, then read the smaller file.]`
+  const room = slot.overImageLimit
+    ? `a model takes at most about ${megabytes(UPSTREAM_IMAGE_BYTES)} MB per image`
+    : `a request has room for about ${megabytes(slot.room ?? 0)} MB of images`
+  return `[${image} was not attached: it is ${megabytes(slot.bytes)} MB encoded, and ${room}. Crop it or export it at a lower resolution, then read the smaller file.]`
 }
 
 type Load = { wire: number; media: number; images: number }
@@ -291,10 +303,12 @@ function decide(request: RequestSize, carriage: MediaCarriage) {
         continue
       }
       slot.decision = "oversized"
+      // By reference only the provider's limit stands in the way, also for a file over the upload
+      // cap, which is over that limit too.
       slot.room =
-        slot.wire === slot.bytes
-          ? Math.min(bodyLimit - fixed.wire, UPSTREAM_MEDIA_BYTES - fixed.media)
-          : UPSTREAM_MEDIA_BYTES - fixed.media
+        carriage === "reference"
+          ? UPSTREAM_MEDIA_BYTES - fixed.media
+          : Math.min(bodyLimit - fixed.wire, UPSTREAM_MEDIA_BYTES - fixed.media)
     }
   }
 
@@ -309,6 +323,10 @@ function decide(request: RequestSize, carriage: MediaCarriage) {
     fixed.media += bytes.media
     for (const slot of slots(message, index, carriage)) {
       if (slot.content && (removals.get(slot.content) ?? 0) >= MAX_REMOVALS) slot.decision = "exhausted"
+      else if (carriage !== "local" && slot.bytes > UPSTREAM_IMAGE_BYTES) {
+        slot.decision = "oversized"
+        slot.overImageLimit = true
+      }
       all.push(slot)
     }
   })

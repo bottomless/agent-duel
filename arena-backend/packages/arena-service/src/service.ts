@@ -3,6 +3,7 @@ import type { ArenaContext, Caller, Fetch } from "./context"
 import { validateOpenRouter, type ModelPool } from "./pool"
 import { handleAssignmentsRequest } from "./assignments"
 import { handleComparisonRequest } from "./comparison"
+import type { MediaStore } from "./media-store"
 import { defaultMetadataRateLimit, handleMetadataRequest, type MetadataRateLimit } from "./metadata"
 import { endpointLabelReader } from "./endpoint-label"
 import { handleOpenRouterRequest } from "./openrouter"
@@ -57,6 +58,11 @@ export type ArenaServiceOptions = {
    * (`endpoint-label.ts`). Off by default: only the control plane saves a catalog.
    */
   readonly recordEndpointLabels?: boolean
+  /**
+   * Keeps the images and PDFs contestant requests name by reference (`media-store.ts`). Only the
+   * control plane sets it. Without one the media routes answer 404 and the engine sends media inline.
+   */
+  readonly mediaStore?: MediaStore
 }
 
 export type ArenaService = {
@@ -97,6 +103,7 @@ export function createArenaService(options: ArenaServiceOptions): ArenaService {
     streamRecovery: options.streamRecovery ?? true,
     captureGenerations: options.captureGenerations ?? false,
     readEndpointLabel: options.recordEndpointLabels ? endpointLabelReader(now) : undefined,
+    mediaStore: options.mediaStore,
   }
   const assignments = (request: Request) => handleAssignmentsRequest(request, context)
   const openrouter = (request: Request) => handleOpenRouterRequest(request, context)

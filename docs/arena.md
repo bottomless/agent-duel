@@ -1063,18 +1063,33 @@ reply takes the same attachments as a chat message, and both contestants get ide
 - Images a contestant reads with its tools are not resized, and they stay in history, so every
   later call sends them again. Vercel refuses a control-plane request over 4,494,157 bytes (headers
   count) before Arena's code runs, and the side fails on a bare 413. So a hosted request carries
-  its images and PDFs by reference: the engine uploads each file once
-  (`/api/openrouter/api/v1/arena/media`, `arena/media-reference.ts`), names it
+  its images and PDFs by reference (`arena/media-reference.ts`, arena-service `media.ts`). The
+  engine asks the control plane for an upload URL for each file it has not uploaded yet, in one
+  request per call (`/api/openrouter/api/v1/arena/media-upload`), and PUTs each file's bytes
+  straight to the control plane's object store. It names the file
   `arena-media:sha256:<digest>:<type>`, and the proxy puts the data back before OpenRouter sees the
-  body (arena-service `media.ts`). Uploads are stored per account for 72 hours, apart from the
-  generation-capture parts, because single-agent chats are not kept; a battle's capture stores its
-  own copy of what the call sent. An expired file is missing, and the engine uploads it again under
-  the same reference, so the prompt and its cache do not change.
-  The route is its own Vercel function in the control-plane repository, which must ship it before a
-  desktop release relies on it; a control plane without it answers 404, and the engine sends the
-  media inline. Until an upload has succeeded in the engine process, the size check counts media in
-  full, so an inline body still fits. BYOK runs in process, sends media inline, and meets only the
-  provider's limits.
+  body. The PUT carries the bytes and their type and nothing else: the storage host gets no account
+  session and no assignment, and the daemon does not forward it. An upload passes no hosted
+  function, so a PDF can be up to 16 MB. An image stops at 5 MB encoded, with a note asking for a
+  smaller file: Claude takes no more through Bedrock and Vertex, and the body limit used to keep
+  every hosted image under that.
+  The store sits behind the `MediaStore` interface (arena-service `media-store.ts`). The control
+  plane implements it on a private store in its own repository; this repository carries no storage
+  SDK. Files are at `arena-media/<account id>/<sha256>`: an account that names another account's
+  digest finds nothing, and a privacy request deletes an account's files by prefix. They are apart
+  from the generation-capture parts, because single-agent chats are not kept; a battle's capture
+  stores its own copy of what the call sent. The store deletes a file 3 days after its upload. A
+  file that is gone, or whose bytes do not match its digest, is missing: the proxy answers 409
+  `arena_media_missing`, and the engine uploads it again under the same reference, so the prompt
+  and its cache do not change.
+  The control plane ships the route and its store before a desktop release relies on them. A
+  control plane without the route or without a store answers 404; the engine then sends the media
+  inline and does not ask that control plane again. When the route or a PUT fails any other way,
+  the media goes inline for that request if the body fits. Until an upload has succeeded in the
+  engine process, the size check counts media in full, so an inline body still fits. Desktops
+  released before the route POST each file's bytes to `/api/openrouter/api/v1/arena/media`, one
+  function request per file; the control plane keeps that route and writes those files to the same
+  store. BYOK runs in process, sends media inline, and meets only the provider's limits.
   The provider still takes only so many images per request. Past the body limit or the provider's
   (`engine-runtime/request-size.ts`), the engine leaves the oldest tool images out, well below the
   limit rather than just enough to fit, with a note in each one's place; the user's pasted images

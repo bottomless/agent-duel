@@ -1,8 +1,20 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, spyOn, test } from "bun:test"
 import { createHash } from "crypto"
 import type { ArenaDb } from "./collection"
 import { KEEP_ALIVE_HEADER } from "./keep-alive"
-import { MEDIA_PATH, MEDIA_TYPE_HEADER, mediaReference, readMediaMissing } from "./media"
+import {
+  MEDIA_FILE_BYTES,
+  MEDIA_PATH,
+  MEDIA_TYPE_HEADER,
+  MEDIA_UPLOAD_PATH,
+  mediaReference,
+  mediaUploadRequest,
+  readMediaMissing,
+  readMediaUploadAnswer,
+  type MediaUpload,
+} from "./media"
+import { mediaPathname, type MediaStore } from "./media-store"
+import { memoryMediaStore } from "./memory-media-store"
 import { createArenaService } from "./service"
 
 const model = {
@@ -13,82 +25,51 @@ const model = {
   routing: { sort: "throughput" },
 }
 
-type Row = Record<string, unknown> & { _id: string }
-
-function matches(row: Row, filter: Record<string, unknown>) {
-  return Object.entries(filter).every(([key, expected]) => {
-    if (expected && typeof expected === "object" && "$in" in expected) {
-      return (expected.$in as unknown[]).includes(row[key])
-    }
-    if (expected && typeof expected === "object" && "$gt" in expected) {
-      return (row[key] as Date).getTime() > (expected.$gt as Date).getTime()
-    }
-    return row[key] === expected
-  })
-}
-
-/** Keeps the uploads in memory; every account owns the same assignment, so only upload scoping differs. */
+/** Every account owns both sides of the same battle, so only the media differs between accounts. */
 function memoryDb(assigned = model) {
-  const tables = new Map<string, Map<string, Row>>()
-  const table = (name: string) => tables.get(name) ?? tables.set(name, new Map()).get(name)!
-  let writes = 0
-  let loads = 0
-  const db = {
+  return {
     collection: (name: string) => {
-      if (name === "arenaAssignmentSets") {
-        return {
-          find: (filter: { userId: string; scopeID: string }) => ({
-            toArray: async () =>
-              filter.scopeID === "turn-1"
-                ? [
-                    {
-                      userId: filter.userId,
-                      scopeID: "turn-1",
-                      assignments: [{ assignmentID: "opaque-id", model: assigned }],
-                    },
-                  ]
-                : [],
-          }),
-        }
-      }
-      if (name !== "arenaMediaUploads") throw new Error(`Unexpected Arena collection: ${name}`)
-      const rows = table(name)
+      if (name !== "arenaAssignmentSets") throw new Error(`Unexpected Arena collection: ${name}`)
       return {
-        find: (filter: Record<string, unknown>, options?: { projection?: unknown }) => ({
-          toArray: async () => {
-            // A find without a projection reads the media itself.
-            if (!options?.projection) loads++
-            return [...rows.values()].filter((row) => matches(row, filter))
-          },
+        find: (filter: { userId: string; scopeID: string }) => ({
+          toArray: async () =>
+            filter.scopeID === "turn-1"
+              ? [
+                  {
+                    userId: filter.userId,
+                    scopeID: "turn-1",
+                    assignments: [
+                      { assignmentID: "opaque-id", model: assigned },
+                      { assignmentID: "other-side", model: assigned },
+                    ],
+                  },
+                ]
+              : [],
         }),
-        findOne: async (filter: Record<string, unknown>) =>
-          [...rows.values()].find((row) => matches(row, filter)) ?? null,
-        replaceOne: async (filter: { _id: string }, document: Row) => {
-          writes++
-          rows.set(filter._id, document)
-          return { acknowledged: true, matchedCount: 0, modifiedCount: 0 }
-        },
       }
     },
   } as unknown as ArenaDb
-  return { db, writes: () => writes, loads: () => loads, rows: (name: string) => [...table(name).values()] }
 }
 
 function service(
-  db: ArenaDb,
-  user = "user-1",
-  upstream: (body: string) => void = () => {},
-  now: () => Date = () => new Date(),
+  options: {
+    readonly mediaStore?: MediaStore
+    readonly user?: string
+    readonly upstream?: (body: string) => void
+    readonly now?: () => Date
+    readonly assigned?: typeof model
+  } = {},
 ) {
   return createArenaService({
-    now,
-    resolveCaller: async () => ({ id: user }),
-    db: async () => db,
+    now: options.now,
+    resolveCaller: async () => ({ id: options.user ?? "user-1" }),
+    db: async () => memoryDb(options.assigned),
     pool: [],
     openRouterApiKey: "server-secret",
     streamRecovery: false,
+    mediaStore: options.mediaStore,
     fetch: async (_url, init) => {
-      upstream(String(init?.body ? new TextDecoder().decode(init.body as ArrayBuffer) : ""))
+      options.upstream?.(String(init?.body ? new TextDecoder().decode(init.body as ArrayBuffer) : ""))
       return Response.json({ id: "gen-real", choices: [{ index: 0, message: { role: "assistant", content: "ok" } }] })
     },
   }).openrouter
@@ -96,7 +77,8 @@ function service(
 
 const routing = { "X-Arena-Assignment-ID": "opaque-id", "X-Arena-Scope-ID": "turn-1" }
 
-const upload = (data: Uint8Array<ArrayBuffer>, mimeType = "image/png", scope = "turn-1") =>
+/** What a desktop released before the upload route sends: one file's raw bytes. */
+const legacyUpload = (data: Uint8Array<ArrayBuffer>, mimeType = "image/png", scope = "turn-1") =>
   new Request(`https://control.test/api/openrouter${MEDIA_PATH}`, {
     method: "POST",
     headers: {
@@ -106,6 +88,13 @@ const upload = (data: Uint8Array<ArrayBuffer>, mimeType = "image/png", scope = "
       [MEDIA_TYPE_HEADER]: mimeType,
     },
     body: data,
+  })
+
+const uploadUrls = (body: unknown, headers: Record<string, string> = {}) =>
+  new Request(`https://control.test/api/openrouter${MEDIA_UPLOAD_PATH}`, {
+    method: "POST",
+    headers: { ...routing, "Content-Type": "application/json", ...headers },
+    body: JSON.stringify(body),
   })
 
 const contestant = (url: string | string[], headers: Record<string, string> = {}) =>
@@ -120,80 +109,245 @@ const contestant = (url: string | string[], headers: Record<string, string> = {}
     }),
   })
 
+const sha256 = (data: Uint8Array) => createHash("sha256").update(data).digest("hex")
 const png = new TextEncoder().encode("a screenshot's bytes")
-const digest = createHash("sha256").update(png).digest("hex")
+const digest = sha256(png)
+const file = (data: Uint8Array, mimeType = "image/png"): MediaUpload => ({
+  digest: sha256(data),
+  mimeType,
+  size: data.byteLength,
+})
+
+/** Uploads as the engine does: one request for the URLs, then each file's bytes to its URL. */
+async function upload(
+  proxy: ReturnType<typeof service>,
+  host: ReturnType<typeof memoryMediaStore>,
+  ...files: Uint8Array<ArrayBuffer>[]
+) {
+  const response = await proxy(uploadUrls(mediaUploadRequest(files.map((data) => file(data)))))
+  expect(response.status).toBe(200)
+  const urls = readMediaUploadAnswer(await response.text())!
+  for (const data of files) {
+    const stored = await host.upload(urls.get(sha256(data))!, {
+      method: "PUT",
+      headers: { "Content-Type": "image/png" },
+      body: data,
+    })
+    expect(stored.status).toBe(200)
+  }
+}
 
 describe("media by reference", () => {
-  test("an upload stores the bytes once under the account and answers their digest", async () => {
-    const store = memoryDb()
-    const proxy = service(store.db)
-    const first = await proxy(upload(png))
-    expect(first.status).toBe(200)
-    expect(await first.json()).toEqual({ sha256: digest })
-    expect((await proxy(upload(png))).status).toBe(200)
-    expect(store.writes()).toBe(1)
-  })
-
-  test("an upload expires after 72 hours, and the same reference works again once it is uploaded again", async () => {
-    // Its own account, so no earlier test's warm copy answers for it.
-    const store = memoryDb()
-    let time = Date.parse("2026-11-20T00:00:00Z")
-    let calls = 0
-    const proxy = service(
-      store.db,
-      "user-expiring",
-      () => calls++,
-      () => new Date(time),
-    )
-    const reference = mediaReference(digest, "image/png")
-    expect((await proxy(upload(png))).status).toBe(200)
-    expect(store.rows("arenaMediaUploads")[0]?.expiresAt).toEqual(new Date(time + 72 * 60 * 60 * 1000))
-    time += 71 * 60 * 60 * 1000
-    expect((await proxy(contestant(reference))).status).toBe(200)
-    // Past its time it is missing, even while the TTL index has not deleted it and the function keeps it warm.
-    time += 2 * 60 * 60 * 1000
-    const expired = await proxy(contestant(reference))
-    expect(expired.status).toBe(409)
-    expect(readMediaMissing(await expired.text())).toEqual([digest])
-    expect((await proxy(upload(png))).status).toBe(200)
-    expect((await proxy(contestant(reference))).status).toBe(200)
-    expect(calls).toBe(2)
-  })
-
-  test("an upload needs a supported type and a live assignment", async () => {
-    const proxy = service(memoryDb().db)
-    expect((await proxy(upload(png, "text/plain"))).status).toBe(400)
-    expect((await proxy(upload(png, "image/png", "another-turn"))).status).toBe(403)
-  })
-
-  test("the proxy puts the data back before OpenRouter sees the request", async () => {
-    const store = memoryDb()
+  test("the upload route answers one URL per file, and a file PUT there comes back in the request", async () => {
+    const host = memoryMediaStore()
+    const asked: Parameters<MediaStore["uploadUrl"]>[0][] = []
+    const mediaStore: MediaStore = {
+      ...host.store,
+      uploadUrl: (input) => {
+        asked.push(input)
+        return host.store.uploadUrl(input)
+      },
+    }
     let sent = ""
-    const proxy = service(store.db, "user-1", (body) => (sent = body))
-    await proxy(upload(png))
-    const response = await proxy(contestant(mediaReference(digest, "image/png")))
+    const proxy = service({ mediaStore, user: "user-direct", upstream: (body) => (sent = body) })
+    const pdf = new TextEncoder().encode("%PDF-1.7 a spec")
+    const response = await proxy(uploadUrls(mediaUploadRequest([file(png), file(pdf, "application/pdf")])))
     expect(response.status).toBe(200)
+    const answer = (await response.json()) as { uploads: { digest: string; url: string }[] }
+    expect(answer.uploads.map((item) => item.digest)).toEqual([digest, sha256(pdf)])
+    // Each URL takes that file alone: its account's pathname, its type, and no more than its size.
+    expect(asked).toEqual([
+      { pathname: `arena-media/user-direct/${digest}`, contentType: "image/png", maxBytes: png.byteLength },
+      { pathname: `arena-media/user-direct/${sha256(pdf)}`, contentType: "application/pdf", maxBytes: pdf.byteLength },
+    ])
+    // Nothing is stored until the desktop sends the bytes.
+    expect((await proxy(contestant(mediaReference(digest, "image/png")))).status).toBe(409)
+
+    const refused = await host.upload(answer.uploads[0]!.url, {
+      method: "PUT",
+      headers: { "Content-Type": "image/jpeg" },
+      body: png,
+    })
+    expect(refused.ok).toBe(false)
+    const stored = await host.upload(answer.uploads[0]!.url, {
+      method: "PUT",
+      headers: { "Content-Type": "image/png" },
+      body: png,
+    })
+    expect(stored.ok).toBe(true)
+    expect((await proxy(contestant(mediaReference(digest, "image/png")))).status).toBe(200)
     expect(sent).toContain(`data:image/png;base64,${Buffer.from(png).toString("base64")}`)
     expect(sent).not.toContain("arena-media:")
   })
 
-  test("a reference with no stored media answers which ones are missing, without calling OpenRouter", async () => {
-    const store = memoryDb()
+  test("both sides of a battle get URLs for the same files of the account", async () => {
+    const host = memoryMediaStore()
+    const proxy = service({ mediaStore: host.store })
+    const pathnames = await Promise.all(
+      ["opaque-id", "other-side"].map(async (assignmentID) => {
+        const response = await proxy(
+          uploadUrls(mediaUploadRequest([file(png)]), { "X-Arena-Assignment-ID": assignmentID }),
+        )
+        const answer = (await response.json()) as { uploads: { digest: string; url: string }[] }
+        expect(Object.keys(answer)).toEqual(["uploads"])
+        expect(answer.uploads.map((item) => Object.keys(item))).toEqual([["digest", "url"]])
+        expect(answer.uploads[0]!.url).not.toContain(assignmentID)
+        return new URL(answer.uploads[0]!.url).pathname
+      }),
+    )
+    expect(pathnames).toEqual([`/arena-media/user-1/${digest}`, `/arena-media/user-1/${digest}`])
+  })
+
+  test("the upload route refuses a bad digest, type or size, too many files, and a dead assignment", async () => {
+    const host = memoryMediaStore()
+    const proxy = service({ mediaStore: host.store })
+    const good = file(png)
+    const refused = [
+      {},
+      { files: [] },
+      { files: [{ ...good, digest: digest.toUpperCase() }] },
+      { files: [{ ...good, digest: digest.slice(1) }] },
+      { files: [{ ...good, mimeType: "text/plain" }] },
+      { files: [{ ...good, mimeType: "image/png; charset=x" }] },
+      { files: [{ ...good, size: 0 }] },
+      { files: [{ ...good, size: 1.5 }] },
+      { files: [{ ...good, size: MEDIA_FILE_BYTES + 1 }] },
+      { files: [good, null] },
+      { files: Array.from({ length: 201 }, () => good) },
+    ]
+    for (const body of refused) expect((await proxy(uploadUrls(body))).status).toBe(400)
+    expect((await proxy(uploadUrls({ files: [{ ...good, size: MEDIA_FILE_BYTES }] }))).status).toBe(200)
+    expect((await proxy(uploadUrls({ files: Array.from({ length: 200 }, () => good) }))).status).toBe(200)
+    const dead = await proxy(uploadUrls(mediaUploadRequest([good]), { "X-Arena-Scope-ID": "another-turn" }))
+    expect(dead.status).toBe(403)
+  })
+
+  test("a desktop released before the upload route still uploads, through the store", async () => {
+    const host = memoryMediaStore()
+    let sent = ""
+    const proxy = service({ mediaStore: host.store, user: "user-legacy", upstream: (body) => (sent = body) })
+    const first = await proxy(legacyUpload(png))
+    expect(first.status).toBe(200)
+    expect(await first.json()).toEqual({ sha256: digest })
+    expect([...host.files.keys()]).toEqual([`arena-media/user-legacy/${digest}`])
+    expect(host.files.get(`arena-media/user-legacy/${digest}`)?.contentType).toBe("image/png")
+    expect((await proxy(contestant(mediaReference(digest, "image/png")))).status).toBe(200)
+    expect(sent).toContain(`data:image/png;base64,${Buffer.from(png).toString("base64")}`)
+
+    expect((await proxy(legacyUpload(png, "text/plain"))).status).toBe(400)
+    expect((await proxy(legacyUpload(new Uint8Array(0)))).status).toBe(400)
+    expect((await proxy(legacyUpload(png, "image/png", "another-turn"))).status).toBe(403)
+  })
+
+  test("without a store both routes answer 404, as a control plane from before them does", async () => {
+    const proxy = service()
+    expect((await proxy(uploadUrls(mediaUploadRequest([file(png)])))).status).toBe(404)
+    expect((await proxy(legacyUpload(png))).status).toBe(404)
+    // A malformed request gets the same answer: there is no route to refuse it.
+    expect((await proxy(uploadUrls({}))).status).toBe(404)
+    const response = await proxy(contestant(mediaReference(digest, "image/png")))
+    expect(response.status).toBe(409)
+    expect(readMediaMissing(await response.text())).toEqual([digest])
+  })
+
+  test("a file is missing 3 days after its upload, and the same reference works once it is uploaded again", async () => {
+    let time = Date.parse("2026-11-20T00:00:00Z")
+    const now = () => new Date(time)
+    const host = memoryMediaStore(now)
     let calls = 0
-    await service(store.db)(upload(png))
+    // Its own account, so no earlier test's warm copy answers for it.
+    const proxy = service({ mediaStore: host.store, user: "user-expiring", upstream: () => calls++, now })
+    const reference = mediaReference(digest, "image/png")
+    await upload(proxy, host, png)
+    expect(host.files.get(`arena-media/user-expiring/${digest}`)?.expiresAt).toEqual(
+      new Date(time + 3 * 24 * 60 * 60 * 1000),
+    )
+    time += 71 * 60 * 60 * 1000
+    expect((await proxy(contestant(reference))).status).toBe(200)
+    // Past its time it is missing, even while the store has not deleted it and the function keeps it warm.
+    time += 2 * 60 * 60 * 1000
+    const expired = await proxy(contestant(reference))
+    expect(expired.status).toBe(409)
+    expect(readMediaMissing(await expired.text())).toEqual([digest])
+    await upload(proxy, host, png)
+    expect((await proxy(contestant(reference))).status).toBe(200)
+    expect(calls).toBe(2)
+  })
+
+  test("a warm function reads a file from the store once, and logs where each call's media came from", async () => {
+    const host = memoryMediaStore()
+    const proxy = service({ mediaStore: host.store, user: "user-logged" })
+    const other = new TextEncoder().encode("another screenshot")
+    await upload(proxy, host, png, other)
+    const info = spyOn(console, "info").mockImplementation(() => {})
+    try {
+      const lines = () => info.mock.calls.filter(([label]) => label === "[arena-service] Arena media")
+      expect((await proxy(contestant(mediaReference(digest, "image/png")))).status).toBe(200)
+      expect(
+        (await proxy(contestant([digest, sha256(other)].map((id) => mediaReference(id, "image/png"))))).status,
+      ).toBe(200)
+      expect((await proxy(contestant(mediaReference("0".repeat(64), "image/png")))).status).toBe(409)
+      // A call that names no media logs nothing.
+      expect((await proxy(contestant("https://example.com/a.png"))).status).toBe(200)
+      expect(host.bodies()).toBe(2)
+      const logged = lines().map(([, line]) => JSON.parse(String(line)) as Record<string, unknown>)
+      expect(logged).toEqual([
+        { files: 1, cached: 0, stored: 1, storeMs: expect.any(Number), missing: 0 },
+        { files: 2, cached: 1, stored: 1, storeMs: expect.any(Number), missing: 0 },
+        { files: 1, cached: 0, stored: 0, storeMs: expect.any(Number), missing: 1 },
+      ])
+      // Counts and a duration: no content, digest or account.
+      const text = JSON.stringify(lines())
+      for (const secret of [
+        digest,
+        sha256(other),
+        "0".repeat(64),
+        "user-logged",
+        Buffer.from(png).toString("base64"),
+      ]) {
+        expect(text).not.toContain(secret)
+      }
+    } finally {
+      info.mockRestore()
+    }
+  })
+
+  test("a reference with no stored media answers which ones are missing, without calling OpenRouter", async () => {
+    const host = memoryMediaStore()
+    let calls = 0
+    await upload(service({ mediaStore: host.store }), host, png)
     // Another account cannot read user-1's media by its digest.
-    const proxy = service(store.db, "user-2", () => calls++)
+    const proxy = service({ mediaStore: host.store, user: "user-2", upstream: () => calls++ })
     const response = await proxy(contestant(mediaReference(digest, "image/png")))
     expect(response.status).toBe(409)
     expect(readMediaMissing(await response.text())).toEqual([digest])
     expect(calls).toBe(0)
   })
 
-  test("a request that names more media than any provider takes is refused before its media loads", async () => {
-    const store = memoryDb()
+  test("stored bytes that are not the file the digest names are missing, and are not kept", async () => {
+    const host = memoryMediaStore()
+    let sent = ""
+    const proxy = service({ mediaStore: host.store, user: "user-corrupt", upstream: (body) => (sent = body) })
+    const reference = mediaReference(digest, "image/png")
+    const pathname = mediaPathname("user-corrupt", digest)
+    for (const wrong of [new TextEncoder().encode("someone else's bytes"), png.slice(0, 5)]) {
+      await host.store.write({ pathname, contentType: "image/png", data: wrong })
+      const response = await proxy(contestant(reference))
+      expect(response.status).toBe(409)
+      expect(readMediaMissing(await response.text())).toEqual([digest])
+    }
+    expect(sent).toBe("")
+    // The engine uploads it again over the wrong bytes, and the next call reads the right ones.
+    await upload(proxy, host, png)
+    expect((await proxy(contestant(reference))).status).toBe(200)
+    expect(sent).toContain(`data:image/png;base64,${Buffer.from(png).toString("base64")}`)
+  })
+
+  test("a request that names more media than any provider takes is refused before any of it loads", async () => {
+    const host = memoryMediaStore()
     let calls = 0
-    const proxy = service(store.db, "user-1", () => calls++)
-    await proxy(upload(png))
+    const proxy = service({ mediaStore: host.store, user: "user-large", upstream: () => calls++ })
+    await upload(proxy, host, png)
     const reference = mediaReference(digest, "image/png")
     // A refusal for the media, not the compaction refusal a request this size also earns.
     const tooMuchMedia = { error: { message: "Arena request carries too much media", type: "arena_media_too_large" } }
@@ -203,15 +357,17 @@ describe("media by reference", () => {
 
     // 9 MB is 12 MB of base64: two copies fit the 32 MB a request may carry, three do not.
     const large = new Uint8Array(9_000_000).fill(7)
-    const largeReference = mediaReference(createHash("sha256").update(large).digest("hex"), "image/png")
-    await proxy(upload(large))
-    const loads = store.loads()
-    const tooLarge = await proxy(contestant([largeReference, largeReference, largeReference]))
+    const largeReference = mediaReference(sha256(large), "image/png")
+    await upload(proxy, host, large)
+    expect(host.bodies()).toBe(0)
+    // The small file's size is read with the large one's, and neither body is.
+    const tooLarge = await proxy(contestant([reference, largeReference, largeReference, largeReference]))
     expect(tooLarge.status).toBe(413)
     expect(await tooLarge.json()).toEqual(tooMuchMedia)
-    expect(store.loads()).toBe(loads)
+    expect(host.bodies()).toBe(0)
     expect(calls).toBe(0)
-    expect((await proxy(contestant([largeReference, largeReference]))).status).toBe(200)
+    expect((await proxy(contestant([reference, largeReference, largeReference]))).status).toBe(200)
+    expect(host.bodies()).toBe(2)
     expect(calls).toBe(1)
   })
 
@@ -221,16 +377,18 @@ describe("media by reference", () => {
     const ping = { [KEEP_ALIVE_HEADER]: "1" }
     const unknown = mediaReference("0".repeat(64), "image/png")
     for (const assigned of [model, claude]) {
-      const response = await service(memoryDb(assigned).db, "user-1", () => calls++)(contestant(unknown, ping))
-      expect(response.status).toBe(204)
-      expect(response.headers.get(KEEP_ALIVE_HEADER)).toBe("1")
+      for (const mediaStore of [memoryMediaStore().store, undefined]) {
+        const response = await service({ mediaStore, assigned, upstream: () => calls++ })(contestant(unknown, ping))
+        expect(response.status).toBe(204)
+        expect(response.headers.get(KEEP_ALIVE_HEADER)).toBe("1")
+      }
     }
     expect(calls).toBe(0)
   })
 
   test("text that only looks like a reference is left alone", async () => {
     let sent = ""
-    const proxy = service(memoryDb().db, "user-1", (body) => (sent = body))
+    const proxy = service({ mediaStore: memoryMediaStore().store, upstream: (body) => (sent = body) })
     const text = `see ${mediaReference(digest, "image/png")}`
     const response = await proxy(contestant(text))
     expect(response.status).toBe(200)

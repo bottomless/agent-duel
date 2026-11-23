@@ -1,5 +1,6 @@
 import type { ArenaDb } from "./collection"
 import type { EndpointLabelReader } from "./endpoint-label"
+import type { MediaStore } from "./media-store"
 import type { MetadataRateLimit } from "./metadata"
 import type { ModelPool } from "./pool"
 import type { WebSearchRateLimit } from "./websearch"
@@ -32,6 +33,8 @@ export type ArenaContext = {
   readonly captureGenerations: boolean
   /** Adds the endpoint catalog's label to each call's stored metrics (`endpoint-label.ts`). */
   readonly readEndpointLabel?: EndpointLabelReader
+  /** Holds the media contestant requests name by reference (`media-store.ts`). */
+  readonly mediaStore?: MediaStore
 }
 
 type Failure = (message: string, status: number) => Response

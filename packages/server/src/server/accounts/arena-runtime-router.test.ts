@@ -586,7 +586,7 @@ describe("Arena runtime proxy", () => {
     expect(new Headers(init?.headers).get("authorization")).toBe("Bearer account-session-token");
   });
 
-  it("forwards an uploaded image as raw bytes with its media type", async () => {
+  it("forwards a request for media upload URLs, and no longer takes a file's raw bytes", async () => {
     installArenaCredentials({
       mode: "hosted",
       researchPartition: "test-research-partition",
@@ -595,36 +595,45 @@ describe("Arena runtime proxy", () => {
       controlPlaneUrl: "https://control.agentduel.test",
     });
     const runtime = issueRuntimeCapability();
-    upstream.mockResolvedValue(Response.json({ sha256: "digest" }));
-    const bytes = new Uint8Array([137, 80, 78, 71, 0, 255]);
+    const answer = { uploads: [{ digest: "a".repeat(64), url: "https://storage.test/upload" }] };
+    upstream.mockResolvedValue(Response.json(answer));
+    const body = JSON.stringify({
+      files: [{ digest: "a".repeat(64), mimeType: "image/png", size: 6 }],
+    });
 
-    const response = await fetch(`${baseUrl}/api/arena-runtime/api/openrouter/api/v1/arena/media`, {
+    const response = await fetch(
+      `${baseUrl}/api/arena-runtime/api/openrouter/api/v1/arena/media-upload`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${runtime.token}`,
+          "Content-Type": "application/json",
+          "X-Arena-Assignment-ID": "opaque-id",
+          "X-Arena-Scope-ID": "turn-1",
+        },
+        body,
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(answer);
+    const [url, init] = upstream.mock.calls[0]!;
+    expect(url).toBe("https://control.agentduel.test/api/openrouter/api/v1/arena/media-upload");
+    const headers = new Headers(init?.headers);
+    expect(headers.get("authorization")).toBe("Bearer account-session-token");
+    expect(headers.get("x-arena-assignment-id")).toBe("opaque-id");
+    expect(new TextDecoder().decode(init?.body as ArrayBuffer)).toBe(body);
+
+    // The engine PUTs the bytes to the storage host itself; the route released desktops used is gone.
+    const raw = await fetch(`${baseUrl}/api/arena-runtime/api/openrouter/api/v1/arena/media`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${runtime.token}`,
         "Content-Type": "application/octet-stream",
-        "X-Arena-Assignment-ID": "opaque-id",
-        "X-Arena-Scope-ID": "turn-1",
-        "X-Arena-Media-Type": "image/png",
       },
-      body: bytes,
+      body: new Uint8Array([137, 80, 78, 71]),
     });
-
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ sha256: "digest" });
-    const [url, init] = upstream.mock.calls[0]!;
-    expect(url).toBe("https://control.agentduel.test/api/openrouter/api/v1/arena/media");
-    const headers = new Headers(init?.headers);
-    expect(headers.get("content-type")).toBe("application/octet-stream");
-    expect(headers.get("x-arena-media-type")).toBe("image/png");
-    expect(new Uint8Array(init?.body as ArrayBuffer)).toEqual(bytes);
-
-    const json = await fetch(`${baseUrl}/api/arena-runtime/api/openrouter/api/v1/arena/media`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${runtime.token}`, "Content-Type": "application/json" },
-      body: "{}",
-    });
-    expect(json.status).toBe(415);
+    expect(raw.status).toBe(404);
     expect(upstream).toHaveBeenCalledTimes(1);
   });
 

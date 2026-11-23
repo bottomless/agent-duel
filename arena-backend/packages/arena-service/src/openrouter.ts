@@ -20,15 +20,20 @@ import {
   recordCalibration,
   type CalibrationSample,
 } from "./request-calibration"
-import {
-  generationCapture,
-  resolveMedia,
-  storeMedia,
-  type CaptureState,
-  type GenerationCapture,
-} from "./generation-capture"
+import { generationCapture, resolveMedia, type CaptureState, type GenerationCapture } from "./generation-capture"
 import { geminiToolResultRetry } from "./gemini-tool-results"
-import { MEDIA_PATH, MEDIA_TYPE_HEADER, mediaMissingError, mediaTooLargeError, sendsByReference } from "./media"
+import {
+  isMediaType,
+  MEDIA_FILE_BYTES,
+  MEDIA_PATH,
+  MEDIA_TYPE_HEADER,
+  MEDIA_UPLOAD_PATH,
+  mediaMissingError,
+  mediaTooLargeError,
+  mediaUploadAnswer,
+  readMediaUploadRequest,
+} from "./media"
+import { mediaPathname } from "./media-store"
 import { createReasoningRedactor } from "./reasoning"
 import {
   HEARTBEAT_HEADER,
@@ -550,6 +555,12 @@ async function sanitizeAssignedResponse(
   return Response.json(payload, { status: response.status, headers })
 }
 
+// The engine sends the media inline when the body fits, and otherwise tries the request again.
+function mediaStoreFailed() {
+  console.error("[arena-service] Arena media store failed")
+  return Response.json({ error: { message: "Arena media store is unavailable" } }, { status: 502 })
+}
+
 export async function handleOpenRouterRequest(request: Request, context: ArenaContext) {
   const caller = await authorize(request, context, (message, status) =>
     Response.json({ error: { message } }, { status }),
@@ -561,6 +572,12 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
   const url = new URL(request.url)
   const suffix = url.pathname.replace(/^\/api\/openrouter/, "")
   if (!suffix.startsWith("/api/v1/")) return Response.json({ error: { message: "Not found" } }, { status: 404 })
+  const mediaStore = context.mediaStore
+  // No store answers as a control plane from before the media routes does, and the engine sends its
+  // media inline.
+  if (!mediaStore && request.method === "POST" && (suffix === MEDIA_PATH || suffix === MEDIA_UPLOAD_PATH)) {
+    return Response.json({ error: { message: "Not found" } }, { status: 404 })
+  }
   const upstream = new URL(`https://openrouter.ai${suffix}`)
   const headers = new Headers()
   headers.set("Authorization", `Bearer ${apiKey}`)
@@ -601,19 +618,49 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
         request.signal,
       )
     }
-    if (request.method === "POST" && suffix === MEDIA_PATH) {
+    // Both media routes answer from the account and the files alone, so the two sides of a battle
+    // get the same answers.
+    if (mediaStore && request.method === "POST" && suffix === MEDIA_UPLOAD_PATH) {
+      const files = body && readMediaUploadRequest(new TextDecoder().decode(body))
+      if (!files) {
+        return Response.json({ error: { message: "Arena media upload request is invalid" } }, { status: 400 })
+      }
+      const db = await context.db()
+      const routeAssignment = await reserveRoutingAssignment(db, caller.id, assignment.scopeID, assignment.assignmentID)
+      if (!routeAssignment) return Response.json({ error: { message: "Arena assignment is invalid" } }, { status: 403 })
+      const urls = await Promise.all(
+        files.map((file) =>
+          mediaStore.uploadUrl({
+            pathname: mediaPathname(caller.id, file.digest),
+            contentType: file.mimeType,
+            maxBytes: file.size,
+          }),
+        ),
+      ).catch(mediaStoreFailed)
+      if (urls instanceof Response) return urls
+      return Response.json(mediaUploadAnswer(files.map((file, index) => ({ digest: file.digest, url: urls[index]! }))))
+    }
+    // Desktops released before the upload route send each file's bytes here.
+    if (mediaStore && request.method === "POST" && suffix === MEDIA_PATH) {
       const mimeType = request.headers.get(MEDIA_TYPE_HEADER)?.trim().toLowerCase()
-      if (!mimeType || !sendsByReference(mimeType) || !/^[\w.+-]+\/[\w.+-]+$/.test(mimeType)) {
+      if (!isMediaType(mimeType)) {
         return Response.json({ error: { message: "Arena media type is not supported" } }, { status: 400 })
       }
       if (!body || body.byteLength === 0) {
         return Response.json({ error: { message: "Arena media body is required" } }, { status: 400 })
       }
+      if (body.byteLength > MEDIA_FILE_BYTES) {
+        return Response.json({ error: { message: "Arena media is too large" } }, { status: 400 })
+      }
       const db = await context.db()
       const routeAssignment = await reserveRoutingAssignment(db, caller.id, assignment.scopeID, assignment.assignmentID)
       if (!routeAssignment) return Response.json({ error: { message: "Arena assignment is invalid" } }, { status: 403 })
-      const digest = await storeMedia(db, caller.id, Buffer.from(body), context.now())
-      return Response.json({ sha256: digest })
+      const data = new Uint8Array(body)
+      const digest = createHash("sha256").update(data).digest("hex")
+      const failure = await mediaStore
+        .write({ pathname: mediaPathname(caller.id, digest), contentType: mimeType, data })
+        .catch(mediaStoreFailed)
+      return failure ?? Response.json({ sha256: digest })
     }
     if (request.method !== "POST" || !["/api/v1/chat/completions", "/api/v1/responses"].includes(suffix)) {
       return Response.json({ error: { message: "Arena assignment cannot access this route" } }, { status: 400 })
@@ -653,7 +700,12 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
       assignmentID: assignment.assignmentID,
     })
     // Images and PDFs the engine uploaded come back here, before the budget counts them (`media.ts`).
-    const media = await resolveMedia(db, caller.id, reasoning.restore(input), context.now())
+    const media = await resolveMedia(mediaStore, caller.id, reasoning.restore(input), context.now()).catch(
+      (error: unknown) => {
+        console.error("[arena-service] Arena media store failed")
+        throw error
+      },
+    )
     // Only Claude pings get this far, so a ping with media the proxy cannot send answers like every
     // other ping, or a made-up reference would tell the sides apart.
     if (keepAlive && (media.tooLarge || media.missing.length > 0)) {
