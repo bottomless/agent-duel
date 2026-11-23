@@ -248,8 +248,18 @@ export function createReasoningRedactor(apiKey: string, binding: Binding) {
     }
     // Markers never go upstream, even when no envelope opened.
     if (!redacted) return message
-    if (restored.reasoning === undefined && rendered) restored.reasoning = rendered
-    if (details.length > 0) restored.reasoning_details = details
+    // OpenRouter maps `reasoning_details` to each provider's native thinking/reasoning format
+    // (Anthropic, Gemini, OpenAI, DeepSeek, Kimi, Qwen, Meta, xAI). Sending `reasoning` or
+    // `reasoning_content` alongside it duplicates the entire reasoning payload on the wire and
+    // inflates request-budget estimates. Only fall back to plaintext fields when no structured
+    // `reasoning_details` were emitted.
+    if (details.length > 0) {
+      delete restored.reasoning
+      delete restored.reasoning_content
+      restored.reasoning_details = details
+    } else if (restored.reasoning === undefined && rendered) {
+      restored.reasoning = rendered
+    }
     return restored
   }
 

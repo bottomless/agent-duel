@@ -53,13 +53,16 @@ export interface FailedFirstSendDeps {
   retryMessage: string;
   diskFullMessage: string;
   archiveWorkspace: (serverId: string, workspaceId: string) => Promise<void>;
+  /** Permanently removes the empty agent this failed send created, so it never lands in Archived. */
+  deleteAgent: (agentId: string) => Promise<void>;
 }
 
 /**
  * New chat creates the chat's workspace before it sends the first message, so a send that fails
- * leaves an empty, untitled chat behind. Archive it and put the message back into New chat, where
- * the user wrote it. Returns false, leaving the chat alone, when the workspace holds an agent
- * this send did not create.
+ * leaves an empty, untitled chat behind. Archive the workspace (retiring any Arena resources first),
+ * delete the empty agent this send created so it never pollutes Archived chats, and put the message
+ * back into New chat, where the user wrote it. Returns false, leaving the chat alone, when the
+ * workspace holds an agent this send did not create.
  */
 export function returnFailedFirstSendToNewChat(
   input: FailedFirstSend,
@@ -81,8 +84,16 @@ export function returnFailedFirstSendToNewChat(
     ? deps.diskFullMessage
     : deps.retryMessage;
   deps.showError(`${message}\n\n${nextStep}`);
-  void deps.archiveWorkspace(input.serverId, input.workspaceId).catch((error) => {
-    console.error("[WorkspaceDraft] Failed to archive the chat of a failed first send", error);
+  void (async () => {
+    try {
+      await deps.archiveWorkspace(input.serverId, input.workspaceId);
+    } finally {
+      if (createdAgentId) {
+        await deps.deleteAgent(createdAgentId);
+      }
+    }
+  })().catch((error) => {
+    console.error("[WorkspaceDraft] Failed to clean up the chat of a failed first send", error);
   });
   return true;
 }

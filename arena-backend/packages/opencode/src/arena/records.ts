@@ -1,12 +1,4 @@
-import type {
-  BattleState,
-  DiscardReason,
-  DiscardStage,
-  Resolution,
-  Side,
-  Vote,
-  VoteDiscardedReason,
-} from "./domain"
+import type { BattleState, DiscardReason, DiscardStage, Resolution, Side, Vote, VoteDiscardedReason } from "./domain"
 import type { ArenaActiveOperation, ArenaOperationProgress } from "./operation-tracker"
 import type { RefChange, RefOutcome } from "./ref-types"
 import type { GenerationMetrics, UsageTotals } from "@agent-duel/arena-service/metrics"
@@ -197,6 +189,16 @@ export type TurnSetupTimings = {
   >
   /** From the turn record to both sides ready. */
   readonly setupMs?: number
+}
+
+/** Where a side's finalization spent its time, in milliseconds. */
+export type RunFinalizationTimings = {
+  readonly pauseMs: number
+  readonly gitFinalizeMs: number
+  readonly resumeMs: number
+  readonly importRefsMs: number
+  readonly archiveMs: number
+  readonly totalMs: number
 }
 
 export type ConfigurationHashes = {
@@ -603,6 +605,7 @@ export type RunDocument = {
   usage?: UsageTotals
   transcriptArchiveID?: Identifier
   archiveComplete?: boolean
+  finalizationTimings?: RunFinalizationTimings
   selectable?: boolean
   finalizedAt?: Date
   worktreeRemovedAt?: Date

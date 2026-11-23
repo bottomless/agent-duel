@@ -335,9 +335,7 @@ export function project(snapshot: BattleSnapshot) {
           singleAgent: singleAgent(snapshot.singleAgentRating),
         }
       : {}),
-    ...(snapshot.singleAgentTurns?.length
-      ? { singleAgentTurns: snapshot.singleAgentTurns.map(singleAgentTurn) }
-      : {}),
+    ...(snapshot.singleAgentTurns?.length ? { singleAgentTurns: snapshot.singleAgentTurns.map(singleAgentTurn) } : {}),
     ...(turn
       ? {
           turn: {
@@ -384,6 +382,9 @@ export function project(snapshot: BattleSnapshot) {
             revealed,
             // Background cleanup can update updatedAt after ordinary chat resumes.
             endedAt: turn.transitionTimestamps.complete ?? turn.transitionTimestamps.discarded,
+            ...(turn.state === "stopping" && turn.transitionTimestamps.stopping
+              ? { stoppingAt: turn.transitionTimestamps.stopping }
+              : {}),
             createdAt: turn.createdAt,
             updatedAt: turn.updatedAt,
           },

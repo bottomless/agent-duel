@@ -68,7 +68,14 @@ export type ArenaDecisionPhase =
       failedB: boolean;
     }
   | { kind: "retry_resolution"; detail: string }
-  | { kind: "transitional"; label: string; busy: boolean };
+  | {
+      kind: "transitional";
+      label: string;
+      busy: boolean;
+      /** Offered when stopping takes too long so the voter can abandon a stuck stop. */
+      canDiscard?: boolean;
+      stoppingAt?: string;
+    };
 
 /**
  * An unresolved battle has decision UI. The host may put running actions in a
@@ -151,6 +158,16 @@ function failedSide(canChooseA: boolean, canChooseB: boolean): ArenaSide | null 
   return canChooseA ? "b" : "a";
 }
 
+function stoppingPhase(turn: NonNullable<ArenaSnapshot["turn"]>): ArenaDecisionPhase {
+  return {
+    kind: "transitional",
+    label: i18n.t("arena.stoppingBattle"),
+    busy: true,
+    ...(turn.canDiscardBattle ? { canDiscard: true } : {}),
+    ...(turn.stoppingAt ? { stoppingAt: turn.stoppingAt } : {}),
+  };
+}
+
 export function arenaDecisionPhase(snapshot: ArenaSnapshot): ArenaDecisionPhase {
   const turn = snapshot.turn;
   const runA = snapshot.runs.find((run) => run.side === "a");
@@ -185,7 +202,7 @@ export function arenaDecisionPhase(snapshot: ArenaSnapshot): ArenaDecisionPhase 
     case "awaiting_vote":
       return awaitingVotePhase(turn, runA, runB);
     case "stopping":
-      return transitional(i18n.t("arena.stoppingBattle"), true);
+      return stoppingPhase(turn);
     case "awaiting_stop_resolution":
       return {
         kind: "awaiting_stop_resolution",

@@ -68,17 +68,18 @@ export type ServiceAdapter = {
   /** Return all candidates. The implementation must not filter by port. */
   readonly listProcesses?: () => Promise<readonly ProcessSnapshot[]> | readonly ProcessSnapshot[]
   readonly listTerminals?: () => Promise<readonly ManagedTerminalSnapshot[]> | readonly ManagedTerminalSnapshot[]
-  readonly stopProcessGroup?: (
-    processGroupID: number,
-    signal: "SIGTERM" | "SIGKILL",
-  ) => Promise<void> | void
+  readonly stopProcessGroup?: (processGroupID: number, signal: "SIGTERM" | "SIGKILL") => Promise<void> | void
   readonly stopTerminal?: (terminalID: string) => Promise<void> | void
   readonly pauseProcessGroup?: (processGroupID: number, signal: "SIGSTOP" | "SIGCONT") => Promise<void> | void
   readonly processGroupAlive?: (processGroupID: number) => Promise<boolean> | boolean
   readonly terminalAlive?: (terminalID: string) => Promise<boolean> | boolean
   /** Re-scan listeners after stopping. A missing method means no listener data is available. */
-  readonly listenersForProcessGroup?: (processGroupID: number) => Promise<readonly ServiceListener[]> | readonly ServiceListener[]
-  readonly listenersForTerminal?: (terminalID: string) => Promise<readonly ServiceListener[]> | readonly ServiceListener[]
+  readonly listenersForProcessGroup?: (
+    processGroupID: number,
+  ) => Promise<readonly ServiceListener[]> | readonly ServiceListener[]
+  readonly listenersForTerminal?: (
+    terminalID: string,
+  ) => Promise<readonly ServiceListener[]> | readonly ServiceListener[]
   readonly wait?: (milliseconds: number) => Promise<void> | void
   /** Refuse to signal groups shared with the daemon/test runner. */
   readonly isProtectedProcessGroup?: (processGroupID: number) => Promise<boolean> | boolean
@@ -105,7 +106,10 @@ export type ServiceStopRecord = {
 }
 
 function bounded(value: string, limit: number) {
-  const normalized = value.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim()
+  const normalized = value
+    .replace(/[\u0000-\u001f\u007f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
   if (Buffer.byteLength(normalized) <= limit) return normalized
   return `${normalized.slice(0, Math.max(0, limit - 1))}…`
 }
@@ -179,10 +183,7 @@ function routesFor(routes: readonly ServiceProxyRoute[] | undefined) {
 
 function processBelongsTo(root: string, process: Pick<ProcessSnapshot, "cwd" | "ownerID" | "processGroupID">) {
   if (process.processGroupID === undefined) return false
-  return (
-    (process.cwd !== undefined && inside(root, process.cwd)) ||
-    process.ownerID === serviceOwnerID(root)
-  )
+  return (process.cwd !== undefined && inside(root, process.cwd)) || process.ownerID === serviceOwnerID(root)
 }
 
 function terminalBelongsTo(root: string, terminal: Pick<ManagedTerminalSnapshot, "cwd" | "ownerID" | "id">) {
@@ -269,17 +270,28 @@ export async function captureOwnedServices(input: CaptureServicesInput): Promise
     // service the turn started, so it is never captured and never stopped. What the user runs
     // inside it shares the shell's terminal and is captured normally.
     if (item.sessionShell) continue
-    if (!processBelongsTo(root, item) || item.processGroupID === undefined || inspectedGroups.has(item.processGroupID)) {
+    if (
+      !processBelongsTo(root, item) ||
+      item.processGroupID === undefined ||
+      inspectedGroups.has(item.processGroupID)
+    ) {
       continue
     }
     inspectedGroups.add(item.processGroupID)
-    if (item.processGroupID !== undefined && protectedGroup && await resolved(protectedGroup(item.processGroupID))) continue
+    if (item.processGroupID !== undefined && protectedGroup && (await resolved(protectedGroup(item.processGroupID))))
+      continue
     const listeners =
       item.listeners ??
       (item.processGroupID !== undefined && adapter.listenersForProcessGroup
         ? await resolved(adapter.listenersForProcessGroup(item.processGroupID))
         : undefined)
-    const record = captureProcess(root, { ...item, ...(listeners ? { listeners } : {}) }, input.portAliases, input.proxyRoutes, now)
+    const record = captureProcess(
+      root,
+      { ...item, ...(listeners ? { listeners } : {}) },
+      input.portAliases,
+      input.proxyRoutes,
+      now,
+    )
     if (record) captured.push(record)
   }
   const terminalRecords: CapturedService[] = []
@@ -288,7 +300,13 @@ export async function captureOwnedServices(input: CaptureServicesInput): Promise
     const listeners =
       item.listeners ??
       (adapter.listenersForTerminal ? await resolved(adapter.listenersForTerminal(item.id)) : undefined)
-    const record = captureTerminal(root, { ...item, ...(listeners ? { listeners } : {}) }, input.portAliases, input.proxyRoutes, now)
+    const record = captureTerminal(
+      root,
+      { ...item, ...(listeners ? { listeners } : {}) },
+      input.portAliases,
+      input.proxyRoutes,
+      now,
+    )
     if (record) terminalRecords.push(record)
   }
   // A terminal can also appear in the process table. Keep one durable record for a managed
@@ -373,7 +391,12 @@ function matchingProcess(root: string, record: CapturedService, candidates: read
 
 function matchingTerminal(root: string, record: CapturedService, candidates: readonly ManagedTerminalSnapshot[]) {
   return candidates.find((candidate) => {
-    if (!record.managedTerminalID || candidate.id !== record.managedTerminalID || !ownedCandidate(root, record, candidate)) return false
+    if (
+      !record.managedTerminalID ||
+      candidate.id !== record.managedTerminalID ||
+      !ownedCandidate(root, record, candidate)
+    )
+      return false
     if (record.ownerID !== undefined && candidate.ownerID === record.ownerID) return true
     return record.processStartIdentity === undefined || candidate.processStartIdentity === record.processStartIdentity
   })
@@ -383,9 +406,12 @@ async function rediscover(root: string, record: CapturedService, adapter: Servic
   const processes = adapter.listProcesses ? await resolved(adapter.listProcesses()) : []
   const terminals = adapter.listTerminals ? await resolved(adapter.listTerminals()) : []
   const matchedProcess = matchingProcess(root, record, processes)
-  const process = matchedProcess && adapter.isProtectedProcessGroup && await resolved(adapter.isProtectedProcessGroup(matchedProcess.processGroupID!))
-    ? undefined
-    : matchedProcess
+  const process =
+    matchedProcess &&
+    adapter.isProtectedProcessGroup &&
+    (await resolved(adapter.isProtectedProcessGroup(matchedProcess.processGroupID!)))
+      ? undefined
+      : matchedProcess
   return {
     process,
     terminal: matchingTerminal(root, record, terminals),
@@ -398,11 +424,12 @@ async function listenersReleased(
   processGroupID: number | undefined,
   terminalID: string | undefined,
 ) {
-  const listeners = processGroupID !== undefined && adapter.listenersForProcessGroup
-    ? await resolved(adapter.listenersForProcessGroup(processGroupID))
-    : terminalID !== undefined && adapter.listenersForTerminal
-      ? await resolved(adapter.listenersForTerminal(terminalID))
-      : undefined
+  const listeners =
+    processGroupID !== undefined && adapter.listenersForProcessGroup
+      ? await resolved(adapter.listenersForProcessGroup(processGroupID))
+      : terminalID !== undefined && adapter.listenersForTerminal
+        ? await resolved(adapter.listenersForTerminal(terminalID))
+        : undefined
   if (listeners === undefined) return true
   return listeners.length === 0
 }
@@ -488,8 +515,12 @@ export async function stopOwnedServices(
         if (adapter.wait && (options.graceMs ?? 0) > 0) await resolved(adapter.wait(options.graceMs ?? 0))
         alive = await ownerStillPresent(root, record, adapter, group, terminal)
       }
-      const released = !alive && await listenersReleased(record, adapter, group, terminal)
-      results.push({ ...stopRecord(record, released ? "stopped" : "failed", released, stoppedAt), stoppedAt, ...(released ? {} : { error: "owner or listener is still present" }) })
+      const released = !alive && (await listenersReleased(record, adapter, group, terminal))
+      results.push({
+        ...stopRecord(record, released ? "stopped" : "failed", released, stoppedAt),
+        stoppedAt,
+        ...(released ? {} : { error: "owner or listener is still present" }),
+      })
     } catch (cause) {
       // A throw is a symptom, not a verdict. The owner may have exited on its own between
       // rediscovery and the signal, which is the outcome we wanted — so look at the machine
@@ -584,7 +615,9 @@ async function commandOutput(command: string, args: readonly string[]) {
       env: { ...process.env, LC_ALL: "C" },
     })
     let output = ""
-    child.stdout.on("data", (chunk) => { output += String(chunk) })
+    child.stdout.on("data", (chunk) => {
+      output += String(chunk)
+    })
     child.once("error", () => resolve(""))
     child.once("close", () => resolve(output))
   })
@@ -631,7 +664,10 @@ function parseOwnerProcesses(output: string) {
 
 function splitCommand(line: string) {
   const tokens = line.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? []
-  const unquote = (token: string) => token.length >= 2 && ((token[0] === '"' && token.at(-1) === '"') || (token[0] === "'" && token.at(-1) === "'")) ? token.slice(1, -1) : token
+  const unquote = (token: string) =>
+    token.length >= 2 && ((token[0] === '"' && token.at(-1) === '"') || (token[0] === "'" && token.at(-1) === "'"))
+      ? token.slice(1, -1)
+      : token
   return tokens.map(unquote)
 }
 
@@ -685,12 +721,7 @@ async function listRealProcesses(): Promise<readonly ProcessSnapshot[]> {
   const cwds = new Map(cwdRows.map((row) => [row.pid, row.cwd] as const))
   const pids = [...new Set([...cwdRows.map((row) => row.pid), ...owners.keys()])].sort((a, b) => a - b)
   if (pids.length === 0) return []
-  const output = await commandOutput("ps", [
-    "-o",
-    "pid=,pgid=,lstart=,command=",
-    "-p",
-    pids.join(","),
-  ])
+  const output = await commandOutput("ps", ["-o", "pid=,pgid=,lstart=,command=", "-p", pids.join(",")])
   const byPid = new Map<number, { processGroupID: number; start: string; command: string }>()
   for (const line of output.split("\n")) {
     const match = line.trim().match(/^(\d+)\s+(\d+)\s+(.{24})\s+(.*)$/)
@@ -701,23 +732,33 @@ async function listRealProcesses(): Promise<readonly ProcessSnapshot[]> {
     if (!details) return []
     const tokens = splitCommand(details.command)
     const owner = owners.get(pid)
-    return [{
-      pid,
-      processGroupID: details.processGroupID,
-      ...(cwds.has(pid) ? { cwd: cwds.get(pid) } : {}),
-      command: tokens[0] ?? details.command,
-      args: tokens.slice(1),
-      ...(owner ?? {}),
-      ...(shells.has(pid) ? { sessionShell: true } : {}),
-      ...(withTerminal.has(pid) ? { terminal: true } : {}),
-      processStartIdentity: details.start,
-    }]
+    return [
+      {
+        pid,
+        processGroupID: details.processGroupID,
+        ...(cwds.has(pid) ? { cwd: cwds.get(pid) } : {}),
+        command: tokens[0] ?? details.command,
+        args: tokens.slice(1),
+        ...(owner ?? {}),
+        ...(shells.has(pid) ? { sessionShell: true } : {}),
+        ...(withTerminal.has(pid) ? { terminal: true } : {}),
+        processStartIdentity: details.start,
+      },
+    ]
   })
 }
 
 async function realListeners(processGroupID: number) {
   if (process.platform === "win32") return await windowsGroupListeners(processGroupID)
-  const output = await commandOutput("lsof", ["-nP", "-a", "-g", String(processGroupID), "-iTCP", "-sTCP:LISTEN", "-FnP"])
+  const output = await commandOutput("lsof", [
+    "-nP",
+    "-a",
+    "-g",
+    String(processGroupID),
+    "-iTCP",
+    "-sTCP:LISTEN",
+    "-FnP",
+  ])
   return output.split("\n").flatMap((line) => {
     const match = line.match(/^n.*:(\d+)$/)
     if (!match) return []
@@ -739,38 +780,52 @@ export async function terminalOpenUnder(roots: readonly string[], adapter: Servi
   )
 }
 
-export const defaultServiceAdapter: ServiceAdapter = {
-  listProcesses: listRealProcesses,
-  listTerminals: () => [],
-  stopProcessGroup: (processGroupID, signal) => {
-    // Windows has no signals to ask with: both steps terminate the group's members.
-    if (process.platform === "win32") return terminateWindowsGroup(processGroupID)
-    try {
-      process.kill(-processGroupID, signal)
-    } catch (cause) {
-      // ESRCH is the outcome the signal was asking for: the group drained between
-      // rediscovery and the kill. `processGroupAlive` below already reads the same errno
-      // from the same syscall as "gone"; this keeps the two in agreement. Every other
-      // errno — EPERM above all — is a real failure and has to keep throwing, because a
-      // group we may not signal is one we must never report as stopped.
-      if ((cause as NodeJS.ErrnoException).code !== "ESRCH") throw cause
-    }
-  },
-  pauseProcessGroup: (processGroupID, signal) => {
-    if (process.platform === "win32") return
-    process.kill(-processGroupID, signal)
-  },
-  processGroupAlive: (processGroupID) => {
-    if (process.platform === "win32") return windowsGroupAlive(processGroupID)
-    try { process.kill(-processGroupID, 0); return true } catch { return false }
-  },
-  listenersForProcessGroup: realListeners,
-  wait: (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
-  isProtectedProcessGroup: async (processGroupID) => {
-    if (process.platform === "win32") return await windowsGroupProtected(processGroupID)
-    const own = Number((await commandOutput("ps", ["-o", "pgid=", "-p", String(process.pid)])).trim())
-    return Number.isInteger(own) && own > 0 && own === processGroupID
-  },
+export function createDefaultServiceAdapter(platform: NodeJS.Platform = process.platform): ServiceAdapter {
+  return {
+    listProcesses: listRealProcesses,
+    listTerminals: () => [],
+    stopProcessGroup: (processGroupID, signal) => {
+      // Windows has no signals to ask with: both steps terminate the group's members.
+      if (platform === "win32") return terminateWindowsGroup(processGroupID)
+      try {
+        process.kill(-processGroupID, signal)
+      } catch (cause) {
+        // ESRCH is the outcome the signal was asking for: the group drained between
+        // rediscovery and the kill. `processGroupAlive` below already reads the same errno
+        // from the same syscall as "gone"; this keeps the two in agreement. Every other
+        // errno — EPERM above all — is a real failure and has to keep throwing, because a
+        // group we may not signal is one we must never report as stopped.
+        if ((cause as NodeJS.ErrnoException).code !== "ESRCH") throw cause
+      }
+    },
+    // Windows has no SIGSTOP/SIGCONT. Omitting `pauseProcessGroup` makes `pauseOwnedProcessGroups`
+    // skip the expensive Win32 PEB process-table scan completely.
+    ...(platform === "win32"
+      ? {}
+      : {
+          pauseProcessGroup: (processGroupID: number, signal: "SIGSTOP" | "SIGCONT") => {
+            process.kill(-processGroupID, signal)
+          },
+        }),
+    processGroupAlive: (processGroupID) => {
+      if (platform === "win32") return windowsGroupAlive(processGroupID)
+      try {
+        process.kill(-processGroupID, 0)
+        return true
+      } catch {
+        return false
+      }
+    },
+    listenersForProcessGroup: realListeners,
+    wait: (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+    isProtectedProcessGroup: async (processGroupID) => {
+      if (platform === "win32") return await windowsGroupProtected(processGroupID)
+      const own = Number((await commandOutput("ps", ["-o", "pgid=", "-p", String(process.pid)])).trim())
+      return Number.isInteger(own) && own > 0 && own === processGroupID
+    },
+  }
 }
+
+export const defaultServiceAdapter: ServiceAdapter = createDefaultServiceAdapter()
 
 export * as ArenaServices from "./services"

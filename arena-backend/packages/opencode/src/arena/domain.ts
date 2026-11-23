@@ -91,7 +91,7 @@ const transitions: Readonly<Record<BattleState, ReadonlyArray<BattleState>>> = {
   canonicalizing: ["cleanup_pending", "complete", "canonicalization_failed"],
   cleanup_pending: ["complete"],
   complete: [],
-  stopping: ["awaiting_stop_resolution", "finalization_failed", "interrupted_recovery"],
+  stopping: ["awaiting_stop_resolution", "finalization_failed", "interrupted_recovery", "discarding"],
   // `awaiting_vote` only reopens a battle an earlier engine parked here after a restart.
   awaiting_stop_resolution: ["discarding", "applying", "awaiting_vote"],
   discarding: ["discarded"],
@@ -276,6 +276,23 @@ export function failedBeforeHalt(input: {
 }
 
 /**
+ * Did a side's prompt finish cleanly before a stop (or an early pick) took effect? Its side then
+ * keeps its completed result and timing instead of being overwritten as "Stopped".
+ */
+export function completedBeforeHalt(input: {
+  readonly completed: boolean
+  readonly haltedAt?: Date
+  readonly endedAt?: Date
+}): boolean {
+  return (
+    input.completed &&
+    input.haltedAt !== undefined &&
+    input.endedAt !== undefined &&
+    input.endedAt.getTime() < input.haltedAt.getTime()
+  )
+}
+
+/**
  * How many times the voter may retry one failed contestant run. Each retry spends on the model
  * again, and a failure that keeps repeating is better answered by picking the other side or
  * sending the prompt again.
@@ -414,8 +431,9 @@ export function canDiscardBattle(
   runs: ReadonlyArray<DecidedRun>,
 ): boolean {
   if (turn.resolution !== undefined) return false
-  // `awaiting_vote` includes a battle `canResumeBattle` reopened.
-  return turn.state === "awaiting_stop_resolution" || turn.state === "awaiting_vote"
+  // `awaiting_vote` includes a battle `canResumeBattle` reopened; `stopping` allows discarding a
+  // stop that is taking too long or got stuck.
+  return turn.state === "awaiting_stop_resolution" || turn.state === "awaiting_vote" || turn.state === "stopping"
 }
 
 /**

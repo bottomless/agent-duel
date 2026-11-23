@@ -243,6 +243,7 @@ function failedFirstSendDeps(input: {
         workspace: { serverId, workspaceId },
       });
     },
+    deleteAgent: (agentId) => input.client.deleteAgent(agentId),
   };
 }
 

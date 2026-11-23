@@ -28,9 +28,14 @@ function createDeps(agentIds: string[]) {
     archiveWorkspace: async (_serverId, workspaceId) => {
       calls.push(`archive ${workspaceId}`);
     },
+    deleteAgent: async (agentId) => {
+      calls.push(`delete ${agentId}`);
+    },
   };
   return { deps, calls, savedDrafts };
 }
+
+const flushMicrotasks = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 const draft: DraftInput = { text: "describe this", attachments: [] };
 const failed = (error: unknown) => ({ serverId: "srv", workspaceId: "wks", error, draft });
@@ -47,7 +52,7 @@ describe("returnFailedFirstSendToNewChat", () => {
     expect(useFailedFirstSendNotice.getState().message).toBeNull();
     expect(savedDrafts).toEqual([draft]);
   });
-  it("puts the message back in New chat and archives the chat its agent went into", () => {
+  it("puts the message back in New chat, archives the workspace, and deletes the empty agent so it never lands in Archived", async () => {
     const { deps, calls, savedDrafts } = createDeps(["agent-1"]);
     const error = new FirstSendError(
       new Error("Battles cannot include image/bmp images"),
@@ -55,6 +60,7 @@ describe("returnFailedFirstSendToNewChat", () => {
     );
 
     expect(returnFailedFirstSendToNewChat(failed(error), deps)).toBe(true);
+    await flushMicrotasks();
 
     expect(savedDrafts).toEqual([draft]);
     expect(calls).toEqual([
@@ -63,6 +69,7 @@ describe("returnFailedFirstSendToNewChat", () => {
       "navigate /new?serverId=srv",
       "error Battles cannot include image/bmp images\n\nYour message is saved. Resolve the error above, then send it again.",
       "archive wks",
+      "delete agent-1",
     ]);
   });
 
@@ -75,11 +82,13 @@ describe("returnFailedFirstSendToNewChat", () => {
     expect(calls.indexOf("forget wks")).toBeLessThan(calls.indexOf("navigate /new?serverId=srv"));
   });
 
-  it("archives a chat that has no agent yet", () => {
+  it("archives a chat that has no agent yet without deleting an agent", async () => {
     const { deps, calls } = createDeps([]);
 
     expect(returnFailedFirstSendToNewChat(failed(new Error("refused")), deps)).toBe(true);
+    await flushMicrotasks();
     expect(calls).toContain("archive wks");
+    expect(calls.some((call) => call.startsWith("delete "))).toBe(false);
   });
 
   it("keeps a disk-full failure visible and names the next step", () => {

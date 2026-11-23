@@ -47,7 +47,6 @@ test("batches tiny reasoning fragments into a compact, lossless continuation", (
       {
         role: "assistant",
         content: "",
-        reasoning: "abcd".repeat(16_384),
         reasoning_details: [
           {
             type: "reasoning.text",
@@ -117,7 +116,6 @@ test("keeps interleaved choices separate, flushes at content, and preserves late
       messages: [
         {
           role: "assistant",
-          reasoning: `private-${index}`,
           reasoning_details: [
             {
               type: "reasoning.text",
@@ -165,8 +163,9 @@ test("redacts JSON reasoning and restores the exact continuation without changin
   expect(JSON.stringify(response)).not.toContain("openai")
   expect(response.choices[0].message.reasoning).toBe(REDACTED_THINKING)
   const input = { messages: [response.choices[0].message], reasoning: { effort: "high" } }
+  const { reasoning: _reasoning, reasoning_content: _reasoningContent, ...deduplicated } = message
   expect(createReasoningRedactor("server-key", binding).restore(input)).toEqual({
-    messages: [message],
+    messages: [deduplicated],
     reasoning: { effort: "high" },
   })
 })
@@ -196,7 +195,6 @@ test("preserves every streamed packet and late signature for the next tool step"
     messages: [
       {
         role: "assistant",
-        reasoning: "First second",
         reasoning_details: [
           {
             type: "reasoning.text",
@@ -270,11 +268,57 @@ test("a single-agent follow-up keeps current reasoning and drops the previous me
   }
   expect(restored.messages[0]).toEqual({ role: "assistant", content: "" })
   expect(restored.messages[2]).toMatchObject({
-    reasoning: "New plan",
     reasoning_details: [{ type: "reasoning.text", text: "New plan", signature: "sig" }],
   })
+  expect(restored.messages[2]).not.toHaveProperty("reasoning")
   expect(JSON.stringify(restored)).not.toContain(REDACTED_THINKING)
   expect(JSON.stringify(restored)).not.toContain("Old plan")
+})
+
+test("omits duplicate plaintext reasoning when reasoning_details is present, but preserves plaintext-only reasoning", () => {
+  const redactor = createReasoningRedactor("server-key", binding)
+  const both = redactor.redact({
+    choices: [
+      {
+        message: {
+          role: "assistant",
+          content: "Done",
+          reasoning: "DeepSeek thought",
+          reasoning_details: [{ type: "reasoning.text", text: "DeepSeek thought", format: "unknown", index: 0 }],
+        },
+      },
+    ],
+  }) as { choices: [{ message: Record<string, unknown> }] }
+  const restoredBoth = redactor.restore({ messages: [both.choices[0].message] }) as {
+    messages: Record<string, unknown>[]
+  }
+  expect(restoredBoth.messages[0]).toEqual({
+    role: "assistant",
+    content: "Done",
+    reasoning_details: [{ type: "reasoning.text", text: "DeepSeek thought", format: "unknown", index: 0 }],
+  })
+  expect(restoredBoth.messages[0]).not.toHaveProperty("reasoning")
+  expect(restoredBoth.messages[0]).not.toHaveProperty("reasoning_content")
+
+  const plainOnly = redactor.redact({
+    choices: [
+      {
+        message: {
+          role: "assistant",
+          content: "Plain",
+          reasoning: "Only string reasoning",
+        },
+      },
+    ],
+  }) as { choices: [{ message: Record<string, unknown> }] }
+  const restoredPlain = redactor.restore({ messages: [plainOnly.choices[0].message] }) as {
+    messages: Record<string, unknown>[]
+  }
+  expect(restoredPlain.messages[0]).toEqual({
+    role: "assistant",
+    content: "Plain",
+    reasoning: "Only string reasoning",
+  })
 })
 
 test("redacts Responses items and progress events and restores their original continuation", () => {

@@ -386,7 +386,7 @@ describe("OpenRouter proxy", () => {
       expect(details.filter((detail) => (detail as { type: string }).type === "reasoning.encrypted")).toHaveLength(1)
       if (ending === "done") expect(events.at(-1)).toBe("data: [DONE]")
       await (await invoke([{ role: "assistant", reasoning_details: details }])).text()
-      expect(body?.messages).toEqual([{ role: "assistant", reasoning: "Private thought", ...delta }])
+      expect(body?.messages).toEqual([{ role: "assistant", ...delta }])
     },
   )
 

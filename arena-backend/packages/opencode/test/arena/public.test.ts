@@ -357,6 +357,19 @@ describe("ArenaPublic", () => {
     expect(project(snapshot(false)).turn?.endedAt).toBeUndefined()
   })
 
+  test("projects stoppingAt and canDiscardBattle while a battle is stopping", () => {
+    const input = snapshot(false)
+    const stoppingAt = new Date("2026-08-05T12:04:00.000Z")
+    const turn = {
+      ...input.turn!,
+      state: "stopping" as const,
+      transitionTimestamps: { stopping: stoppingAt },
+    }
+    const output = project({ ...input, turn })
+    expect(output.turn?.canDiscardBattle).toBe(true)
+    expect(output.turn?.stoppingAt).toBe(stoppingAt.toISOString())
+  })
+
   test("shows single-agent rating state and reveals identity only after its separate thumbs vote", () => {
     const input = snapshot(false)
     input.singleAgentRating = {

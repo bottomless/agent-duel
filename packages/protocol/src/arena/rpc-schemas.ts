@@ -486,6 +486,7 @@ export const ArenaSnapshotSchema = z
       canRetryResolution: z.boolean(),
       canDiscardWinner: z.boolean().optional(),
       revealed: z.boolean(),
+      stoppingAt: z.string().optional(),
     })
       .passthrough()
       .optional(),
