@@ -142,13 +142,12 @@ export function getStagingUserId(): Promise<string> {
   return cachedStagingUserIdPromise;
 }
 
-export function shouldInstallAppUpdateOnQuit(input: {
-  platform: NodeJS.Platform;
-  isAppImage: boolean;
-}): boolean {
-  // AppImage's no-relaunch install path blocks while launching the replacement
-  // binary, which can hang after the running file has already been replaced.
-  return !(input.platform === "linux" && input.isAppImage);
+export function shouldInstallAppUpdateOnQuit(platform: NodeJS.Platform): boolean {
+  // Linux installs only from Install & restart. AppImage's no-relaunch install path blocks while
+  // launching the replacement binary, which can hang after the running file has already been
+  // replaced. The deb and rpm install through pkexec (or sudo), so a root prompt would appear on
+  // quit and hold the quit until someone answers it.
+  return platform !== "linux";
 }
 
 class ElectronAppUpdateRuntime implements AppUpdateRuntime {
@@ -307,12 +306,7 @@ export async function installAppUpdateOnQuit({
   signal: AbortSignal;
   onBeforeQuit?: () => Promise<void>;
 }): Promise<boolean> {
-  if (
-    !shouldInstallAppUpdateOnQuit({
-      platform: process.platform,
-      isAppImage: Boolean(process.env.APPIMAGE),
-    })
-  ) {
+  if (!shouldInstallAppUpdateOnQuit(process.platform)) {
     return false;
   }
 

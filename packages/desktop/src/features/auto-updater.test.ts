@@ -167,11 +167,10 @@ describe("checkForAppUpdate", () => {
 });
 
 describe("shouldInstallAppUpdateOnQuit", () => {
-  it("keeps Linux AppImage updates on the manual install path", () => {
-    expect(shouldInstallAppUpdateOnQuit({ platform: "linux", isAppImage: true })).toBe(false);
-    expect(shouldInstallAppUpdateOnQuit({ platform: "linux", isAppImage: false })).toBe(true);
-    expect(shouldInstallAppUpdateOnQuit({ platform: "darwin", isAppImage: false })).toBe(true);
-    expect(shouldInstallAppUpdateOnQuit({ platform: "win32", isAppImage: false })).toBe(true);
+  it("keeps every Linux package on the manual install path", () => {
+    expect(shouldInstallAppUpdateOnQuit("linux")).toBe(false);
+    expect(shouldInstallAppUpdateOnQuit("darwin")).toBe(true);
+    expect(shouldInstallAppUpdateOnQuit("win32")).toBe(true);
   });
 });
 
