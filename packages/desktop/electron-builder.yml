@@ -65,7 +65,9 @@ mac:
     - zip
 linux:
   category: Development
-  icon: assets
+  # electron-builder renders every hicolor size from this one 512 px PNG, the same artwork as
+  # icon.icns and icon.ico.
+  icon: assets/icon.png
   # update-alternatives refuses a name with a space, so the deb's install fell back to a plain link
   # that removal left dangling.
   executableName: agent-duel

@@ -38,11 +38,7 @@ function toRecord(value: unknown): Record<string, unknown> | undefined {
 }
 
 function getNotificationIcon(): Electron.NativeImage | null {
-  const candidates = [
-    path.resolve(__dirname, "../assets/icon.png"),
-    path.resolve(__dirname, "../assets/64x64.png"),
-    path.resolve(__dirname, "../assets/128x128.png"),
-  ];
+  const candidates = [path.resolve(__dirname, "../assets/icon.png")];
 
   for (const iconPath of candidates) {
     if (!existsSync(iconPath)) {
