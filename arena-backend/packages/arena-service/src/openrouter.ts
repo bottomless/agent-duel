@@ -2,7 +2,7 @@ import { createHash, createHmac, randomUUID } from "crypto"
 import { recordAssignmentGenerationMetrics, reserveRoutingAssignment, type SingleAgentModelSize } from "./assignments"
 import { authorize, type ArenaContext, type Fetch } from "./context"
 import { KEEP_ALIVE_HEADER, keepAliveAnswer, keepsCacheWarm } from "./keep-alive"
-import type { StoredGenerationMetrics, UsageTotals } from "./metrics"
+import type { GenerationOutcome, StoredGenerationMetrics, UsageTotals } from "./metrics"
 import {
   classifyPaymentError,
   compactionRequiredError,
@@ -117,6 +117,7 @@ function metricsCollector(generationID: string, startedAt: number) {
   let usagePayload: unknown
   let finished: string | undefined
   let provider: string | undefined
+  let upstreamGenerationID: string | undefined
   return {
     observe(event: unknown) {
       const value = generation(event)
@@ -125,15 +126,30 @@ function metricsCollector(generationID: string, startedAt: number) {
       }
       finished = finishReason(value) ?? finished
       if (record(value) && typeof value.provider === "string" && value.provider) provider = value.provider
+      if (record(value) && typeof value.id === "string" && value.id) upstreamGenerationID = value.id
     },
-    value(): StoredGenerationMetrics | undefined {
-      const measured = usage(usagePayload, Math.max(0, Date.now() - startedAt))
-      if (!measured && !finished) return undefined
+    // What the stream showed before it ended, for the log an early end writes.
+    observed() {
+      return { upstreamGenerationID, provider }
+    },
+    /**
+     * This call's one row. Only a complete call has usage; an early end keeps what the stream
+     * showed. A stream that closed without a finish reason still gets its row: the provider may have
+     * cut it, which is what these rows are for.
+     */
+    value(
+      outcome: GenerationOutcome = "complete",
+      extra: { readonly quietMs?: number; readonly status?: number } = {},
+    ): StoredGenerationMetrics {
+      const measured = outcome === "complete" ? usage(usagePayload, Math.max(0, Date.now() - startedAt)) : undefined
       return {
         generationID,
+        outcome,
         ...(measured ? { usage: measured } : {}),
         ...(finished ? { finishReason: finished } : {}),
         ...(provider ? { provider } : {}),
+        ...(upstreamGenerationID ? { upstreamGenerationID } : {}),
+        ...extra,
       }
     },
   }
@@ -195,14 +211,35 @@ function sanitizeLine(
   }
 }
 
+// OpenRouter names the provider that refused a call in the error's metadata, as `provider` or
+// `provider_name`.
+function refusedProvider(body: string) {
+  let payload: unknown
+  try {
+    payload = JSON.parse(body) as unknown
+  } catch {
+    payload = undefined
+  }
+  if (record(payload) && record(payload.error) && record(payload.error.metadata)) {
+    for (const value of [payload.error.metadata.provider, payload.error.metadata.provider_name]) {
+      if (typeof value === "string" && value) return value
+    }
+  }
+  return undefined
+}
+
+/** Writes the call's one row. */
+type RecordCall = (metrics: StoredGenerationMetrics) => Promise<void>
+
 function sanitizeStream(
   stream: ReadableStream<Uint8Array>,
   generationID: string,
   reasoning: ReasoningRedactor,
   startedAt: number,
-  complete: (metrics: StoredGenerationMetrics | undefined) => Promise<void>,
+  recordCall: RecordCall,
   recovery?: ReplayRecorder,
   capture?: ResponseCapture,
+  signal?: AbortSignal,
 ) {
   const reader = stream.getReader()
   const decoder = new TextDecoder()
@@ -212,6 +249,32 @@ function sanitizeStream(
   let heartbeat: ReturnType<typeof setInterval> | undefined
   let lastWrite = Date.now()
   const metrics = metricsCollector(generationID, startedAt)
+  // Counts from the request, so a provider that sends nothing at all is measured from the start.
+  let lastUpstreamDataAt = startedAt
+  const observeData = (event: unknown) => {
+    // OpenRouter's processing comments keep the connection alive without ending model silence.
+    lastUpstreamDataAt = Date.now()
+    metrics.observe(event)
+  }
+  const quietMs = () => Math.max(0, Date.now() - lastUpstreamDataAt)
+  // Metrics, including the provider, are recorded when the stream finishes or ends early, so the
+  // log and the stored row both describe what the stream showed before it stopped.
+  let earlyEndLogged = false
+  const logEarlyEnd = (state: "cancelled" | "failed", quiet: number) => {
+    if (earlyEndLogged) return
+    earlyEndLogged = true
+    const { upstreamGenerationID, provider } = metrics.observed()
+    console.error(
+      "[arena-service] OpenRouter contestant stream ended early",
+      JSON.stringify({
+        generationID,
+        upstreamGenerationID: upstreamGenerationID ?? null,
+        provider: provider ?? null,
+        outcome: state,
+        quietMs: quiet,
+      }),
+    )
+  }
   const stopHeartbeat = () => {
     if (heartbeat) clearInterval(heartbeat)
     heartbeat = undefined
@@ -255,14 +318,14 @@ function sanitizeStream(
             const rest = decoder.decode()
             capture?.record(rest)
             pending += rest
-            if (pending) writeLine(controller, sanitizeLine(pending, generationID, reasoning, metrics.observe))
+            if (pending) writeLine(controller, sanitizeLine(pending, generationID, reasoning, observeData))
             if (open) writeLine(controller, "")
             const tail = reasoning.flush()
             if (tail) write(controller, `\n\ndata: ${JSON.stringify({ id: generationID, ...tail })}\n\n`)
             reasoning.clear()
             stopHeartbeat()
             // Recorded before the close: a hosted function may stop once its response ends.
-            await Promise.all([complete(metrics.value()), recovery?.complete(), capture?.finish("complete")])
+            await Promise.all([recordCall(metrics.value()), recovery?.complete(), capture?.finish("complete")])
             controller.close()
             return
           }
@@ -272,14 +335,23 @@ function sanitizeStream(
           const lines = pending.split("\n")
           pending = lines.pop() ?? ""
           if (!lines.length) continue
-          for (const line of lines) writeLine(controller, sanitizeLine(line, generationID, reasoning, metrics.observe))
+          for (const line of lines) writeLine(controller, sanitizeLine(line, generationID, reasoning, observeData))
           return
         }
       } catch {
         reasoning.clear()
         stopHeartbeat()
         if (cancelled) return
-        await Promise.all([recovery?.fail(), capture?.finish("failed")])
+        // The upstream fetch shares the client's signal, so a client that left can break the read
+        // before `cancel` runs. That end is the client's, not the provider's.
+        const outcome = signal?.aborted ? "cancelled" : "failed"
+        const quiet = quietMs()
+        logEarlyEnd(outcome, quiet)
+        await Promise.all([
+          recordCall(metrics.value(outcome, { quietMs: quiet })),
+          recovery?.fail(),
+          capture?.finish("failed"),
+        ])
         controller.enqueue(
           encoder.encode(
             `${open ? "\n" : ""}data: ${JSON.stringify({
@@ -292,11 +364,17 @@ function sanitizeStream(
     },
     cancel(reason) {
       cancelled = true
+      const quiet = quietMs()
+      logEarlyEnd("cancelled", quiet)
       stopHeartbeat()
       reasoning.clear()
       void recovery?.fail()
       // Awaited: a hosted function may stop once the cancel settles.
-      return Promise.all([reader.cancel(reason), capture?.finish("cancelled")]).then(() => undefined)
+      return Promise.all([
+        reader.cancel(reason),
+        recordCall(metrics.value("cancelled", { quietMs: quiet })),
+        capture?.finish("cancelled"),
+      ]).then(() => undefined)
     },
   })
 }
@@ -503,9 +581,10 @@ async function sanitizeAssignedResponse(
   refusal: RefusalContext,
   reasoning: ReasoningRedactor,
   startedAt: number,
-  complete: (metrics: StoredGenerationMetrics | undefined) => Promise<void>,
+  recordCall: RecordCall,
   recovery?: () => ReplayRecorder | undefined,
   capture?: ResponseCapture,
+  signal?: AbortSignal,
 ) {
   const { generationID } = refusal
   const headers = assignedHeaders(response.headers)
@@ -513,7 +592,16 @@ async function sanitizeAssignedResponse(
     const upstream = await response.text().catch(() => "")
     logRefusal(refusal, response.status, upstream)
     capture?.record(upstream)
-    await capture?.finish("failed")
+    const provider = refusedProvider(upstream)
+    await Promise.all([
+      capture?.finish("failed"),
+      recordCall({
+        generationID,
+        outcome: "error",
+        status: response.status,
+        ...(provider ? { provider } : {}),
+      }),
+    ])
     if (isContextOverflow(response.status, upstream)) {
       return Response.json(compactionRequiredError(), { status: 413, headers })
     }
@@ -535,7 +623,7 @@ async function sanitizeAssignedResponse(
     const recorder = recovery?.()
     if (recorder) headers.set(HEARTBEAT_HEADER, String(HEARTBEAT_MS))
     return new Response(
-      sanitizeStream(response.body, generationID, reasoning, startedAt, complete, recorder, capture),
+      sanitizeStream(response.body, generationID, reasoning, startedAt, recordCall, recorder, capture, signal),
       { status: response.status, headers },
     )
   }
@@ -544,7 +632,7 @@ async function sanitizeAssignedResponse(
   const raw = JSON.parse(text) as unknown
   const metrics = metricsCollector(generationID, startedAt)
   metrics.observe(raw)
-  await Promise.all([complete(metrics.value()), capture?.finish("complete")])
+  await Promise.all([recordCall(metrics.value()), capture?.finish("complete")])
   const payload = reasoning.redact(sanitizePayload(raw, generationID))
   headers.set("content-type", "application/json")
   return Response.json(payload, { status: response.status, headers })
@@ -571,6 +659,9 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
 
   let capture: GenerationCapture | undefined
   let upstreamStatus: number | undefined
+  // Assigned once the call has an assignment and a generation id, so a fetch that rejects still
+  // records how it ended.
+  let recordFailure: ((outcome: "cancelled" | "failed") => Promise<void>) | undefined
   try {
     let body = request.method === "GET" || request.method === "HEAD" ? undefined : await request.arrayBuffer()
     const assignment = assignmentHeaders(request)
@@ -699,6 +790,28 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
       return Response.json(compactionRequiredError(), { status: 413 })
     }
     body = new TextEncoder().encode(budget.body).buffer
+    // One row per call: the first outcome recorded is this call's, and a second write is ignored.
+    let recorded = false
+    const recordCall = async (metrics: StoredGenerationMetrics | undefined) => {
+      if (recorded) return
+      recorded = true
+      if (!metrics || !requestedGenerationID) return
+      try {
+        // Any call whose provider is known has an endpoint to label, early ends included.
+        const label = metrics.provider
+          ? await context.readEndpointLabel?.(db, routeAssignment.model, metrics.provider)
+          : undefined
+        await recordAssignmentGenerationMetrics(db, {
+          userId: caller.id,
+          scopeID: assignment.scopeID,
+          assignmentID: assignment.assignmentID,
+          metrics: { ...metrics, startedAt: new Date(startedAt), ...label },
+        })
+      } catch {
+        console.error("[arena-service] Arena generation metrics could not be recorded")
+      }
+    }
+    recordFailure = (outcome) => recordCall({ generationID, outcome })
     const sending = context.fetch(upstream, {
       method: request.method,
       headers,
@@ -768,20 +881,6 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
       })
       upstreamStatus = response.status
     }
-    const recordGeneration = async (metrics: StoredGenerationMetrics | undefined) => {
-      if (!metrics || !requestedGenerationID) return
-      try {
-        const label = await context.readEndpointLabel?.(db, routeAssignment.model, metrics.provider)
-        await recordAssignmentGenerationMetrics(db, {
-          userId: caller.id,
-          scopeID: assignment.scopeID,
-          assignmentID: assignment.assignmentID,
-          metrics: { ...metrics, startedAt: new Date(startedAt), ...label },
-        })
-      } catch {
-        console.error("[arena-service] Arena generation metrics could not be recorded")
-      }
-    }
     const recordMeasuredInput = async (metrics: StoredGenerationMetrics | undefined) => {
       const promptTokens = metrics?.usage?.promptTokens
       if (!promptTokens || !needsCalibration(budget.input, limits.compactAt)) return
@@ -791,7 +890,7 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
     }
     // Both writes finish before the stream closes, so they run side by side.
     const recordMetrics = async (metrics: StoredGenerationMetrics | undefined) => {
-      await Promise.all([recordGeneration(metrics), recordMeasuredInput(metrics)])
+      await Promise.all([recordCall(metrics), recordMeasuredInput(metrics)])
     }
     const recovery = () =>
       context.streamRecovery && requestedGenerationID
@@ -810,10 +909,12 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
       recordMetrics,
       recovery,
       responseCapture,
+      request.signal,
     )
   } catch (error) {
-    // A rejected fetch, an unreadable body or malformed JSON: close the capture with any text received.
-    await capture?.finish(request.signal.aborted ? "cancelled" : "failed", upstreamStatus)
+    // A rejected fetch, an unreadable body or malformed JSON: close the call with what it ended as.
+    const outcome = request.signal.aborted ? "cancelled" : "failed"
+    await Promise.all([capture?.finish(outcome, upstreamStatus), recordFailure?.(outcome)])
     if (await context.networkUnavailable?.(error)) return Response.json(networkUnavailableError(), { status: 503 })
     console.error("[arena-service] OpenRouter proxy failed")
     return Response.json({ error: { message: "OpenRouter request failed" } }, { status: 502 })
