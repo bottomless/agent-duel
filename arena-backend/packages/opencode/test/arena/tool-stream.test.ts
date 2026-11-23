@@ -259,7 +259,7 @@ describe("withHeldToolCalls", () => {
     expect(seen.at(-1)?.type).not.toBe("finish")
   })
 
-  test("keeps complete held input in failed Arena history without releasing a call", async () => {
+  test("keeps complete held input on the failed Arena message and replays no call that never ran", async () => {
     const seen = await events(reset(sse([['{"path":"a.js"}', ""]], "cut")))
     expect(toolEvents(seen)).toEqual(["start call_0", 'delta call_0 {"path":"a.js"}'])
     for (const type of ["provider.internal", "provider.transport", "aborted"]) {
@@ -280,22 +280,18 @@ describe("withHeldToolCalls", () => {
           .filter((part) => part.type === "tool")
           .map((part) => part.time.ran),
       ).toEqual([undefined])
-      expect(history.flatMap((message) => message.content).filter((part) => part.type === "tool-call")).toMatchObject([
-        { id: "call_0", input: { path: "a.js" } },
-      ])
+      // Core replays a cut stream only up to its last call that ran, so the retry starts over.
+      expect(
+        history
+          .flatMap((message) => message.content)
+          .filter((part) => part.type === "tool-call" || part.type === "tool-result"),
+      ).toEqual([])
       let outbound = ""
       await events(async (_input, init) => {
         outbound = String(init?.body)
         return respond(`${chunk({ role: "assistant", content: "hi" })}${chunk({}, "stop")}data: [DONE]\n\n`)()
       }, history)
-      expect(JSON.parse(outbound)).toMatchObject({
-        messages: expect.arrayContaining([
-          expect.objectContaining({
-            role: "assistant",
-            tool_calls: [{ id: "call_0", type: "function", function: { name: "read", arguments: '{"path":"a.js"}' } }],
-          }),
-        ]),
-      })
+      expect(outbound).not.toContain("call_0")
     }
     const unchanged = await failedHistory(seen, "opencode", "provider.internal")
     expect(unchanged.messages).toMatchObject([{ content: [{ state: { status: "error", input: {} } }] }])

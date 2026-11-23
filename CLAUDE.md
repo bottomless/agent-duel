@@ -57,7 +57,7 @@ These are the docs this product is built on. Read the relevant one before non-tr
 | [docs/testing.md](docs/testing.md)                   | TDD workflow, determinism, real dependencies over mocks, test organization                                                      |
 | [docs/qa.md](docs/qa.md)                             | QA evidence bar for pull requests — platform matrix, version drift, performance, UI proof                                       |
 | [docs/deployment.md](docs/deployment.md)             | Production boundary, desktop packaging, and release smoke test                                                                  |
-| [docs/upstream-sync.md](docs/upstream-sync.md)       | Weekly Paseo merge — cadence, merge commit, `scripts/upstream-sync.mjs`, policy, what a clean merge still breaks                |
+| [docs/upstream-sync.md](docs/upstream-sync.md)       | Weekly OpenCode merge into `arena-backend` — cleanup script, vendor patches, testing, landing; Paseo syncs stopped              |
 
 **Inherited Paseo subsystems.** Working code you rarely touch, documented by upstream and not
 maintained here. Open one only when your task lands in that code; do not read them for context.
@@ -119,7 +119,7 @@ See [docs/development.md](docs/development.md) for full setup, build sync requir
 
 ## Critical rules
 
-- **Do not fix underlying Paseo issues in this repository.** Report shared Paseo defects upstream and keep changes here scoped to Agent Duel. Pull their fixes from upstream when this repository is updated.
+- **Do not fix underlying Paseo issues in this repository.** Report shared Paseo defects upstream and keep changes here scoped to Agent Duel. Paseo syncs have stopped, so port their fix by hand once it lands upstream ([upstream sync](docs/upstream-sync.md#paseo)).
   The project owner approved an exception for these seven items to support the OpenCode 2.0 port: R46's silent 20,000-entry file-search limit, R54's invalid config key blocking valid settings, R38's spaced file links and Makefile links, R57's relative plugin path base, the core timeout message "All fibers interrupted without error", stale open Archived lists in another window, and duplicate `thought_…_0` reasoning keys. Each should still go upstream. This exception covers only these seven items.
 - **NEVER restart the main Paseo daemon on port 6767 without permission** — it manages all running agents. If you're an agent, restarting it kills your own process.
 - **NEVER assume a timeout means the service needs restarting** — timeouts can be transient.

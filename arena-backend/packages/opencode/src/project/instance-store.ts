@@ -4,6 +4,7 @@ import { AbsolutePath } from "@opencode/core/schema"
 import { Location } from "@opencode/core/location"
 import { LocationServiceMap } from "@opencode/core/location-services"
 import { FSUtil } from "@opencode/util/fs-util"
+import { Shell } from "@opencode/core/shell"
 import { GlobalBus } from "@/bus/global"
 import { WorkspaceContext } from "@/control-plane/workspace-context"
 import { InstanceRef } from "@/effect/instance-ref"
@@ -72,24 +73,42 @@ export const layer: Layer.Layer<Service, never, LocationServiceMap.Service> = La
       return yield* load(input)
     })
 
+    // Core runs local shell commands in the process daemon, where they outlive the Location that started them.
+    // A disposed directory's work is over (a contestant's dev server, a stopped chat's command), so end them first.
+    const endShells = Effect.fnUntraced(function* (key: Location.Ref) {
+      // An inactive Location has no commands of this server to end; building one here would only be thrown away.
+      if (!(yield* RcMap.has(locations.rcMap, key))) return
+      yield* Effect.gen(function* () {
+        const shell = yield* Shell.Service
+        // Removing a running command ends it as killed, which also settles the job waiting on it.
+        for (const info of yield* shell.list()) yield* shell.remove(info.id).pipe(Effect.ignore)
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(locations.get(key)),
+        Effect.catch((error) => Effect.logWarning("failed to end a disposed directory's shells", { error })),
+      )
+    })
+
+    const invalidate = (key: Location.Ref) => endShells(key).pipe(Effect.andThen(locations.invalidate(key)))
+
     const disposeDirectory = Effect.fn("InstanceStore.disposeDirectory")(function* (directory: string) {
       const resolved = resolve(directory)
       const key = ref(resolved)
       const active = yield* RcMap.has(locations.rcMap, key)
       if (!active) return
       const ctx = fromLocation(yield* contextFor(locations, resolved))
-      yield* locations.invalidate(key)
+      yield* invalidate(key)
       yield* emitDisposed(resolved, ctx.project.id)
     })
 
     const dispose = Effect.fn("InstanceStore.dispose")(function* (ctx: InstanceContext) {
-      yield* locations.invalidate(ref(ctx.directory))
+      yield* invalidate(ref(ctx.directory))
       yield* emitDisposed(ctx.directory, ctx.project.id)
     })
 
     const disposeAll = Effect.fn("InstanceStore.disposeAll")(function* () {
       const refs = Array.from(yield* RcMap.keys(locations.rcMap))
-      yield* Effect.forEach(refs, (item) => locations.invalidate(item), {
+      yield* Effect.forEach(refs, (item) => invalidate(item), {
         concurrency: "unbounded",
         discard: true,
       })

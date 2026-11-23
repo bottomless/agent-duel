@@ -85,6 +85,14 @@ describe("request size", () => {
     expect(bound(messages).report).toBeUndefined()
   })
 
+  test("stored message metadata does not count, since it is never sent", () => {
+    // Core passes hooks each message with its stored metadata, the way model-request.ts builds them.
+    const withMetadata = { ...user("Check these slides"), metadata: { arenaSystem: "x".repeat(400_000) } } as Message
+    const messages = [withMetadata, ...step([["slide-1.jpg", 2.1]]), ...step([["slide-2.jpg", 2.1]])]
+    expect(bound(messages).report).toBeUndefined()
+    expect(bound([user("Check these slides"), ...messages.slice(1)]).report).toBeUndefined()
+  })
+
   test("the oldest images go first, only as many as it takes to fit", () => {
     // Like Qwen's battle: renders read one per step pile up until the body passes the limit.
     const messages = [

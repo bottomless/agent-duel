@@ -255,7 +255,9 @@ test("does not compact at 272K without a control-plane refusal", async () => {
 test.each(["empty", "reasoning", "partial"] as const)(
   "an idle %s reply uses the right recovery note and keeps its row",
   async (mode) => {
-    const expected = mode === "partial" ? ArenaResponseRecovery.IDLE_CONTINUE : ArenaResponseRecovery.IDLE_RESTART
+    // A cut reply is replayed only up to its last local call that ran, so a partial text reply is not
+    // replayed and the model starts the response again.
+    const expected = ArenaResponseRecovery.IDLE_RESTART
     let primary = 0
     const requests: unknown[] = []
     let idleController: ReadableStreamDefaultController<Uint8Array> | undefined
@@ -317,6 +319,7 @@ test.each(["empty", "reasoning", "partial"] as const)(
     expect(requests).toHaveLength(2)
     expect(JSON.stringify(requests[1])).toContain(expected)
     expect(JSON.stringify(requests[1])).not.toContain("Continue from where you left off")
+    expect(JSON.stringify(requests[1])).not.toContain("A partial answer")
   },
 )
 

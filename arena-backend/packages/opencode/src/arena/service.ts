@@ -12,7 +12,7 @@ import {
 import { ARENA_SENT_AT } from "./session-runtime/projection"
 import { copyKeepingReferences } from "./compaction-reference"
 import { KeyedMutex } from "@opencode/core/effect/keyed-mutex"
-import { closeShellTurn, openShellTurn } from "./engine-runtime/shell"
+import { awaitedShells, closeShellTurn, openShellTurn, SERVER_CHECK_INTERVAL_MS } from "./engine-runtime/shell"
 import { ArenaActivity } from "./activity"
 import { withChildWaitLimit } from "./child-wait"
 import { Stream } from "effect"
@@ -252,6 +252,7 @@ import {
 import {
   assignProxyRoutes,
   captureOwnedServices,
+  defaultServiceAdapter,
   pauseOwnedProcessGroups,
   persistedProxyRoutes,
   resumeProcessGroups,
@@ -801,6 +802,8 @@ const SLOT_PROCESS_RELIST_MS = 500
 const SLOT_POOL_TARGET = 3
 /** How often a contestant that waits for its child agents checks on them. */
 const CHILD_POLL_INTERVAL = Duration.millis(100)
+/** How often a contestant that waits only for its background commands checks on them. */
+const SHELL_POLL_INTERVAL = Duration.millis(500)
 /** How long a side that ended waits for its cancelled child agents before it finalizes anyway. */
 const CHILD_SETTLE_TIMEOUT_MS = 15_000
 
@@ -4945,14 +4948,30 @@ export const layer: Layer.Layer<
 
     /**
      * Core's parent run ends when the parent ends its response, and each child result wakes it again
-     * in a run nothing waits for. The contestant ends when the last of those runs ends and no child
-     * works. A run fails alone, so follow each one: a parent that fails stops the wait.
+     * in a run nothing waits for. The contestant ends when the last of those runs ends, no child
+     * works and no background command it still waits for runs (`awaitedShells`): that command's result
+     * wakes the session the same way. A run fails alone, so follow each one: a parent that fails stops
+     * the wait.
      */
     const awaitChildren = Effect.fn("Arena.awaitChildren")(function* (
       store: Store,
       run: SideRuntime,
       result: Exit.Exit<Effect.Success<ReturnType<typeof prompts.join>>, Error>,
     ) {
+      // A server keeps listening, so a command found listening stays a server; any other is checked again.
+      const servers = new Map<number, { readonly server: boolean; readonly at: number }>()
+      const isServer = (pid: number) =>
+        Effect.gen(function* () {
+          const now = Date.now()
+          const known = servers.get(pid)
+          if (known && (known.server || now - known.at < SERVER_CHECK_INTERVAL_MS)) return known.server
+          const listeners = yield* Effect.tryPromise(
+            async () => (await defaultServiceAdapter.listenersForProcessGroup?.(pid)) ?? [],
+          ).pipe(Effect.catch(() => Effect.succeed([])))
+          const server = listeners.length > 0
+          servers.set(pid, { server, at: now })
+          return server
+        })
       let latest = result
       let waited = false
       while (true) {
@@ -4967,12 +4986,16 @@ export const layer: Layer.Layer<
         }
         const children = yield* descendants(run.sessionID)
         const working = yield* Effect.forEach(children, (id) => prompts.working(id))
-        if (!working.includes(true)) {
+        const shells = yield* Effect.forEach([run.sessionID, ...children], (id) =>
+          inDirectory(run.worktree.directory, prompts.pendingShells(id)),
+        )
+        const commands = yield* awaitedShells(shells.flat(), Date.now(), isServer)
+        if (!working.includes(true) && commands === 0) {
           if (!waited) return latest
           return yield* Effect.exit(inDirectory(run.worktree.directory, prompts.join({ sessionID: run.sessionID })))
         }
         waited = true
-        yield* Effect.sleep(CHILD_POLL_INTERVAL)
+        yield* Effect.sleep(working.includes(true) ? CHILD_POLL_INTERVAL : SHELL_POLL_INTERVAL)
       }
     })
 

@@ -26,6 +26,7 @@ retain labeled native implementation history; it does not add a native target.
 | [RPC namespacing](rpc-namespacing.md)    | Request/response naming and shared-release policy         |
 | [Testing](testing.md)                    | Test policy, targeted execution and CI status             |
 | [QA](qa.md)                              | Evidence appropriate to the affected behavior and runtime |
+| [Upstream sync](upstream-sync.md)        | Weekly OpenCode merge, vendor patches and landing         |
 | [Writing documentation](writing-docs.md) | Ownership, organization and prose conventions             |
 | [Contributing](../CONTRIBUTING.md)       | Short contribution and PR guidance                        |
 | [Accounts](accounts.md)                  | Sign-in, account sessions and authentication boundaries   |

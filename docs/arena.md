@@ -90,8 +90,9 @@ contestant call as OpenRouter received it, with the real model, routing, cache k
 reasoning, and its raw response (`arena-service/src/generation-capture.ts`, `captureGenerations`).
 Messages, tools and images are stored once per account by content, because each call resends the
 whole history. Single-agent chats, keep-alive pings and the service's own comparison and metadata
-calls are not kept. BYOK leaves capture off: its store is on the voter's machine, and those fields
-name the model.
+calls are not kept. A retried Carbon call (see [Request](#blinding)) keeps its refused attempt as a
+separate record under a new generation id, linked by `retriedByGenerationID`. BYOK leaves capture
+off: its store is on the voter's machine, and those fields name the model.
 
 The control plane also adds the endpoint's quantization to each stored request row, from a catalog of
 OpenRouter's endpoint lists that it saves itself (`arena-service/src/endpoint-label.ts`, `recordEndpointLabels`).
@@ -1269,15 +1270,19 @@ the session's model, so a fill moves the canonical transcript hash. The guard re
 `message`: the generated client keeps an error body only for a status the route declares, every
 session route declares 400, and a 409 reached the app as a bare `UnexpectedStatus: 409`.
 
-**Finalize** (`finalizeSide` in `arena/service.ts`). Each side settles on its own. A background shell
-does not delay the final answer or the vote. Its service stays available for Preview under the
-[contestant environment lifetime](#the-canonical-spine-and-contestant-environments). Stop ends
-session-owned shells. Once the side closes, drop its
-background shell notifications; they must not change a reviewed answer or enter the winner's
-history on a later turn. A contestant's foreground shell defaults to two minutes when the timeout
-is omitted or zero. An explicit positive timeout is honored up to a ten-minute hard limit. Use
-`background: true` for a server or a long-running command; timeout results state the applied limit
-and give that advice.
+**Finalize** (`finalizeSide` in `arena/service.ts`). Each side settles on its own. A side waits for a
+background command its contestant started, as it waits for background child agents, until the
+command's result reaches the contestant, so a build or test that outlives its call is part of the
+answer the user votes on. A command listening on a port is a server: it does not hold the side and
+stays available for Preview under the
+[contestant environment lifetime](#the-canonical-spine-and-contestant-environments). Neither does a
+command started more than the ten-minute foreground limit ago, which a command that never ends, or a
+result that never arrives, would otherwise turn into a side that never ends. Stop ends session-owned shells. Once the side closes, drop
+its background shell notifications; they must not change a reviewed answer or enter the winner's
+history on a later turn. A contestant's foreground shell defaults to two minutes when the timeout is
+omitted or zero, and an explicit positive timeout is honored up to the ten-minute limit. Core moves a
+foreground command that outlives its timeout to the background, where the side waits for it like any
+other.
 
 Terminal state and the actual Git state are recorded under the generation's private battle refs, numstat is stored, and
 applicability is set to `applicable` only when the frozen base is an ancestor of the result. A
@@ -1327,7 +1332,11 @@ field. Each layer has its own file:
   that stays the same across the chat. The same refusal rule applies to both fields, and the catalog
   check cannot see it: run `probeRouting` (`arena-service/src/openrouter.ts`) on a pool before it
   ships. A provider that slows down mid-turn keeps the conversation; OpenRouter leaves it only when
-  that provider is unavailable.
+  that provider is unavailable. Gemini Carbon on Google AI Studio sometimes refuses a request that
+  ends on plain-text tool results with a bare 400 `INVALID_ARGUMENT`, and accepts the same text in
+  an object. On that exact refusal the proxy wraps each plain-text result in the pending tool batch
+  as `{"output": …}` and sends the request once more, before anything reaches the desktop
+  (`arena-service/src/gemini-tool-results.ts`). Every other model and error passes through unchanged.
   Resolution disables further routing without deleting the assignment.
 - **Keep-alive** (`arena/keep-alive.ts`) — preserve Anthropic's five-minute prompt cache during long
   tool, permission and child-agent waits by pinging waiting sessions every four minutes, for at most
