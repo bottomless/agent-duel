@@ -1,8 +1,10 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, expect, test } from "vitest";
+import { V2Harness } from "../test-utils/v2-harness.js";
+import { OpenCodeV2Session } from "./session.js";
 import { createArenaSessionApi } from "./arena.js";
-import { ArenaRefusalError } from "../../../../arena/refusal.js";
+import { ArenaRefusalError, SettledArenaRequestError } from "../../../../arena/refusal.js";
 import { managedV2ProcessEvents } from "./runtime.js";
 import { OpenCodeV2AgentClient } from "./agent.js";
 import { createTestLogger } from "../../../../../test-utils/test-logger.js";
@@ -61,10 +63,47 @@ test("an Arena request uses the replacement generation after reconnecting", asyn
     {
       url: "/arena/sessions/ses_canonical/archive",
       token: "replacement",
-      directory: "/tmp/arena-project",
+      directory: encodeURIComponent("/tmp/arena-project"),
     },
   ]);
   expect(api.streamKey).toContain(replacement.serverUrl);
+});
+
+test("the V2 session requests an empty-only archive for draft cleanup but not for an explicit archive", async () => {
+  const received: string[] = [];
+  const server = createServer((request, response) => {
+    received.push(`${request.method} ${request.url}`);
+    response.end("null");
+  });
+  servers.push(server);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const harness = new V2Harness();
+  const session = new OpenCodeV2Session(
+    {
+      ...harness.connection,
+      arena: {
+        serverUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+        controlToken: "archive-test",
+      },
+    },
+    harness.info,
+    { provider: "opencode", cwd: harness.info.location.directory },
+    createTestLogger(),
+    true,
+    false,
+  );
+  try {
+    const arena = session.arena;
+    if (!arena) throw new Error("Expected an Arena session");
+    await arena.archive({ onlyIfEmpty: true });
+    await arena.archive();
+    expect(received).toEqual([
+      "POST /arena/sessions/session/archive?onlyIfEmpty=true",
+      "POST /arena/sessions/session/archive",
+    ]);
+  } finally {
+    await session.close();
+  }
 });
 
 test("an engine refusal the app words itself keeps its code; other failures do not", async () => {
@@ -100,7 +139,14 @@ test("an engine refusal the app words itself keeps its code; other failures do n
   });
   const failed = await api.reply("turn", "steer", "b", []).catch((error: unknown) => error);
   expect(failed).not.toBeInstanceOf(ArenaRefusalError);
+  expect(failed).toBeInstanceOf(SettledArenaRequestError);
   expect(failed).toMatchObject({ message: "Cannot write file" });
+  // A failed status without the engine's terminal error envelope isn't a proven refusal.
+  const unanswered = await api
+    .start("chat", "hello", "voter", false)
+    .catch((error: unknown) => error);
+  expect(unanswered).toMatchObject({ message: "Arena request failed with status 400" });
+  expect(unanswered).not.toBeInstanceOf(SettledArenaRequestError);
 });
 
 test("managed V2 generations report process exit even to late subscribers", async () => {

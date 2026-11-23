@@ -1,7 +1,11 @@
 import type { Href } from "expo-router";
 import type { DraftInput } from "@/stores/draft-store";
-import type { ArenaPromptAttachments, DaemonClient } from "@getpaseo/client/internal/daemon-client";
-import { ARENA_CONTROL_PLANE_FAILED_CODE } from "@getpaseo/protocol/accounts/schemas";
+import {
+  AgentCreationRefusedError,
+  DaemonRpcError,
+  type ArenaPromptAttachments,
+  type DaemonClient,
+} from "@getpaseo/client/internal/daemon-client";
 import type { ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
 import { create } from "zustand";
 
@@ -18,7 +22,7 @@ export const useFailedFirstSendNotice = create<FailedFirstSendNoticeState>((set)
   dismiss: () => set({ message: null }),
 }));
 
-/** The send did not admit a turn. Any created agent was checked for a turn before reporting this. */
+/** No start was sent, or a settled start left no visible turn. Archive still checks at the engine. */
 export class UnadmittedFirstSendError extends Error {
   constructor(
     cause: unknown,
@@ -29,20 +33,32 @@ export class UnadmittedFirstSendError extends Error {
   }
 }
 
-function isPreAdmissionRefusal(error: unknown): boolean {
-  if (!(error instanceof Error) || error.name !== "DaemonRpcError" || !("code" in error)) {
-    return false;
+export function firstAgentCreationFailed(error: unknown): never {
+  if (error instanceof AgentCreationRefusedError) throw new UnadmittedFirstSendError(error, null);
+  if (
+    error instanceof DaemonRpcError &&
+    error.requestSettled &&
+    error.requestType === "agent.create.request"
+  ) {
+    throw new UnadmittedFirstSendError(error.userMessage, null);
   }
-  // Access checks and the assignment draw precede admission. Generic handler errors, including
-  // transport failures between the daemon and engine, do not establish where the start failed.
-  if (error.code === "access_denied" || error.code === ARENA_CONTROL_PLANE_FAILED_CODE) return true;
-  // The attachment validator reports this refusal before allocating a turn, without a code.
-  return (
-    error.code === "handler_error" &&
-    "userMessage" in error &&
-    typeof error.userMessage === "string" &&
-    /^Request failed: Battles cannot include \S+ images$/.test(error.userMessage)
-  );
+  throw error;
+}
+
+export async function resolveFirstBattle(input: {
+  client: Pick<DaemonClient, "arenaResolve">;
+  agentId: string;
+  presentError: (error: unknown) => unknown;
+}): Promise<ArenaSnapshot> {
+  try {
+    return await input.client.arenaResolve(input.agentId);
+  } catch (error) {
+    const failure = input.presentError(error);
+    if (error instanceof DaemonRpcError && error.requestSettled) {
+      throw new UnadmittedFirstSendError(failure, input.agentId);
+    }
+    throw failure;
+  }
 }
 
 function hasTurn(snapshot: ArenaSnapshot): boolean {
@@ -81,7 +97,7 @@ export async function startFirstBattle(input: StartFirstBattleInput): Promise<Ar
 
     const failure = presentError(error);
     // An empty snapshot can overtake a still-running start whose response the app lost.
-    if (snapshot && !hasTurn(snapshot) && isPreAdmissionRefusal(error)) {
+    if (snapshot && !hasTurn(snapshot) && error instanceof DaemonRpcError && error.requestSettled) {
       throw new UnadmittedFirstSendError(failure, agentId);
     }
     throw failure;
@@ -115,20 +131,24 @@ export interface FailedFirstSendDeps {
     serverId: string,
     workspaceId: string,
     emptyDraftAgentId: string | null,
-  ) => Promise<void>;
+  ) => Promise<boolean>;
 }
 
-/** Return a failed send to New chat only when it left an empty workspace. */
-export function returnFailedFirstSendToNewChat(
+/** Return a failed send to New chat only when the host confirms its guarded archive. */
+export async function returnFailedFirstSendToNewChat(
   input: FailedFirstSend,
   deps: FailedFirstSendDeps,
-): boolean {
+): Promise<boolean> {
   if (!(input.error instanceof UnadmittedFirstSendError)) return false;
   const createdAgentId = input.error.agentId;
   const workspaceAgentIds = deps.readWorkspaceAgentIds(input.serverId, input.workspaceId);
   if (workspaceAgentIds.some((agentId) => agentId !== createdAgentId)) return false;
 
   const route = deps.resolveNewChatRoute(input.serverId, input.workspaceId);
+  const archived = await deps
+    .archiveWorkspace(input.serverId, input.workspaceId, createdAgentId)
+    .catch(() => false);
+  if (!archived) return false;
   deps.saveNewChatDraft(input.draft);
   // Before navigating: the route can be the host root, which restores the remembered workspace.
   deps.forgetWorkspace(input.serverId, input.workspaceId);
@@ -138,8 +158,5 @@ export function returnFailedFirstSendToNewChat(
     ? deps.diskFullMessage
     : deps.retryMessage;
   deps.showError(`${message}\n\n${nextStep}`);
-  void deps.archiveWorkspace(input.serverId, input.workspaceId, createdAgentId).catch((error) => {
-    console.error("[WorkspaceDraft] Failed to clean up the chat of a failed first send", error);
-  });
   return true;
 }

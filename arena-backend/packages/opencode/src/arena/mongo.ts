@@ -38,6 +38,7 @@ import type {
   BattleMetricsDocument,
   ReviewEventDocument,
   RunDocument,
+  RunFinalizationTimings,
   SessionArchiveDocument,
   SingleAgentRatingDocument,
   SingleAgentVote,
@@ -830,6 +831,25 @@ export class Store {
     return updated
   }
 
+  async recordRunFinalizationTimings(runID: string, timings: RunFinalizationTimings) {
+    // Stop measures the cancel calls and prompt wait independently. Neither writer can replace
+    // the other's fields, even when a runner finishes before the cancel call acknowledges.
+    const fields = Object.fromEntries(
+      Object.entries(timings).map(([key, value]) => [`finalizationTimings.${key}`, value]),
+    )
+    const updated = await this.runs.findOneAndUpdate(
+      { _id: runID },
+      {
+        $set: { ...fields, updatedAt: new Date() },
+        ...(!timings.failedStep ? { $unset: { "finalizationTimings.failedStep": "" } } : {}),
+      },
+      { returnDocument: "after" },
+    )
+    if (!updated) throw new Error(`Arena run not found: ${runID}`)
+    this.changed({ turnID: updated.turnID })
+    return updated.finalizationTimings
+  }
+
   async claimReplyContinuation(turnID: string, sides: readonly Side[], at = new Date()) {
     requireTransition("awaiting_vote", "running")
     const current = await this.turns.findOne({ _id: turnID })
@@ -942,6 +962,7 @@ export class Store {
           transcriptArchiveID: "",
           archiveComplete: "",
           finalizedAt: "",
+          finalizationTimings: "",
           suggestedTitle: "",
         },
       },

@@ -4322,6 +4322,9 @@ export const RpcErrorMessageSchema = z.object({
     requestType: z.string().optional(),
     error: z.string(),
     code: z.string().optional(),
+    // The operation was refused before dispatch or its owner returned a terminal response.
+    // Does not imply that it made no changes.
+    requestSettled: z.literal(true).optional(),
   }),
 });
 

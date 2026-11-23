@@ -20,7 +20,7 @@ import {
   ArenaPartTooLargeError,
   ARENA_PAYLOAD_LIMIT_BYTES,
 } from "../../../../arena/payload-limit.js";
-import { arenaEngineError } from "../../../../arena/refusal.js";
+import { arenaResponseError, beforeArenaDispatch } from "../../../../arena/refusal.js";
 import { z } from "zod";
 
 export interface ArenaSessionApiOptions {
@@ -40,15 +40,6 @@ function parseJsonOrNull(text: string): unknown {
   }
 }
 
-function requestError(value: unknown, status: number): Error {
-  if (value && typeof value === "object" && "data" in value) {
-    const data = value.data;
-    if (data && typeof data === "object" && "message" in data && typeof data.message === "string")
-      return arenaEngineError(data.message, "code" in data ? data.code : undefined);
-  }
-  return new Error(`Arena request failed with status ${status}`);
-}
-
 export function createArenaSessionApi(options: ArenaSessionApiOptions): ArenaApi {
   const request = async <T>(
     path: string,
@@ -61,7 +52,7 @@ export function createArenaSessionApi(options: ArenaSessionApiOptions): ArenaApi
       tooLarge?: () => Error;
     } = {},
   ): Promise<T> => {
-    await options.ensureRuntime?.();
+    await options.ensureRuntime?.().catch(beforeArenaDispatch);
     const connection = options.connection();
     const base = connection.serverUrl.replace(/\/$/, "");
     const response = await fetch(new URL(path, `${base}/`), {
@@ -79,7 +70,7 @@ export function createArenaSessionApi(options: ArenaSessionApiOptions): ArenaApi
       throw requestOptions.tooLarge?.() ?? new ArenaChatTooLargeError();
     const value = parseJsonOrNull(text);
     if (response.status === 404 && requestOptions.allowNotFound) return schema.parse(null);
-    if (!response.ok) throw requestError(value, response.status);
+    if (!response.ok) throw arenaResponseError(value, response.status);
     return schema.parse(value);
   };
   const snapshot = (

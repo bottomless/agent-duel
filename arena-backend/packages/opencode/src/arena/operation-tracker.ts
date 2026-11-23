@@ -38,8 +38,8 @@ export type ArenaOperationProgress =
  * Store write between them, so `applying_changes` completes and starts again; replacing the
  * entry let the 0.05 s second part erase the 30 s first one, and the row finished as "<1s". Its
  * second part carries the first part's time forward by starting that much earlier, so the gap
- * between the parts is not counted. Any other restart is a new attempt, such as the plan running
- * again after the developer answers a review, and starts fresh.
+ * between the parts is not counted. Stop has the same split when the watchdog interrupts the prompt
+ * wait and retries cancellation. Other restarts, such as a plan running again after review, start fresh.
  */
 export function mergeOperationProgress(
   existing: readonly ArenaOperationProgress[],
@@ -49,8 +49,8 @@ export function mergeOperationProgress(
   if (!previous) return [...existing, progress]
   let startedAt = progress.startedAt
   if (
-    progress.operation === "applying_changes" &&
-    previous.state === "completed" &&
+    ((progress.operation === "applying_changes" && previous.state === "completed") ||
+      (progress.operation === "stopping_agents" && previous.state !== "running")) &&
     progress.startedAt >= previous.finishedAt
   ) {
     startedAt -= previous.finishedAt - previous.startedAt

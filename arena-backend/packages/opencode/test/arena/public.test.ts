@@ -221,6 +221,14 @@ describe("ArenaPublic", () => {
     expect(project(input).runs[0]?.error).toBe("Contestant run failed")
   })
 
+  test.each([false, true])("hides a saved Git timeout stack even after reveal, revealed=%s", (revealed) => {
+    const input = snapshot(revealed)
+    input.runs[0]!.runState = "stopped"
+    input.runs[0]!.error =
+      "Arena result finalization failed\nError: Git timed out while importing result refs\n    at private-path:10:5"
+    expect(project(input).runs[0]?.error).toBe("Git timed out before this side’s changes could be saved.")
+  })
+
   test("projects active transition operations only for current active turns", () => {
     const input = snapshot(true)
     input.turn!.activeOperations = ["preparing_workspaces", "applying_changes"]

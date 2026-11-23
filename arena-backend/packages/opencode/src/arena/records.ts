@@ -193,6 +193,9 @@ export type TurnSetupTimings = {
 
 /** Where a side's finalization spent its time, in milliseconds. */
 export type RunFinalizationTimings = {
+  /** Time in Stop's cancellation calls, separate from the prompt's remaining cleanup. */
+  readonly cancelMs?: number
+  readonly cancelWaitMs?: number
   readonly pauseMs: number
   readonly gitFinalizeMs: number
   readonly resumeMs: number
@@ -606,7 +609,7 @@ export type RunDocument = {
   usage?: UsageTotals
   transcriptArchiveID?: Identifier
   archiveComplete?: boolean
-  finalizationTimings?: RunFinalizationTimings
+  finalizationTimings?: Partial<RunFinalizationTimings>
   selectable?: boolean
   finalizedAt?: Date
   worktreeRemovedAt?: Date

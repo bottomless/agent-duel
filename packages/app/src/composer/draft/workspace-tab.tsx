@@ -34,7 +34,11 @@ import {
 } from "@/composer/draft/workspace-tab-core";
 import { DRAFT_CAPABILITIES } from "@/composer/draft/timeline";
 import type { AgentSnapshotPayload } from "@getpaseo/protocol/messages";
-import type { ArenaPromptAttachments, DaemonClient } from "@getpaseo/client/internal/daemon-client";
+import {
+  DaemonConnectionError,
+  type ArenaPromptAttachments,
+  type DaemonClient,
+} from "@getpaseo/client/internal/daemon-client";
 import type { WorkspaceComposerAttachment } from "@/attachments/types";
 import {
   useDraftWorkspaceAttachmentScopeKey,
@@ -72,9 +76,10 @@ import { useDraftStore } from "@/stores/draft-store";
 import { buildNewWorkspaceDraftKey } from "@/stores/draft-keys";
 import { useSessionStore } from "@/stores/session-store";
 import { buildWorkspaceArchiveRedirectRoute } from "@/utils/workspace-archive-navigation";
-import { archiveWorkspaceOptimistically } from "@/workspace/workspace-archive";
 import {
+  firstAgentCreationFailed,
   hasDraftBattle,
+  resolveFirstBattle,
   returnFailedFirstSendToNewChat,
   startFirstBattle,
   UnadmittedFirstSendError,
@@ -143,6 +148,7 @@ async function submitDraftCreateRequest(input: {
     }
     imagesData = await encodeImages(images);
   } catch (error) {
+    if (error instanceof DaemonConnectionError) throw error;
     throw new UnadmittedFirstSendError(error, null);
   }
   const attachmentsArray = Array.isArray(attachments) ? attachments : undefined;
@@ -161,7 +167,9 @@ async function submitDraftCreateRequest(input: {
     ...(!arenaPreferences.battleMode ? promptAttachments : {}),
   };
   const creation = useWorkspaceDraftSubmissionStore.getState().creationByDraftId[input.draftId];
-  const result = creation ? await creation.retry(options) : await client.createAgent(options);
+  const result = await (creation ? creation.retry(options) : client.createAgent(options)).catch(
+    firstAgentCreationFailed,
+  );
 
   if (result.id) {
     copyArenaPreferences(input.arenaPreferenceKey, input.createdPreferenceKey(result.id));
@@ -188,8 +196,10 @@ async function startDraftBattle(input: {
   queueBattlePrompt: (agentId: string, text: string, images: UserMessageImageAttachment[]) => void;
 }): Promise<void> {
   const { client, agentId, text, images, promptAttachments } = input;
-  const snapshot = await client.arenaResolve(agentId).catch((error: unknown) => {
-    throw presentBattleStartError(error);
+  const snapshot = await resolveFirstBattle({
+    client,
+    agentId,
+    presentError: presentBattleStartError,
   });
   const admitted = hasDraftBattle(snapshot, text);
   if (!admitted && !canStartBattleOnChat(snapshot.chat)) {
@@ -249,14 +259,11 @@ function failedFirstSendDeps(input: {
     showError: input.showError,
     retryMessage: input.retryMessage,
     diskFullMessage: input.diskFullMessage,
-    archiveWorkspace: async (serverId, workspaceId, emptyDraftAgentId) => {
-      await archiveWorkspaceOptimistically({
-        client: {
-          archiveWorkspace: (id) =>
-            input.client.archiveWorkspace(id, undefined, { emptyDraftAgentId }),
-        },
-        workspace: { serverId, workspaceId },
+    archiveWorkspace: async (_serverId, workspaceId, emptyDraftAgentId) => {
+      const result = await input.client.archiveWorkspace(workspaceId, undefined, {
+        emptyDraftAgentId,
       });
+      return !result.canceled && result.error === null;
     },
   };
 }
@@ -484,7 +491,7 @@ export function WorkspaceDraftComposer({
       }),
     createRequest: async ({ attempt, text, images, attachments, cwd }) => {
       if (pendingAutoSubmit?.agentCreation) {
-        const result = await pendingAutoSubmit.agentCreation.result;
+        const result = await pendingAutoSubmit.agentCreation.result.catch(firstAgentCreationFailed);
         return { agentId: result.id, result };
       }
       return submitDraftCreateRequest({
@@ -516,6 +523,22 @@ export function WorkspaceDraftComposer({
           savePendingBattlePrompt({ serverId, agentId, text: promptText, images: promptImages });
         },
       });
+    },
+    onCreateError: async (error) => {
+      if (!client || !pendingAutoSubmit) return false;
+      const draft = {
+        text: pendingAutoSubmit.text,
+        attachments: composerWorkspaceAttachment.userAttachmentsOnly(pendingAutoSubmit.attachments),
+      };
+      return returnFailedFirstSendToNewChat(
+        { serverId, workspaceId, error, draft },
+        failedFirstSendDeps({
+          client,
+          showError: useFailedFirstSendNotice.getState().show,
+          retryMessage: t("common.errors.firstSendRetry"),
+          diskFullMessage: t("common.errors.firstSendDiskFull"),
+        }),
+      );
     },
     onCreateSuccess: ({ result }) => {
       clearDraftInput("sent");
@@ -589,27 +612,9 @@ export function WorkspaceDraftComposer({
           attachments: submission.attachments,
           cwd: submission.cwd,
         });
-    void createPromise.catch((error: unknown) => {
-      const draft = {
-        text: submission.text,
-        attachments: composerWorkspaceAttachment.userAttachmentsOnly(submission.attachments),
-      };
-      if (
-        client &&
-        returnFailedFirstSendToNewChat(
-          { serverId, workspaceId, error, draft },
-          failedFirstSendDeps({
-            client,
-            showError: useFailedFirstSendNotice.getState().show,
-            retryMessage: t("common.errors.firstSendRetry"),
-            diskFullMessage: t("common.errors.firstSendDiskFull"),
-          }),
-        )
-      ) {
-        return;
-      }
-      replaceDraftText(draft.text);
-      setDraftAttachments(draft.attachments);
+    void createPromise.catch(() => {
+      replaceDraftText(submission.text);
+      setDraftAttachments(composerWorkspaceAttachment.userAttachmentsOnly(submission.attachments));
       autoSubmitKeyRef.current = null;
     });
   }, [
@@ -619,11 +624,9 @@ export function WorkspaceDraftComposer({
     handleCreateFromInput,
     initialCreateAttempt,
     isReadyForAutoSubmit,
-    client,
     serverId,
     setDraftAttachments,
     replaceDraftText,
-    t,
     workspaceId,
   ]);
 

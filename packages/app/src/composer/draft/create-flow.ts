@@ -99,7 +99,8 @@ interface UseDraftAgentCreateFlowOptions<TDraftAgent, TCreateResult> {
   createRequest: (ctx: CreateRequestContext) => Promise<CreateRequestResult<TCreateResult>>;
   buildDraftAgent: (attempt: CreateAttempt) => TDraftAgent;
   onCreateSuccess: (ctx: { result: TCreateResult; attempt: CreateAttempt }) => Promise<void> | void;
-  onCreateError?: (error: Error) => void;
+  /** True if the failed first send was returned to New chat instead of the draft tab. */
+  onCreateError?: (error: Error) => Promise<boolean>;
 }
 
 export function useDraftAgentCreateFlow<TDraftAgent, TCreateResult>({
@@ -212,14 +213,15 @@ export function useDraftAgentCreateFlow<TDraftAgent, TCreateResult>({
       } catch (error) {
         const resolved =
           error instanceof Error ? error : new Error(t("composer.errors.failedToCreateAgent"));
+        // Keep the composer pending while the host decides whether the draft may be archived.
+        const handled = await onCreateError?.(resolved);
         dispatch({ type: "CREATE_FAILED", message: resolved.message });
         markPendingCreateLifecycle({
           draftId,
           lifecycle: "abandoned",
           errorMessage: resolved.message,
         });
-        onCreateError?.(resolved);
-        throw error;
+        if (!handled) throw error;
       }
     },
     [

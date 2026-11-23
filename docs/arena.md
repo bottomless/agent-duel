@@ -1009,8 +1009,11 @@ APFS a slot's clones share blocks with the checkout until something writes to th
 
 **Start** (`startTurn` in `arena/service.ts`). Refuses unless the chat is `ready`, no turn is active, and no
 ordinary turn is in flight. Return a refused first send to New chat only when it left the workspace
-empty. Archive under the same lock as battle admission; a timeout or disconnect leaves the outcome
-unknown even if a snapshot has no turn yet. Keep that workspace and draft, and hand off the battle
+empty. Use the creation receipt or a terminal engine response to distinguish a refusal from a lost
+reply. Check the empty draft under the admission lock and wait for the archive to confirm before
+leaving. If resolve failed before a chat record existed, the engine cannot confirm the archive. A
+timeout or disconnect also leaves the outcome unknown even if a snapshot has no turn yet. Keep
+that workspace and draft, and hand off the battle
 if the engine confirms admission. Keep the error and retry instruction in the scrolling setup area
 until dismissed, so a long startup error cannot cover the composer. Start freezes canonical `HEAD`
 together with the exact staged, unstaged, and
@@ -1518,11 +1521,14 @@ actually verified. Use one utility request; increase evidence quality before add
   a discard reads differently. Do not bring back `Keep` or `Kept`. Stop acknowledges the durable
   claim before canceling agents; a repeat returns the current state. That claim skips comparison
   in the same write, so the decision never promises a report and a restart cannot offer to retry it.
-  The stopping status shows the active step. After ten seconds, offer Discard and keep it available
-  if the watchdog moves the stop to recovery. Bound Git steps so recovery can preserve a finished
-  side and reach a decision even when Git cannot save the other side. Keeping a side when the other
-  had already failed, rather than merely stopped, carries the same `voteDiscardedReason`, so metrics
-  do not file it as a win.
+  Keep “Canceling agents” in the stopping bar until the prompts settle. Core acknowledges an
+  interrupt before its runner has unwound: `cancelMs` measures the calls, `cancelWaitMs` the wait
+  after them. Neither is part of the time spent saving the result. After ten seconds, offer Discard
+  and keep it available if the watchdog moves the stop to recovery. Bound the initial Git ref check
+  on restart as well as each side’s save. A hung check otherwise blocks every Arena request before
+  it can reach the stopped battle. If Git times out saving one side, keep the other side’s result
+  available. Keeping a side when the other had already failed, rather than merely stopped, carries
+  the same `voteDiscardedReason`, so metrics do not file it as a win.
 
 **Applying** (`promoteImpl` in `arena/service.ts`) records the resolution and enters `applying`
 in one compare-and-set. Acknowledge votes, kept sides, and review answers after that durable claim

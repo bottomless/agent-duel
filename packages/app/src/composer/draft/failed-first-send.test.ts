@@ -1,7 +1,14 @@
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  AgentCreationRefusedError,
+  DaemonConnectionError,
+  DaemonRpcError,
+} from "@getpaseo/client/internal/daemon-client";
 import type { DraftInput } from "@/stores/draft-store";
 import type { ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
 import {
+  firstAgentCreationFailed,
+  resolveFirstBattle,
   returnFailedFirstSendToNewChat,
   startFirstBattle,
   UnadmittedFirstSendError,
@@ -9,7 +16,7 @@ import {
   type FailedFirstSendDeps,
 } from "./failed-first-send";
 
-function createDeps(agentIds: string[]) {
+function createDeps(agentIds: string[], archiveConfirmed = true) {
   const calls: string[] = [];
   const savedDrafts: DraftInput[] = [];
   const deps: FailedFirstSendDeps = {
@@ -21,13 +28,12 @@ function createDeps(agentIds: string[]) {
     },
     forgetWorkspace: (_serverId, workspaceId) => calls.push(`forget ${workspaceId}`),
     navigate: (route) => calls.push(`navigate ${String(route)}`),
-    showError: (message) => {
-      calls.push(`error ${message}`);
-    },
+    showError: (message) => calls.push(`error ${message}`),
     retryMessage: "Your message is saved. Resolve the error above, then send it again.",
     diskFullMessage: "Your message is saved. Free disk space, then send it again.",
     archiveWorkspace: async (_serverId, workspaceId, emptyDraftAgentId) => {
       calls.push(`archive ${workspaceId} ${emptyDraftAgentId}`);
+      return archiveConfirmed;
     },
   };
   return { deps, calls, savedDrafts };
@@ -71,15 +77,21 @@ const admittedSnapshot: ArenaSnapshot = {
   },
 };
 
-function refuseUnsupportedImage() {
-  return Object.assign(new Error("Battles cannot include image/bmp images"), {
-    name: "DaemonRpcError",
+function handlerFailure(requestType: string, requestSettled?: true) {
+  return new DaemonRpcError({
+    requestId: "req",
+    requestType,
     code: "handler_error",
-    userMessage: "Request failed: Battles cannot include image/bmp images",
+    error: "Backup failed",
+    requestSettled,
   });
 }
 
-function startWithLostResponse(
+function presentError(error: unknown) {
+  return error instanceof DaemonRpcError ? new Error(error.userMessage) : error;
+}
+
+function startWithFailure(
   error: Error,
   arenaSnapshot: (agentId: string, chatId: string) => Promise<ArenaSnapshot>,
 ) {
@@ -94,21 +106,37 @@ function startWithLostResponse(
     chatId: "chat-1",
     prompt: draft.text,
     attachments: {},
-    presentError: (cause) => cause,
+    presentError,
   });
 }
 
-function recoverFailedSend(start: Promise<ArenaSnapshot>, deps: FailedFirstSendDeps) {
-  return start.catch((error: unknown) => returnFailedFirstSendToNewChat(failed(error), deps));
+async function failCreation(error: Error): Promise<never> {
+  return firstAgentCreationFailed(error);
+}
+
+function resolveWithFailure(error: Error) {
+  return resolveFirstBattle({
+    client: {
+      arenaResolve: async () => {
+        throw error;
+      },
+    },
+    agentId: "agent-1",
+    presentError,
+  });
+}
+
+function recoverFailedSend<T>(send: Promise<T>, deps: FailedFirstSendDeps) {
+  return send.catch((error: unknown) => returnFailedFirstSendToNewChat(failed(error), deps));
 }
 
 describe("returnFailedFirstSendToNewChat", () => {
   afterEach(() => useFailedFirstSendNotice.getState().dismiss());
 
-  it("keeps the failure across navigation and dismisses it without clearing the restored draft", () => {
+  it("keeps the failure across navigation and dismisses it without clearing the restored draft", async () => {
     const { deps, savedDrafts } = createDeps([]);
     deps.showError = useFailedFirstSendNotice.getState().show;
-    returnFailedFirstSendToNewChat(
+    await returnFailedFirstSendToNewChat(
       failed(new UnadmittedFirstSendError("backup failed", null)),
       deps,
     );
@@ -118,107 +146,142 @@ describe("returnFailedFirstSendToNewChat", () => {
     expect(savedDrafts).toEqual([draft]);
   });
 
-  it("checks for a turn after a proven refusal before archiving without deleting its agent", async () => {
-    const { deps, calls, savedDrafts } = createDeps(["agent-1"]);
-    const start = startWithLostResponse(refuseUnsupportedImage(), async (agentId, chatId) => {
-      calls.push(`snapshot ${agentId} ${chatId}`);
-      return emptySnapshot;
-    });
-    const outcome = await recoverFailedSend(start, deps);
-
-    expect(outcome).toBe(true);
-    expect(savedDrafts).toEqual([draft]);
+  it("archives a refused creation with no agent and preserves the disk-full retry instruction", async () => {
+    const { deps, calls } = createDeps([]);
+    const create = Promise.reject(new AgentCreationRefusedError("ENOSPC: backup failed")).catch(
+      firstAgentCreationFailed,
+    );
+    expect(await recoverFailedSend(create, deps)).toBe(true);
     expect(calls).toEqual([
-      "snapshot agent-1 chat-1",
+      "archive wks null",
       "save",
       "forget wks",
       "navigate /new",
-      "error Battles cannot include image/bmp images\n\nYour message is saved. Resolve the error above, then send it again.",
-      "archive wks agent-1",
+      "error ENOSPC: backup failed\n\nYour message is saved. Free disk space, then send it again.",
     ]);
   });
 
-  it("stops restoring the chat it archives, so a relaunch or leaving Settings does not reopen it", () => {
-    const { deps, calls } = createDeps([]);
-    const error = new UnadmittedFirstSendError("No OpenRouter key", null);
-
-    expect(returnFailedFirstSendToNewChat(failed(error), deps)).toBe(true);
-    expect(calls.indexOf("forget wks")).toBeGreaterThanOrEqual(0);
-    expect(calls.indexOf("forget wks")).toBeLessThan(calls.indexOf("navigate /new"));
-  });
-
-  it("keeps a disk-full failure before agent creation visible and names the next step", () => {
-    const { deps, calls } = createDeps([]);
-    const error = new UnadmittedFirstSendError("ENOSPC: backup failed", null);
-    expect(returnFailedFirstSendToNewChat(failed(error), deps)).toBe(true);
-    expect(calls).toContain(
-      "error ENOSPC: backup failed\n\nYour message is saved. Free disk space, then send it again.",
-    );
-  });
-
-  it("leaves a chat that holds another agent alone", () => {
+  it("leaves a chat that holds another agent alone", async () => {
     const { deps, calls } = createDeps(["agent-1", "agent-0"]);
-    const error = new UnadmittedFirstSendError("refused", "agent-1");
-
-    expect(returnFailedFirstSendToNewChat(failed(error), deps)).toBe(false);
+    expect(
+      await returnFailedFirstSendToNewChat(
+        failed(new UnadmittedFirstSendError("refused", "agent-1")),
+        deps,
+      ),
+    ).toBe(false);
     expect(calls).toEqual([]);
   });
 
-  it("keeps the workspace and draft in place when agent creation has an unknown outcome", () => {
-    const { deps, calls, savedDrafts } = createDeps([]);
-
-    expect(returnFailedFirstSendToNewChat(failed(new Error("Request timed out")), deps)).toBe(
-      false,
-    );
+  it.each([
+    new DaemonConnectionError("Lost", "DAEMON_CONNECTION_LOST"),
+    new Error("agent_request_outcome_unknown"),
+    handlerFailure("creation.subscribe.request", true),
+  ])("keeps an unconfirmed creation in place: %s", async (error) => {
+    const { deps, calls } = createDeps([]);
+    expect(await recoverFailedSend(failCreation(error), deps)).toBe(false);
     expect(calls).toEqual([]);
-    expect(savedDrafts).toEqual([]);
+  });
+});
+
+describe("resolving the first battle", () => {
+  it("archives on a terminal resolve refusal if the engine confirms the empty chat", async () => {
+    const { deps, calls } = createDeps(["agent-1"]);
+    expect(
+      await recoverFailedSend(
+        resolveWithFailure(handlerFailure("arena.session.resolve.request", true)),
+        deps,
+      ),
+    ).toBe(true);
+    expect(calls[0]).toBe("archive wks agent-1");
+    expect(calls).toContain("navigate /new");
+  });
+
+  it("stays in the workspace if resolve failed before the engine could verify an empty chat", async () => {
+    const { deps, calls } = createDeps(["agent-1"], false);
+    expect(
+      await recoverFailedSend(
+        resolveWithFailure(handlerFailure("arena.session.resolve.request", true)),
+        deps,
+      ),
+    ).toBe(false);
+    expect(calls).toEqual(["archive wks agent-1"]);
+  });
+
+  it("does not try to archive after losing the resolve response", async () => {
+    const { deps, calls } = createDeps(["agent-1"]);
+    expect(
+      await recoverFailedSend(
+        resolveWithFailure(handlerFailure("arena.session.resolve.request")),
+        deps,
+      ),
+    ).toBe(false);
+    expect(calls).toEqual([]);
   });
 });
 
 describe("recovering the first battle start", () => {
+  it("checks for a turn after an engine error before archiving without deleting its agent", async () => {
+    const { deps, calls, savedDrafts } = createDeps(["agent-1"]);
+    const start = startWithFailure(
+      handlerFailure("arena.turn.start.request", true),
+      async (agentId, chatId) => {
+        calls.push(`snapshot ${agentId} ${chatId}`);
+        return emptySnapshot;
+      },
+    );
+    expect(await recoverFailedSend(start, deps)).toBe(true);
+    expect(savedDrafts).toEqual([draft]);
+    expect(calls).toEqual([
+      "snapshot agent-1 chat-1",
+      "archive wks agent-1",
+      "save",
+      "forget wks",
+      "navigate /new",
+      "error Backup failed\n\nYour message is saved. Resolve the error above, then send it again.",
+    ]);
+  });
+
   it("hands off the admitted battle after losing the start response", async () => {
-    const result = startWithLostResponse(
-      new Error("Request timed out"),
+    const result = startWithFailure(
+      new DaemonConnectionError("Request timed out", "DAEMON_REQUEST_TIMEOUT"),
       async () => admittedSnapshot,
     );
     await expect(result).resolves.toBe(admittedSnapshot);
   });
 
   it.each([
-    new Error("Request timed out"),
-    Object.assign(new Error("Request failed: fetch failed"), {
-      name: "DaemonRpcError",
-      code: "handler_error",
-    }),
+    new DaemonConnectionError("Request timed out", "DAEMON_REQUEST_TIMEOUT"),
+    handlerFailure("arena.turn.start.request"),
   ])(
     "does not archive on %s even if the snapshot wins the race against admission",
     async (error) => {
-      const { deps, calls, savedDrafts } = createDeps(["agent-1"]);
-      const start = startWithLostResponse(error, async () => emptySnapshot);
-      const outcome = await recoverFailedSend(start, deps);
-
-      expect(outcome).toBe(false);
+      const { deps, calls } = createDeps(["agent-1"]);
+      expect(
+        await recoverFailedSend(
+          startWithFailure(error, async () => emptySnapshot),
+          deps,
+        ),
+      ).toBe(false);
       expect(calls).toEqual([]);
-      expect(savedDrafts).toEqual([]);
     },
   );
 
   it("does not archive after a proven refusal if it cannot read the chat", async () => {
-    const error = refuseUnsupportedImage();
-    const result = startWithLostResponse(error, async () => {
+    const { deps, calls } = createDeps(["agent-1"]);
+    const start = startWithFailure(handlerFailure("arena.turn.start.request", true), async () => {
       throw new Error("Connection lost");
     });
-
-    await expect(result).rejects.toBe(error);
+    expect(await recoverFailedSend(start, deps)).toBe(false);
+    expect(calls).toEqual([]);
   });
 
   it("does not archive after a proven refusal if there is an unrelated turn", async () => {
-    const error = refuseUnsupportedImage();
-    const result = startWithLostResponse(error, async () => ({
+    const { deps, calls } = createDeps(["agent-1"]);
+    const start = startWithFailure(handlerFailure("arena.turn.start.request", true), async () => ({
       ...emptySnapshot,
       singleAgentTurns: [{ messageID: "message-1", modelSize: "medium" }],
     }));
-
-    await expect(result).rejects.toBe(error);
+    expect(await recoverFailedSend(start, deps)).toBe(false);
+    expect(calls).toEqual([]);
   });
 });

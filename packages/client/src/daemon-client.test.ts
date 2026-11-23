@@ -2,6 +2,7 @@ import type { ArenaDatabaseUpgrade } from "@getpaseo/protocol/arena-upgrade";
 import { afterEach, describe, expect, expectTypeOf, test, vi } from "vitest";
 import { z } from "zod";
 import {
+  AgentCreationRefusedError,
   DaemonClient,
   DaemonConnectionError,
   supportsUsageReports,
@@ -8305,6 +8306,51 @@ test("creation lifecycle sends the keyed agent and initial prompt as one intent"
   expect(transport.sent).toHaveLength(1);
 });
 
+test.each([false, true])(
+  "createAgent retains the receipt's outcomeUnknown=%s on failure",
+  async (outcomeUnknown) => {
+    const transport = createMockTransport();
+    const client = new DaemonClient({
+      url: "ws://test",
+      clientId: "creation-receipt",
+      transportFactory: () => transport.transport,
+      reconnect: { enabled: false },
+    });
+    clients.push(client);
+    const connected = client.connect();
+    transport.triggerOpen({ features: { creationLifecycle: true } });
+    await connected;
+    const result = client
+      .createAgent({ idempotencyKey: "draft-one", provider: "opencode", cwd: "/project" })
+      .catch((error: unknown) => error);
+    const request = parseSentFrame(transport.sent[0]);
+    transport.triggerMessage(
+      wrapSessionMessage({
+        type: "agent.create.response",
+        payload: {
+          requestId: request.requestId,
+          agent: null,
+          error: "provider unavailable",
+          creation: {
+            kind: "agent",
+            idempotencyKey: "draft-one",
+            revision: 1,
+            phase: "failed",
+            failedStage: "agent",
+            agentId: "allocated-id",
+            workspaceId: null,
+            error: "provider unavailable",
+            outcomeUnknown,
+          },
+        },
+      }),
+    );
+    const failure = await result;
+    expect(failure).toMatchObject({ message: "provider unavailable" });
+    expect(failure instanceof AgentCreationRefusedError).toBe(!outcomeUnknown);
+  },
+);
+
 test("creation lifecycle acknowledgement reaches the observer before the final response", async () => {
   const transport = createMockTransport();
   const client = new DaemonClient({
@@ -8920,10 +8966,19 @@ test("ordinary lifecycle queues new calls, distinguishes submitted outcomes, and
   first.triggerMessage(
     wrapSessionMessage({
       type: "rpc_error",
-      payload: { requestId: "initial", error: "Denied", code: "access_denied" },
+      payload: {
+        requestId: "initial",
+        error: "Denied",
+        code: "access_denied",
+        requestSettled: true,
+      },
     }),
   );
-  expect(await initial).toMatchObject({ code: "access_denied", serverId: "srv_test_1" });
+  expect(await initial).toMatchObject({
+    code: "access_denied",
+    serverId: "srv_test_1",
+    requestSettled: true,
+  });
   const submitted = client
     .patchDaemonConfig({ pluginsEnabled: false }, "submitted")
     .catch((error: unknown) => error);

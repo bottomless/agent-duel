@@ -1,6 +1,6 @@
 import { $ } from "bun"
 import { afterEach, describe, expect, test } from "bun:test"
-import { Deferred, Effect, Layer } from "effect"
+import { Deferred, Effect, Exit, Layer, Logger } from "effect"
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -164,21 +164,38 @@ function inProgressMessages(sessionID: SessionID, directory: string, promptText:
   ]
 }
 
-type SecondSideBehavior = "cancelable" | "stuck"
+type SecondSideBehavior = "cancelable" | "stuck" | "slow-settlement"
 
 function createFixtureLayer(root: string, canonicalID: SessionID, secondSideBehavior: SecondSideBehavior) {
   let hungGitDirectory: string | undefined
+  let hangNextGit = false
+  let interruptedGit: readonly string[] | undefined
   const gitLayer = Layer.effect(
     Git.Service,
     Effect.map(Git.Service, (git) => ({
       ...git,
-      run: (args, options) => (options.cwd === hungGitDirectory ? Effect.never : git.run(args, options)),
+      run: (args, options) => {
+        if (hangNextGit) {
+          hangNextGit = false
+          return Effect.never.pipe(
+            Effect.onInterrupt(() =>
+              Effect.sync(() => {
+                interruptedGit = args
+              }),
+            ),
+          )
+        }
+        return options.cwd === hungGitDirectory ? Effect.never : git.run(args, options)
+      },
     })),
   ).pipe(Layer.provide(LayerNode.compile(Git.node)))
   const sessions = new Map<string, SessionRecord>()
   sessions.set(canonicalID, { info: makeSessionInfo(canonicalID, root, "Canonical"), messages: [] })
 
   const activeSignals = new Map<string, Deferred.Deferred<void>>()
+  const settlePrompt = Deferred.makeUnsafe<void>()
+  const cancelEntered = Deferred.makeUnsafe<void>()
+  const acknowledgeCancel = Deferred.makeUnsafe<void>()
   let promptOrdinal = 0
   let currentDirectory = root
 
@@ -292,6 +309,7 @@ function createFixtureLayer(root: string, canonicalID: SessionID, secondSideBeha
               const gate = yield* Deferred.make<void>()
               activeSignals.set(input.sessionID, gate)
               yield* Deferred.await(gate)
+              if (secondSideBehavior === "slow-settlement") yield* Deferred.await(settlePrompt)
               const aborted: SessionV1.WithParts[] = msgs.map((item) =>
                 item.info.role === "assistant"
                   ? {
@@ -310,6 +328,10 @@ function createFixtureLayer(root: string, canonicalID: SessionID, secondSideBeha
           cancel: (sessionID) =>
             Effect.gen(function* () {
               if (secondSideBehavior === "stuck") return
+              if (secondSideBehavior === "slow-settlement") {
+                yield* Deferred.succeed(cancelEntered, undefined)
+                yield* Deferred.await(acknowledgeCancel)
+              }
               const gate = activeSignals.get(sessionID)
               if (gate) {
                 activeSignals.delete(sessionID)
@@ -381,6 +403,13 @@ function createFixtureLayer(root: string, canonicalID: SessionID, secondSideBeha
   return {
     layer,
     sessions,
+    cancelEntered: Deferred.await(cancelEntered),
+    acknowledgeCancel: Deferred.succeed(acknowledgeCancel, undefined),
+    settlePrompt: Deferred.succeed(settlePrompt, undefined),
+    hangFirstRecoveryGit: () => {
+      hangNextGit = true
+    },
+    interruptedGit: () => interruptedGit,
     hangGitIn: (directory: string) => {
       hungGitDirectory = directory
     },
@@ -556,6 +585,8 @@ describe("Arena stop recovery, watchdog, and finalization timings", () => {
       store = await connectLocalStore({ directory: dataDir })
       setStoreForTest(store)
       const fixture2 = createFixtureLayer(repo, canonicalID, "cancelable")
+      process.env.OPENCODE_ARENA_FINALIZATION_GIT_TIMEOUT_MS = "1000"
+      fixture2.hangFirstRecoveryGit()
       // Seed the restarted session store with the two runs' root sessions so recovery can archive Side 2.
       for (const run of await store.runsForTurn(turnID)) {
         const sid = SessionID.make(run.rootSessionID)
@@ -570,6 +601,7 @@ describe("Arena stop recovery, watchdog, and finalization timings", () => {
           Effect.gen(function* () {
             const arena = yield* ArenaService.Service
             const recovered = yield* arena.session(canonicalID)
+            expect(fixture2.interruptedGit()).toEqual(["rev-parse", "--path-format=absolute", "--git-common-dir"])
             expect(recovered.turn?.state).toBe("awaiting_stop_resolution")
             expect(recovered.turn?.comparisonState).toBe("skipped")
 
@@ -681,7 +713,13 @@ describe("Arena stop recovery, watchdog, and finalization timings", () => {
               expect(recoveredSide?.finalizedAt).toBeDefined()
               if (scenario === "timeout") {
                 expect(recoveredSide?.applicability).toBe("blocked")
-                expect(recoveredSide?.error).toContain("Git timed out while reading result refs")
+                expect(recoveredSide?.error).toBe(
+                  "Arena result finalization failed\nGit timed out while reading result refs",
+                )
+                const decision = yield* arena.session(canonicalID)
+                expect(decision.runs.find((run) => run.id === recoveredSide?._id)?.error).toBe(
+                  "Git timed out before this side’s changes could be saved.",
+                )
                 expect(recoveredSide?.finalizationTimings).toMatchObject({
                   failedStep: "snapshotting_changes",
                   gitFinalizeMs: expect.any(Number),
@@ -698,6 +736,73 @@ describe("Arena stop recovery, watchdog, and finalization timings", () => {
     },
     30_000,
   )
+
+  test("times cancellation until the prompt settles, even after Core acknowledges both cancel calls", async () => {
+    const { repo, dataDir, cleanup } = await createRepo()
+    const store = await connectLocalStore({ directory: dataDir })
+    const router = installOpenRouterStub()
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(store)
+    const canonicalID = nextSessionID()
+    const fixture = createFixtureLayer(repo, canonicalID, "slow-settlement")
+    const waitingForPrompt = Deferred.makeUnsafe<void>()
+    const trace: { field: string; ms: number }[] = []
+    const logger = Logger.make(({ message }) => {
+      const [event, fields] = Array.isArray(message) ? message : []
+      if (fields?.operation !== "stopping_agents") return
+      if (event === "Arena side cancellation step ended") trace.push({ field: fields.timing, ms: fields.durationMs })
+      if (event === "Arena side cancellation step started" && fields.timing === "cancelWaitMs") {
+        Deferred.doneUnsafe(waitingForPrompt, Exit.void)
+      }
+    })
+
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const arena = yield* ArenaService.Service
+          const { chat } = yield* arena.session(canonicalID)
+          const started = yield* arena.startTurn(chat.id, "Cancel while a prompt is unwinding.")
+          const id = started.turn!.id
+          const finished = yield* Effect.promise(() =>
+            waitForRun(store, id, (run) => !!run.finalizedAt, "first result"),
+          )
+          yield* arena.stop(id)
+          yield* fixture.cancelEntered.pipe(Effect.timeout("5 seconds"))
+          const beforeAck = (yield* arena.stop(id)).turn
+          expect(beforeAck?.activeOperations).toEqual(["stopping_agents"])
+          const firstStart = beforeAck?.operationProgress?.find((row) => row.operation === "stopping_agents")?.startedAt
+          yield* fixture.acknowledgeCancel
+          yield* Deferred.await(waitingForPrompt).pipe(Effect.timeout("5 seconds"))
+          expect(trace.map((step) => step.field)).toEqual(["cancelMs", "cancelMs"])
+          const waiting = yield* arena.stop(id)
+          expect(waiting.turn).toMatchObject({
+            state: "stopping",
+            activeOperations: ["stopping_agents"],
+            operationProgress: expect.arrayContaining([
+              { operation: "stopping_agents", state: "running", startedAt: firstStart },
+            ]),
+          })
+          const release = Date.now()
+          yield* fixture.settlePrompt
+          const decided = yield* Effect.promise(() => waitForTurn(store, id, "awaiting_stop_resolution"))
+          const cancel = decided.operationProgress?.find((entry) => entry.operation === "stopping_agents")
+          expect(cancel?.state === "completed" && cancel.finishedAt).toBeGreaterThanOrEqual(release)
+          const runs = yield* Effect.promise(() => store.runsForTurn(id))
+          expect(trace.map((step) => step.field)).toEqual(["cancelMs", "cancelMs", "cancelWaitMs"])
+          expect(runs.find((run) => run._id !== finished._id)?.finalizationTimings).toMatchObject({
+            cancelMs: trace[0]!.ms + trace[1]!.ms,
+            cancelWaitMs: trace[2]!.ms,
+            gitFinalizeMs: expect.any(Number),
+          })
+          expect(runs.find((run) => run._id === finished._id)?.finalizationTimings?.cancelMs).toBeUndefined()
+        }).pipe(Effect.provide(fixture.layer), Effect.provideService(Logger.CurrentLoggers, new Set([logger]))),
+      )
+    } finally {
+      router.restore()
+      await store.close()
+      await cleanup()
+    }
+  }, 30_000)
 
   test("allows discarding a battle directly from a stuck stopping state", async () => {
     const { repo, dataDir, cleanup } = await createRepo()
