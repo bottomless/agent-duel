@@ -72,12 +72,12 @@ See [leaderboard](https://agentduel.com/leaderboard) for model performance
 
 Execution stays on your machine:
 
-```text
-Electron UI -> local daemon -> local Arena runtime -> local repositories and agents
-                                       |
-                                       |-> Agent Duel cloud -> OpenRouter (official download)
-                                       `-> OpenRouter (your key in a BYOK build)
-```
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/architecture-dark.svg">
+    <img src="docs/images/architecture.svg" width="560" alt="On your machine: Electron UI, then the local daemon, then the local Arena runtime, then local repositories and agents. Model calls go through Agent Duel cloud to OpenRouter in the official download, or straight to OpenRouter with your key in a BYOK build.">
+  </picture>
+</p>
 
 The UI WebSocket terminates at the local daemon. The packaged desktop
 application contains the daemon, renderer, and compiled Arena runtime.
