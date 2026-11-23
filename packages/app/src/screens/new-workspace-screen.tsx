@@ -1553,6 +1553,9 @@ export function NewWorkspaceScreen({
             composerStateRequired: t("newWorkspace.errors.composerStateRequired"),
           },
         });
+        // This send consumed the draft a failed first send put back here, so the
+        // "your message is saved" notice is stale and goes away without a Dismiss.
+        useFailedFirstSendNotice.getState().dismiss();
         leaveFullscreen();
       } catch (error) {
         if (error instanceof MissingSelectedBranchError && selectedItem)
