@@ -40,7 +40,7 @@ import {
   SESSION_REJECTED_RETRY_MESSAGE,
 } from "@agent-duel/arena-service/request-error"
 import { withHeldToolCalls } from "./tool-stream"
-import { boundRequestSize } from "./request-size"
+import { boundRequestSize, type MediaCarriage } from "./request-size"
 import { MODEL_IDLE_TIMEOUT_MS } from "../model-idle"
 import { ArenaResponseRecovery } from "../response-recovery"
 import { idleBudgetFetch, idleExhausted, idleRecoveryNote, idleTimeout, resetIdleBudget } from "./idle"
@@ -61,6 +61,8 @@ export interface ArenaEngineRuntimeOptions {
   readonly assignments?: ArenaAssignmentRegistry
   /** Defaults to the in-process credential-bearing Arena proxy. */
   readonly contestantFetch?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>
+  /** How that proxy carries images and PDFs, for the request size check. Defaults to the process backend's. */
+  readonly mediaCarriage?: () => MediaCarriage
   /** Returns the preview variables for the contestant worktree. */
   readonly previewEnvironment?: (sessionID: string, directory: string) => Readonly<Record<string, string | undefined>>
   /** Returns a staging gate for a contestant session, if worktree setup is still running. */
@@ -86,9 +88,10 @@ const CheckedShell = EffectContext.Reference<string | undefined>("agent-duel/Che
   defaultValue: () => undefined,
 })
 
-const defaultOptions: Required<Pick<ArenaEngineRuntimeOptions, "assignments" | "contestantFetch">> = {
+const defaultOptions: Required<Pick<ArenaEngineRuntimeOptions, "assignments" | "contestantFetch" | "mediaCarriage">> = {
   assignments: ArenaRuntime.registry,
   contestantFetch: ArenaRuntime.contestantFetch,
+  mediaCarriage: ArenaRuntime.mediaCarriage,
 }
 
 type InstalledOptions = ArenaEngineRuntimeOptions & typeof defaultOptions
@@ -308,11 +311,13 @@ function install(context: Context, options: InstalledOptions) {
     const boundSize = (event: Parameters<typeof prepareContext>[0] & { tools: Record<string, unknown> }) =>
       Effect.suspend(() => {
         if (!arenaModel(event.model)) return Effect.void
-        const bounded = boundRequestSize(event)
+        const carriage = options.mediaCarriage()
+        const bounded = boundRequestSize(event, carriage)
         if (!bounded.report) return Effect.void
         event.messages = bounded.messages
-        return Effect.logInfo("Arena left images out of a request over the hosted size limit", {
+        return Effect.logInfo("Arena left images out of a request over its size limits", {
           sessionID: String(event.sessionID),
+          carriage,
           ...bounded.report,
         })
       })

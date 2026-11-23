@@ -1057,15 +1057,32 @@ reply takes the same attachments as a chat message, and both contestants get ide
 - The engine resizes each image once, at admission, to 1568 px and 600 KB, and names it
   `attachment-<n>.<ext>`. Every model call re-sends the conversation through the control plane,
   whose hosted function takes about 4.5 MB per request, so a message carries at most four images.
-  The composer holds a battle message to that count when images are attached and refuses a send
+  The cap predates sending media by reference (below) and stays. The composer holds a battle message to that count when images are attached and refuses a send
   over it: the engine's refusal comes only after New chat has created the chat.
   An image's own file name never reaches the models, transcripts, or judge.
-- Images a contestant reads with its tools are not resized, and they stay in history, so they
-  reach the 4.5 MB limit within one turn. Vercel refuses a larger body before Arena's code runs,
-  and the side fails on a bare 413. The measured cap is 4,494,157 bytes of body, and headers count
-  against it. The engine leaves the oldest images out of a request, only as many as it takes to fit
-  (`engine-runtime/request-size.ts`), with a note in each one's place. Each removal costs a
-  prompt-cache miss, so a chat at the limit misses the cache on every step that reads an image.
+- Images a contestant reads with its tools are not resized, and they stay in history, so every
+  later call sends them again. Vercel refuses a control-plane request over 4,494,157 bytes (headers
+  count) before Arena's code runs, and the side fails on a bare 413. So a hosted request carries
+  its images and PDFs by reference: the engine uploads each file once
+  (`/api/openrouter/api/v1/arena/media`, `arena/media-reference.ts`), names it
+  `arena-media:sha256:<digest>:<type>`, and the proxy puts the data back before OpenRouter sees the
+  body (arena-service `media.ts`). Uploads are stored per account for 72 hours, apart from the
+  generation-capture parts, because single-agent chats are not kept; a battle's capture stores its
+  own copy of what the call sent. An expired file is missing, and the engine uploads it again under
+  the same reference, so the prompt and its cache do not change.
+  The route is its own Vercel function in the control-plane repository, which must ship it before a
+  desktop release relies on it; a control plane without it answers 404, and the engine sends the
+  media inline. Until an upload has succeeded in the engine process, the size check counts media in
+  full, so an inline body still fits. BYOK runs in process, sends media inline, and meets only the
+  provider's limits.
+  The provider still takes only so many images per request. Past the body limit or the provider's
+  (`engine-runtime/request-size.ts`), the engine leaves the oldest tool images out, well below the
+  limit rather than just enough to fit, with a note in each one's place; the user's pasted images
+  go only as far as it takes to fit. Each removal rewrites the prompt prefix, and Claude, cached
+  from one breakpoint at the end, then writes the whole conversation again; trimming only to the
+  limit did that on every later step that read an image. The body size counts what the request
+  sends: a streamed step stores its sealed reasoning on every part, tool calls included, but sends
+  it once.
   It never drops the newest step's images to fit older ones; what does not fit
   of that step, or an image too large on its own, gets a note asking for a separate read or a
   smaller file. Canonical history keeps every image. Reasoning is sealed between calls, so an
@@ -1277,7 +1294,13 @@ answer the user votes on. A command listening on a port is a server: it does not
 stays available for Preview under the
 [contestant environment lifetime](#the-canonical-spine-and-contestant-environments). Neither does a
 command started more than the ten-minute foreground limit ago, which a command that never ends, or a
-result that never arrives, would otherwise turn into a side that never ends. Stop ends session-owned shells. Once the side closes, drop
+result that never arrives, would otherwise turn into a side that never ends. Nor does a command that
+died with an earlier engine: Core keeps its job list in the engine database, so after a crash or a
+forced stop (seen on a Windows dev-stack quit and a macOS kill), a resumed side still finds the job,
+running or finished with its result undelivered. Nothing will end it or deliver that result: Core does
+that only in its own restart recovery, which the Arena engine does not run. A job whose shell the
+current engine does not have is not waited for (`pendingShellsOf`).
+Stop ends session-owned shells. Once the side closes, drop
 its background shell notifications; they must not change a reviewed answer or enter the winner's
 history on a later turn. A contestant's foreground shell defaults to two minutes when the timeout is
 omitted or zero, and an explicit positive timeout is honored up to the ten-minute limit. Core moves a
@@ -1340,7 +1363,9 @@ field. Each layer has its own file:
   Resolution disables further routing without deleting the assignment.
 - **Keep-alive** (`arena/keep-alive.ts`) — preserve Anthropic's five-minute prompt cache during long
   tool, permission and child-agent waits by pinging waiting sessions every four minutes, for at most
-  30 minutes. Finished sessions waiting for a user reply get no pings. The engine cannot know which
+  30 minutes. An answer still running after four minutes gets the same pings: the cache counts from
+  when its request started, and a 20-30K-token answer takes three to seven minutes. Finished
+  sessions waiting for a user reply get no pings. The engine cannot know which
   contestant is Claude: the service forwards only `anthropic/` chat completions and returns the same
   empty 204 for every side, including a refused ping (`arena-service/src/keep-alive.ts`). Pings carry
   `max_tokens: 1`; zero is ignored by OpenRouter and runs a full answer. Keep them out of transcripts,

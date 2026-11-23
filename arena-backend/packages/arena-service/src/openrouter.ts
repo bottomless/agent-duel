@@ -20,8 +20,15 @@ import {
   recordCalibration,
   type CalibrationSample,
 } from "./request-calibration"
-import { generationCapture, type CaptureState, type GenerationCapture } from "./generation-capture"
+import {
+  generationCapture,
+  resolveMedia,
+  storeMedia,
+  type CaptureState,
+  type GenerationCapture,
+} from "./generation-capture"
 import { geminiToolResultRetry } from "./gemini-tool-results"
+import { MEDIA_PATH, MEDIA_TYPE_HEADER, mediaMissingError, mediaTooLargeError, sendsByReference } from "./media"
 import { createReasoningRedactor } from "./reasoning"
 import {
   HEARTBEAT_HEADER,
@@ -594,6 +601,20 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
         request.signal,
       )
     }
+    if (request.method === "POST" && suffix === MEDIA_PATH) {
+      const mimeType = request.headers.get(MEDIA_TYPE_HEADER)?.trim().toLowerCase()
+      if (!mimeType || !sendsByReference(mimeType) || !/^[\w.+-]+\/[\w.+-]+$/.test(mimeType)) {
+        return Response.json({ error: { message: "Arena media type is not supported" } }, { status: 400 })
+      }
+      if (!body || body.byteLength === 0) {
+        return Response.json({ error: { message: "Arena media body is required" } }, { status: 400 })
+      }
+      const db = await context.db()
+      const routeAssignment = await reserveRoutingAssignment(db, caller.id, assignment.scopeID, assignment.assignmentID)
+      if (!routeAssignment) return Response.json({ error: { message: "Arena assignment is invalid" } }, { status: 403 })
+      const digest = await storeMedia(db, caller.id, Buffer.from(body), context.now())
+      return Response.json({ sha256: digest })
+    }
     if (request.method !== "POST" || !["/api/v1/chat/completions", "/api/v1/responses"].includes(suffix)) {
       return Response.json({ error: { message: "Arena assignment cannot access this route" } }, { status: 400 })
     }
@@ -631,7 +652,20 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
       scopeID: assignment.scopeID,
       assignmentID: assignment.assignmentID,
     })
-    const restored = reasoning.restore(input)
+    // Images and PDFs the engine uploaded come back here, before the budget counts them (`media.ts`).
+    const media = await resolveMedia(db, caller.id, reasoning.restore(input), context.now())
+    // Only Claude pings get this far, so a ping with media the proxy cannot send answers like every
+    // other ping, or a made-up reference would tell the sides apart.
+    if (keepAlive && (media.tooLarge || media.missing.length > 0)) {
+      console.warn(
+        "[arena-service] Keep-alive ping skipped",
+        JSON.stringify({ media: media.tooLarge ? "too large" : "missing" }),
+      )
+      return keepAliveAnswer()
+    }
+    if (media.tooLarge) return Response.json(mediaTooLargeError(), { status: 413 })
+    if (media.missing.length > 0) return Response.json(mediaMissingError(media.missing), { status: 409 })
+    const restored = media.body as Record<string, unknown>
     const generationID = requestedGenerationID || `gen_${randomUUID().replaceAll("-", "")}`
     const startedAt = Date.now()
     const endpoint = suffix === "/api/v1/responses" ? "responses" : "chat"

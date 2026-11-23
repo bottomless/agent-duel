@@ -16,6 +16,8 @@ import { Job } from "@opencode/core/job"
 import { Tool } from "@opencode/core/tool"
 import { Agent } from "@opencode/schema/agent"
 import { SessionMessage } from "@opencode/schema/session-message"
+import type { Job as JobInfo } from "@opencode/schema/job"
+import { Shell as ShellSchema } from "@opencode/schema/shell"
 import { LocationServiceMap } from "@opencode/core/location-service-map"
 import { InstanceStore } from "@/project/instance-store"
 import { AssignmentRegistry } from "@/arena/proxy"
@@ -25,6 +27,7 @@ import {
   cancelSessionShells,
   closeShellTurn,
   contestantShellInput,
+  knownShells,
   MAX_FOREGROUND_TIMEOUT_MS,
   openShellTurn,
   pendingShellsOf,
@@ -383,12 +386,71 @@ test("a side waits for its running commands and undelivered results, not for a s
   expect(checked).toEqual([1, 3])
 })
 
+test("a job whose shell this engine does not have ran under an engine that died, so no side waits for it", () => {
+  const job = (shellID: string, status: JobInfo.Status) =>
+    ({
+      kind: "shell",
+      id: shellID,
+      sessionID: "ses_side",
+      status,
+      time: { started: 1_000 },
+      shellID,
+      command: "sleep 300",
+    }) as unknown as JobInfo.Info
+  const jobs = [
+    job("sh_live", "running"),
+    job("sh_dead", "running"),
+    job("sh_done", "completed"),
+    // Finished before its engine died, with a result nothing will deliver now.
+    job("sh_lost", "completed"),
+  ]
+  const pending = pendingShellsOf(jobs, [{ id: "sh_live", pid: 42 }], "ses_side", new Set(["sh_live", "sh_done"]))
+  expect(pending).toEqual([
+    { shellID: "sh_live", running: true, started: 1_000, pid: 42 },
+    { shellID: "sh_done", running: false, started: 1_000 },
+  ])
+  // A command that just exited has left the running list but is still known: its result is on its way.
+  expect(pendingShellsOf([job("sh_exited", "running")], [], "ses_side", new Set(["sh_exited"]))).toEqual([
+    { shellID: "sh_exited", running: true, started: 1_000 },
+  ])
+})
+
+test("after an engine restart, a background command that died with the old engine no longer holds the side", async () => {
+  await fixture(async ({ execute, root, jobs, shell }) => {
+    const command = await execute(root.id, { command: "sleep 30", background: true })
+    const shellID = command.metadata?.shellID
+    if (typeof shellID !== "string") throw new Error("shell ID missing")
+    // The job list survives a restart in the engine database; the Shell service starts empty.
+    const restarted: Pick<Shell.Interface, "get"> = {
+      get: (id) => Effect.fail(new Shell.NotFoundError({ id })),
+    }
+    const pendingWith = (service: Pick<Shell.Interface, "get">) =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const items = yield* jobs.backgroundJobs
+          const known = yield* knownShells(items, root.id).pipe(
+            Effect.provideService(Shell.Service, { ...shell, ...service }),
+          )
+          return pendingShellsOf(items, yield* shell.list(), root.id, known).map((item) => item.shellID)
+        }),
+      )
+    try {
+      expect(await pendingWith(shell)).toContain(shellID)
+      expect(await pendingWith(restarted)).not.toContain(shellID)
+    } finally {
+      await Effect.runPromise(shell.stop(ShellSchema.ID.make(shellID), "killed").pipe(Effect.ignore))
+    }
+  })
+}, 30_000)
+
 test("a background command stays pending until its result is delivered, and a server shows its port", async () => {
   await fixture(async ({ execute, root, jobs, shell }) => {
     const pending = () =>
       Effect.runPromise(
         Effect.gen(function* () {
-          return pendingShellsOf(yield* jobs.backgroundJobs, yield* shell.list(), root.id)
+          const items = yield* jobs.backgroundJobs
+          const known = yield* knownShells(items, root.id).pipe(Effect.provideService(Shell.Service, shell))
+          return pendingShellsOf(items, yield* shell.list(), root.id, known)
         }),
       )
     const until = async (check: () => Promise<boolean>) => {

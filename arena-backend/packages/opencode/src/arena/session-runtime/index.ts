@@ -39,7 +39,7 @@ import { getArenaAutoAccept, idleRecovery, setArenaAutoAccept } from "@/arena/en
 import { ArenaResponseRecovery } from "@/arena/response-recovery"
 import { shellRestartInput } from "@/arena/shell-restart"
 import { battleResumeInput } from "@/arena/resume-note"
-import { cancelSessionShells, pendingShellsOf, type PendingShell } from "@/arena/engine-runtime/shell"
+import { cancelSessionShells, knownShells, pendingShellsOf, type PendingShell } from "@/arena/engine-runtime/shell"
 import { EXTERNAL_WRITE } from "@/arena/contestant"
 import type {
   ArenaMessageInfo,
@@ -925,13 +925,13 @@ const promptLayer: Layer.Layer<
             const items = yield* jobs.backgroundJobs
             if (!items.some((item) => item.kind === "shell" && item.sessionID === sessionID)) return []
             const ref = yield* directory.ref()
-            const shells = yield* directory.provide(
+            const { shells, known } = yield* directory.provide(
               ref,
               Effect.gen(function* () {
-                return yield* (yield* Shell.Service).list()
+                return { shells: yield* (yield* Shell.Service).list(), known: yield* knownShells(items, sessionID) }
               }),
             )
-            return pendingShellsOf(items, shells, sessionID)
+            return pendingShellsOf(items, shells, sessionID, known)
           }),
         ),
       prepare: () => Effect.void,
