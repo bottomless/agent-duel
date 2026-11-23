@@ -65,6 +65,8 @@ mac:
     - zip
 linux:
   category: Development
+  # The desktop entry's Comment and the deb's Description. package.json's description is internal.
+  description: "A desktop app for head-to-head coding agent battles, with single-agent mode and free inference."
   # electron-builder renders every hicolor size from this one 512 px PNG, the same artwork as
   # icon.icns and icon.ico.
   icon: assets/icon.png
@@ -92,6 +94,7 @@ linux:
         - x64
 deb:
   afterInstall: scripts/linux-sandbox/after-install.tpl
+  packageCategory: devel
   # Setting depends replaces electron-builder's default list, so it is written out in full. The
   # default leaves out libgbm1 and libasound2, so the app would not start on a minimal install
   # (Ubuntu 22.04 does not pull libgbm1 in through GTK). Battles need git, and capturing contestant

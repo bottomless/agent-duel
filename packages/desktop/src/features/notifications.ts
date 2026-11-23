@@ -38,7 +38,11 @@ function toRecord(value: unknown): Record<string, unknown> | undefined {
 }
 
 function getNotificationIcon(): Electron.NativeImage | null {
-  const candidates = [path.resolve(__dirname, "../assets/icon.png")];
+  // The same file the window icon uses: packaged builds copy it into resources (Linux only;
+  // macOS sends through its own bridge, and Windows shows the app's own icon).
+  const candidates = app.isPackaged
+    ? [path.join(process.resourcesPath, "icon.png")]
+    : [path.resolve(__dirname, "../../assets/icon.png")];
 
   for (const iconPath of candidates) {
     if (!existsSync(iconPath)) {
