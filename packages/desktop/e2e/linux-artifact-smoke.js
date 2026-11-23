@@ -45,7 +45,7 @@ async function main() {
     const tarDir = path.join(extracted, "tar");
     fs.mkdirSync(tarDir);
     execFileSync("tar", ["-xzf", findArtifact(".tar.gz"), "-C", tarDir]);
-    const appPath = fs.existsSync(path.join(tarDir, "Agent Duel"))
+    const appPath = fs.existsSync(path.join(tarDir, "agent-duel"))
       ? tarDir
       : path.join(tarDir, fs.readdirSync(tarDir)[0]);
     process.env.PASEO_DESKTOP_SMOKE_ARTIFACT_DIR = path.join(artifactRoot, "tar");

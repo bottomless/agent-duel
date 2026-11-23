@@ -66,6 +66,12 @@ mac:
 linux:
   category: Development
   icon: assets
+  # update-alternatives refuses a name with a space, so the deb's install fell back to a plain link
+  # that removal left dangling.
+  executableName: agent-duel
+  # Name the installed desktop entry after desktopName ("Agent Duel.desktop"), as before the rename,
+  # not the executable: pinned launchers and the paseo:// handler registration point at that file.
+  syncDesktopName: true
   artifactName: "Agent-Duel-${version}-${arch}.${ext}"
   maintainer: "Bottomless"
   vendor: "Bottomless"
