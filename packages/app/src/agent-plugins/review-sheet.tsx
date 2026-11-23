@@ -112,6 +112,8 @@ export function AgentPluginsReviewSheet({
       header={header}
       visible={visible}
       onClose={handleDismiss}
+      // A pan or backdrop tap during the import would close the sheet without telling its owner.
+      dismissible={!isSaving}
       footer={footer}
       testID={testID}
     >

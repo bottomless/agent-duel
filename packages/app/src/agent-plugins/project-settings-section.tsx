@@ -77,7 +77,7 @@ export function ProjectPluginsSettings({
       trailing={globalPointer}
       testID="project-plugins"
     >
-      {error && !status ? (
+      {error ? (
         <Alert
           variant="error"
           title={t("agentPlugins.settings.loadFailed")}

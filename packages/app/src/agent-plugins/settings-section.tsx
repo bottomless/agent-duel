@@ -1,7 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Text, View } from "react-native";
-import { StyleSheet } from "react-native-unistyles";
 import type { AgentPlugin } from "@getpaseo/protocol/messages";
 import { SettingsCard, SettingsRow, SettingsSection } from "@/components/settings";
 import { Alert } from "@/components/ui/alert";
@@ -55,13 +54,12 @@ export function AgentPluginsSection({ serverId }: { serverId: string }) {
   return (
     <SettingsSection
       title={t("agentPlugins.settings.sectionTitle")}
+      info={t("agentPlugins.description")}
       trailing={scanButton}
       testID="agent-plugins-settings"
     >
-      <Text style={[settingsStyles.rowHint, styles.description]}>
-        {t("agentPlugins.description")}
-      </Text>
-      {error && !status ? (
+      {/* A failed Scan again keeps the last list, so its error shows above it. */}
+      {error ? (
         <Alert
           variant="error"
           title={t("agentPlugins.settings.loadFailed")}
@@ -127,9 +125,3 @@ export function SettingsPluginRow({
     />
   );
 }
-
-const styles = StyleSheet.create((theme) => ({
-  description: {
-    marginBottom: theme.spacing[2],
-  },
-}));

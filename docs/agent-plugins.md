@@ -16,7 +16,14 @@ OpenCode config folders the engine reads. Code: `packages/server/src/server/agen
 | The repository's own setup                  | `.claude/commands`, `.claude/agents`, `.mcp.json`, `.codex/config.toml`, `.codex/agents` | That project |
 
 Skills, commands, agents and MCP servers convert. Hooks do not: each battle contestant would run
-them. Skills in `.claude/skills` and `.agents/skills` are left out because the engine reads them
+them.
+
+Each contestant starts its own copy of every imported MCP server and calls it on its own, so a
+server with side effects (posting to Slack, writing to a database) acts once per side, and the vote
+does not undo the losing side's calls. The builder adds an `ask` permission rule for each imported
+server (`<server>_*`), so Ask before tools asks before every call, as Claude Code does. Without it,
+Ask before tools asks only for work outside the project. Auto Accept runs them, and a rule in the
+user's own config ranks above the import. Skills in `.claude/skills` and `.agents/skills` are left out because the engine reads them
 itself. A Codex plugin whose `.app.json` requires a ChatGPT app is left out of every list: its
 skills drive the app's tools, which run only through OpenAI's backend, so the user has nothing to
 decide.

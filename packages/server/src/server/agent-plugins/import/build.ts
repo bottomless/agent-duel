@@ -12,7 +12,7 @@ import { IMPORT_FEATURES, type DetectedPlugin, type PluginImporter } from "../pl
 import { RulesyncError, runRulesync } from "./rulesync.js";
 
 /** Bump when a build's output changes, so imports made by an older daemon are redone. */
-export const IMPORT_FORMAT = 2;
+export const IMPORT_FORMAT = 3;
 
 /** Why a plugin is missing from the build, by plugin id. */
 export type BuildErrors = Record<string, string>;
@@ -187,6 +187,32 @@ async function presentMergedFeatures(merged: Merged): Promise<string[]> {
 }
 
 /**
+ * The engine's permission action for every tool of an MCP server (`McpTool.name` in
+ * `arena-backend/packages/core/src/tool/mcp.ts`), which normalizes the server name the same way.
+ */
+function mcpToolsAction(server: string): string {
+  return `${server.replace(/[^a-zA-Z0-9_-]/g, "_")}_*`;
+}
+
+/**
+ * Imported MCP servers ask before each call, as they do in Claude Code. Agent Duel's Ask before
+ * tools otherwise asks only for work outside the project, so a server with side effects (posting to
+ * Slack, writing to a database) would run once per battle contestant without the user seeing it.
+ * Auto Accept still runs them, and the user's own config ranks above the import and can allow them.
+ */
+async function askBeforeMcpCalls(configFile: string, servers: readonly string[]): Promise<void> {
+  if (servers.length === 0 || !(await exists(configFile))) return;
+  const config = await readJsonObject(configFile);
+  if (!config) throw new Error(`rulesync wrote an unreadable ${configFile}`);
+  const permissions = Array.isArray(config.permissions) ? config.permissions : [];
+  config.permissions = [
+    ...permissions,
+    ...servers.map((server) => ({ action: mcpToolsAction(server), resource: "*", effect: "ask" })),
+  ];
+  await fs.writeFile(configFile, `${JSON.stringify(config, null, 2)}\n`);
+}
+
+/**
  * Replaces the files inside `target` rather than the directory itself, so the engine's watch on
  * the directory keeps working across imports.
  */
@@ -257,6 +283,7 @@ export async function buildImport(input: {
       const failed = Object.fromEntries(imported.map((plugin) => [plugin.id, error.reason]));
       return { ...errors, ...failed };
     }
+    await askBeforeMcpCalls(path.join(output, "opencode.jsonc"), Object.keys(merged.servers));
     await replaceContents(input.target, output);
     return errors;
   } finally {

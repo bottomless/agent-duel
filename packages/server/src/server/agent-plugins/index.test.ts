@@ -202,6 +202,11 @@ describe("agent plugins", () => {
           slack: { type: "remote", url: "https://mcp.slack.com/mcp" },
         },
       },
+      // Each contestant of a battle calls a server on its own; Ask before tools asks for each call.
+      permissions: [
+        { action: "local_*", resource: "*", effect: "ask" },
+        { action: "slack_*", resource: "*", effect: "ask" },
+      ],
     });
   });
 
@@ -267,6 +272,7 @@ describe("agent plugins", () => {
     expect(await exists(path.join(target, "skills", "write-page"))).toBe(false);
     expect(await readJson(path.join(target, "opencode.jsonc"))).toEqual({
       mcp: { servers: { runway: { type: "remote", url: "https://mcp.runwayml.com/mcp" } } },
+      permissions: [{ action: "runway_*", resource: "*", effect: "ask" }],
     });
   });
 
@@ -399,6 +405,10 @@ describe("agent plugins", () => {
           docs: { type: "local", command: ["npx", "docs-mcp"] },
         },
       },
+      permissions: [
+        { action: "pg_*", resource: "*", effect: "ask" },
+        { action: "docs_*", resource: "*", effect: "ask" },
+      ],
     });
     const untracked = execFileSync("git", ["status", "--porcelain", "--untracked-files=all"], {
       cwd: sandbox.project,
