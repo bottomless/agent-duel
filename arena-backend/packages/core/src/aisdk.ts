@@ -3,6 +3,7 @@ export * as AISDK from "./aisdk.js"
 import { makeLocationNode } from "@opencode/util/effect/app-node"
 import { httpFetch } from "@opencode/util/effect/app-node-platform"
 import { APICallError } from "@ai-sdk/provider"
+import { ClientTls } from "#client-tls"
 import type {
   JSONSchema7,
   JSONValue,
@@ -129,6 +130,7 @@ function wrapSSE(res: Response, ms: number, ctl: AbortController) {
  */
 export function providerFetch(model: RuntimeInfo, custom?: Fetch, outbound: Fetch = fetch) {
   const timeouts = Provider.timeouts(model.settings ?? {})
+  const tls = Provider.tls(model.settings ?? {})
   return async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
     const opts = { ...(init ?? {}) }
     // A plain AbortSignal.timeout would keep running into the body stream, so the header limit uses
@@ -155,7 +157,12 @@ export function providerFetch(model: RuntimeInfo, custom?: Fetch, outbound: Fetc
       }
     }
 
-    const send: Fetch = custom ?? outbound
+    const https = String(input instanceof Request ? input.url : input).startsWith("https:")
+    const certified = tls && https ? ClientTls.sender(tls) : undefined
+    if (tls && https && !certified) throw new Error("Client certificates aren't supported on this runtime")
+    // A followed redirect keeps the TLS options, so it would present the client certificate to another host.
+    if (certified) Object.assign(opts, certified.init, { redirect: "error" })
+    const send: Fetch = certified ? certified.fetch : (custom ?? outbound)
     const middleware = httpMiddleware.getStore()
     const res = await (
       middleware
@@ -454,7 +461,6 @@ function providerOptionKey(packageName: string | undefined, providerID: Provider
   if (packageName === "@ai-sdk/amazon-bedrock") return "bedrock"
   if (packageName === "@ai-sdk/amazon-bedrock/mantle") return "openai"
   if (packageName === "@ai-sdk/azure") return "azure"
-  if (packageName === "@ai-sdk/github-copilot") return "copilot"
   if (packageName === "@jerome-benoit/sap-ai-provider-v2") return "sap-ai"
   if (packageName === "@ai-sdk/openai-compatible") return providerID.split(".")[0]
   if (packageName === "@openrouter/ai-sdk-provider") return "openrouter"

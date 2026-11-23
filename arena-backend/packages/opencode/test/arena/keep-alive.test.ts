@@ -53,6 +53,47 @@ function setup(result: PingResult = "kept") {
 }
 
 describe("ArenaKeepAlive", () => {
+  test("re-sends a long answer's own prompt every four minutes while it is still answering", async () => {
+    const { clock, keepAlive, pings, ping } = setup()
+    const end = keepAlive.begin("session", ping)
+    await clock.advance(9 * MINUTE)
+    expect(pings).toEqual([4 * MINUTE, 8 * MINUTE])
+    end()
+    await clock.advance(20 * MINUTE)
+    expect(pings).toEqual([4 * MINUTE, 8 * MINUTE])
+  })
+
+  test("a short answer gets no ping while answering, and waiting counts from its last use", async () => {
+    const { clock, keepAlive, pings, ping } = setup()
+    const end = keepAlive.begin("session", ping)
+    await clock.advance(3 * MINUTE)
+    end(ping)
+    expect(pings).toEqual([])
+    await clock.advance(2 * MINUTE)
+    expect(pings).toEqual([4 * MINUTE])
+  })
+
+  test("an answer's first ping counts from when its request started, not from the session's last use", async () => {
+    const { clock, keepAlive, pings, ping } = setup()
+    // A failed call leaves no ping, so the session last used its prompt ten minutes before the next.
+    keepAlive.begin("session")()
+    await clock.advance(10 * MINUTE)
+    const end = keepAlive.begin("session", ping)
+    await clock.advance(1 * MINUTE)
+    expect(pings).toEqual([])
+    await clock.advance(3 * MINUTE)
+    expect(pings).toEqual([14 * MINUTE])
+    end()
+  })
+
+  test("a session that goes idle stops the pings of an answer still out", async () => {
+    const { clock, keepAlive, pings, ping } = setup()
+    keepAlive.begin("session", ping)
+    keepAlive.idle("session")
+    await clock.advance(10 * MINUTE)
+    expect(pings).toEqual([])
+  })
+
   test("pings every four minutes from when the last call started, while the session waits", async () => {
     const { clock, keepAlive, pings, ping } = setup()
     const end = keepAlive.begin("session")

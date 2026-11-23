@@ -371,8 +371,9 @@ export function failedAnswer(
 }
 
 /**
- * The note Core adds after a cut answer so the next step continues it
- * (`CONTINUE_AFTER_INCOMPLETE_STREAM` in `core/src/session/runner/llm.ts`, not exported there).
+ * The note Core added after a cut answer so the next step continued it. Core stopped writing it in
+ * OpenCode 2.3 (a cut stream is now retried from its last local call that ran); chats from before
+ * that still have it.
  */
 export const CONTINUE_AFTER_INCOMPLETE_STREAM =
   "The previous response was interrupted. Continue from where you left off without repeating completed content."

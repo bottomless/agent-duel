@@ -7,6 +7,8 @@ import { ResearchUploader } from "./research"
 import { arenaCredentials, type ArenaCredentials } from "./credentials"
 import { createArenaBackend, type ArenaBackend } from "./backend"
 import { idleSession, KeepAlive } from "./keep-alive"
+import { referencesConfirmed } from "./media-reference"
+import type { MediaCarriage } from "./engine-runtime/request-size"
 import { GlobalBus } from "@/bus/global"
 
 export const providerID = "arena"
@@ -162,6 +164,15 @@ export function backend() {
   return built.backend
 }
 
+const contestantUpstream = (target: ArenaBackend) => `${target.url}/api/openrouter`
+
+/** How a contestant request will carry its images and PDFs, which its size check counts. */
+export function mediaCarriage(): MediaCarriage {
+  const target = backend()
+  if (target && !target.mediaByReference) return "local"
+  return target && referencesConfirmed(contestantUpstream(target)) ? "reference" : "inline"
+}
+
 /** End cache pings on both legacy idle events and Core's native execution lifecycle. */
 export function stopIdleKeepAlive(payload: Record<string, unknown>, waits: KeepAlive = keepAlive) {
   const legacy = idleSession(payload)
@@ -197,10 +208,11 @@ export async function contestantFetch(input: string | URL | Request, init?: Requ
     })
   }
   return proxy(new Request(input, init), registry, {
-    upstream: `${target.url}/api/openrouter`,
+    upstream: contestantUpstream(target),
     fetch: target.fetch,
     telemetry,
     keepAlive,
+    mediaByReference: target.mediaByReference,
   })
 }
 

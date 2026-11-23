@@ -6,7 +6,7 @@ import type { Message, SystemPart } from "@opencode/ai"
 import { createOpenRouter } from "@openrouter/ai-sdk-provider"
 import { AISDK } from "@opencode/core/aisdk"
 import { ShellTool } from "@opencode/core/tool/plugin/shell"
-import { contestantShellInput, contestantShellTimeoutMessage, shellNotification } from "./shell"
+import { contestantShellInput, shellNotification } from "./shell"
 import { WindowsJob } from "@opencode/util/windows-job"
 import { define } from "@opencode/plugin/effect/plugin"
 import type { Context } from "@opencode/plugin/effect/plugin"
@@ -40,10 +40,10 @@ import {
   SESSION_REJECTED_RETRY_MESSAGE,
 } from "@agent-duel/arena-service/request-error"
 import { withHeldToolCalls } from "./tool-stream"
-import { boundRequestSize } from "./request-size"
+import { boundRequestSize, type MediaCarriage } from "./request-size"
 import { MODEL_IDLE_TIMEOUT_MS } from "../model-idle"
 import { ArenaResponseRecovery } from "../response-recovery"
-import { idleBudgetFetch, idleExhausted, idleTimeout, resetIdleBudget } from "./idle"
+import { idleBudgetFetch, idleExhausted, idleRecoveryNote, idleTimeout, resetIdleBudget } from "./idle"
 import { ArenaShellLedger } from "./shell-ledger"
 import {
   toolExecutionProvider,
@@ -61,6 +61,8 @@ export interface ArenaEngineRuntimeOptions {
   readonly assignments?: ArenaAssignmentRegistry
   /** Defaults to the in-process credential-bearing Arena proxy. */
   readonly contestantFetch?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>
+  /** How that proxy carries images and PDFs, for the request size check. Defaults to the process backend's. */
+  readonly mediaCarriage?: () => MediaCarriage
   /** Returns the preview variables for the contestant worktree. */
   readonly previewEnvironment?: (sessionID: string, directory: string) => Readonly<Record<string, string | undefined>>
   /** Returns a staging gate for a contestant session, if worktree setup is still running. */
@@ -86,9 +88,10 @@ const CheckedShell = EffectContext.Reference<string | undefined>("agent-duel/Che
   defaultValue: () => undefined,
 })
 
-const defaultOptions: Required<Pick<ArenaEngineRuntimeOptions, "assignments" | "contestantFetch">> = {
+const defaultOptions: Required<Pick<ArenaEngineRuntimeOptions, "assignments" | "contestantFetch" | "mediaCarriage">> = {
   assignments: ArenaRuntime.registry,
   contestantFetch: ArenaRuntime.contestantFetch,
+  mediaCarriage: ArenaRuntime.mediaCarriage,
 }
 
 type InstalledOptions = ArenaEngineRuntimeOptions & typeof defaultOptions
@@ -308,11 +311,13 @@ function install(context: Context, options: InstalledOptions) {
     const boundSize = (event: Parameters<typeof prepareContext>[0] & { tools: Record<string, unknown> }) =>
       Effect.suspend(() => {
         if (!arenaModel(event.model)) return Effect.void
-        const bounded = boundRequestSize(event)
+        const carriage = options.mediaCarriage()
+        const bounded = boundRequestSize(event, carriage)
         if (!bounded.report) return Effect.void
         event.messages = bounded.messages
-        return Effect.logInfo("Arena left images out of a request over the hosted size limit", {
+        return Effect.logInfo("Arena left images out of a request over its size limits", {
           sessionID: String(event.sessionID),
+          carriage,
           ...bounded.report,
         })
       })
@@ -467,13 +472,7 @@ function install(context: Context, options: InstalledOptions) {
       (event) =>
         Effect.sync(() => {
           if (!arenaSession(options, String(event.sessionID)) || !idleTimeout(event.error)) return
-          const message = event.message
-          const hasReply =
-            message?.type === "assistant" &&
-            message.content.some(
-              (part) => part.type === "tool" || (part.type === "text" && part.text.trim().length > 0),
-            )
-          event.text = hasReply ? ArenaResponseRecovery.IDLE_CONTINUE : ArenaResponseRecovery.IDLE_RESTART
+          event.text = idleRecoveryNote(event.message)
         }),
       { providerID: String(PROVIDER_ID) },
     )
@@ -620,7 +619,6 @@ function install(context: Context, options: InstalledOptions) {
             if (assignment?.telemetry) {
               return yield* execute(contestantShellInput(input as Record<string, unknown>), call).pipe(
                 Effect.provideService(ShellTool.Notification, shellNotification(assignment.rootSessionID)),
-                Effect.provideService(ShellTool.TimeoutMessage, contestantShellTimeoutMessage),
               )
             }
             const { directory, project } = context.location

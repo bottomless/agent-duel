@@ -16,17 +16,25 @@ import { Job } from "@opencode/core/job"
 import { Tool } from "@opencode/core/tool"
 import { Agent } from "@opencode/schema/agent"
 import { SessionMessage } from "@opencode/schema/session-message"
+import type { Job as JobInfo } from "@opencode/schema/job"
+import { Shell as ShellSchema } from "@opencode/schema/shell"
 import { LocationServiceMap } from "@opencode/core/location-service-map"
+import { InstanceStore } from "@/project/instance-store"
 import { AssignmentRegistry } from "@/arena/proxy"
 import { createArenaEnginePlugin } from "@/arena/engine-runtime/plugin"
 import {
+  awaitedShells,
   cancelSessionShells,
   closeShellTurn,
   contestantShellInput,
-  contestantShellTimeoutMessage,
+  knownShells,
+  MAX_FOREGROUND_TIMEOUT_MS,
   openShellTurn,
+  pendingShellsOf,
   shellNotification,
+  type PendingShell,
 } from "@/arena/engine-runtime/shell"
+import { defaultServiceAdapter } from "@/arena/services"
 
 test("contestant foreground timeouts default to two minutes and honor requests up to ten minutes", () => {
   for (const [requested, applied] of [
@@ -49,14 +57,6 @@ test("contestant foreground timeouts default to two minutes and honor requests u
   })
   const background = { command: "sleep 9999", background: true, timeout: 0 }
   expect(contestantShellInput(background)).toBe(background)
-})
-
-test("contestant timeout advice states the applied limit and directs long commands to the background", () => {
-  for (const timeout of [120_000, 240_000, 600_000]) {
-    expect(contestantShellTimeoutMessage(timeout)).toBe(
-      `Command exceeded the foreground timeout limit of ${timeout} ms. Use background: true for a server or a long-running command.`,
-    )
-  }
 })
 
 test("delivery and side closure serialize; old results cannot reach a reply or the next turn", async () => {
@@ -241,7 +241,18 @@ async function fixture(body: (input: Fixture) => Promise<void>) {
       jobs,
       directory,
       timeouts,
-      dispose: () => Effect.runPromise(locations.invalidate(root.location)),
+      // The Arena's real disposal path: InstanceStore ends the Location's shells, which the process daemon keeps.
+      dispose: () =>
+        Effect.runPromise(
+          Effect.gen(function* () {
+            const store = yield* InstanceStore.Service
+            yield* store.disposeDirectory(directory)
+          }).pipe(
+            Effect.provide(InstanceStore.layer),
+            Effect.provideService(LocationServiceMap.Service, locations),
+            Effect.scoped,
+          ),
+        ),
     }
   }
   try {
@@ -295,8 +306,16 @@ test("process-death assertions accept absent or unsignalable groups and propagat
   expect(failure).toBe(error)
 })
 
-test("native contestant and child shells enforce the deadline; ordinary shells keep their requested timeout", async () => {
-  await fixture(async ({ execute, root, child, other, timeouts }) => {
+// Core moves a foreground command that outlives its timeout to the background instead of stopping it.
+test("native contestant and child shells apply the capped deadline; ordinary shells keep their requested timeout", async () => {
+  await fixture(async ({ execute, shell, root, child, other, timeouts }) => {
+    const backgrounded = async (result: Awaited<ReturnType<typeof execute>>) => {
+      expect(result.metadata).toMatchObject({ status: "running" })
+      expect(JSON.stringify(result.content)).toContain("moved to the background")
+      const shellID = result.metadata?.shellID
+      if (typeof shellID !== "string") throw new Error("shell ID missing")
+      await Effect.runPromise(shell.stop(shellID, "killed").pipe(Effect.ignore))
+    }
     for (const info of [root, child]) {
       for (const [timeout, applied] of [
         [undefined, 120_000],
@@ -308,27 +327,14 @@ test("native contestant and child shells enforce the deadline; ordinary shells k
         const input = timeout === undefined ? {} : { timeout }
         const result = await execute(info.id, { command: "sleep 60; printf foreground", ...input })
         expect(timeouts.at(-1)).toBe(applied)
-        expect(result.metadata).toMatchObject({ timeout: true })
-        expect(result.content).toContainEqual({
-          type: "text",
-          text: expect.stringContaining(
-            "Command exceeded the foreground timeout limit of 25 ms. Use background: true for a server or a long-running command.",
-          ),
-        })
-        expect(JSON.stringify(result.content)).not.toContain("Retry with a larger timeout")
+        await backgrounded(result)
       }
     }
     const timedOut = await execute(other.id, { command: "sleep 60; printf foreground", timeout: 42 })
     expect(timeouts.at(-1)).toBe(42)
-    expect(timedOut.metadata).toMatchObject({ timeout: true })
-    expect(timedOut.content).toContainEqual({
-      type: "text",
-      text: expect.stringContaining(
-        "Command exceeded timeout of 25 ms. Retry with a larger timeout if the command is expected to take longer.",
-      ),
-    })
+    await backgrounded(timedOut)
     const ordinary = await execute(other.id, { command: "printf ordinary", timeout: 0 })
-    expect(timeouts.at(-1)).toBe(0)
+    expect(timeouts.at(-1)).toBe(120_000)
     expect(ordinary.metadata).toMatchObject({ status: "completed", exit: 0 })
   })
 }, 30_000)
@@ -351,6 +357,130 @@ test("open contestants receive completed output; ordinary sessions keep Core's d
         },
       ])
     }
+  })
+}, 30_000)
+
+test("a side waits for its running commands and undelivered results, not for a server or a command past the limit", async () => {
+  const now = 1_000_000_000
+  const servers = new Set([3])
+  const checked: number[] = []
+  const awaited = (shells: PendingShell[]) =>
+    Effect.runPromise(
+      awaitedShells(shells, now, (pid) =>
+        Effect.sync(() => {
+          checked.push(pid)
+          return servers.has(pid)
+        }),
+      ),
+    )
+  // A build that outlived its call, and one whose result Core is still delivering.
+  expect(await awaited([{ shellID: "sh_build", running: true, started: now - 130_000, pid: 1 }])).toBe(1)
+  expect(await awaited([{ shellID: "sh_done", running: false, started: now - 200_000, pid: 2 }])).toBe(1)
+  // A server is kept for Preview, and a command still running after the limit would hold the side forever.
+  expect(await awaited([{ shellID: "sh_server", running: true, started: now - 130_000, pid: 3 }])).toBe(0)
+  const hung = { shellID: "sh_hung", running: true, started: now - MAX_FOREGROUND_TIMEOUT_MS, pid: 4 }
+  expect(await awaited([hung])).toBe(0)
+  // A result that never arrives stops holding the side at the same limit.
+  expect(await awaited([{ ...hung, shellID: "sh_lost", running: false }])).toBe(0)
+  expect(await awaited([{ shellID: "sh_unknown", running: true, started: now - 1_000 }])).toBe(1)
+  expect(checked).toEqual([1, 3])
+})
+
+test("a job whose shell this engine does not have ran under an engine that died, so no side waits for it", () => {
+  const job = (shellID: string, status: JobInfo.Status) =>
+    ({
+      kind: "shell",
+      id: shellID,
+      sessionID: "ses_side",
+      status,
+      time: { started: 1_000 },
+      shellID,
+      command: "sleep 300",
+    }) as unknown as JobInfo.Info
+  const jobs = [
+    job("sh_live", "running"),
+    job("sh_dead", "running"),
+    job("sh_done", "completed"),
+    // Finished before its engine died, with a result nothing will deliver now.
+    job("sh_lost", "completed"),
+  ]
+  const pending = pendingShellsOf(jobs, [{ id: "sh_live", pid: 42 }], "ses_side", new Set(["sh_live", "sh_done"]))
+  expect(pending).toEqual([
+    { shellID: "sh_live", running: true, started: 1_000, pid: 42 },
+    { shellID: "sh_done", running: false, started: 1_000 },
+  ])
+  // A command that just exited has left the running list but is still known: its result is on its way.
+  expect(pendingShellsOf([job("sh_exited", "running")], [], "ses_side", new Set(["sh_exited"]))).toEqual([
+    { shellID: "sh_exited", running: true, started: 1_000 },
+  ])
+})
+
+test("after an engine restart, a background command that died with the old engine no longer holds the side", async () => {
+  await fixture(async ({ execute, root, jobs, shell }) => {
+    const command = await execute(root.id, { command: "sleep 30", background: true })
+    const shellID = command.metadata?.shellID
+    if (typeof shellID !== "string") throw new Error("shell ID missing")
+    // The job list survives a restart in the engine database; the Shell service starts empty.
+    const restarted: Pick<Shell.Interface, "get"> = {
+      get: (id) => Effect.fail(new Shell.NotFoundError({ id })),
+    }
+    const pendingWith = (service: Pick<Shell.Interface, "get">) =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const items = yield* jobs.backgroundJobs
+          const known = yield* knownShells(items, root.id).pipe(
+            Effect.provideService(Shell.Service, { ...shell, ...service }),
+          )
+          return pendingShellsOf(items, yield* shell.list(), root.id, known).map((item) => item.shellID)
+        }),
+      )
+    try {
+      expect(await pendingWith(shell)).toContain(shellID)
+      expect(await pendingWith(restarted)).not.toContain(shellID)
+    } finally {
+      await Effect.runPromise(shell.stop(ShellSchema.ID.make(shellID), "killed").pipe(Effect.ignore))
+    }
+  })
+}, 30_000)
+
+test("a background command stays pending until its result is delivered, and a server shows its port", async () => {
+  await fixture(async ({ execute, root, jobs, shell }) => {
+    const pending = () =>
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const items = yield* jobs.backgroundJobs
+          const known = yield* knownShells(items, root.id).pipe(Effect.provideService(Shell.Service, shell))
+          return pendingShellsOf(items, yield* shell.list(), root.id, known)
+        }),
+      )
+    const until = async (check: () => Promise<boolean>) => {
+      const deadline = Date.now() + 10_000
+      while (!(await check())) {
+        if (Date.now() > deadline) throw new Error("timed out")
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      }
+    }
+    const build = await execute(root.id, { command: "sleep 1; printf built", background: true })
+    const buildID = build.metadata?.shellID
+    if (typeof buildID !== "string") throw new Error("shell ID missing")
+    expect((await pending()).find((item) => item.shellID === buildID)).toMatchObject({
+      running: true,
+      pid: expect.any(Number),
+    })
+    // Delivery to the open contestant removes it.
+    await until(async () => !(await pending()).some((item) => item.shellID === buildID))
+
+    const server = await execute(root.id, {
+      command: `node -e "require('http').createServer().listen(0, '127.0.0.1'); setInterval(() => {}, 1000)"`,
+      background: true,
+    })
+    const serverID = server.metadata?.shellID
+    if (typeof serverID !== "string") throw new Error("shell ID missing")
+    const pid = (await pending()).find((item) => item.shellID === serverID)?.pid
+    if (pid === undefined) throw new Error("server pid missing")
+    // The shell leads the process group its server listens from.
+    await until(async () => ((await defaultServiceAdapter.listenersForProcessGroup?.(pid)) ?? []).length > 0)
+    await Effect.runPromise(shell.stop(serverID, "killed").pipe(Effect.ignore))
   })
 }, 30_000)
 

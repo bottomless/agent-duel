@@ -6,6 +6,7 @@ import { Database } from "@opencode/core/database/database"
 import { Form } from "@opencode/core/form"
 import { Permission as CorePermission } from "@opencode/core/permission"
 import { Job } from "@opencode/core/job"
+import { Shell } from "@opencode/core/shell"
 import { Location } from "@opencode/core/location"
 import { LocationServiceMap } from "@opencode/core/location-service-map"
 import { Session as CoreSession } from "@opencode/core/session"
@@ -14,7 +15,7 @@ import { SessionMove } from "@opencode/core/session/move"
 import { SessionInbox } from "@opencode/core/session/inbox"
 import { SessionMessageTable } from "@opencode/core/session/sql"
 import { StepFailedError } from "@opencode/core/session/error"
-import { SubagentJob } from "@opencode/core/session/subagent-job"
+import { SubagentHold } from "@opencode/core/session/subagent-hold"
 import { toSessionError } from "@opencode/core/session/to-session-error"
 import { SessionMessage } from "@opencode/schema/session-message"
 import { Session as SessionSchema } from "@opencode/schema/session"
@@ -38,7 +39,7 @@ import { getArenaAutoAccept, idleRecovery, setArenaAutoAccept } from "@/arena/en
 import { ArenaResponseRecovery } from "@/arena/response-recovery"
 import { shellRestartInput } from "@/arena/shell-restart"
 import { battleResumeInput } from "@/arena/resume-note"
-import { cancelSessionShells } from "@/arena/engine-runtime/shell"
+import { cancelSessionShells, knownShells, pendingShellsOf, type PendingShell } from "@/arena/engine-runtime/shell"
 import { EXTERNAL_WRITE } from "@/arena/contestant"
 import type {
   ArenaMessageInfo,
@@ -176,6 +177,8 @@ export interface PromptInterface {
   readonly holdChildResults: (sessionIDs: readonly SessionSchema.ID[]) => Effect.Effect<void, Error>
   /** Whether the session has a run, a running job, or a job result that has not reached its parent. */
   readonly working: (sessionID: SessionSchema.ID) => Effect.Effect<boolean, Error>
+  /** The session's background shell commands whose result has not reached it: running, or being delivered. */
+  readonly pendingShells: (sessionID: SessionSchema.ID) => Effect.Effect<readonly PendingShell[], Error>
   readonly prepare: () => Effect.Effect<void, Error>
 }
 
@@ -769,7 +772,7 @@ export const node = sessionNode
 const promptLayer: Layer.Layer<
   SessionPrompt,
   never,
-  CoreSession.Service | Session | Directory | Job.Service | SubagentJob.Service
+  CoreSession.Service | Session | Directory | Job.Service
 > = Layer.effect(
   SessionPrompt,
   Effect.gen(function* () {
@@ -777,7 +780,6 @@ const promptLayer: Layer.Layer<
     const arena = yield* Session
     const directory = yield* Directory
     const jobs = yield* Job.Service
-    const subagents = yield* SubagentJob.Service
     // A failed drain comes back as an error, not as the errored assistant that 1.x returned.
     // Settle on that assistant instead, so the run fails the way Arena classifies (and offers
     // Retry for). Interruption is not an error here and still ends the loop.
@@ -827,7 +829,7 @@ const promptLayer: Layer.Layer<
             resume: false,
           })
       }
-      yield* subagents.release(input.sessionID)
+      yield* SubagentHold.release(input.sessionID)
       return yield* settle(input.sessionID, admittedAt ?? (yield* Clock.currentTimeMillis))
     })
     const join = Effect.fn("ArenaSessionPrompt.join")(function* (input: { readonly sessionID: SessionSchema.ID }) {
@@ -908,7 +910,7 @@ const promptLayer: Layer.Layer<
           }),
         ),
       holdChildResults: (sessionIDs) =>
-        Effect.forEach(sessionIDs, (sessionID) => subagents.hold(sessionID), { discard: true }),
+        Effect.forEach(sessionIDs, (sessionID) => SubagentHold.hold(sessionID), { discard: true }),
       working: (sessionID) =>
         Effect.gen(function* () {
           if ((yield* sessions.active).has(sessionID)) return true
@@ -917,6 +919,21 @@ const promptLayer: Layer.Layer<
           // deliver. Foreground jobs have none, and their results are already in the tool call.
           return job !== undefined && (job.status === "running" || job.notificationID !== undefined)
         }),
+      pendingShells: (sessionID) =>
+        normalizeError(
+          Effect.gen(function* () {
+            const items = yield* jobs.backgroundJobs
+            if (!items.some((item) => item.kind === "shell" && item.sessionID === sessionID)) return []
+            const ref = yield* directory.ref()
+            const { shells, known } = yield* directory.provide(
+              ref,
+              Effect.gen(function* () {
+                return { shells: yield* (yield* Shell.Service).list(), known: yield* knownShells(items, sessionID) }
+              }),
+            )
+            return pendingShellsOf(items, shells, sessionID, known)
+          }),
+        ),
       prepare: () => Effect.void,
     })
   }),
@@ -925,7 +942,7 @@ const promptLayer: Layer.Layer<
 export const promptNode = makeGlobalNode({
   service: SessionPrompt,
   layer: promptLayer,
-  deps: [CoreSession.node, sessionNode, directoryNode, Job.node, SubagentJob.node],
+  deps: [CoreSession.node, sessionNode, directoryNode, Job.node],
 })
 
 const statusLayer: Layer.Layer<SessionStatus, never, CoreSession.Service> = Layer.effect(

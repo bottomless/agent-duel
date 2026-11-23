@@ -13,6 +13,12 @@ import type { ArenaCredentials } from "./credentials"
 export interface ArenaBackend {
   readonly url: string
   readonly fetch: Fetch
+  /**
+   * Contestant requests upload their images and PDFs and name them (`media-reference.ts`). Only the
+   * hosted control plane needs it: its requests pass a 4.5 MB function limit, and BYOK never leaves
+   * the process.
+   */
+  readonly mediaByReference?: boolean
 }
 
 // BYOK requests never leave the process; the service routes on the path alone.
@@ -22,6 +28,7 @@ export function createArenaBackend(credentials: ArenaCredentials, db: () => Prom
   if (credentials.mode === "hosted") {
     return {
       url: credentials.controlPlaneUrl,
+      mediaByReference: true,
       fetch(input, init) {
         const headers = new Headers(init?.headers)
         headers.set("Authorization", `Bearer ${credentials.token}`)

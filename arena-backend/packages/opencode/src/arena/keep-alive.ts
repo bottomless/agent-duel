@@ -6,6 +6,11 @@
  * re-sent every four minutes with a one-token answer that nobody reads. Nothing reaches the
  * transcript, telemetry or the session.
  *
+ * A single answer can outlast the cache too: one that writes 20-30K tokens takes three to seven
+ * minutes, and the cache counts from when its request started, so the call that continues it would
+ * write the whole conversation again. While a request is still answering, its own prompt is re-sent
+ * the same way every four minutes.
+ *
  * The engine cannot tell which side is Claude, so every waiting side is pinged the same way and the
  * proxy forwards only the ones whose provider caches by request (`arena-service/src/keep-alive.ts`).
  * A side that finished and waits for the user's reply is idle and gets no pings: so few battles get
@@ -28,6 +33,8 @@ export type Ping = () => Promise<PingResult>
 type Entry = {
   inFlight: number
   ping?: Ping
+  /** The latest request still answering, which re-sends its own prompt while it takes long. */
+  answering?: { readonly ping: Ping; cancel?: () => void }
   /** When the last request or ping that used the cached prompt started. */
   usedAt: number
   /** When the last request ended, while none is in flight. */
@@ -64,11 +71,11 @@ export class KeepAlive {
   }
 
   /**
-   * A request for the session is leaving. Call the returned function once when it has ended, with a
-   * ping that re-sends it when the next call continues its prompt, or with none when it failed or
-   * replaced the conversation (compaction).
+   * A request for the session is leaving. `answering` re-sends it while it is still answering. Call
+   * the returned function once when it has ended, with a ping that re-sends it when the next call
+   * continues its prompt, or with none when it failed or replaced the conversation (compaction).
    */
-  begin(sessionID: string) {
+  begin(sessionID: string, answering?: Ping) {
     const startedAt = this.now()
     let entry = this.sessions.get(sessionID)
     if (!entry) {
@@ -80,10 +87,20 @@ export class KeepAlive {
     current.inFlight++
     current.waitingSince = undefined
     this.disarm(current)
+    const flight: Entry["answering"] = answering && { ping: answering }
+    if (flight) {
+      current.answering?.cancel?.()
+      current.answering = flight
+      this.armAnswering(sessionID, current, flight, startedAt)
+    }
     let ended = false
     return (ping?: Ping) => {
       if (ended) return
       ended = true
+      if (flight) {
+        flight.cancel?.()
+        if (current.answering === flight) current.answering = undefined
+      }
       // The session went idle while the request was out: its turn is over.
       if (this.sessions.get(sessionID) !== current) return
       current.inFlight = Math.max(0, current.inFlight - 1)
@@ -99,7 +116,29 @@ export class KeepAlive {
     const entry = this.sessions.get(sessionID)
     if (!entry) return
     this.disarm(entry)
+    entry.answering?.cancel?.()
+    entry.answering = undefined
     this.sessions.delete(sessionID)
+  }
+
+  /** Re-sends a request's prompt every `everyMs` from its last use while it is still answering. */
+  private armAnswering(sessionID: string, entry: Entry, flight: NonNullable<Entry["answering"]>, startedAt: number) {
+    if (!this.supported) return
+    const now = this.now()
+    // The request read the cached prompt when it started, later than any earlier use of the session.
+    const due = Math.max(now, Math.max(entry.usedAt, startedAt) + this.everyMs)
+    if (due - startedAt > this.maxWaitMs) return
+    flight.cancel = this.schedule(async () => {
+      flight.cancel = undefined
+      if (!this.supported || this.sessions.get(sessionID) !== entry || entry.answering !== flight) return
+      entry.usedAt = this.now()
+      const result = await flight.ping()
+      if (result === "unsupported" && this.supported) {
+        this.supported = false
+        console.warn("[arena-keep-alive] The proxy does not take keep-alive pings; stopped sending them")
+      }
+      if (result === "kept" && entry.answering === flight) this.armAnswering(sessionID, entry, flight, startedAt)
+    }, due - now)
   }
 
   private disarm(entry: Entry) {
