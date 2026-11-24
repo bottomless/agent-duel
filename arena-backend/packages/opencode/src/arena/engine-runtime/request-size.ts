@@ -241,7 +241,11 @@ function note(slot: Slot) {
   const room = slot.overImageLimit
     ? `a model takes at most about ${megabytes(UPSTREAM_IMAGE_BYTES)} MB per image`
     : `a request has room for about ${megabytes(slot.room ?? 0)} MB of images`
-  return `[${image} was not attached: it is ${megabytes(slot.bytes)} MB encoded, and ${room}. Crop it or export it at a lower resolution, then read the smaller file.]`
+  // The user attached it, so there is no file for the agent to shrink.
+  const smaller = slot.user
+    ? "Ask the user to attach a smaller copy, cropped or exported at a lower resolution."
+    : "Crop it or export it at a lower resolution, then read the smaller file."
+  return `[${image} was not attached: it is ${megabytes(slot.bytes)} MB encoded, and ${room}. ${smaller}]`
 }
 
 type Load = { wire: number; media: number; images: number }

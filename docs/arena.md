@@ -1078,15 +1078,18 @@ reply takes the same attachments as a chat message, and both contestants get ide
   SDK. Files are at `arena-media/<account id>/<sha256>`: an account that names another account's
   digest finds nothing, and a privacy request deletes an account's files by prefix. They are apart
   from the generation-capture parts, because single-agent chats are not kept; a battle's capture
-  stores its own copy of what the call sent. The store deletes a file 3 days after its upload. A
-  file that is gone, or whose bytes do not match its digest, is missing: the proxy answers 409
-  `arena_media_missing`, and the engine uploads it again under the same reference, so the prompt
-  and its cache do not change.
+  stores its own copy of what the call sent. A file expires 3 days after its upload, and the store
+  deletes it no more than a day later. A file that expired, is gone, or whose bytes do not match its
+  digest is missing: the proxy answers 409 `arena_media_missing`, and the engine uploads it again
+  under the same reference, so the prompt and its cache do not change.
   The control plane ships the route and its store before a desktop release relies on them. A
   control plane without the route or without a store answers 404; the engine then sends the media
-  inline and does not ask that control plane again. When the route or a PUT fails any other way,
-  the media goes inline for that request if the body fits. Until an upload has succeeded in the
-  engine process, the size check counts media in full, so an inline body still fits. Desktops
+  inline and does not ask that control plane again. When a PUT fails, the route answers 5xx or
+  without a file's URL, or a file is still missing right after it was uploaded again, the media goes
+  inline if the body fits, and the engine sends media inline for the next 5 minutes. A PUT to a host
+  that drops packets waits up to 30 seconds plus the file's time at 1 Mbit/s, so a failing store
+  holds one step, not every step. Until an upload has succeeded in the engine process, and during
+  that pause, the size check counts media in full, so an inline body still fits. Desktops
   released before the route POST each file's bytes to `/api/openrouter/api/v1/arena/media`, one
   function request per file; the control plane keeps that route and writes those files to the same
   store. BYOK runs in process, sends media inline, and meets only the provider's limits.

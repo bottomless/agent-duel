@@ -360,15 +360,43 @@ describe("media by reference", () => {
     const largeReference = mediaReference(sha256(large), "image/png")
     await upload(proxy, host, large)
     expect(host.bodies()).toBe(0)
-    // The small file's size is read with the large one's, and neither body is.
+    // Loading stops at the limit: the large file's size passes it, so its body is never read.
     const tooLarge = await proxy(contestant([reference, largeReference, largeReference, largeReference]))
     expect(tooLarge.status).toBe(413)
     expect(await tooLarge.json()).toEqual(tooMuchMedia)
-    expect(host.bodies()).toBe(0)
+    expect(host.bodies()).toBe(1)
     expect(calls).toBe(0)
     expect((await proxy(contestant([reference, largeReference, largeReference]))).status).toBe(200)
     expect(host.bodies()).toBe(2)
     expect(calls).toBe(1)
+  })
+
+  test("a body that names many files reads a few at a time, and answers every missing one", async () => {
+    const host = memoryMediaStore()
+    let open = 0
+    let most = 0
+    const store: MediaStore = {
+      ...host.store,
+      read: async (pathname) => {
+        most = Math.max(most, ++open)
+        await Bun.sleep(1)
+        open--
+        return host.store.read(pathname)
+      },
+    }
+    const proxy = service({ mediaStore: store, user: "user-many" })
+    const files = Array.from({ length: 30 }, (_, index) => new TextEncoder().encode(`screenshot ${index}`))
+    await upload(proxy, host, ...files.slice(0, 25))
+    const references = files.map((data) => mediaReference(sha256(data), "image/png"))
+    const response = await proxy(contestant(references))
+    expect(response.status).toBe(409)
+    expect(readMediaMissing(await response.text())).toEqual(files.slice(25).map(sha256))
+    expect(most).toBe(8)
+    // The files it found are warm for the call after the engine uploads the rest.
+    await upload(proxy, host, ...files.slice(25))
+    const reads = host.bodies()
+    expect((await proxy(contestant(references))).status).toBe(200)
+    expect(host.bodies() - reads).toBe(5)
   })
 
   test("a keep-alive ping answers the same whether or not the proxy has its media", async () => {

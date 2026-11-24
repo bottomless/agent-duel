@@ -19,7 +19,7 @@ import { HEARTBEAT_HEADER, REPLAY_PATH, REPLAY_UNAVAILABLE_LINE } from "@agent-d
 import { KEEP_ALIVE_HEADER } from "@agent-duel/arena-service/keep-alive"
 import { readMediaMissing } from "@agent-duel/arena-service/media"
 import type { KeepAlive, Ping, PingResult } from "./keep-alive"
-import { forgetUploads, referenceMedia, referencesUnsupported, uploadMedia, type Media } from "./media-reference"
+import { forgetUploads, pauseReferences, referenceMedia, sendsInline, uploadMedia, type Media } from "./media-reference"
 import { REQUEST_BYTES_LIMIT } from "./engine-runtime/request-size"
 
 // The control plane lost its upload route after this request was sized for references.
@@ -737,8 +737,7 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
     let inline: string | undefined
     const inlineText = () => (inline ??= JSON.stringify(rewritten))
     const fitsInline = () => Buffer.byteLength(inlineText()) <= REQUEST_BYTES_LIMIT
-    const referenced =
-      options.mediaByReference && !referencesUnsupported(upstream) ? referenceMedia(rewritten) : undefined
+    const referenced = options.mediaByReference && !sendsInline(upstream) ? referenceMedia(rewritten) : undefined
     const upload = async (media: Iterable<Media>): Promise<UploadFailure | undefined> => {
       try {
         return await uploadMedia({
@@ -756,8 +755,8 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
     }
     // When an upload fails, the media goes inline if the body still fits: the size check counts media
     // in full until this process has seen an upload succeed. A body sized for references that does
-    // not fit answers the upload's own failure. After a 404 it answers a retryable failure instead,
-    // and the retry is sized inline, because the route is now known to be missing.
+    // not fit answers the upload's own failure. After a 404 it answers a retryable failure instead.
+    // Either way the retry is sized inline: the route is missing, or the store is paused.
     const sendInline = async (failure: UploadFailure) => {
       if (fitsInline()) {
         if (failure instanceof Response) await failure.body?.cancel().catch(() => undefined)
@@ -791,6 +790,13 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
         forgetUploads(upstream, missing)
         const again = await upload(missing.flatMap((digest) => referenced?.media.get(digest) ?? []))
         response = again === undefined ? await send() : await sendInline(again)
+        // The store took the files again and still cannot read them back, so references to it fail
+        // for now: this request and the next ones go inline.
+        if (again === undefined && response.status === 409 && readMediaMissing(await response.clone().text())) {
+          await response.body?.cancel().catch(() => undefined)
+          pauseReferences(upstream)
+          response = await sendInline("unsupported")
+        }
       }
     } catch (error) {
       preHeaderTransportFailure = !request.signal.aborted && retryableTransport(error)

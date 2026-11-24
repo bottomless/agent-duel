@@ -220,7 +220,7 @@ async function insertNewParts(db: ArenaDb, userId: string, candidates: ReadonlyA
 }
 
 // Media the engine sends by reference (`media.ts`) is not a capture part: it sits in the control
-// plane's object store (`media-store.ts`), which deletes it 3 days after the upload. A single-agent
+// plane's object store (`media-store.ts`), which deletes it 3 to 4 days after the upload. A single-agent
 // chat is never captured, and a battle's capture stores its own copy of what the call sent. An
 // expired file is uploaded again on the next call that names it, and its reference, and so the
 // prompt, stays the same.
@@ -260,6 +260,9 @@ function cacheMedia(pathname: string, data: Buffer, expiresAt: Date) {
 // loads: each reference expands to its whole file, so a few kilobytes could otherwise build gigabytes.
 const MAX_MEDIA_REFERENCES = 200
 const MAX_RESOLVED_MEDIA_BYTES = 32_000_000
+// Store reads run a few at a time, so a body that names many files does not open each at once on a
+// cold function. A guess.
+const PARALLEL_READS = 8
 
 const encodedBytes = (bytes: number) => Math.ceil(bytes / 3) * 4
 
@@ -311,64 +314,73 @@ async function loadMedia(
   if (named > MAX_MEDIA_REFERENCES) return { tooLarge: true }
   const media = new Map<string, Buffer>()
   const unknown: string[] = []
-  for (const digest of counts.keys()) {
+  // What the references expand to so far. Each file counts before its body is read, so a body that
+  // names large files stops loading at the limit.
+  let resolvedBytes = 0
+  for (const [digest, count] of counts) {
     const data = cachedMedia(mediaPathname(userId, digest), now)
-    if (data) media.set(digest, data)
-    else unknown.push(digest)
+    if (!data) {
+      unknown.push(digest)
+      continue
+    }
+    media.set(digest, data)
+    resolvedBytes += encodedBytes(data.byteLength) * count
   }
   reads.cached = media.size
-  if (!store && unknown.length > 0) return { missing: unknown }
-  const startedAt = Date.now()
-  try {
-    // Every size before any body, so a body that names large files never loads more than the limit.
-    const opened = await Promise.allSettled(unknown.map((digest) => store?.read(mediaPathname(userId, digest))))
-    const files = opened.flatMap((result, index) =>
-      result.status === "fulfilled" && result.value ? [{ digest: unknown[index]!, file: result.value }] : [],
-    )
-    const discard = () => Promise.all(files.map(({ file }) => file.body.cancel().catch(() => undefined)))
-    const failed = opened.find((result) => result.status === "rejected")
-    if (failed) {
-      await discard()
-      throw failed.reason
+  if (resolvedBytes > MAX_RESOLVED_MEDIA_BYTES) return { tooLarge: true }
+  if (unknown.length === 0) return { media }
+  if (!store) return { missing: unknown }
+  const missing: string[] = []
+  let tooLarge = false
+  let failure: { readonly reason: unknown } | undefined
+  // Each reader finishes or cancels the body it opened, so a read that fails leaves none half read.
+  const next = async (): Promise<void> => {
+    const digest = unknown.shift()
+    if (digest === undefined || tooLarge || failure) return
+    const pathname = mediaPathname(userId, digest)
+    const file = await store.read(pathname).catch((reason: unknown) => {
+      failure ??= { reason }
+      return null
+    })
+    if (file === null) return
+    // A file past its time is missing, even while the store has not deleted it yet. The rest are
+    // still read, so the engine uploads every missing file in one go and the call after it finds the
+    // others warm.
+    if (!file || file.expiresAt.getTime() <= now.getTime()) {
+      missing.push(digest)
+      await file?.body.cancel().catch(() => undefined)
+      return next()
     }
-    // A file past its time is missing, even while the store has not deleted it yet.
-    const live = new Map(
-      files.flatMap(({ digest, file }) => (file.expiresAt.getTime() > now.getTime() ? [[digest, file] as const] : [])),
-    )
-    const absent = unknown.filter((digest) => !live.has(digest))
-    if (absent.length > 0) {
-      await discard()
-      return { missing: absent }
+    resolvedBytes += encodedBytes(file.size) * (counts.get(digest) ?? 0)
+    if (resolvedBytes > MAX_RESOLVED_MEDIA_BYTES) tooLarge = true
+    if (tooLarge || failure) {
+      await file.body.cancel().catch(() => undefined)
+      return
     }
-    let resolvedBytes = 0
-    for (const [digest, data] of media) resolvedBytes += encodedBytes(data.byteLength) * (counts.get(digest) ?? 0)
-    for (const [digest, file] of live) resolvedBytes += encodedBytes(file.size) * (counts.get(digest) ?? 0)
-    if (resolvedBytes > MAX_RESOLVED_MEDIA_BYTES) {
-      await discard()
-      return { tooLarge: true }
-    }
-    // Settled, so a read that fails leaves no other body half read.
-    const loaded = await Promise.allSettled([...live].map(([digest, file]) => readMedia(file, digest)))
-    const unread = loaded.find((result) => result.status === "rejected")
-    if (unread) throw unread.reason
-    const corrupt: string[] = []
-    for (const [index, [digest, file]] of [...live].entries()) {
-      const result = loaded[index]
-      const data = result?.status === "fulfilled" ? result.value : undefined
-      // Bytes that are not the file the digest names are missing, and never kept: the engine uploads
-      // the file again over them.
-      if (!data) {
-        corrupt.push(digest)
-        continue
-      }
+    const data = await readMedia(file, digest).catch((reason: unknown) => {
+      failure ??= { reason }
+      return null
+    })
+    if (data === null) return
+    // Bytes that are not the file the digest names are missing, and never kept: the engine uploads
+    // the file again over them.
+    if (!data) missing.push(digest)
+    else {
       media.set(digest, data)
-      cacheMedia(mediaPathname(userId, digest), data, file.expiresAt)
+      cacheMedia(pathname, data, file.expiresAt)
       reads.stored++
     }
-    return corrupt.length > 0 ? { missing: corrupt } : { media }
+    return next()
+  }
+  const startedAt = Date.now()
+  try {
+    await Promise.all(Array.from({ length: Math.min(PARALLEL_READS, unknown.length) }, next))
   } finally {
     reads.storeMs = Date.now() - startedAt
   }
+  if (failure) throw failure.reason
+  if (tooLarge) return { tooLarge: true }
+  return missing.length > 0 ? { missing } : { media }
 }
 
 /**

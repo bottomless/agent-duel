@@ -4,9 +4,9 @@
  * repository; this package carries no storage SDK. A service without a store answers 404 on the
  * media routes, and the engine sends media inline.
  *
- * The store deletes a file `MEDIA_LIFETIME_DAYS` after it was written, by either write below. A
- * write to a pathname that already holds a file replaces it, so a file that expired, or whose bytes
- * went wrong, is uploaded again under the same reference.
+ * A file expires `MEDIA_LIFETIME_DAYS` after it was written, by either write below, and the store
+ * deletes it no more than a day later. A write to a pathname that already holds a file replaces it,
+ * so a file that expired, or whose bytes went wrong, is uploaded again under the same reference.
  */
 export type MediaStore = {
   /**

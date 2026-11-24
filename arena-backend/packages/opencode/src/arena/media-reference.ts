@@ -20,8 +20,8 @@ export type Media = { readonly digest: string; readonly mimeType: string; readon
 const DATA_URL = /^data:([\w.+-]+\/[\w.+-]+);base64,/
 
 // Uploads this process knows the control plane's store keeps, per upstream. The store deletes a file
-// 3 days after its upload; a control plane that no longer has one answers `arena_media_missing`, and
-// the request uploads it again.
+// 3 to 4 days after its upload; a control plane that no longer has one answers `arena_media_missing`,
+// and the request uploads it again.
 const uploaded = new Set<string>()
 // Upstreams that answered the upload route with 404: a control plane older than it, or one with no
 // store. Their requests carry their media inline, as before.
@@ -29,6 +29,12 @@ const unsupported = new Set<string>()
 // Upstreams whose store took an upload. Until one has, the request size counts media inline
 // (`request-size.ts`), so a control plane without the route never gets a body over its limit.
 const confirmed = new Set<string>()
+// Upstreams whose store failed an upload, or could not read back a file it had just taken, with
+// when to try it again. Their requests carry media inline until then, so a storage host that stops
+// answering holds one step, not every step. A guess: long enough to outlast a short outage, short
+// enough that a chat goes back to references while it runs.
+const paused = new Map<string, number>()
+const STORE_PAUSE_MS = 5 * 60 * 1000
 
 const key = (upstream: string, digest: string) => `${upstream}|${digest}`
 
@@ -61,10 +67,24 @@ export function referenceMedia(body: Readonly<Record<string, unknown>>) {
   return { body: referenced, media }
 }
 
-export const referencesUnsupported = (upstream: string) => unsupported.has(upstream)
+/**
+ * Whether this upstream's requests carry their media inline: its control plane has no upload route,
+ * or its store failed a few minutes ago.
+ */
+export const sendsInline = (upstream: string) => unsupported.has(upstream) || (paused.get(upstream) ?? 0) > Date.now()
 
-/** Whether the control plane's store took an upload and the route has not answered 404 since. */
+/** Whether the control plane's store took an upload and has not failed or answered 404 since. */
 export const referencesConfirmed = (upstream: string) => confirmed.has(upstream)
+
+/**
+ * Sends this upstream's media inline for a while, and sizes its requests for that, because its store
+ * failed. The request that found it sends inline when its body fits, and otherwise fails in a way
+ * the engine retries.
+ */
+export function pauseReferences(upstream: string) {
+  paused.set(upstream, Date.now() + STORE_PAUSE_MS)
+  confirmed.delete(upstream)
+}
 
 /** The control plane no longer has these; the next upload of each sends it again. */
 export function forgetUploads(upstream: string, digests: ReadonlyArray<string>) {
@@ -73,9 +93,11 @@ export function forgetUploads(upstream: string, digests: ReadonlyArray<string>) 
 
 // Uploads run a few at a time: a step that read many screenshots should not wait on each in turn.
 const PARALLEL_UPLOADS = 4
-// A guess: a file at the size cap takes about this long on a 1 Mbit/s uplink. A storage host that
-// never answers must not hold the request; its media goes inline instead.
-const UPLOAD_TIMEOUT_MS = 180_000
+// How long one PUT may take: the file at 1 Mbit/s, plus time to connect and for the store to answer.
+// Guesses. A storage host that never answers must not hold the request; its media goes inline instead.
+const UPLOAD_SETUP_MS = 30_000
+const UPLOAD_BYTES_PER_MS = 125
+const uploadTimeout = (bytes: number) => UPLOAD_SETUP_MS + Math.ceil(bytes / UPLOAD_BYTES_PER_MS)
 
 // The control plane answered without a URL for a file, or the storage host did not take one. In the
 // control plane's own shape, so the caller answers it as it would a refused request and the engine
@@ -103,6 +125,9 @@ export async function uploadMedia(input: {
 }): Promise<Response | "unsupported" | undefined> {
   const pending = [...input.media].filter((item) => !uploaded.has(key(input.upstream, item.digest)))
   if (pending.length === 0) return undefined
+  // Another request found the route missing or the store failing after this one chose references.
+  if (unsupported.has(input.upstream)) return "unsupported"
+  if (sendsInline(input.upstream)) return uploadFailed()
   const response = await input.execute(`${input.upstream}${MEDIA_UPLOAD_PATH}`, {
     method: "POST",
     headers: { ...input.routing, "Content-Type": "application/json", Accept: "application/json" },
@@ -117,9 +142,17 @@ export async function uploadMedia(input: {
     confirmed.delete(input.upstream)
     return "unsupported"
   }
-  if (!response.ok) return response
+  if (!response.ok) {
+    // The control plane's own failure, or its store's. A refused account or assignment is the
+    // request's to answer, and pauses nothing.
+    if (response.status >= 500) pauseReferences(input.upstream)
+    return response
+  }
   const urls = readMediaUploadAnswer(await response.text())
-  if (!urls || pending.some((item) => !urls.has(item.digest))) return uploadFailed()
+  if (!urls || pending.some((item) => !urls.has(item.digest))) {
+    pauseReferences(input.upstream)
+    return uploadFailed()
+  }
   const put = input.put ?? fetch
   let failed = false
   const next = async (): Promise<void> => {
@@ -129,7 +162,7 @@ export async function uploadMedia(input: {
       method: "PUT",
       headers: { "Content-Type": item.mimeType },
       body: new Uint8Array(item.data),
-      signal: AbortSignal.any([input.signal, AbortSignal.timeout(UPLOAD_TIMEOUT_MS)]),
+      signal: AbortSignal.any([input.signal, AbortSignal.timeout(uploadTimeout(item.data.byteLength))]),
     }).catch((error: unknown) => {
       if (input.signal.aborted) throw error
       return undefined
@@ -140,9 +173,11 @@ export async function uploadMedia(input: {
       return
     }
     uploaded.add(key(input.upstream, item.digest))
-    if (!unsupported.has(input.upstream)) confirmed.add(input.upstream)
+    if (!sendsInline(input.upstream)) confirmed.add(input.upstream)
     return next()
   }
   await Promise.all(Array.from({ length: Math.min(PARALLEL_UPLOADS, pending.length) }, next))
-  return failed ? uploadFailed() : undefined
+  if (!failed) return undefined
+  pauseReferences(input.upstream)
+  return uploadFailed()
 }

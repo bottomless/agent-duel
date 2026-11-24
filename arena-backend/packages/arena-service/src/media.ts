@@ -7,7 +7,8 @@ import { MEDIA_REFERENCE } from "./generation-capture"
  * the engine asks `MEDIA_UPLOAD_PATH` for an upload URL per image or PDF, PUTs each file's bytes
  * straight to the control plane's object store (`media-store.ts`), and names it in the request with
  * `mediaReference`. The proxy puts the data back before OpenRouter sees the body. A file is stored
- * per account under the SHA-256 of its bytes, and the store deletes it 3 days after the upload.
+ * per account under the SHA-256 of its bytes. It is missing 3 days after the upload, and the store
+ * deletes it within the next day.
  */
 export const MEDIA_UPLOAD_PATH = "/api/v1/arena/media-upload"
 /**

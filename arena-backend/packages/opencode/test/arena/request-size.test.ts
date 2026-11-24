@@ -298,6 +298,11 @@ describe("request size", () => {
     const huge = bound([user("Look at the poster"), ...step([["poster.png", 16.2]])], "local").messages
     expect(shown(huge)).toEqual({ "poster.png": "oversized" })
     expect(JSON.stringify(huge.at(-1))).toContain("a request has room for about 16.0 MB of images")
+    // A pasted image has no file the agent could shrink, so the note sends it to the user.
+    const pasted = JSON.stringify(bound([user("Match this poster", [["poster.png", 6.2]])], "reference").messages)
+    expect(pasted).toContain("a model takes at most about 5.0 MB per image")
+    expect(pasted).toContain("Ask the user to attach a smaller copy")
+    expect(pasted).not.toContain("read the smaller file")
   })
 
   test("the user's pasted images are removed only after the images tools read", () => {
