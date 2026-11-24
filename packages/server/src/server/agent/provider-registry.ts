@@ -1,4 +1,5 @@
 import type { Logger } from "pino";
+import type { GetArenaDaemonUrls } from "../arena/daemon-urls.js";
 import type { ProviderOptions, ToolPolicy } from "@getpaseo/protocol/agent-types";
 
 import type {
@@ -115,18 +116,14 @@ export interface BuildProviderRegistryOptions {
   isDev?: boolean;
   ompRuntime?: OmpRuntime;
   openCodeBridge?: OpenCodeBridge;
-  getArenaPreviewBaseUrl?: () => string | null;
+  getArenaDaemonUrls?: GetArenaDaemonUrls;
   /** The daemon's `$PASEO_HOME/uploads`, whose per-upload directories an agent may open. */
   uploadsRoot?: string;
 }
 
 interface ProviderClientFactoryOptions extends Pick<
   BuildProviderRegistryOptions,
-  | "workspaceGitService"
-  | "managedProcesses"
-  | "ompRuntime"
-  | "getArenaPreviewBaseUrl"
-  | "uploadsRoot"
+  "workspaceGitService" | "managedProcesses" | "ompRuntime" | "getArenaDaemonUrls" | "uploadsRoot"
 > {
   openCodeBridge?: OpenCodeBridge;
   customProvider?: {
@@ -196,7 +193,7 @@ const PROVIDER_CLIENT_FACTORIES: Record<string, ProviderClientFactory> = {
     const openCodeOptions = {
       managedProcesses: options?.managedProcesses,
       bridge: options?.openCodeBridge,
-      getArenaPreviewBaseUrl: options?.getArenaPreviewBaseUrl,
+      getArenaDaemonUrls: options?.getArenaDaemonUrls,
       uploadsRoot: options?.uploadsRoot,
     };
     // The Arena backend is its own OpenCode build, so a stock binary probe does not select it.
@@ -205,7 +202,7 @@ const PROVIDER_CLIENT_FACTORIES: Record<string, ProviderClientFactory> = {
           logger,
           settings: runtimeSettings,
           managedProcesses: options?.managedProcesses,
-          getArenaPreviewBaseUrl: options?.getArenaPreviewBaseUrl,
+          getArenaDaemonUrls: options?.getArenaDaemonUrls,
           uploadsRoot: options?.uploadsRoot,
           arenaMode: true,
         })
@@ -839,7 +836,7 @@ function buildResolvedBuiltinProviders(
     | "managedProcesses"
     | "ompRuntime"
     | "openCodeBridge"
-    | "getArenaPreviewBaseUrl"
+    | "getArenaDaemonUrls"
     | "uploadsRoot"
   >,
   isDev: boolean,
@@ -865,7 +862,7 @@ function buildResolvedBuiltinProviders(
             managedProcesses: options.managedProcesses,
             ompRuntime: options.ompRuntime,
             openCodeBridge: options.openCodeBridge,
-            getArenaPreviewBaseUrl: options.getArenaPreviewBaseUrl,
+            getArenaDaemonUrls: options.getArenaDaemonUrls,
             uploadsRoot: options.uploadsRoot,
           }),
         contract: PROVIDER_CONTRACTS[definition.id] ?? UNSUPPORTED_PROVIDER_CONTRACT,
@@ -988,9 +985,9 @@ function addDerivedProviders(
 
 function arenaProviderClientOptions(
   options: BuildProviderRegistryOptions | undefined,
-): Pick<ProviderClientFactoryOptions, "getArenaPreviewBaseUrl" | "uploadsRoot"> {
+): Pick<ProviderClientFactoryOptions, "getArenaDaemonUrls" | "uploadsRoot"> {
   return {
-    getArenaPreviewBaseUrl: options?.getArenaPreviewBaseUrl,
+    getArenaDaemonUrls: options?.getArenaDaemonUrls,
     uploadsRoot: options?.uploadsRoot,
   };
 }

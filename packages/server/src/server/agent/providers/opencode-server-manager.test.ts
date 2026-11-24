@@ -30,6 +30,7 @@ import {
 } from "./opencode/server-manager.js";
 import { getArenaDatabaseUpgrade } from "./opencode/arena-upgrade.js";
 import { resolveEngineLogPath } from "./opencode/paths.js";
+import { arenaDaemonUrls, type GetArenaDaemonUrls } from "../../arena/daemon-urls.js";
 import { createArenaByokService } from "../../accounts/byok.js";
 import { clearArenaCredentials, installArenaCredentials } from "../../accounts/credentials.js";
 
@@ -215,7 +216,7 @@ describe("OpenCodeServerManager generations", () => {
     expect(payload.mode).toBe("hosted");
     expect(payload.token).not.toBe("session-token");
     expect(payload.token).toHaveLength(43);
-    expect(payload.controlPlaneUrl).toBe("http://localhost:6768/api/arena-runtime");
+    expect(payload.controlPlaneUrl).toBe("http://127.0.0.1:6768/api/arena-runtime");
     expect(payload.controlTokenHash).toBe(
       createHash("sha256").update(acquisition.server.controlToken).digest("hex"),
     );
@@ -236,7 +237,10 @@ describe("OpenCodeServerManager generations", () => {
     expect(runtime.spawnCalls).toHaveLength(0);
   });
 
-  test("refuses to start a signed-in Arena without a TCP daemon for its runtime proxy", async () => {
+  test.each([
+    ["a socket", arenaDaemonUrls("/run/daemon.sock")],
+    ["a LAN-only bind", arenaDaemonUrls({ address: "192.168.1.14", family: "IPv4", port: 49187 })],
+  ] as const)("refuses to start hosted Arena on %s", async (_label, urls) => {
     installArenaCredentials({
       mode: "hosted",
       researchPartition: "test-research-partition",
@@ -246,10 +250,12 @@ describe("OpenCodeServerManager generations", () => {
     });
     const { manager, runtime } = createTestManager([4089], {
       launchKind: "arena-binary",
-      getArenaPreviewBaseUrl: () => null,
+      getArenaDaemonUrls: () => urls,
     });
 
-    await expect(manager.acquireCurrent()).rejects.toThrow("Arena credentials are unavailable");
+    await expect(manager.acquireCurrent()).rejects.toThrow(
+      "Hosted Arena requires a loopback TCP connection to the daemon. Configure the daemon to listen on 127.0.0.1 or [::1].",
+    );
     expect(runtime.spawnCalls).toHaveLength(0);
   });
 
@@ -257,7 +263,7 @@ describe("OpenCodeServerManager generations", () => {
     installArenaCredentials({ mode: "byok", openRouterApiKey: "sk-or-v1-private" });
     const { manager, runtime } = createTestManager([4090], {
       launchKind: "arena-source",
-      getArenaPreviewBaseUrl: () => null,
+      getArenaDaemonUrls: () => null,
     });
 
     const acquisition = await manager.acquireCurrent();
@@ -604,7 +610,7 @@ describe("OpenCodeServerManager generations", () => {
 
   test("passes the Arena preview proxy base URL to the server process", async () => {
     const { manager, runtime } = createTestManager([4092], {
-      getArenaPreviewBaseUrl: () => "http://localhost:6771",
+      getArenaDaemonUrls: () => arenaDaemonUrls({ address: "::1", family: "IPv6", port: 6771 }),
     });
 
     const acquisition = await manager.acquireCurrent();
@@ -1367,7 +1373,7 @@ function createTestManager(
     autoAnnounce?: boolean;
     baseEnv?: Record<string, string>;
     opencodeHomeDir?: string;
-    getArenaPreviewBaseUrl?: () => string | null;
+    getArenaDaemonUrls?: GetArenaDaemonUrls;
     controlToken?: string;
     launchKind?: "arena-source" | "arena-binary";
     includeStdin?: boolean;
@@ -1397,7 +1403,9 @@ function createTestManager(
         opencodeHomeDir ?? path.join(os.tmpdir(), "agent-duel-opencode-server-manager-test"),
       spawnServerProcess: runtime.spawnServerProcess,
       terminateProcess: runtime.terminateProcess,
-      getArenaPreviewBaseUrl: options.getArenaPreviewBaseUrl ?? (() => "http://localhost:6768"),
+      getArenaDaemonUrls:
+        options.getArenaDaemonUrls ??
+        (() => arenaDaemonUrls({ address: "127.0.0.1", family: "IPv4", port: 6768 })),
       controlToken: options.controlToken,
     }),
     runtime,

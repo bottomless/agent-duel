@@ -6,6 +6,7 @@ import net from "node:net";
 import { createRequire } from "node:module";
 import path from "node:path";
 import type { Logger } from "pino";
+import type { GetArenaDaemonUrls } from "../../../arena/daemon-urls.js";
 
 import { findExecutable } from "../../../../executable-resolution/executable-resolution.js";
 import { spawnProcess, type SpawnProcessOptions } from "../../../../utils/spawn.js";
@@ -267,7 +268,7 @@ export interface OpenCodeServerManagerOptions {
   resolveCommandPrefix?: OpenCodeCommandPrefixResolver;
   resolveHomeDir?: () => string;
   spawnServerProcess?: OpenCodeServerProcessSpawner;
-  getArenaPreviewBaseUrl?: () => string | null;
+  getArenaDaemonUrls?: GetArenaDaemonUrls;
   controlToken?: string;
   createEventSource?: OpenCodeServerEventSourceFactory;
   decorateServerEnv?: (env: Record<string, string>) => Record<string, string>;
@@ -294,7 +295,7 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
   private readonly resolveCommandPrefix: OpenCodeCommandPrefixResolver;
   private readonly resolveHomeDir: () => string;
   private readonly spawnServerProcess: OpenCodeServerProcessSpawner;
-  private readonly getArenaPreviewBaseUrl?: () => string | null;
+  private readonly getArenaDaemonUrls?: GetArenaDaemonUrls;
   private readonly controlToken: string;
   private readonly createEventSource: OpenCodeServerEventSourceFactory;
   private readonly decorateServerEnv?: (env: Record<string, string>) => Record<string, string>;
@@ -315,7 +316,7 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
       });
     this.resolveHomeDir = options.resolveHomeDir ?? resolveOpenCodeHomeDir;
     this.spawnServerProcess = options.spawnServerProcess ?? spawnProcess;
-    this.getArenaPreviewBaseUrl = options.getArenaPreviewBaseUrl;
+    this.getArenaDaemonUrls = options.getArenaDaemonUrls;
     this.controlToken = options.controlToken ?? randomUUID();
     this.createEventSource =
       options.createEventSource ?? ((input) => new OpenCodeEventConsumer(input));
@@ -874,10 +875,12 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
   }
 
   private issueLaunchArenaCredentials(): ArenaCredentialsSnapshot {
-    const arenaCredentials = issueArenaLaunchCredentials(this.getArenaPreviewBaseUrl?.() ?? null);
+    const arenaCredentials = issueArenaLaunchCredentials(
+      this.getArenaDaemonUrls?.()?.runtimeBaseUrl ?? null,
+    );
     if (!arenaCredentials) {
       throw new Error(
-        "Arena credentials are unavailable; sign in on a TCP daemon, or add an OpenRouter API key, before starting Arena",
+        "Arena credentials are unavailable; sign in or add an OpenRouter API key before starting Arena",
       );
     }
     if (!isArenaCredentialsCurrent(arenaCredentials)) {
@@ -929,8 +932,8 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
         // Kept out of `environment`, which sessions hand on as their harness environment.
         envOverlay: {
           ...(useDevDatabase ? { OPENCODE_DB: path.join(input.serverCwd, "opencode.db") } : {}),
-          ...(this.getArenaPreviewBaseUrl
-            ? { PASEO_ARENA_PREVIEW_BASE_URL: this.getArenaPreviewBaseUrl() ?? undefined }
+          ...(this.getArenaDaemonUrls
+            ? { PASEO_ARENA_PREVIEW_BASE_URL: this.getArenaDaemonUrls()?.previewBaseUrl }
             : {}),
           ...(input.isArenaLaunch
             ? {

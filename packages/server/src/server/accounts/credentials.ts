@@ -126,14 +126,18 @@ export function readArenaCredentials(): ArenaCredentialsSnapshot | null {
 /**
  * What one Arena launch receives on its stdin. A hosted launch gets a revocable loopback
  * capability for the daemon's runtime proxy instead of the account session, so it needs the
- * daemon's TCP origin. A BYOK launch calls OpenRouter itself and gets the key.
+ * daemon's loopback TCP origin. A BYOK launch calls OpenRouter itself and gets the key.
  */
 export function issueArenaLaunchCredentials(
   daemonBaseUrl: string | null,
 ): ArenaCredentialsSnapshot | null {
   if (!current) return null;
   if (current.mode === "byok") return { credentials: current, version };
-  if (!daemonBaseUrl) return null;
+  if (!daemonBaseUrl) {
+    throw new Error(
+      "Hosted Arena requires a loopback TCP connection to the daemon. Configure the daemon to listen on 127.0.0.1 or [::1].",
+    );
+  }
   const token = randomBytes(32).toString("base64url");
   runtimeCredentials.set(token, version);
   return {

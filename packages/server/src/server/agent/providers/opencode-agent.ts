@@ -39,6 +39,7 @@ import { isDeepStrictEqual } from "node:util";
 import { createPathEquivalenceMatcher } from "../../../utils/path.js";
 import pLimit from "p-limit";
 import type { Logger } from "pino";
+import type { GetArenaDaemonUrls } from "../../arena/daemon-urls.js";
 import { z } from "zod";
 import {
   ArenaComparisonDiffSchema,
@@ -1525,7 +1526,7 @@ interface OpenCodeAgentClientDeps {
   managedProcesses?: ManagedProcessRegistry;
   bridge?: OpenCodeBridge;
   arenaMode?: boolean;
-  getArenaPreviewBaseUrl?: () => string | null;
+  getArenaDaemonUrls?: GetArenaDaemonUrls;
   uploadsRoot?: string;
   moveSession?: (input: OpenCodeMoveSessionInput) => Promise<void>;
   forkArenaSession?: (input: OpenCodeArenaForkInput) => Promise<string>;
@@ -1700,7 +1701,7 @@ export class OpenCodeAgentClient implements AgentClient {
       OpenCodeServerManager.getInstance(this.logger, runtimeSettings, {
         managedProcesses: deps.managedProcesses,
         resolveHomeDir: deps.resolveHomeDir,
-        getArenaPreviewBaseUrl: deps.getArenaPreviewBaseUrl,
+        getArenaDaemonUrls: deps.getArenaDaemonUrls,
         createEventSource: ({
           serverUrl,
           processExit,
