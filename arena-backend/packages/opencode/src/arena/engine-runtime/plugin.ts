@@ -43,7 +43,16 @@ import { withHeldToolCalls } from "./tool-stream"
 import { boundRequestSize, type MediaCarriage } from "./request-size"
 import { MODEL_IDLE_TIMEOUT_MS } from "../model-idle"
 import { ArenaResponseRecovery } from "../response-recovery"
-import { idleBudgetFetch, idleExhausted, idleRecoveryNote, idleTimeout, resetIdleBudget } from "./idle"
+import {
+  headerTimeout,
+  headerTimeoutExhausted,
+  idleBudgetFetch,
+  idleExhausted,
+  idleRecoveryNote,
+  idleTimeout,
+  resetIdleBudget,
+} from "./idle"
+import { ARENA_OFFLINE_MESSAGE } from "../../session/retry"
 import { ArenaShellLedger } from "./shell-ledger"
 import {
   toolExecutionProvider,
@@ -446,7 +455,7 @@ function install(context: Context, options: InstalledOptions) {
               retry: true,
               delay: Math.min(Math.max(event.decision.retry ? event.decision.delay : 2_000, 2_000), 10_000),
               persistent: true,
-              message: offline ? "Waiting for network" : SESSION_REJECTED_RETRY_MESSAGE,
+              message: offline ? ARENA_OFFLINE_MESSAGE : SESSION_REJECTED_RETRY_MESSAGE,
             }
             return
           }
@@ -456,11 +465,12 @@ function install(context: Context, options: InstalledOptions) {
               delay: event.decision.delay,
               persistent: false,
             }
-          if (idleExhausted(event.error)) {
+          if (idleExhausted(event.error) || headerTimeoutExhausted(event.error)) {
             event.decision = { retry: false }
             return
           }
-          if (event.decision.retry && idleTimeout(event.error))
+          if (event.decision.retry && headerTimeout(event.error)) event.decision.message = ARENA_OFFLINE_MESSAGE
+          else if (event.decision.retry && idleTimeout(event.error))
             event.decision.message = ArenaResponseRecovery.IDLE_RECOVERING
           if (options.retryDelayMs !== undefined && event.decision.retry) event.decision.delay = options.retryDelayMs
         }),

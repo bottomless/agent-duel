@@ -6,6 +6,7 @@ import {
 } from "@agent-duel/arena-service/request-error"
 import { REDACTED_THINKING } from "@agent-duel/arena-service/reasoning"
 import { ARENA_OFFLINE_MESSAGE } from "@/session/retry"
+import { ArenaResponseRecovery } from "./response-recovery"
 
 const OPAQUE_PROVIDER = "arena"
 const OPAQUE_MODEL = "contestant"
@@ -60,10 +61,13 @@ function safeError(value: unknown) {
   const statusCode = data && typeof data.statusCode === "number" ? data.statusCode : undefined
   const responseBody = data && typeof data.responseBody === "string" ? data.responseBody : undefined
   const message = (() => {
-    if (text === requestTooLargeMessage || data?.message === requestTooLargeMessage) return requestTooLargeMessage
-    // Rebuilt by the engine proxy from the control plane's code; it names no model.
-    if (text === singleAgentAllowanceMessage || data?.message === singleAgentAllowanceMessage) {
-      return singleAgentAllowanceMessage
+    for (const neutral of [
+      requestTooLargeMessage,
+      singleAgentAllowanceMessage,
+      ArenaResponseRecovery.IDLE_EXHAUSTED,
+      ArenaResponseRecovery.HEADER_TIMEOUT_EXHAUSTED,
+    ]) {
+      if (text === neutral || data?.message === neutral) return neutral
     }
     if (statusCode === 402) return paymentMessage(statusCode, responseBody) ?? "The agent could not complete this run."
     const lower = text.toLowerCase()
