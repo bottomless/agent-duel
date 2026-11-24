@@ -256,7 +256,7 @@ function logProxyFailure(
   const details = {
     path: req.path,
     generationId: req.header("x-arena-generation-id"),
-    requestBytes: Buffer.isBuffer(req.body) ? req.body.length : 0,
+    requestBytes: Buffer.isBuffer(req.body) ? req.body.byteLength : 0,
     elapsedMs: Date.now() - startedAt,
   };
   if (aborted) {
