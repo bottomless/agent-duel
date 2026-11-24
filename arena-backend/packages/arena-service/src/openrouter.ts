@@ -705,15 +705,15 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
       body,
       signal: request.signal,
     })
-    // Battles only: a single-agent chat is never compared, so nothing reads its calls.
-    capture =
-      context.captureGenerations && routeAssignment.modelSize === undefined
-        ? generationCapture(
-            db,
-            { userId: caller.id, ...assignment, generationID, model: routeAssignment.model.slug, endpoint },
-            context.now,
-          )
-        : undefined
+    // A single-agent turn's scopeID is its singleAgentRatings record's _id (`ensureSingleAgentRating`
+    // in opencode), so its captures join to the rating the way a battle's join to its turn.
+    capture = context.captureGenerations
+      ? generationCapture(
+          db,
+          { userId: caller.id, ...assignment, generationID, model: routeAssignment.model.slug, endpoint },
+          context.now,
+        )
+      : undefined
     capture?.request(budget.body)
     let response = await sending
     upstreamStatus = response.status
