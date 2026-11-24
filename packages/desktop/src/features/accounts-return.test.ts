@@ -54,7 +54,7 @@ async function requestWithHost(url: string, host: string): Promise<number> {
 }
 
 describe("accounts return server", () => {
-  it("accepts same-origin POSTs and focuses the bound window", async () => {
+  it("accepts same-origin GETs and POSTs and focuses the bound window", async () => {
     const window = new FakeWindow();
     let focused = 0;
     const server = createAccountsReturnServer({
@@ -70,14 +70,13 @@ describe("accounts return server", () => {
       const url = await server.createReturnUrl(window);
       expect(url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/accounts\/return\/[a-f0-9]{64}$/);
 
-      expect((await request(url)).status).toBe(405);
-
-      const returned = await request(url, { method: "POST" });
-      expect(returned.status).toBe(204);
+      // The success page links here; No Content keeps the browser on that page.
+      expect((await request(url)).status).toBe(204);
       expect(focused).toBe(1);
       expect(window.focused).toBe(true);
 
-      expect((await request(url, { method: "POST" })).status).toBe(204);
+      const returned = await request(url, { method: "POST" });
+      expect(returned.status).toBe(204);
       expect(focused).toBe(2);
     } finally {
       await server.close();
@@ -90,7 +89,9 @@ describe("accounts return server", () => {
     try {
       const firstUrl = await server.createReturnUrl(window);
       expect(await requestWithHost(firstUrl, "127.0.0.1:1")).toBe(404);
-      expect((await request(firstUrl, { method: "PUT" })).status).toBe(405);
+      const rejected = await request(firstUrl, { method: "PUT" });
+      expect(rejected.status).toBe(405);
+      expect(rejected.headers.get("allow")).toBe("GET, POST");
 
       const secondUrl = await server.createReturnUrl(window);
       expect((await request(firstUrl)).status).toBe(404);
