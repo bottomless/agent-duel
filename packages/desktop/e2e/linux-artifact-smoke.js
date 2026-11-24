@@ -42,6 +42,8 @@ async function main() {
       expectedSandbox: portableSandbox,
     });
 
+    // tar.gz is not a default target; it is only present when built on request.
+    if (!fs.readdirSync(release).some((file) => file.endsWith(".tar.gz"))) return;
     const tarDir = path.join(extracted, "tar");
     fs.mkdirSync(tarDir);
     execFileSync("tar", ["-xzf", findArtifact(".tar.gz"), "-C", tarDir]);

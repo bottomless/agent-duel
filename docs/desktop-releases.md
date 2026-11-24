@@ -71,7 +71,8 @@ is configured explicitly.
 
 Release builds check the published GitHub release when they start and every 30
 minutes, download a newer version in the background and offer Install in the
-sidebar; an update the user does not install is applied when the app quits. The
+sidebar; an update the user does not install is applied when the app quits,
+except on Linux, which installs only from Install. The
 Mac reads `latest-mac.yml` and the ZIP from the release; Windows reads
 `latest.yml`, the Setup exe and its blockmap; Linux reads `latest-linux.yml`
 and the AppImage or deb.
@@ -95,8 +96,9 @@ and the AppImage or deb.
 - The Windows installer is one-click and per user, in
   `%LOCALAPPDATA%\Programs\Agent Duel`: no pages and no UAC, so an update installs
   silently. An assisted or per-machine installer would ask again on every update.
-- The AppImage installs an update only when the user clicks Install: its
-  install-on-quit path can hang after the running file is replaced. Its name,
+- Linux installs an update only when the user clicks Install. The AppImage's
+  install-on-quit path can hang after the running file is replaced, and the
+  deb's would hold the quit on a root prompt. The AppImage's name,
   `Agent-Duel-x86_64.AppImage`, has no version, so the update overwrites it in
   place and shortcuts and the `paseo` CLI link keep working. electron-builder
   embeds the AppImage's blockmap in the file, so the release has no
