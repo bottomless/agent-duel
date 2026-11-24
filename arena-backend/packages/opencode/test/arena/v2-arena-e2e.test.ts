@@ -105,7 +105,20 @@ describe("Arena v2 battle integration", () => {
               )
             }
             return new Response(
-              'data: {"choices":[{"index":0,"delta":{"content":"Saved partial reply"},"finish_reason":"content_filter","native_finish_reason":"private policy detail"}]}\n\ndata: [DONE]\n\n',
+              ": OPENROUTER PROCESSING\n\n" +
+                'data: {"id":"gen-1","choices":[{"index":0,"delta":{"content":"Saved partial reply"}}]}\n\n' +
+                `data: ${JSON.stringify({
+                  id: "gen-1",
+                  object: "chat.completion.chunk",
+                  model: "qwen/qwen4-max",
+                  provider: "Alibaba",
+                  choices: [],
+                  error: {
+                    code: 400,
+                    message: "private policy detail",
+                    metadata: { error_type: "invalid_request", provider_code: "data_inspection_failed" },
+                  },
+                })}\n\n`,
               { headers: { "content-type": "text/event-stream" } },
             )
           }
@@ -286,6 +299,8 @@ describe("Arena v2 battle integration", () => {
       })
     }
     expect(JSON.stringify(afterNext)).not.toContain("private policy detail")
+    expect(JSON.stringify(afterNext)).not.toContain("Alibaba")
+    expect(JSON.stringify(afterNext)).not.toContain("data_inspection_failed")
     const filteredSessions = await Promise.all(
       (afterNext.runs ?? []).map(async (run) => {
         const history = await request(`/api/experimental/session/${run.sessionID}/export`, {
@@ -294,6 +309,8 @@ describe("Arena v2 battle integration", () => {
         expect(history.status).toBe(200)
         const text = await history.text()
         expect(text).not.toContain("private policy detail")
+        expect(text).not.toContain("Alibaba")
+        expect(text).not.toContain("data_inspection_failed")
         return { side: run.side, partial: text.includes("Saved partial reply") }
       }),
     )

@@ -17,21 +17,38 @@ function json(value: string): unknown {
   }
 }
 
+const INSPECTION_FAILED_CODE = /^(data_inspection_failed|DataInspectionFailed)$/i
+
+function hasInspectionFailedCode(part: unknown) {
+  return (
+    isRecord(part) &&
+    [part.code, part.type, part.error_type, part.provider_code, part.provider_error_code].some(
+      (code) => typeof code === "string" && INSPECTION_FAILED_CODE.test(code),
+    )
+  )
+}
+
+function isInspectionFailedError(error: unknown) {
+  if (!isRecord(error)) return false
+  const metadata = isRecord(error.metadata) ? error.metadata : undefined
+  const raw = typeof metadata?.raw === "string" ? json(metadata.raw) : metadata?.raw
+  const nested = isRecord(raw) && isRecord(raw.error) ? raw.error : raw
+  return [error, metadata, nested].some(hasInspectionFailedCode)
+}
+
 /** Only the service inspects the provider's structured error, never text that may quote the prompt. */
 export function inspectionFailed(status: number, body: string) {
   if (status !== 400) return false
   const payload = json(body)
   if (!isRecord(payload)) return false
-  const error = isRecord(payload.error) ? payload.error : payload
-  const metadata = isRecord(error.metadata) ? error.metadata : undefined
-  const raw = typeof metadata?.raw === "string" ? json(metadata.raw) : metadata?.raw
-  const nested = isRecord(raw) && isRecord(raw.error) ? raw.error : raw
-  return [error, metadata, nested].some(
-    (part) =>
-      isRecord(part) &&
-      [part.code, part.type, part.error_type].some(
-        (code) => typeof code === "string" && /^(data_inspection_failed|DataInspectionFailed)$/i.test(code),
-      ),
+  return isInspectionFailedError(isRecord(payload.error) ? payload.error : payload)
+}
+
+/** Structured `data_inspection_failed` error carried inside an HTTP 200 payload or SSE chunk. */
+export function inspectionFailedError(value: unknown) {
+  if (!isRecord(value)) return false
+  return (
+    isInspectionFailedError(value.error) || (isRecord(value.response) && isInspectionFailedError(value.response.error))
   )
 }
 
@@ -42,16 +59,24 @@ export function readContentFilter(body: string | undefined) {
 
 /** Keep answer text sent with the finish, but no policy report, tool call or native reason. */
 export function filteredStreamChunk(value: Record<string, unknown>, generationID: string) {
-  if (!Array.isArray(value.choices)) return
-  const choice = value.choices.find(
-    (item) =>
-      isRecord(item) && (item.finish_reason === "content_filter" || item.native_finish_reason === "content_filter"),
-  )
-  if (!isRecord(choice)) return
-  const content = isRecord(choice.delta) ? choice.delta.content : undefined
-  return {
-    id: generationID,
-    choices: [{ index: 0, delta: typeof content === "string" ? { content } : {}, finish_reason: "content_filter" }],
+  if (Array.isArray(value.choices)) {
+    const choice = value.choices.find(
+      (item) =>
+        isRecord(item) && (item.finish_reason === "content_filter" || item.native_finish_reason === "content_filter"),
+    )
+    if (isRecord(choice)) {
+      const content = isRecord(choice.delta) ? choice.delta.content : undefined
+      return {
+        id: generationID,
+        choices: [{ index: 0, delta: typeof content === "string" ? { content } : {}, finish_reason: "content_filter" }],
+      }
+    }
+  }
+  if (inspectionFailedError(value) || (isRecord(value.error) && value.error.type === "content_filter")) {
+    return {
+      id: generationID,
+      choices: [{ index: 0, delta: {}, finish_reason: "content_filter" }],
+    }
   }
 }
 

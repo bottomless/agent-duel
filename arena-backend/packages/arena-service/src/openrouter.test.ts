@@ -335,6 +335,26 @@ describe("OpenRouter proxy", () => {
       },
       true,
     ],
+    [
+      {
+        code: 400,
+        metadata: {
+          error_type: "invalid_request",
+          provider_code: "data_inspection_failed",
+        },
+      },
+      true,
+    ],
+    [
+      {
+        code: 400,
+        metadata: {
+          provider_name: "Alibaba",
+          provider_error_code: "data_inspection_failed",
+        },
+      },
+      true,
+    ],
     [{ code: 400, message: "Invalid tool argument: data_inspection_failed", metadata: { raw: "not JSON" } }, false],
   ] as const)(
     "returns a blinded terminal error only for a structured inspection refusal: %j",
@@ -375,6 +395,200 @@ describe("OpenRouter proxy", () => {
       expect(calls).toBe(1)
     },
   )
+
+  test.each([
+    [
+      {
+        code: 400,
+        message: "Input text data may contain inappropriate content.",
+        metadata: { error_type: "invalid_request", provider_code: "data_inspection_failed" },
+      },
+      true,
+    ],
+    [
+      {
+        code: 400,
+        message: "Provider returned error",
+        metadata: { provider_name: "Alibaba", provider_error_code: "data_inspection_failed" },
+      },
+      true,
+    ],
+    [
+      {
+        code: 400,
+        message: "Provider returned error",
+        metadata: {
+          raw: JSON.stringify({ error: { code: "DataInspectionFailed", message: "private detail" } }),
+        },
+      },
+      true,
+    ],
+    [{ code: 400, message: "Invalid tool argument: data_inspection_failed", metadata: { raw: "not JSON" } }, false],
+  ] as const)(
+    "rewrites an HTTP 200 SSE structured inspection refusal into a content_filter finish: %j",
+    async (error, blocked) => {
+      const recorded: Record<string, unknown>[] = []
+      const db = fakeDb({
+        assignmentSets: () => [
+          {
+            userId: "user-1",
+            scopeID: "turn",
+            assignments: [{ assignmentID: "opaque-id", model: pool[0] }],
+          },
+        ],
+        recordMetrics: (document) => recorded.push(document),
+      })
+      const generationID = "gen_00000000000000000000000000000042"
+      const proxy = openrouter({
+        db: async () => db,
+        fetch: async () =>
+          new Response(
+            ": OPENROUTER PROCESSING\n\n" +
+              `data: ${JSON.stringify({
+                id: "gen-upstream-1",
+                object: "chat.completion.chunk",
+                model: "qwen/qwen4-max",
+                provider: "Alibaba",
+                choices: [],
+                error,
+              })}\n\n`,
+            { headers: { "content-type": "text/event-stream" } },
+          ),
+      })
+      const response = await proxy(
+        new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "X-Arena-Assignment-ID": "opaque-id",
+            "X-Arena-Scope-ID": "turn",
+            "X-Arena-Generation-ID": generationID,
+          },
+          body: JSON.stringify({ model: "contestant", stream: true, messages: [] }),
+        }),
+      )
+      expect(response.status).toBe(200)
+      const body = await response.text()
+      expect(body).not.toContain("Alibaba")
+      expect(body).not.toContain("inappropriate content")
+      expect(body).not.toContain("data_inspection_failed")
+      const events = body
+        .split("\n")
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => JSON.parse(line.slice("data:".length).trim()) as unknown)
+      expect(events).toEqual(
+        blocked
+          ? [
+              {
+                id: generationID,
+                choices: [{ index: 0, delta: {}, finish_reason: "content_filter" }],
+              },
+            ]
+          : [{ error: { message: "Arena contestant request failed", type: "arena_upstream_error" } }],
+      )
+      if (blocked) expect(recorded[0]).toMatchObject({ provider: "Alibaba", finishReason: "content_filter" })
+    },
+  )
+
+  test("does not append a retryable stream error when the upstream drops after an SSE inspection refusal", async () => {
+    const db = fakeDb({
+      assignmentSets: () => [
+        {
+          userId: "user-1",
+          scopeID: "turn",
+          assignments: [{ assignmentID: "opaque-id", model: pool[0] }],
+        },
+      ],
+    })
+    const generationID = "gen_00000000000000000000000000000043"
+    const proxy = openrouter({
+      db: async () => db,
+      fetch: async () => {
+        const encoder = new TextEncoder()
+        let step = 0
+        const body = new ReadableStream<Uint8Array>({
+          pull(controller) {
+            if (step++ === 0) {
+              controller.enqueue(
+                encoder.encode(
+                  `data: ${JSON.stringify({
+                    id: "gen-upstream-2",
+                    object: "chat.completion.chunk",
+                    provider: "Alibaba",
+                    choices: [],
+                    error: {
+                      code: 400,
+                      message: "Input text data may contain inappropriate content.",
+                      metadata: { error_type: "invalid_request", provider_code: "data_inspection_failed" },
+                    },
+                  })}\n\n`,
+                ),
+              )
+              return
+            }
+            controller.error(new Error("connection reset"))
+          },
+        })
+        return new Response(body, { headers: { "content-type": "text/event-stream" } })
+      },
+    })
+    const response = await proxy(
+      new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "X-Arena-Assignment-ID": "opaque-id",
+          "X-Arena-Scope-ID": "turn",
+          "X-Arena-Generation-ID": generationID,
+        },
+        body: JSON.stringify({ model: "contestant", stream: true, messages: [] }),
+      }),
+    )
+    const body = await response.text()
+    expect(body).not.toContain("arena_retryable_stream_error")
+    const events = body
+      .split("\n")
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => JSON.parse(line.slice("data:".length).trim()) as unknown)
+    expect(events).toEqual([
+      {
+        id: generationID,
+        choices: [{ index: 0, delta: {}, finish_reason: "content_filter" }],
+      },
+    ])
+  })
+
+  test("turns an HTTP 200 JSON structured inspection refusal into a blinded HTTP 400 content filter", async () => {
+    const db = fakeDb({
+      assignmentSets: () => [
+        {
+          userId: "user-1",
+          scopeID: "turn",
+          assignments: [{ assignmentID: "opaque-id", model: pool[0] }],
+        },
+      ],
+    })
+    const proxy = openrouter({
+      db: async () => db,
+      fetch: async () =>
+        Response.json({
+          error: {
+            code: 400,
+            message: "Input text data may contain inappropriate content.",
+            metadata: { error_type: "invalid_request", provider_code: "data_inspection_failed" },
+          },
+        }),
+    })
+    const response = await proxy(
+      new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+        method: "POST",
+        headers: { "X-Arena-Assignment-ID": "opaque-id", "X-Arena-Scope-ID": "turn" },
+        body: JSON.stringify({ model: "contestant", messages: [] }),
+      }),
+    )
+    expect(response.status).toBe(400)
+    expect(await response.json()).toEqual({
+      error: { type: "content_filter", message: "A content filter blocked this response." },
+    })
+  })
 
   test("sanitizes recognized provider context overflow refusals", async () => {
     const db = fakeDb({

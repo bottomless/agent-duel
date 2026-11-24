@@ -6,6 +6,7 @@ import {
   contentFilterError,
   contentFilterMessage,
   filteredStreamChunk,
+  inspectionFailedError,
   networkUnavailableError,
   paymentError,
   readCompactionRequired,
@@ -256,6 +257,8 @@ function retryableStreamPayload() {
 
 export function sanitizePayload(value: unknown, generationID: string, stream = false): unknown {
   if (!record(value)) return value
+  const blocked = stream && filteredStreamChunk(value, generationID)
+  if (blocked) return blocked
   if (value.error !== undefined) {
     if (
       stream &&
@@ -503,8 +506,8 @@ function sanitizeStream(
   // An error written into that event joins its data, the SDK cannot parse it, and a retryable
   // failure ends the run instead. Every error here closes the open event first.
   let open = false
-  const emit = (controller: ReadableStreamDefaultController<Uint8Array>, line: string) => {
-    if (open && line.startsWith('data: {"error":')) controller.enqueue(encoder.encode("\n"))
+  const emit = (controller: ReadableStreamDefaultController<Uint8Array>, line: string, fresh = false) => {
+    if (open && (fresh || line.startsWith('data: {"error":'))) controller.enqueue(encoder.encode("\n"))
     const text = `${line}\n`
     telemetry?.rawChunk?.(metadata, text)
     controller.enqueue(encoder.encode(text))
@@ -581,7 +584,8 @@ function sanitizeStream(
             // else is where the bytes ran out, and the model call gets the cut-off error instead.
             if (pending && skip === 0 && (finished || endsResponse(pending))) {
               finished = true
-              emit(controller, sanitize(pending))
+              const sanitized = sanitize(pending)
+              emit(controller, sanitized, blocked)
               if (blocked) return finishBlocked(controller)
             }
             if (finished && open) emit(controller, "")
@@ -621,7 +625,8 @@ function sanitizeStream(
             }
             finished ||= endsResponse(line)
             if (isDataLine(line)) delivered++
-            emit(controller, sanitize(line))
+            const sanitized = sanitize(line)
+            emit(controller, sanitized, blocked)
             if (blocked) return finishBlocked(controller)
             forwarded = true
           }
@@ -902,7 +907,16 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
       return new Response(body, { status: response.status, headers })
     }
 
-    const payload = sanitizePayload(JSON.parse(await response.text()) as unknown, generationID)
+    const raw = JSON.parse(await response.text()) as unknown
+    if (inspectionFailedError(raw) || (record(raw) && record(raw.error) && raw.error.type === "content_filter")) {
+      const payload = contentFilterError()
+      endWait?.()
+      telemetry?.rawChunk?.(metadata, JSON.stringify(payload))
+      await telemetry?.error?.(metadata, new Error(contentFilterMessage), new Date())
+      headers.set("content-type", "application/json")
+      return Response.json(payload, { status: 400, headers })
+    }
+    const payload = sanitizePayload(raw, generationID)
     telemetry?.rawChunk?.(metadata, JSON.stringify(payload))
     await telemetry?.complete?.(metadata, new Date())
     endWait?.(ping)

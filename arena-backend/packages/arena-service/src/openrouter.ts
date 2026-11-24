@@ -9,6 +9,7 @@ import {
   contentFilterError,
   filteredStreamChunk,
   inspectionFailed,
+  inspectionFailedError,
   isContextOverflow,
   networkUnavailableError,
   retryableStreamError,
@@ -99,6 +100,7 @@ function usage(value: unknown, latencyMs: number): UsageTotals | undefined {
 
 function finishReason(value: unknown) {
   if (!record(value)) return undefined
+  if (inspectionFailedError(value)) return "content_filter"
   if (typeof value.status === "string" && ["completed", "incomplete", "failed"].includes(value.status)) {
     return value.status
   }
@@ -179,6 +181,7 @@ function sanitizeLine(
   generationID: string,
   reasoning: ReasoningRedactor,
   observe?: (value: unknown) => void,
+  filtered?: () => void,
 ) {
   if (!line.startsWith("data:")) return ""
   const raw = line.slice("data:".length).trimStart()
@@ -191,6 +194,12 @@ function sanitizeLine(
     }
     const value = JSON.parse(raw) as unknown
     observe?.(value)
+    const blocked = record(value) && filteredStreamChunk(value, generationID)
+    if (blocked) {
+      reasoning.clear()
+      filtered?.()
+      return `data: ${JSON.stringify(blocked)}`
+    }
     return `data: ${JSON.stringify(reasoning.redact(sanitizePayload(value, generationID, true), true))}`
   } catch {
     reasoning.clear()
@@ -225,16 +234,25 @@ function sanitizeStream(
   // error written into that event becomes one more data line, the client cannot parse the joined
   // data, and a retryable failure turns into a final one.
   let open = false
+  let blocked = false
   const write = (controller: ReadableStreamDefaultController<Uint8Array>, text: string) => {
     controller.enqueue(encoder.encode(text))
     recovery?.record(text)
     lastWrite = Date.now()
   }
-  const writeLine = (controller: ReadableStreamDefaultController<Uint8Array>, line: string) => {
-    if (open && line.startsWith('data: {"error":')) write(controller, "\n")
+  const writeLine = (controller: ReadableStreamDefaultController<Uint8Array>, line: string, fresh = false) => {
+    if (open && (fresh || line.startsWith('data: {"error":'))) write(controller, "\n")
     write(controller, `${line}\n`)
     if (line.startsWith("data:")) open = true
     else if (line === "") open = false
+  }
+  const writeSanitized = (controller: ReadableStreamDefaultController<Uint8Array>, line: string) => {
+    let fresh = false
+    const sanitized = sanitizeLine(line, generationID, reasoning, metrics.observe, () => {
+      fresh = true
+      blocked = true
+    })
+    writeLine(controller, sanitized, fresh)
   }
   return new ReadableStream<Uint8Array>({
     start(controller) {
@@ -260,7 +278,7 @@ function sanitizeStream(
             const rest = decoder.decode()
             capture?.record(rest)
             pending += rest
-            if (pending) writeLine(controller, sanitizeLine(pending, generationID, reasoning, metrics.observe))
+            if (pending) writeSanitized(controller, pending)
             if (open) writeLine(controller, "")
             const tail = reasoning.flush()
             if (tail) write(controller, `\n\ndata: ${JSON.stringify({ id: generationID, ...tail })}\n\n`)
@@ -277,13 +295,19 @@ function sanitizeStream(
           const lines = pending.split("\n")
           pending = lines.pop() ?? ""
           if (!lines.length) continue
-          for (const line of lines) writeLine(controller, sanitizeLine(line, generationID, reasoning, metrics.observe))
+          for (const line of lines) writeSanitized(controller, line)
           return
         }
       } catch {
         reasoning.clear()
         stopHeartbeat()
         if (cancelled) return
+        if (blocked) {
+          if (open) writeLine(controller, "")
+          await Promise.all([complete(metrics.value()), recovery?.complete(), capture?.finish("complete")])
+          controller.close()
+          return
+        }
         await Promise.all([recovery?.fail(), capture?.finish("failed")])
         controller.enqueue(
           encoder.encode(
@@ -551,7 +575,9 @@ async function sanitizeAssignedResponse(
   const raw = JSON.parse(text) as unknown
   const metrics = metricsCollector(generationID, startedAt)
   metrics.observe(raw)
-  await Promise.all([complete(metrics.value()), capture?.finish("complete")])
+  const blocked = inspectionFailedError(raw)
+  await Promise.all([complete(metrics.value()), capture?.finish(blocked ? "failed" : "complete")])
+  if (blocked) return Response.json(contentFilterError(), { status: 400, headers })
   const payload = reasoning.redact(sanitizePayload(raw, generationID))
   headers.set("content-type", "application/json")
   return Response.json(payload, { status: response.status, headers })
