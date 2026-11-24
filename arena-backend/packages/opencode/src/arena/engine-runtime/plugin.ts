@@ -39,6 +39,7 @@ import {
   readSessionRejected,
   SESSION_REJECTED_RETRY_MESSAGE,
 } from "@agent-duel/arena-service/request-error"
+import { replayToolCalls } from "./replay-tool-calls"
 import { withHeldToolCalls } from "./tool-stream"
 import { boundRequestSize, type MediaCarriage } from "./request-size"
 import { MODEL_IDLE_TIMEOUT_MS } from "../model-idle"
@@ -292,9 +293,11 @@ function install(context: Context, options: InstalledOptions) {
       sessionID: Session.ID
     }) => {
       if (!arenaModel(event.model)) return
-      event.messages = reasoningContext(
-        event.messages,
-        options.assignments.assignments.get(String(event.sessionID))?.reasoningFromMessageID,
+      event.messages = replayToolCalls(
+        reasoningContext(
+          event.messages,
+          options.assignments.assignments.get(String(event.sessionID))?.reasoningFromMessageID,
+        ),
       )
       // Replace model-family identity text. Native replay remains intact for user and tool
       // messages, while upstream provider branding cannot reach a blinded contestant.

@@ -1,6 +1,6 @@
 import { createHash } from "crypto"
 import { describe, expect, test } from "bun:test"
-import { carriesModelOutput, create } from "@/arena/telemetry"
+import { carriesModelOutput, create, sanitizeStoredResponse } from "@/arena/telemetry"
 import { Store } from "@/arena/mongo"
 import type { GenerationDocument, GenerationRetry } from "@/arena/records"
 import { ArenaWaitError, type RequestMetadata } from "@/arena/proxy"
@@ -10,6 +10,16 @@ function store(value: object): Store {
 }
 
 describe("ArenaTelemetry", () => {
+  test("blinds a repeated positional call ID per generation, not per stream fragment", () => {
+    const line = 'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"read_0"}]}}]}'
+    const raw = [line, line].join("\n\n")
+    const stored = sanitizeStoredResponse(raw, "gen_first")
+    const [first, second] = stored.split("\n\n")
+    expect(first).toBe(second)
+    expect(stored).not.toContain("read_0")
+    expect(sanitizeStoredResponse(stored, "gen_first")).toBe(stored)
+    expect(sanitizeStoredResponse(raw, "gen_second")).not.toBe(stored)
+  })
   test("stores generation artifacts without model-fingerprinting metadata", async () => {
     let generation: GenerationDocument | undefined
     let runUsage: GenerationDocument["usage"]
