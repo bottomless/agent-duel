@@ -29,7 +29,7 @@ describe("Arena v2 battle integration", () => {
     directory = undefined
   })
 
-  test("runs two contestants, votes, grafts, and admits the next native prompt", async () => {
+  test("grafts a voted winner, then accepts a filtered partial reply without counting a vote", async () => {
     const [{ Server }, { ArenaRuntime }, credentials] = await Promise.all([
       import("@/server/server"),
       import("@/arena/runtime"),
@@ -52,11 +52,18 @@ describe("Arena v2 battle integration", () => {
       readonly response: string
     }> = []
     const responseBySession = new Map<string, string>()
+    // The next turn receives one refusal of each kind. Keep the calls per assignment to catch retries.
+    const blockedCalls: string[] = []
+    let blockNextTurn = false
     originalFetch = globalThis.fetch
     globalThis.fetch = (async (input, init) => {
       const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url)
       if (url.origin === "https://control.test") {
         const request = new Request(input, init)
+        if (url.pathname === "/api/research") {
+          const batch = (await request.json()) as { records: unknown[] }
+          return Response.json({ received: batch.records.length, stored: batch.records.length })
+        }
         if (url.pathname === "/api/arena/assignments") {
           const body = (await request.json()) as { action: string; kind: string; decision?: string }
           if (body.action === "create") {
@@ -82,12 +89,26 @@ describe("Arena v2 battle integration", () => {
           const completion = new Request(input, init)
           const arenaSessionID = completion.headers.get("x-arena-session-id") ?? completion.headers.get("x-session-id")
           const sessionID = arenaSessionID ?? `request-${completionRequests.length}`
-          const body = (await completion.json()) as { messages?: readonly unknown[] }
+          const body = (await completion.json()) as { messages?: readonly unknown[]; tools?: readonly unknown[] }
           // Native root sessions may also request a title. Keep each session's
           // response stable without assuming those auxiliary calls arrive last.
           const response = responseBySession.get(sessionID) ?? `response for ${sessionID}`
           responseBySession.set(sessionID, response)
           completionRequests.push({ sessionID, messages: body.messages ?? [], response })
+          if (blockNextTurn && body.tools?.length) {
+            const assignment = completion.headers.get("X-Arena-Assignment-ID")!
+            blockedCalls.push(assignment)
+            if (assignment !== blockedCalls[0]) {
+              return Response.json(
+                { error: { type: "content_filter", message: "private policy detail" } },
+                { status: 400 },
+              )
+            }
+            return new Response(
+              'data: {"choices":[{"index":0,"delta":{"content":"Saved partial reply"},"finish_reason":"content_filter","native_finish_reason":"private policy detail"}]}\n\ndata: [DONE]\n\n',
+              { headers: { "content-type": "text/event-stream" } },
+            )
+          }
           return new Response(
             `data: {"id":"r","choices":[{"index":0,"delta":{"role":"assistant","content":"${response}"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n`,
             { headers: { "content-type": "text/event-stream" } },
@@ -101,6 +122,8 @@ describe("Arena v2 battle integration", () => {
       mode: "hosted",
       token: "test-token",
       controlPlaneUrl: "https://control.test",
+      researchAccountID: "test-account",
+      researchPartition: "test-partition",
       controlTokenHash: credentials.hashArenaControlToken(controlToken),
     })
     process.env.PASEO_HOME = home
@@ -129,6 +152,7 @@ describe("Arena v2 battle integration", () => {
     const attached = await request(`/arena/sessions/${source.id}`, {
       headers: { "x-opencode-directory": directory },
     })
+    if (!attached.ok) throw new Error(await attached.text())
     expect(attached.status).toBe(200)
     const attachedBody = (await attached.json()) as { chat: { id: string } }
     const started = await request(`/arena/chats/${attachedBody.chat.id}/turns`, {
@@ -222,6 +246,7 @@ describe("Arena v2 battle integration", () => {
     expect(canonicalHistory).not.toContain(loserText)
 
     const requestsBeforeNextTurn = completionRequests.length
+    blockNextTurn = true
     const next = await request(`/arena/chats/${current.chat.id}/turns`, {
       method: "POST",
       headers: { "x-opencode-directory": directory },
@@ -248,12 +273,52 @@ describe("Arena v2 battle integration", () => {
 
     const nextTurnID = afterNext.turn?.id
     if (!nextTurnID) throw new Error("Arena did not publish the replay turn ID")
-    const cleaned = await request(`/arena/turns/${nextTurnID}/vote`, {
+    expect(blockedCalls).toHaveLength(2)
+    expect(new Set(blockedCalls).size).toBe(2)
+    expect(afterNext.turn).toMatchObject({ canTie: false })
+    for (const run of afterNext.runs ?? []) {
+      expect(run).toMatchObject({
+        runState: "error",
+        error: "A content filter blocked this response.",
+        selectable: false,
+        canRetry: false,
+        canAcceptFailed: true,
+      })
+    }
+    expect(JSON.stringify(afterNext)).not.toContain("private policy detail")
+    const filteredSessions = await Promise.all(
+      (afterNext.runs ?? []).map(async (run) => {
+        const history = await request(`/api/experimental/session/${run.sessionID}/export`, {
+          headers: { "x-opencode-directory": directory! },
+        })
+        expect(history.status).toBe(200)
+        const text = await history.text()
+        expect(text).not.toContain("private policy detail")
+        return { side: run.side, partial: text.includes("Saved partial reply") }
+      }),
+    )
+    const partial = filteredSessions.find((session) => session.partial)
+    if (!partial) throw new Error("Missing partial response from the filtered side")
+    const accepted = await request(`/arena/turns/${nextTurnID}/vote`, {
       method: "POST",
       headers: { "x-opencode-directory": directory },
-      body: JSON.stringify({ vote: "a" }),
+      body: JSON.stringify({ vote: partial.side, acceptFailed: true }),
     })
-    expect(cleaned.status).toBe(200)
-    await cleaned.text()
+    expect(accepted.status).toBe(200)
+    expect((await accepted.json()).turn).toMatchObject({
+      acceptedFailedSide: partial.side,
+      voteDiscardedReason: "contestant_failed",
+    })
+    const appliedDeadline = Date.now() + 20_000
+    while (Date.now() < appliedDeadline && afterNext.chat.activeTurnID) {
+      await Bun.sleep(100)
+      afterNext = await snapshot()
+    }
+    expect(afterNext.chat.activeTurnID).toBeUndefined()
+    const kept = await request(`/api/experimental/session/${afterNext.chat.canonicalSessionID}/export`, {
+      headers: { "x-opencode-directory": directory },
+    })
+    expect(kept.status).toBe(200)
+    expect(await kept.text()).toContain("Saved partial reply")
   }, 45_000)
 })

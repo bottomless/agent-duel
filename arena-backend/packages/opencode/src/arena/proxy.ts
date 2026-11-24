@@ -3,9 +3,13 @@ import { contestant } from "./model-profile"
 import type { GenerationMetrics } from "./records"
 import {
   compactionRequiredError,
+  contentFilterError,
+  contentFilterMessage,
+  filteredStreamChunk,
   networkUnavailableError,
   paymentError,
   readCompactionRequired,
+  readContentFilter,
   readNetworkUnavailable,
   readPaymentError,
   readSessionRejected,
@@ -382,12 +386,23 @@ function researchHeaders(source: Headers) {
   )
 }
 
-function sanitizeLine(line: string, generationID: string, normalize: (value: unknown) => unknown) {
+function sanitizeLine(
+  line: string,
+  generationID: string,
+  normalize: (value: unknown) => unknown,
+  filtered: () => void,
+) {
   if (!line.startsWith("data:")) return ""
   const raw = line.slice("data:".length).trimStart()
   if (!raw || raw === "[DONE]") return line
   try {
-    return `data: ${JSON.stringify(normalize(sanitizePayload(JSON.parse(raw), generationID, true)))}`
+    const value: unknown = JSON.parse(raw)
+    const blocked = record(value) && filteredStreamChunk(value, generationID)
+    if (blocked) {
+      filtered()
+      return `data: ${JSON.stringify(blocked)}`
+    }
+    return `data: ${JSON.stringify(normalize(sanitizePayload(value, generationID, true)))}`
   } catch {
     return (
       "data: " + JSON.stringify({ error: { message: "Provider response stream failed", type: "arena_stream_error" } })
@@ -453,6 +468,32 @@ function sanitizeStream(
   let pending = ""
   let settled = false
   let finished = false
+  let blocked = false
+  const sanitize = (line: string) =>
+    sanitizeLine(line, generationID, normalize, () => {
+      blocked = true
+    })
+  // The SDK emits its finish on EOF. Once a filter has finished the choice, a later transport
+  // failure must not replace it with a retryable error, or leave its prompt armed for cache pings.
+  const finishBlocked = async (controller: ReadableStreamDefaultController<Uint8Array>) => {
+    settled = true
+    onEnd?.(false)
+    if (open) emit(controller, "")
+    controller.close()
+    tracked.closedAt = Date.now()
+    // Let the service finish recording usage and the response after its final choice. Only the
+    // client stream is closed above; a server that never closes its tail must not hold the reader.
+    const timeout = setTimeout(() => void reader.cancel().catch(() => undefined), 5_000)
+    try {
+      await telemetry?.error?.(metadata, new Error(contentFilterMessage), new Date())
+      while (!(await reader.read()).done) {
+        /* discard the tail */
+      }
+    } finally {
+      clearTimeout(timeout)
+      await reader.cancel().catch(() => undefined)
+    }
+  }
   // Data lines the model call has received. A replay resends the whole response, so it skips them.
   let delivered = 0
   let skip = 0
@@ -540,7 +581,8 @@ function sanitizeStream(
             // else is where the bytes ran out, and the model call gets the cut-off error instead.
             if (pending && skip === 0 && (finished || endsResponse(pending))) {
               finished = true
-              emit(controller, sanitizeLine(pending, generationID, normalize))
+              emit(controller, sanitize(pending))
+              if (blocked) return finishBlocked(controller)
             }
             if (finished && open) emit(controller, "")
             if (!finished) {
@@ -579,7 +621,8 @@ function sanitizeStream(
             }
             finished ||= endsResponse(line)
             if (isDataLine(line)) delivered++
-            emit(controller, sanitizeLine(line, generationID, normalize))
+            emit(controller, sanitize(line))
+            if (blocked) return finishBlocked(controller)
             forwarded = true
           }
           if (forwarded) return
@@ -802,9 +845,10 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
     const type = response.headers.get("content-type") ?? ""
     if (!response.ok) {
       // Rebuild allowlisted control responses so upstream text and capability limits never escape.
-      const knownStatus = [401, 402, 403, 413, 503].includes(response.status)
+      const knownStatus = [400, 401, 402, 403, 413, 503].includes(response.status)
       const body = knownStatus ? await response.text() : undefined
       let payload = { error: { message: "Arena contestant request failed", type: "arena_upstream_error" } }
+      if (response.status === 400 && readContentFilter(body)) payload = contentFilterError()
       if (response.status === 401 && readSessionRejected(body)) payload = sessionRejectedError()
       if (response.status === 402) payload = paymentError(readPaymentError(body) ?? "arena_payment_required")
       if (response.status === 503 && readNetworkUnavailable(body)) payload = networkUnavailableError()

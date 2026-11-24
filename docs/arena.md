@@ -1835,6 +1835,11 @@ credit-limit, and unknown payment failures, but Core classifies HTTP 402 as nonr
 failure (`ai/src/provider-error.ts`). There is no automatic temporary-budget retry in the V2 path.
 Never switch contestants or replay partial work to recover payment failures.
 
+A content filter ends the contestant's run. Keep its partial answer and saved files available through
+**Accept**, without a leaderboard vote. Do not run pending tools, retry the request or send it to a
+different host. Both a filtered stream and an HTTP moderation refusal show the same reason; the
+provider's explanation can identify the contestant or quote the prompt.
+
 An output-token cap continues from saved output and tool results under the same assignment. Never
 replay completed tools. Leave unfinished calls unexecuted and request smaller writes or patches.
 Core allows two continuations, then fails on the third consecutive `length` response while

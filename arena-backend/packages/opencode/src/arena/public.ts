@@ -18,7 +18,12 @@ import { ArenaActiveOperation } from "./operation-tracker"
 import type { BattleSnapshot, HiddenAssignment, RunDocument, SingleAgentRatingDocument } from "./records"
 import { ArenaSchema } from "./schema"
 import { ArenaResponseRecovery } from "./response-recovery"
-import { requestTooLargeMessage, runAuthMessage, runPaymentMessage } from "@agent-duel/arena-service/request-error"
+import {
+  contentFilterMessage,
+  requestTooLargeMessage,
+  runAuthMessage,
+  runPaymentMessage,
+} from "@agent-duel/arena-service/request-error"
 import { arenaCredentials } from "./credentials"
 
 export type PublicIdentity = {
@@ -272,6 +277,7 @@ function runErrorMessage(run: RunDocument, revealed: boolean, byok: boolean) {
   }
   if (run.runState === "interrupted") return INTERRUPTED_RUN_MESSAGE
   if (!message) return undefined
+  if (message.split("\n").includes(contentFilterMessage)) return contentFilterMessage
   for (const safe of [
     ArenaResponseRecovery.EXHAUSTED,
     ArenaResponseRecovery.IDLE_EXHAUSTED,

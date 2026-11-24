@@ -2,6 +2,59 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value)
 }
 
+export const contentFilterMessage = "A content filter blocked this response."
+
+// Core recognizes this OpenAI error type as a permanent content-policy failure.
+export function contentFilterError() {
+  return { error: { type: "content_filter", message: contentFilterMessage } }
+}
+
+function json(value: string): unknown {
+  try {
+    return JSON.parse(value)
+  } catch {
+    return undefined
+  }
+}
+
+/** Only the service inspects the provider's structured error, never text that may quote the prompt. */
+export function inspectionFailed(status: number, body: string) {
+  if (status !== 400) return false
+  const payload = json(body)
+  if (!isRecord(payload)) return false
+  const error = isRecord(payload.error) ? payload.error : payload
+  const metadata = isRecord(error.metadata) ? error.metadata : undefined
+  const raw = typeof metadata?.raw === "string" ? json(metadata.raw) : metadata?.raw
+  const nested = isRecord(raw) && isRecord(raw.error) ? raw.error : raw
+  return [error, metadata, nested].some(
+    (part) =>
+      isRecord(part) &&
+      [part.code, part.type, part.error_type].some(
+        (code) => typeof code === "string" && /^(data_inspection_failed|DataInspectionFailed)$/i.test(code),
+      ),
+  )
+}
+
+export function readContentFilter(body: string | undefined) {
+  const value = body && json(body)
+  return isRecord(value) && isRecord(value.error) && value.error.type === "content_filter"
+}
+
+/** Keep answer text sent with the finish, but no policy report, tool call or native reason. */
+export function filteredStreamChunk(value: Record<string, unknown>, generationID: string) {
+  if (!Array.isArray(value.choices)) return
+  const choice = value.choices.find(
+    (item) =>
+      isRecord(item) && (item.finish_reason === "content_filter" || item.native_finish_reason === "content_filter"),
+  )
+  if (!isRecord(choice)) return
+  const content = isRecord(choice.delta) ? choice.delta.content : undefined
+  return {
+    id: generationID,
+    choices: [{ index: 0, delta: typeof content === "string" ? { content } : {}, finish_reason: "content_filter" }],
+  }
+}
+
 export const compactionRequiredType = "arena_compaction_required"
 
 export function compactionRequiredError() {

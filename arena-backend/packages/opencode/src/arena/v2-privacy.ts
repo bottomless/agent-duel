@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto"
 import {
+  contentFilterMessage,
   requestTooLargeMessage,
   paymentMessage,
   singleAgentAllowanceMessage,
@@ -59,6 +60,10 @@ function safeError(value: unknown) {
   const data = record(value) && record(value.data) ? value.data : undefined
   const statusCode = data && typeof data.statusCode === "number" ? data.statusCode : undefined
   const responseBody = data && typeof data.responseBody === "string" ? data.responseBody : undefined
+  if (record(value) && value.type === "provider.content-filter")
+    return { type: value.type, message: contentFilterMessage }
+  if (record(value) && value.name === "ContentFilterError")
+    return { name: value.name, data: { message: contentFilterMessage } }
   const message = (() => {
     if (text === requestTooLargeMessage || data?.message === requestTooLargeMessage) return requestTooLargeMessage
     // Rebuilt by the engine proxy from the control plane's code; it names no model.

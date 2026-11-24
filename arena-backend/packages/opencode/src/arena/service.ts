@@ -9,6 +9,7 @@ import {
   messagesToGraft,
   type CancelOptions,
 } from "./session-runtime"
+import { contentFilterMessage } from "@agent-duel/arena-service/request-error"
 import { ARENA_SENT_AT } from "./session-runtime/projection"
 import { copyKeepingReferences } from "./compaction-reference"
 import { KeyedMutex } from "@opencode/core/effect/keyed-mutex"
@@ -1508,6 +1509,11 @@ export function normalTurnReservations() {
       return (counts.get(sessionID) ?? 0) > 0
     },
   }
+}
+
+function promptBlocked(result: Exit.Exit<SessionV1.WithParts | void, unknown>) {
+  const answer = Exit.isSuccess(result) ? result.value?.info : undefined
+  return answer?.role === "assistant" && answer.error?.name === "ContentFilterError"
 }
 
 /** Whether a contestant prompt ended in a failure of its own: an error or defect, or an errored answer. */
@@ -3110,9 +3116,7 @@ export const layer: Layer.Layer<
         // left as it is, so a send reaches the battle's git check and says what to install. That
         // check runs here outside the trunk, which may really be gone.
         if (
-          Exit.isFailure(
-            yield* Effect.exit(withGit(requireBattleGit(process.cwd())).pipe(gitDeadline("probing git"))),
-          )
+          Exit.isFailure(yield* Effect.exit(withGit(requireBattleGit(process.cwd())).pipe(gitDeadline("probing git"))))
         ) {
           yield* Effect.logWarning("Arena skipped a canonical inspection because git does not run", {
             chatID: chat._id,
@@ -4903,7 +4907,9 @@ export const layer: Layer.Layer<
           unsettled.push(
             assistant.error.name === "MessageOutputLengthError"
               ? ArenaResponseRecovery.EXHAUSTED
-              : `Contestant assistant error: ${JSON.stringify(assistant.error)}`,
+              : assistant.error.name === "ContentFilterError"
+                ? contentFilterMessage
+                : `Contestant assistant error: ${JSON.stringify(assistant.error)}`,
           )
         }
         // On 2.0 a Stop interrupts the prompt instead of returning an aborted assistant, and a stream
@@ -5226,7 +5232,7 @@ export const layer: Layer.Layer<
     const closeTurn = Effect.fnUntraced(function* (
       store: Store,
       run: SideRuntime,
-      result: Exit.Exit<unknown, unknown>,
+      canAnswer: boolean,
       tried: Set<string>,
     ) {
       return yield* closeShellTurn(
@@ -5234,7 +5240,7 @@ export const layer: Layer.Layer<
         steerGates.withLock(run.runID)(
           Effect.gen(function* () {
             const current = yield* promise(() => store.turn(run.turnID))
-            if (Exit.isSuccess(result) && current?.state === "running" && !haltingRuns.has(run.runID)) {
+            if (canAnswer && current?.state === "running" && !haltingRuns.has(run.runID)) {
               const status = yield* inDirectory(run.worktree.directory, statuses.get(run.sessionID)).pipe(
                 Effect.catchCause(() => Effect.succeed({ type: "idle" as const })),
               )
@@ -5392,7 +5398,7 @@ export const layer: Layer.Layer<
       const triedSteers = new Set<string>()
       while (true) {
         const steer = interruptingSteers.get(run.runID)
-        if (!steer) {
+        if (!steer || promptBlocked(result)) {
           // A read that fails here leaves the turn to close, and finalization checks every session.
           const answered = result
           result = yield* withChildWaitLimit(awaitChildren(store, run, answered), {
@@ -5405,12 +5411,15 @@ export const layer: Layer.Layer<
               ),
             ),
           )
-          if (interruptingSteers.has(run.runID)) continue
+          // Neither a queued steer nor Send now may start another step after a content filter.
+          const blocked = promptBlocked(result)
+          if (blocked) interruptingSteers.delete(run.runID)
+          else if (interruptingSteers.has(run.runID)) continue
           // The runner's last boundary check and its idle transition are not one step, so a steer can
           // arrive just as the answer ends. Close the turn only when no steer waits and no runner
           // works; otherwise answer the steer here, in the fiber that owns finalization, as 1.x's
           // loop answered a user message written before it ended.
-          const late = yield* closeTurn(store, run, result, triedSteers)
+          const late = yield* closeTurn(store, run, Exit.isSuccess(result) && !blocked, triedSteers)
           if (!late) break
           result = yield* Effect.exit(inDirectory(run.worktree.directory, prompts.loop({ sessionID: run.sessionID })))
           continue

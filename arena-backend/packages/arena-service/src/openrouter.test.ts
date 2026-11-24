@@ -311,6 +311,71 @@ describe("OpenRouter proxy", () => {
     expect((await invoke(36_000)).status).toBe(200)
   })
 
+  test.each([
+    [{ code: "data_inspection_failed", message: "private detail" }, true],
+    [
+      {
+        code: 400,
+        metadata: {
+          raw: JSON.stringify({ error: { type: "data_inspection_failed", message: "private context length detail" } }),
+        },
+      },
+      true,
+    ],
+    [
+      {
+        code: 400,
+        metadata: {
+          error_type: "data_inspection_failed",
+          provider_name: "Google AI Studio",
+          raw: JSON.stringify({
+            error: { code: 400, status: "INVALID_ARGUMENT", message: "Request contains an invalid argument." },
+          }),
+        },
+      },
+      true,
+    ],
+    [{ code: 400, message: "Invalid tool argument: data_inspection_failed", metadata: { raw: "not JSON" } }, false],
+  ] as const)(
+    "returns a blinded terminal error only for a structured inspection refusal: %j",
+    async (error, blocked) => {
+      const db = fakeDb({
+        assignmentSets: () => [
+          {
+            userId: "user-1",
+            scopeID: "turn",
+            assignments: [{ assignmentID: "opaque-id", model: { ...pool[0], slug: "google/gemini-4-carbon" } }],
+          },
+        ],
+      })
+      let calls = 0
+      const proxy = openrouter({
+        db: async () => db,
+        fetch: async () => {
+          calls++
+          return Response.json({ error }, { status: 400 })
+        },
+      })
+      const response = await proxy(
+        new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+          method: "POST",
+          headers: { "X-Arena-Assignment-ID": "opaque-id", "X-Arena-Scope-ID": "turn" },
+          body: JSON.stringify({
+            model: "contestant",
+            messages: [{ role: "tool", tool_call_id: "call-1", content: "Plain text" }],
+          }),
+        }),
+      )
+      expect(response.status).toBe(400)
+      expect(await response.json()).toEqual({
+        error: blocked
+          ? { type: "content_filter", message: "A content filter blocked this response." }
+          : { type: "arena_upstream_error", message: "Arena contestant request failed" },
+      })
+      expect(calls).toBe(1)
+    },
+  )
+
   test("sanitizes recognized provider context overflow refusals", async () => {
     const db = fakeDb({
       assignmentSets: () => [

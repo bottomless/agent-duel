@@ -6,6 +6,9 @@ import type { StoredGenerationMetrics, UsageTotals } from "./metrics"
 import {
   classifyPaymentError,
   compactionRequiredError,
+  contentFilterError,
+  filteredStreamChunk,
+  inspectionFailed,
   isContextOverflow,
   networkUnavailableError,
   retryableStreamError,
@@ -141,6 +144,8 @@ function metricsCollector(generationID: string, startedAt: number) {
 
 function sanitizePayload(value: unknown, generationID: string, stream = false): unknown {
   if (!record(value)) return value
+  const blocked = stream && filteredStreamChunk(value, generationID)
+  if (blocked) return blocked
   if (value.error !== undefined) {
     return {
       error: {
@@ -447,7 +452,7 @@ async function logKeepAlive(response: Response | undefined, startedAt: number) {
   const text = await response?.text().catch(() => undefined)
   if (!response?.ok || text === undefined) {
     console.warn("[arena-service] Keep-alive ping failed", JSON.stringify({ status: response?.status ?? "unsent" }))
-    return false
+    return response !== undefined && text !== undefined && inspectionFailed(response.status, text)
   }
   const metrics = metricsCollector("keep-alive", startedAt)
   const values = (response.headers.get("content-type") ?? "").includes("text/event-stream")
@@ -511,9 +516,11 @@ async function sanitizeAssignedResponse(
   const headers = assignedHeaders(response.headers)
   if (!response.ok) {
     const upstream = await response.text().catch(() => "")
-    logRefusal(refusal, response.status, upstream)
     capture?.record(upstream)
     await capture?.finish("failed")
+    if (inspectionFailed(response.status, upstream))
+      return Response.json(contentFilterError(), { status: 400, headers })
+    logRefusal(refusal, response.status, upstream)
     if (isContextOverflow(response.status, upstream)) {
       return Response.json(compactionRequiredError(), { status: 413, headers })
     }
@@ -727,7 +734,7 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
     }
     const retry =
       endpoint === "chat" && !request.signal.aborted ? await geminiToolResultRetry(budget.request, response) : undefined
-    if (retry && !request.signal.aborted) {
+    if (retry && !inspectionFailed(response.status, retry.refusal) && !request.signal.aborted) {
       logRefusal(refusal, response.status, retry.refusal)
       capture?.record(retry.refusal)
       await capture?.finish("failed", response.status)

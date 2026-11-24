@@ -51,6 +51,8 @@ function holdEndedToolCalls(activity?: () => void) {
           return
         }
         case "finish":
+          // Core settles outstanding input as failed. A parseable call in a refused step must not run.
+          if (part.finishReason.unified === "content-filter") held.clear()
           for (const { end, call, late } of held.values()) {
             controller.enqueue(end)
             if (call) controller.enqueue({ ...call, input: call.input + late })
