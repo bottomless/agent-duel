@@ -27,6 +27,7 @@ import {
   type CaptureState,
   type GenerationCapture,
 } from "./generation-capture"
+import { geminiSignatureRouting } from "./gemini-signature-routing"
 import { geminiToolResultRetry } from "./gemini-tool-results"
 import { MEDIA_PATH, MEDIA_TYPE_HEADER, mediaMissingError, mediaTooLargeError, sendsByReference } from "./media"
 import { createReasoningRedactor } from "./reasoning"
@@ -125,6 +126,7 @@ function metricsCollector(generationID: string, startedAt: number) {
       }
       finished = finishReason(value) ?? finished
       if (record(value) && typeof value.provider === "string" && value.provider) provider = value.provider
+      return provider
     },
     value(): StoredGenerationMetrics | undefined {
       const measured = usage(usagePayload, Math.max(0, Date.now() - startedAt))
@@ -173,7 +175,7 @@ function sanitizeLine(
   line: string,
   generationID: string,
   reasoning: ReasoningRedactor,
-  observe?: (value: unknown) => void,
+  observe: (value: unknown) => string | undefined,
 ) {
   if (!line.startsWith("data:")) return ""
   const raw = line.slice("data:".length).trimStart()
@@ -185,8 +187,8 @@ function sanitizeLine(
       return tail ? `data: ${JSON.stringify({ id: generationID, ...tail })}\n\n${line}` : line
     }
     const value = JSON.parse(raw) as unknown
-    observe?.(value)
-    return `data: ${JSON.stringify(reasoning.redact(sanitizePayload(value, generationID, true), true))}`
+    const provider = observe(value)
+    return `data: ${JSON.stringify(reasoning.redact(sanitizePayload(value, generationID, true), true, provider))}`
   } catch {
     reasoning.clear()
     return `data: ${JSON.stringify({
@@ -384,14 +386,19 @@ function cacheKey(
 }
 
 /** The fields the proxy decides for every contestant call, replacing any the engine sent. */
-function assignedRouting(model: ModelProfile, modelSize: SingleAgentModelSize | undefined, key: string) {
+function assignedRouting(
+  model: ModelProfile,
+  modelSize: SingleAgentModelSize | undefined,
+  key: string,
+  provider = model.routing,
+) {
   return {
     model: model.slug,
     reasoning:
       model.reasoningEffort === null
         ? { enabled: true }
         : { effort: model.reasoningEffort ?? (modelSize === "medium" ? "xhigh" : "high") },
-    provider: model.routing,
+    provider,
     // Without these OpenRouter's throughput sort can move a conversation to another provider whose
     // cache is empty, and some providers miss their own cache without a key.
     session_id: key,
@@ -543,9 +550,9 @@ async function sanitizeAssignedResponse(
   capture?.record(text)
   const raw = JSON.parse(text) as unknown
   const metrics = metricsCollector(generationID, startedAt)
-  metrics.observe(raw)
+  const provider = metrics.observe(raw)
   await Promise.all([complete(metrics.value()), capture?.finish("complete")])
-  const payload = reasoning.redact(sanitizePayload(raw, generationID))
+  const payload = reasoning.redact(sanitizePayload(raw, generationID), false, provider)
   headers.set("content-type", "application/json")
   return Response.json(payload, { status: response.status, headers })
 }
@@ -647,13 +654,18 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
     if (keepAlive && (suffix !== "/api/v1/chat/completions" || !keepsCacheWarm(routeAssignment.model.slug))) {
       return keepAliveAnswer()
     }
-    const reasoning = createReasoningRedactor(apiKey, {
-      userId: caller.id,
-      scopeID: assignment.scopeID,
-      assignmentID: assignment.assignmentID,
-    })
+    const reasoning = createReasoningRedactor(apiKey, calibrationKey, routeAssignment.model.slug)
+    const signers = new Set<string | null>()
+    const replay = reasoning.restore(input, signers)
+    const provider = geminiSignatureRouting(routeAssignment.model.routing, signers)
+    if (!provider) {
+      return Response.json(
+        { error: { message: "Arena contestant request failed", type: "arena_upstream_error" } },
+        { status: 400 },
+      )
+    }
     // Images and PDFs the engine uploaded come back here, before the budget counts them (`media.ts`).
-    const media = await resolveMedia(db, caller.id, reasoning.restore(input), context.now())
+    const media = await resolveMedia(db, caller.id, replay, context.now())
     // Only Claude pings get this far, so a ping with media the proxy cannot send answers like every
     // other ping, or a made-up reference would tell the sides apart.
     if (keepAlive && (media.tooLarge || media.missing.length > 0)) {
@@ -675,6 +687,7 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
         routeAssignment.model,
         routeAssignment.modelSize,
         cacheKey(apiKey, caller.id, assignment.scopeID, routeAssignment),
+        provider,
       ),
       ...promptCache(routeAssignment.model.slug, input),
       stream_options: record(input.stream_options)

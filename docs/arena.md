@@ -1365,8 +1365,12 @@ field. Each layer has its own file:
   single-agent chat draws an assignment per message, so it keys on a hash of the account and session
   that stays the same across the chat. The same refusal rule applies to both fields, and the catalog
   check cannot see it: run `probeRouting` (`arena-service/src/openrouter.ts`) on a pool before it
-  ships. A provider that slows down mid-turn keeps the conversation; OpenRouter leaves it only when
-  that provider is unavailable. Gemini Carbon on Google AI Studio sometimes refuses a request that
+  ships. OpenRouter can leave an unavailable provider. When a Gemini continuation replays signed
+  reasoning, restrict it to the provider that issued the signature: Vertex rejects signatures from
+  Google AI Studio. Seal the signer from the upstream response with the reasoning.
+  A rate limit on the signer follows the usual retry path; it must not send that signature to the
+  other provider. Envelopes issued before signer tracking keep their original routing.
+  Gemini Carbon on Google AI Studio sometimes refuses a request that
   ends on plain-text tool results with a bare 400 `INVALID_ARGUMENT`, and accepts the same text in
   an object. On that exact refusal the proxy wraps each plain-text result in the pending tool batch
   as `{"output": …}` and sends the request once more, before anything reaches the desktop
