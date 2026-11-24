@@ -1328,7 +1328,8 @@ describe("Arena stop recovery, watchdog, and finalization timings", () => {
     // Watchdog is far longer than the Git limit so the test proves the Git limit ended the save,
     // not the watchdog.
     process.env.OPENCODE_ARENA_STOP_WATCHDOG_MS = "60000"
-    process.env.OPENCODE_ARENA_FINALIZATION_GIT_TIMEOUT_MS = "300"
+    // Long enough for the stopped side's real save, each step of which takes up to about 1s under test load.
+    process.env.OPENCODE_ARENA_FINALIZATION_GIT_TIMEOUT_MS = "3000"
     setStoreForTest(store)
     const canonicalID = nextSessionID()
     const fixture = createFixtureLayer(repo, canonicalID, "cancelable")
@@ -1354,13 +1355,14 @@ describe("Arena stop recovery, watchdog, and finalization timings", () => {
             yield* Effect.promise(() =>
               waitForRun(store, turnID, (run) => run._id === firstRun._id && run.runState === "complete", "side a answered"),
             )
-            yield* Effect.sleep("800 millis")
+            // Past the limit: a running battle does not bound the save.
+            yield* Effect.sleep("4000 millis")
             const stillSaving = yield* Effect.promise(() => store.run(firstRun._id))
             expect(stillSaving?.finalizedAt).toBeUndefined()
             expect(stillSaving?.error).toBeUndefined()
 
             // Press Stop while Side A is already stuck inside Git save. Its in-flight save picks up
-            // the 300ms Git limit instead of waiting for the 60s watchdog.
+            // the 3000ms Git limit instead of waiting for the 60s watchdog.
             const stoppedAt = Date.now()
             yield* arena.stop(turnID)
             yield* Effect.promise(() => waitForTurn(store, turnID, "awaiting_stop_resolution"))
