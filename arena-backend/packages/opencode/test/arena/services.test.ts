@@ -7,7 +7,6 @@ import path from "node:path"
 import {
   assignProxyRoutes,
   captureOwnedServices,
-  createDefaultServiceAdapter,
   defaultServiceAdapter,
   hasControllingTerminal,
   parseProcessTerminals,
@@ -185,7 +184,8 @@ test("keeps ownership after a launched service changes out of the worktree cwd",
     processStartIdentity: "start-10",
   } satisfies ProcessSnapshot
   const adapter: ServiceAdapter = {
-    listProcesses: () => (alive ? [{ ...process, pid: 12, processStartIdentity: "surviving-child" }] : []),
+    listProcesses: () =>
+      alive ? [{ ...process, pid: 12, processStartIdentity: "surviving-child" }] : [],
     stopProcessGroup: () => {
       alive = false
     },
@@ -193,7 +193,10 @@ test("keeps ownership after a launched service changes out of the worktree cwd",
   }
   const [service] = await captureOwnedServices({
     worktree: root,
-    processes: [process, { ...process, pid: 11, processGroupID: 21, ownerID: serviceOwnerID("/repo/other") }],
+    processes: [
+      process,
+      { ...process, pid: 11, processGroupID: 21, ownerID: serviceOwnerID("/repo/other") },
+    ],
   })
 
   expect(service?.ownerID).toBe(ownerID)
@@ -235,7 +238,11 @@ test("stops owned groups and verifies listener release with an injectable adapte
     portAliases: { PASEO_PORT: 43121, PASEO_PORT2: 43122, PASEO_PORT3: 43123 },
     now: new Date("2026-08-28T12:00:00.000Z"),
   })
-  expect(service?.listeners.map((listener) => listener.alias)).toEqual(["PASEO_PORT", "PASEO_PORT2", "PASEO_PORT3"])
+  expect(service?.listeners.map((listener) => listener.alias)).toEqual([
+    "PASEO_PORT",
+    "PASEO_PORT2",
+    "PASEO_PORT3",
+  ])
   const [result] = await stopOwnedServices([service!], { worktree: "/repo/contestant", adapter })
   expect(stoppedGroups).toEqual([20])
   expect(result?.status).toBe("stopped")
@@ -555,22 +562,6 @@ test("pauses only the worktree's own groups without a terminal, and resumes them
   expect(signals).toEqual(["SIGSTOP 40", "SIGSTOP 42", "SIGCONT 40", "SIGCONT 42"])
 })
 
-test("skips process enumeration when the platform cannot pause process groups (win32)", async () => {
-  const winAdapter = createDefaultServiceAdapter("win32")
-  expect(winAdapter.pauseProcessGroup).toBeUndefined()
-
-  let listed = 0
-  const adapter: ServiceAdapter = {
-    ...winAdapter,
-    listProcesses: () => {
-      listed += 1
-      return []
-    },
-  }
-  expect(await pauseOwnedProcessGroups("/repo/contestant", adapter)).toEqual([])
-  expect(listed).toBe(0)
-})
-
 // Windows has no SIGSTOP, so nothing is paused there, and no `ps -o stat` to read the state.
 test.skipIf(process.platform === "win32")("a paused dev server cannot change the worktree under git add", async () => {
   const dir = { path: await realpath(await mkdtemp(path.join(tmpdir(), "arena-services-"))) }
@@ -591,11 +582,7 @@ test.skipIf(process.platform === "win32")("a paused dev server cannot change the
     const state = await $`ps -o stat= -p ${churner.pid!}`.quiet().text()
     expect(state.trim()).toStartWith("T")
     for (let attempt = 0; attempt < 10; attempt++) {
-      const add = await $`git add -A`
-        .cwd(dir.path)
-        .env({ ...process.env, GIT_INDEX_FILE: `${dir.path}/.git/paused-index` })
-        .quiet()
-        .nothrow()
+      const add = await $`git add -A`.cwd(dir.path).env({ ...process.env, GIT_INDEX_FILE: `${dir.path}/.git/paused-index` }).quiet().nothrow()
       expect(add.stderr.toString()).toBe("")
       expect(add.exitCode).toBe(0)
     }

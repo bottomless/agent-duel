@@ -6238,13 +6238,22 @@ test.each([
     onlyIfEmpty: true,
     refuses: true,
   },
-  { label: "does not accept a missing Arena chat as proof of an empty draft", onlyIfEmpty: true },
-])("archive_workspace_request $label", async ({ onlyIfEmpty, refuses }) => {
+  {
+    label: "archives a draft whose Arena chat was never created",
+    onlyIfEmpty: true,
+    archives: true,
+  },
+  {
+    label: "leaves a draft alone when Arena answers with a chat it did not archive",
+    onlyIfEmpty: true,
+    unarchived: true,
+  },
+])("archive_workspace_request $label", async ({ onlyIfEmpty, refuses, archives, unarchived }) => {
   const order: string[] = [];
   const arenaArchive = vi.fn(async () => {
     order.push("arena");
     if (refuses) throw new Error("Arena draft already has a turn");
-    return null;
+    return unarchived ? { chat: { status: "ready" } } : null;
   });
   const workspace = createPersistedWorkspaceRecord({
     workspaceId: "ws-arena-archive",
@@ -6292,8 +6301,9 @@ test.each([
   expect(arenaArchive).toHaveBeenCalledExactlyOnceWith(
     onlyIfEmpty ? { onlyIfEmpty: true } : undefined,
   );
-  expect(order).toEqual(onlyIfEmpty ? ["arena"] : ["arena", "agent"]);
-  expect(Boolean(workspace.archivedAt)).toBe(!onlyIfEmpty);
+  const archived = !onlyIfEmpty || archives === true;
+  expect(order).toEqual(archived ? ["arena", "agent"] : ["arena"]);
+  expect(Boolean(workspace.archivedAt)).toBe(archived);
 });
 
 test.each([

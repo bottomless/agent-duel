@@ -151,7 +151,9 @@ export function createArenaSessionApi(options: ArenaSessionApiOptions): ArenaApi
       request(
         `/arena/sessions/${encodeURIComponent(options.sessionId)}/archive${archiveOptions?.onlyIfEmpty ? "?onlyIfEmpty=true" : ""}`,
         ArenaSnapshotSchema.nullable(),
-        { method: "POST", allowNotFound: true, unbounded: true },
+        // An empty-only archive answers `null` for a session the engine checked and found without
+        // a chat or a prompt. A 404 proves nothing about the draft, so it stays a failure there.
+        { method: "POST", allowNotFound: !archiveOptions?.onlyIfEmpty, unbounded: true },
       ),
     snapshot: (chatId) => snapshot(`/arena/chats/${encodeURIComponent(chatId)}`),
     turn: (turnId) => snapshot(`/arena/turns/${encodeURIComponent(turnId)}`),

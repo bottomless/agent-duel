@@ -1011,10 +1011,15 @@ APFS a slot's clones share blocks with the checkout until something writes to th
 ordinary turn is in flight. Return a refused first send to New chat only when it left the workspace
 empty. Use the creation receipt or a terminal engine response to distinguish a refusal from a lost
 reply. Check the empty draft under the admission lock and wait for the archive to confirm before
-leaving. If resolve failed before a chat record existed, the engine cannot confirm the archive. A
-timeout or disconnect also leaves the outcome unknown even if a snapshot has no turn yet. Keep
+leaving. A resolve that failed before a chat record existed leaves a session with no chat; the
+engine confirms that one as empty once the session holds no prompt, and answers `null`. The daemon
+takes `null` as that confirmation only from an empty-only archive, where a 404 stays a failure. A
+timeout or disconnect leaves the outcome unknown even if a snapshot has no turn yet. Keep
 that workspace and draft, and hand off the battle
-if the engine confirms admission. Keep the error and retry instruction in the scrolling setup area
+if the engine confirms admission. The composer stays usable while that is pending: carry what was
+typed there into the chat's composer and never send it. Leave behind the restored prompt and the
+attachments sent with it, which the battle already has (`draftBeyondLateFirstBattle`). Keep the
+error and retry instruction in the scrolling setup area
 until dismissed, so a long startup error cannot cover the composer. Start freezes canonical `HEAD`
 together with the exact staged, unstaged, and
 nonignored-untracked state in `refs/battles/<chat>/turn-<n>/base`, then draws a pair. Both agents
@@ -1524,11 +1529,25 @@ actually verified. Use one utility request; increase evidence quality before add
   Keep “Canceling agents” in the stopping bar until the prompts settle. Core acknowledges an
   interrupt before its runner has unwound: `cancelMs` measures the calls, `cancelWaitMs` the wait
   after them. Neither is part of the time spent saving the result. After ten seconds, offer Discard
-  and keep it available if the watchdog moves the stop to recovery. Bound the initial Git ref check
-  on restart as well as each side’s save. A hung check otherwise blocks every Arena request before
-  it can reach the stopped battle. If Git times out saving one side, keep the other side’s result
-  available. Keeping a side when the other had already failed, rather than merely stopped, carries
-  the same `voteDiscardedReason`, so metrics do not file it as a win.
+  and keep it available if the watchdog moves the stop to recovery. Bound Git only where the
+  developer is leaving a battle: a stopped side’s save, restart recovery, the watchdog’s recovery,
+  and Discard (`limitGit`). A hung step there otherwise blocks every Arena request before it can
+  reach the stopped battle. A running battle waits for Git however long it takes; a limit there
+  failed sides whose `git add` was slow. Work that recovery starts and leaves running, such as a
+  resumed battle or a spare pair, waits too (`unlimitGit`). Opening a folder reads its Git layout,
+  so bound that under the same rule and leave the load running. Do not answer for Git on a
+  timeout: a folder recorded as not a repository stays that way until the engine restarts. If Git
+  times out saving one side, keep the other side’s result available. Keeping a side when the other had already failed, rather than merely stopped, carries the same `voteDiscardedReason`, so metrics do not file it as a win.
+
+  The watchdog and Discard wait two seconds for the fibers they interrupt, then recover without
+  them. A fiber wedged past that is marked abandoned (`TurnWork`), and every store call and Git
+  step it reaches afterwards ends as an interrupt, so it cannot write over recovery. Fork a turn’s
+  work with `forkTurnWork` so it carries that mark.
+
+  The app waits two minutes for a Discard. The engine gives up at 90 seconds and refuses, so a
+  Discard still queued behind recovery never runs after the app reported it failed. The check sits
+  where the write is issued (`recordDiscard`). A Discard already recorded answers with the battle
+  as it stands and finishes in the background.
 
 **Applying** (`promoteImpl` in `arena/service.ts`) records the resolution and enters `applying`
 in one compare-and-set. Acknowledge votes, kept sides, and review answers after that durable claim

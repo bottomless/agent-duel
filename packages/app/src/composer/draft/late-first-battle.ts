@@ -3,7 +3,12 @@ import type { AgentSnapshotPayload } from "@getpaseo/protocol/messages";
 import type { ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
 import { create } from "zustand";
 import { arenaSubscription, type ArenaStreamClient } from "@/arena/stream-subscription";
+import type { UserComposerAttachment } from "@/attachments/types";
 import { hasDraftBattle } from "@/composer/draft/failed-first-send";
+import { hasDraftContent } from "@/composer/draft/input-draft-core";
+import { buildDraftStoreKey } from "@/stores/draft-keys";
+import { useDraftStore, type DraftInput } from "@/stores/draft-store";
+import { normalizeComposerAttachment } from "@/stores/draft-store/state";
 
 /**
  * A first battle whose start response was lost (timeout or disconnect) while the engine may
@@ -15,6 +20,8 @@ export interface LateFirstBattle {
   serverId: string;
   agentId: string;
   prompt: string;
+  /** What the composer sent with the prompt; the restored draft holds these again. */
+  attachments: UserComposerAttachment[];
   result: AgentSnapshotPayload;
 }
 
@@ -75,4 +82,56 @@ export function watchLateFirstBattleAdmission(input: {
     unsubscribe();
     release();
   };
+}
+
+function attachmentIdentity(attachment: UserComposerAttachment): string {
+  return JSON.stringify(normalizeComposerAttachment(attachment));
+}
+
+/**
+ * What the draft holds that the admitted battle does not, or null when that is nothing. The
+ * restored prompt and the attachments sent with it stay behind: the battle has them, and a copy
+ * in the next composer invites a second send.
+ */
+export function draftBeyondLateFirstBattle(input: {
+  battle: Pick<LateFirstBattle, "prompt" | "attachments">;
+  draft: DraftInput;
+}): DraftInput | null {
+  const typed = input.draft.text.trim();
+  const isNewText = typed.length > 0 && typed !== input.battle.prompt.trim();
+  const sent = new Set(input.battle.attachments.map(attachmentIdentity));
+  const beyond: DraftInput = {
+    text: isNewText ? input.draft.text : "",
+    attachments: input.draft.attachments.filter(
+      (attachment) => !sent.has(attachmentIdentity(attachment)),
+    ),
+  };
+  return hasDraftContent(beyond) ? beyond : null;
+}
+
+/**
+ * Moves what was typed while waiting for the battle into the composer of the chat it opens.
+ * Run it before the draft is cleared. An agent tab that is already open keeps what its composer
+ * holds, with the draft's content after it.
+ */
+export function carryDraftIntoLateFirstBattle(input: {
+  battle: LateFirstBattle;
+  draftKey: string;
+}): void {
+  const drafts = useDraftStore.getState();
+  const draft = drafts.getDraftInput(input.draftKey);
+  const beyond = draft ? draftBeyondLateFirstBattle({ battle: input.battle, draft }) : null;
+  if (!beyond) return;
+  const agentDraftKey = buildDraftStoreKey({
+    serverId: input.battle.serverId,
+    agentId: input.battle.agentId,
+  });
+  const held = drafts.getDraftInput(agentDraftKey) ?? { text: "", attachments: [] };
+  const text = [held.text, beyond.text].filter((part) => part.length > 0).join("\n\n");
+  drafts.saveDraftInput({
+    draftKey: agentDraftKey,
+    draft: { text, attachments: [...held.attachments, ...beyond.attachments] },
+  });
+  // A composer that is already mounted shows only text it is told about.
+  drafts.replaceDraftText({ draftKey: agentDraftKey, text });
 }

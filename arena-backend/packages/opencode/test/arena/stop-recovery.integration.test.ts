@@ -1,6 +1,6 @@
 import { $ } from "bun"
 import { afterEach, describe, expect, test } from "bun:test"
-import { Deferred, Effect, Exit, Layer, Logger } from "effect"
+import { Deferred, Effect, Exit, Fiber, Layer, Logger } from "effect"
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises"
 import { existsSync } from "node:fs"
 import os from "node:os"
@@ -25,6 +25,7 @@ import type { SessionV1 } from "@/arena/session-shape"
 import { Config } from "@/config/config"
 import { Git } from "@/git"
 import { Image } from "@/image/image"
+import type { InstanceContext } from "@/project/instance-context"
 import { InstanceStore } from "@/project/instance-store"
 import { MessageID, SessionID } from "@/session/schema"
 import { Worktree } from "@/worktree"
@@ -34,6 +35,7 @@ afterEach(() => {
   delete process.env.OPENCODE_ARENA
   delete process.env.OPENCODE_ARENA_STOP_WATCHDOG_MS
   delete process.env.OPENCODE_ARENA_FINALIZATION_GIT_TIMEOUT_MS
+  delete process.env.OPENCODE_ARENA_DISCARD_REQUEST_TIMEOUT_MS
   setStoreForTest(undefined)
   registry.assignments.clear()
 })
@@ -172,6 +174,13 @@ function createFixtureLayer(root: string, canonicalID: SessionID, secondSideBeha
   let hangNextGit = false
   let interruptedGit: readonly string[] | undefined
   let failNextWorktreeRemove = false
+  let hungFolder: string | undefined
+  let heldGit: ((cwd: string, args: readonly string[]) => boolean) | undefined
+  let wedgedGitDirectory: string | undefined
+  const gitGate = Deferred.makeUnsafe<void>()
+  const wedgedGitDone = Deferred.makeUnsafe<void>()
+  const removalGate = Deferred.makeUnsafe<void>()
+  let holdRemovals = false
   const gitLayer = Layer.effect(
     Git.Service,
     Effect.map(Git.Service, (git) => ({
@@ -187,6 +196,16 @@ function createFixtureLayer(root: string, canonicalID: SessionID, secondSideBeha
             ),
           )
         }
+        if (options.cwd === wedgedGitDirectory) {
+          wedgedGitDirectory = undefined
+          // A step no interrupt reaches, which then finishes: the fiber outlives its interrupt.
+          return Deferred.await(gitGate).pipe(
+            Effect.andThen(git.run(args, options)),
+            Effect.ensuring(Deferred.succeed(wedgedGitDone, undefined)),
+            Effect.uninterruptible,
+          )
+        }
+        if (heldGit?.(options.cwd, args)) return Deferred.await(gitGate).pipe(Effect.andThen(git.run(args, options)))
         return options.cwd === hungGitDirectory ? Effect.never : git.run(args, options)
       },
     })),
@@ -220,6 +239,8 @@ function createFixtureLayer(root: string, canonicalID: SessionID, secondSideBeha
                 ),
               )
             }),
+          load: ({ directory }) =>
+            directory === hungFolder ? Effect.never : Effect.succeed({ directory } as InstanceContext),
           disposeDirectory: () => Effect.void,
         }),
         gitLayer,
@@ -386,9 +407,13 @@ function createFixtureLayer(root: string, canonicalID: SessionID, secondSideBeha
                 failNextWorktreeRemove = false
                 return Effect.fail(new Error("Simulated worktree removal failure"))
               }
-              return Effect.promise(async () => {
-                await rm(directory, { recursive: true, force: true }).catch(() => undefined)
-              })
+              return (holdRemovals ? Deferred.await(removalGate) : Effect.void).pipe(
+                Effect.andThen(
+                  Effect.promise(async () => {
+                    await rm(directory, { recursive: true, force: true }).catch(() => undefined)
+                  }),
+                ),
+              )
             }),
           retire: (directory) =>
             Effect.promise(async () => {
@@ -423,6 +448,28 @@ function createFixtureLayer(root: string, canonicalID: SessionID, secondSideBeha
     },
     failNextWorktreeRemove: () => {
       failNextWorktreeRemove = true
+    },
+    /** Git in matching folders waits for `releaseGit`, then runs: slow, not broken. */
+    holdGit: (matches: (cwd: string, args: readonly string[]) => boolean) => {
+      heldGit = matches
+    },
+    /** The next Git step in this folder ignores interrupts until `releaseGit`, then runs. */
+    wedgeNextGitIn: (directory: string) => {
+      wedgedGitDirectory = directory
+    },
+    releaseGit: Effect.suspend(() => {
+      heldGit = undefined
+      hungGitDirectory = undefined
+      return Deferred.succeed(gitGate, undefined)
+    }),
+    wedgedGitDone: Deferred.await(wedgedGitDone),
+    holdWorktreeRemovals: () => {
+      holdRemovals = true
+    },
+    releaseWorktreeRemovals: Deferred.succeed(removalGate, undefined),
+    /** Opening this folder never answers, as when the Git read of its layout hangs. */
+    hangFolder: (directory: string | undefined) => {
+      hungFolder = directory
     },
   }
 }
@@ -478,6 +525,18 @@ describe("Arena stop recovery, watchdog, and finalization timings", () => {
           const archived = yield* arena.archiveSession(canonicalID, { onlyIfEmpty: true })
           expect(archived?.chat.status).toBe("archived")
           expect(archived?.history).toEqual([])
+
+          // A first send that failed before its chat existed leaves a session with no chat. That
+          // is an empty draft too, unless the session already holds something the user sent.
+          const unresolved = nextSessionID()
+          fixture.sessions.set(unresolved, { info: makeSessionInfo(unresolved, repo, "Draft"), messages: [] })
+          expect(yield* arena.archiveSession(unresolved, { onlyIfEmpty: true })).toBeNull()
+          fixture.sessions.set(unresolved, {
+            info: makeSessionInfo(unresolved, repo, "Draft"),
+            messages: completedMessages(unresolved, repo, "Already sent."),
+          })
+          const refused = yield* Effect.flip(arena.archiveSession(unresolved, { onlyIfEmpty: true }))
+          expect(refused.message).toBe("Arena draft already has a turn")
         }).pipe(Effect.provide(fixture.layer)),
       )
     } finally {
@@ -872,7 +931,7 @@ describe("Arena stop recovery, watchdog, and finalization timings", () => {
     }
   }, 30_000)
 
-  test("restart recovery skips a hung canonical inspection instead of blocking", async () => {
+  test("restart recovery skips a hung canonical inspection, and a request then waits for Git", async () => {
     const { repo, dataDir, cleanup } = await createRepo()
     let store = await connectLocalStore({ directory: dataDir })
     process.env.OPENCODE_ARENA = "1"
@@ -893,28 +952,287 @@ describe("Arena stop recovery, watchdog, and finalization timings", () => {
         ).pipe(Effect.provide(fixture1.layer)),
       )
 
-      // Reopen with Git hung in the canonical checkout. The inspection deadline must let recovery
-      // finish and leave the chat ready, not block the instance load or block the checkout.
+      // Reopen with Git slow in the canonical checkout.
+      await store.close()
+      store = await connectLocalStore({ directory: dataDir })
+      setStoreForTest(store)
+      const fixture2 = createFixtureLayer(repo, canonicalID, "cancelable")
+      process.env.OPENCODE_ARENA_FINALIZATION_GIT_TIMEOUT_MS = "300"
+      fixture2.holdGit((cwd) => cwd === repo)
+
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const arena = yield* ArenaService.Service
+            // Recovery gates every call. It gives up on the inspection and leaves the chat ready.
+            const started = Date.now()
+            yield* Effect.exit(arena.stop("no-such-turn"))
+            expect(Date.now() - started).toBeLessThan(10_000)
+            expect((yield* Effect.promise(() => store.chat(chatID)))?.status).toBe("ready")
+
+            // Opening the chat is not recovery: it waits for Git well past the limit, as main does,
+            // and reads the checkout once Git answers.
+            const opening = yield* arena.session(canonicalID).pipe(Effect.forkScoped)
+            yield* Effect.sleep("1200 millis")
+            expect(opening.pollUnsafe()).toBeUndefined()
+            yield* fixture2.releaseGit
+            const opened = yield* Fiber.join(opening)
+            expect(opened.chat.status).toBe("ready")
+          }),
+        ).pipe(Effect.provide(fixture2.layer)),
+      )
+    } finally {
+      await store.close()
+      await cleanup()
+    }
+  }, 30_000)
+
+  test("a running battle waits for slow Git instead of failing the side", async () => {
+    const { repo, dataDir, cleanup } = await createRepo()
+    const store = await connectLocalStore({ directory: dataDir })
+    const router = installOpenRouterStub()
+    process.env.OPENCODE_ARENA = "1"
+    // The Stop limit, far shorter than the Git below takes. It must not apply here.
+    process.env.OPENCODE_ARENA_FINALIZATION_GIT_TIMEOUT_MS = "300"
+    setStoreForTest(store)
+    const canonicalID = nextSessionID()
+    const fixture = createFixtureLayer(repo, canonicalID, "cancelable")
+
+    try {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const arena = yield* ArenaService.Service
+            const resolved = yield* arena.session(canonicalID)
+            // The first step of saving a side's changes, which no preparation step runs.
+            fixture.holdGit((cwd, args) => cwd !== repo && args[0] === "status" && args.includes("--no-renames"))
+            const started = yield* arena.startTurn(resolved.chat.id, "Slow Git is not a failed side.")
+            const turnID = started.turn!.id
+
+            // The side's answer is in and its changes are being saved, which is where Git is slow.
+            yield* Effect.promise(() =>
+              waitForRun(store, turnID, (run) => run.runState === "complete", "first side answered"),
+            )
+            yield* Effect.sleep("1200 millis")
+            const waiting = yield* Effect.promise(() => store.runsForTurn(turnID))
+            expect(waiting.some((run) => run.runState === "error" || run.error !== undefined)).toBe(false)
+            expect(waiting.some((run) => run.finalizedAt !== undefined)).toBe(false)
+
+            yield* fixture.releaseGit
+            const saved = yield* Effect.promise(() =>
+              waitForRun(store, turnID, (run) => run.runState === "complete" && !!run.finalizedAt, "first side saved"),
+            )
+            expect(saved.selectable).toBe(true)
+            expect(saved.error).toBeUndefined()
+            expect(saved.finalCommit).toBeDefined()
+            expect(saved.finalizationTimings?.failedStep).toBeUndefined()
+
+            yield* arena.stop(turnID)
+            yield* Effect.promise(() => waitForTurn(store, turnID, "awaiting_stop_resolution"))
+          }),
+        ).pipe(Effect.provide(fixture.layer)),
+      )
+    } finally {
+      router.restore()
+      await store.close()
+      await cleanup()
+    }
+  }, 30_000)
+
+  test("a fiber the watchdog gave up on cannot write over recovery", async () => {
+    const { repo, dataDir, cleanup } = await createRepo()
+    const store = await connectLocalStore({ directory: dataDir })
+    const router = installOpenRouterStub()
+    process.env.OPENCODE_ARENA = "1"
+    process.env.OPENCODE_ARENA_STOP_WATCHDOG_MS = "150"
+    setStoreForTest(store)
+    const canonicalID = nextSessionID()
+    const fixture = createFixtureLayer(repo, canonicalID, "cancelable")
+
+    try {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const arena = yield* ArenaService.Service
+            const resolved = yield* arena.session(canonicalID)
+            const started = yield* arena.startTurn(resolved.chat.id, "Stuck side outlives its interrupt.")
+            const turnID = started.turn!.id
+            const finished = yield* Effect.promise(() =>
+              waitForRun(store, turnID, (run) => run.runState === "complete" && !!run.finalizedAt, "first side"),
+            )
+            const stuck = yield* Effect.promise(() =>
+              waitForRun(store, turnID, (run) => run._id !== finished._id, "second side"),
+            )
+
+            // The stopped side's save reaches a Git step that ignores the watchdog's interrupt.
+            fixture.wedgeNextGitIn(stuck.worktree)
+            yield* arena.stop(turnID)
+
+            // Recovery goes ahead without that fiber and settles the side itself.
+            yield* Effect.promise(() => waitForTurn(store, turnID, "awaiting_stop_resolution"))
+            const recovered = yield* Effect.promise(() => store.run(stuck._id))
+            expect(recovered?.runState).toBe("stopped")
+            expect(recovered?.finalizedAt).toBeDefined()
+            expect(recovered?.finalCommit).toBeDefined()
+            expect(recovered?.error).toBeUndefined()
+
+            // The wedged step finishes and the old fiber unwinds. It writes nothing.
+            yield* fixture.releaseGit
+            yield* fixture.wedgedGitDone
+            yield* Effect.sleep("500 millis")
+            expect(yield* Effect.promise(() => store.run(stuck._id))).toEqual(recovered)
+            expect((yield* Effect.promise(() => store.turn(turnID)))?.state).toBe("awaiting_stop_resolution")
+          }),
+        ).pipe(Effect.provide(fixture.layer)),
+      )
+    } finally {
+      router.restore()
+      await store.close()
+      await cleanup()
+    }
+  }, 30_000)
+
+  test("a Discard that cannot start in time is refused and never runs later", async () => {
+    const { repo, dataDir, cleanup } = await createRepo()
+    let store = await connectLocalStore({ directory: dataDir })
+    const router = installOpenRouterStub()
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(store)
+    const canonicalID = nextSessionID()
+    const fixture1 = createFixtureLayer(repo, canonicalID, "cancelable")
+    let turnID = ""
+
+    try {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const arena = yield* ArenaService.Service
+            const resolved = yield* arena.session(canonicalID)
+            const started = yield* arena.startTurn(resolved.chat.id, "Discard during recovery.")
+            turnID = started.turn!.id
+            yield* Effect.promise(() =>
+              waitForRun(store, turnID, (run) => run.runState === "complete" && !!run.finalizedAt, "first side"),
+            )
+            yield* arena.stop(turnID)
+            yield* Effect.promise(() => waitForTurn(store, turnID, "awaiting_stop_resolution"))
+          }),
+        ).pipe(Effect.provide(fixture1.layer)),
+      )
+
+      // Restart with Git slow in the checkout, so recovery outlasts the Discard's wait.
+      await store.close()
+      store = await connectLocalStore({ directory: dataDir })
+      setStoreForTest(store)
+      const fixture2 = createFixtureLayer(repo, canonicalID, "cancelable")
+      for (const run of await store.runsForTurn(turnID)) {
+        const sid = SessionID.make(run.rootSessionID)
+        fixture2.sessions.set(sid, {
+          info: makeSessionInfo(sid, run.worktree, `Side ${run.side}`),
+          messages: completedMessages(sid, run.worktree, "Discard during recovery."),
+        })
+      }
+      process.env.OPENCODE_ARENA_FINALIZATION_GIT_TIMEOUT_MS = "20000"
+      process.env.OPENCODE_ARENA_DISCARD_REQUEST_TIMEOUT_MS = "300"
+      fixture2.holdGit((cwd) => cwd === repo)
+
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const arena = yield* ArenaService.Service
+            const refused = yield* Effect.flip(arena.resolveStop(turnID, "discard"))
+            expect(refused.message).toBe("Discard did not start in time, so the battle was not discarded. Try again.")
+
+            // Recovery finishes. The Discard the engine refused does not run behind it.
+            yield* fixture2.releaseGit
+            yield* Effect.exit(arena.stop("no-such-turn"))
+            yield* Effect.sleep("500 millis")
+            const kept = yield* Effect.promise(() => store.turn(turnID))
+            expect(kept?.state).toBe("awaiting_stop_resolution")
+            expect(kept?.resolution).toBeUndefined()
+
+            // Pressed again, it discards. Its cleanup outlasts the wait this time: the discard is
+            // recorded, so the request answers with it rather than reporting a failure.
+            fixture2.holdWorktreeRemovals()
+            const answered = yield* arena.resolveStop(turnID, "discard")
+            expect(answered.turn?.id ?? turnID).toBe(turnID)
+            const recorded = yield* Effect.promise(() => store.turn(turnID))
+            expect(recorded?.resolution).toEqual({ kind: "stopped", resolution: "discard" })
+            expect(recorded?.state).toBe("discarding")
+
+            yield* fixture2.releaseWorktreeRemovals
+            yield* Effect.promise(() => waitForTurn(store, turnID, "discarded"))
+            expect((yield* Effect.promise(() => store.chat(kept!.chatID)))?.status).toBe("ready")
+          }),
+        ).pipe(Effect.provide(fixture2.layer)),
+      )
+    } finally {
+      router.restore()
+      await store.close()
+      await cleanup()
+    }
+  }, 30_000)
+
+  test("restart recovery gives up on a folder that will not open", async () => {
+    const { repo, dataDir, cleanup } = await createRepo()
+    let store = await connectLocalStore({ directory: dataDir })
+    const router = installOpenRouterStub()
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(store)
+    const canonicalID = nextSessionID()
+    const fixture1 = createFixtureLayer(repo, canonicalID, "stuck")
+    let turnID = ""
+    let finishedRunID = ""
+
+    try {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const arena = yield* ArenaService.Service
+            const resolved = yield* arena.session(canonicalID)
+            const started = yield* arena.startTurn(resolved.chat.id, "Folder will not open.")
+            turnID = started.turn!.id
+            const finished = yield* Effect.promise(() =>
+              waitForRun(store, turnID, (run) => run.runState === "complete" && !!run.finalizedAt, "first side"),
+            )
+            finishedRunID = finished._id
+            yield* Effect.promise(() => store.transitionTurn(turnID, "stopping"))
+          }),
+        ).pipe(Effect.provide(fixture1.layer)),
+      )
+
       await store.close()
       store = await connectLocalStore({ directory: dataDir })
       setStoreForTest(store)
       const fixture2 = createFixtureLayer(repo, canonicalID, "cancelable")
       process.env.OPENCODE_ARENA_FINALIZATION_GIT_TIMEOUT_MS = "500"
-      fixture2.hangGitIn(repo)
+      for (const run of await store.runsForTurn(turnID)) {
+        const sid = SessionID.make(run.rootSessionID)
+        fixture2.sessions.set(sid, {
+          info: makeSessionInfo(sid, run.worktree, `Side ${run.side}`),
+          messages: inProgressMessages(sid, run.worktree, "Folder will not open."),
+        })
+        if (run._id !== finishedRunID) fixture2.hangFolder(run.worktree)
+      }
 
-      const started = Date.now()
       await Effect.runPromise(
         Effect.scoped(
           Effect.gen(function* () {
             const arena = yield* ArenaService.Service
             const recovered = yield* arena.session(canonicalID)
-            expect(recovered.chat.status).toBe("ready")
+            expect(recovered.turn?.state).toBe("awaiting_stop_resolution")
+            const runs = yield* Effect.promise(() => store.runsForTurn(turnID))
+            const preserved = runs.find((run) => run._id === finishedRunID)
+            const unopened = runs.find((run) => run._id !== finishedRunID)
+            expect(preserved?.runState).toBe("complete")
+            expect(preserved?.selectable).toBe(true)
+            expect(unopened?.runState).toBe("stopped")
+            expect(unopened?.selectable).toBe(false)
+            expect(unopened?.error).toContain("Git timed out while opening the folder")
           }),
         ).pipe(Effect.provide(fixture2.layer)),
       )
-      expect(Date.now() - started).toBeLessThan(10_000)
-      expect((await store.chat(chatID))?.status).toBe("ready")
     } finally {
+      router.restore()
       await store.close()
       await cleanup()
     }

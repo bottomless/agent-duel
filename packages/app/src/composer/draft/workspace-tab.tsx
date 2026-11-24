@@ -87,6 +87,7 @@ import {
   type FailedFirstSendDeps,
 } from "@/composer/draft/failed-first-send";
 import {
+  carryDraftIntoLateFirstBattle,
   useLateFirstBattleStore,
   watchLateFirstBattleAdmission,
   type LateFirstBattle,
@@ -99,6 +100,8 @@ import { forgetLastWorkspaceSelection } from "@/stores/navigation-active-workspa
 function presentBattleStartError(error: unknown): unknown {
   return neutralBattleStartError(noticeAccountSessionRejection(error));
 }
+
+type LostBattleStart = Pick<LateFirstBattle, "agentId" | "prompt" | "result">;
 
 async function submitDraftCreateRequest(input: {
   draftId: string;
@@ -121,7 +124,7 @@ async function submitDraftCreateRequest(input: {
   /** Hold the typed prompt and its images as the agent's next battle when nothing will send it now. */
   queueBattlePrompt: (agentId: string, text: string, images: UserMessageImageAttachment[]) => void;
   /** Watch for a start whose response was lost; the engine may still admit it after the failure. */
-  watchLateBattleAdmission: (battle: Omit<LateFirstBattle, "serverId">) => void;
+  watchLateBattleAdmission: (battle: LostBattleStart) => void;
 }): Promise<{
   agentId: string | null;
   result: AgentSnapshotPayload;
@@ -202,7 +205,7 @@ async function startDraftBattle(input: {
   result: AgentSnapshotPayload;
   handOffStartedBattle: (agentId: string, snapshot: ArenaSnapshot) => void;
   queueBattlePrompt: (agentId: string, text: string, images: UserMessageImageAttachment[]) => void;
-  watchLateBattleAdmission: (battle: Omit<LateFirstBattle, "serverId">) => void;
+  watchLateBattleAdmission: (battle: LostBattleStart) => void;
 }): Promise<void> {
   const { client, agentId, text, images, promptAttachments } = input;
   try {
@@ -413,6 +416,7 @@ export function WorkspaceDraftComposer({
   const draftOptionControls = composerState.agentControls.optionControls;
 
   const clearDraftInput = draftInput.clear;
+  const flushDraftText = draftInput.flushText;
   const replaceDraftText = draftInput.replaceText;
   const setDraftAttachments = draftInput.setAttachments;
   const pendingAutoSubmit = useWorkspaceDraftSubmissionStore((state) => {
@@ -491,12 +495,16 @@ export function WorkspaceDraftComposer({
   const handleLateBattleAdmitted = useCallback(
     (battle: LateFirstBattle, snapshot: ArenaSnapshot) => {
       handOffStartedBattle(battle.agentId, snapshot);
+      // The composer stayed usable while the battle was pending. What was typed there opens
+      // with the chat instead of being cleared with the draft.
+      flushDraftText();
+      carryDraftIntoLateFirstBattle({ battle, draftKey: draftStoreKey });
       // The abandoned create record stood in for the failed send; the admitted battle replaces
       // it, the same way an accepted start drops the record instead of marking it sent.
       useCreateFlowStore.getState().clear({ draftId });
       handleCreateSucceeded(battle.result);
     },
-    [draftId, handOffStartedBattle, handleCreateSucceeded],
+    [draftId, draftStoreKey, flushDraftText, handOffStartedBattle, handleCreateSucceeded],
   );
   const lateBattle = useLateFirstBattleStore((state) => state.byDraftId[draftId] ?? null);
   useEffect(() => {
@@ -555,7 +563,7 @@ export function WorkspaceDraftComposer({
         workspaceDirectory: draftWorkingDirectory,
         arenaThinking: arenaPreferences.thinking,
       }),
-    createRequest: async ({ attempt, text, images, attachments, cwd }) => {
+    createRequest: async ({ attempt, text, images, attachments, composerAttachments, cwd }) => {
       if (pendingAutoSubmit?.agentCreation) {
         const result = await pendingAutoSubmit.agentCreation.result.catch(firstAgentCreationFailed);
         return { agentId: result.id, result };
@@ -586,7 +594,11 @@ export function WorkspaceDraftComposer({
           savePendingBattlePrompt({ serverId, agentId, text: promptText, images: promptImages });
         },
         watchLateBattleAdmission: (battle) => {
-          useLateFirstBattleStore.getState().set(draftId, { serverId, ...battle });
+          useLateFirstBattleStore.getState().set(draftId, {
+            serverId,
+            ...battle,
+            attachments: composerWorkspaceAttachment.userAttachmentsOnly(composerAttachments),
+          });
         },
       });
     },
@@ -666,6 +678,7 @@ export function WorkspaceDraftComposer({
     const createPromise = preparedAttempt
       ? continueCreateFromAttempt({
           attempt: preparedAttempt,
+          composerAttachments: submission.attachments,
           cwd: submission.cwd,
         })
       : handleCreateFromInput({

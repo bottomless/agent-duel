@@ -9131,7 +9131,9 @@ export class Session {
       const snapshot = await arena.archive(
         emptyDraftAgentId === undefined ? undefined : { onlyIfEmpty: true },
       );
-      if (emptyDraftAgentId !== undefined && snapshot?.chat.status !== "archived") {
+      // `null` is the engine's answer for a draft whose chat was never created: the first send
+      // failed before that, and the engine checked that the session holds no prompt.
+      if (emptyDraftAgentId !== undefined && snapshot && snapshot.chat.status !== "archived") {
         throw new Error("Arena did not confirm the empty draft was archived");
       }
       if (snapshot) this.syncArenaPreviewRoutes(snapshot);

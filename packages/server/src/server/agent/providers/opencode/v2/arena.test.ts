@@ -106,6 +106,27 @@ test("the V2 session requests an empty-only archive for draft cleanup but not fo
   }
 });
 
+test("a 404 is an answer for an explicit archive but not for an empty-only one", async () => {
+  const server = createServer((_request, response) => {
+    response.writeHead(404, { "content-type": "application/json" });
+    response.end("{}");
+  });
+  servers.push(server);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const api = createArenaSessionApi({
+    connection: () => ({
+      serverUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+      controlToken: "archive-test",
+    }),
+    sessionId: "ses_canonical",
+    directory: "/tmp/arena-project",
+  });
+  await expect(api.archive()).resolves.toBeNull();
+  await expect(api.archive({ onlyIfEmpty: true })).rejects.toThrow(
+    "Arena request failed with status 404",
+  );
+});
+
 test("an engine refusal the app words itself keeps its code; other failures do not", async () => {
   const failures = [
     {
