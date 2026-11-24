@@ -188,6 +188,12 @@ export const en = {
     noneRunning: "None running",
     letResolve: "Let an agent resolve",
     battlesPaused: "Battles are paused",
+    diskFull: "The disk is full",
+    diskFullDetail:
+      "Agent Duel can't save this battle until the disk has room. Free some space, for example with Free up in Settings, and it finishes by itself.",
+    lowDisk: "Low disk space",
+    lowDiskDetail:
+      "This battle needs about {{needed}} free and the disk has {{free}}. If the disk fills up, the battle waits for space instead of failing.",
     mergeConflicts: "Some files have merge conflicts",
     discardWinning: "Discard winning changes",
     winningNotApplied: "The winning changes were not applied",

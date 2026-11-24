@@ -1869,6 +1869,33 @@ export class OpenCodeAgentClient implements AgentClient {
         }
         return ArenaEnvironmentTrimSchema.parse(await response.json());
       },
+      removeOrphanPools: async (checkouts) => {
+        const current = await this.serverManager.acquireCurrent();
+        await acquisition.release();
+        acquisition = current;
+        const response = await fetch(
+          new URL("/arena/environments/orphans", acquisition.server.url),
+          {
+            method: "POST",
+            headers: {
+              Accept: "application/json",
+              "Content-Type": "application/json",
+              "x-opencode-directory": openCodeDirectoryHeader(sourceRepoRoot),
+              "x-paseo-control-token": acquisition.server.controlToken,
+            },
+            body: JSON.stringify({ checkouts }),
+            // Each pool it removes is a tree of contestant worktrees to delete.
+            signal: AbortSignal.timeout(300_000),
+          },
+        );
+        if (!response.ok) {
+          const detail = await response.text().catch(() => "");
+          throw new Error(
+            `Arena orphan pool sweep failed with status ${response.status}: ${detail}`,
+          );
+        }
+        return z.object({ removed: z.number() }).parse(await response.json()).removed;
+      },
       close: () => acquisition.release(),
     };
   }

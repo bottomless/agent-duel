@@ -153,6 +153,7 @@ export const arenaHandlers = HttpApiBuilder.group(ArenaApi, "arena", (handlers) 
         map(arena.releaseCheckout(ctx.payload.root).pipe(Effect.as(HttpApiSchema.NoContent.make()))),
       )
       .handle("trimEnvironments", (ctx) => map(arena.trimEnvironments(ctx.payload.keep, ctx.payload.volumeOf)))
+      .handle("removeOrphanPools", (ctx) => map(arena.removeOrphanPools(ctx.payload.checkouts)))
       .handle("prewarmProject", (ctx) =>
         map(arena.prewarmProject(ctx.payload.root).pipe(Effect.as(HttpApiSchema.NoContent.make()))),
       )

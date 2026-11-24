@@ -237,6 +237,49 @@ export class WorkspaceCleanupService {
       );
       if ((await this.trimThroughBackend(1, root)) === "unavailable") return;
     }
+    await this.removeOrphanPools();
+  }
+
+  /**
+   * Delete battle worktree pools no Arena home owns: left by a home that is gone, or carried along
+   * when a checkout was moved or copied. It runs whatever the retention limit, which only counts
+   * chats a store knows. A failure is logged and retried at the next trim.
+   */
+  private async removeOrphanPools(): Promise<number> {
+    try {
+      const checkouts = await this.orphanSweepCheckouts();
+      const [anchor] = await this.projectRoots();
+      if (!anchor || checkouts.length === 0) return 0;
+      const source = await this.deps.openSource(anchor);
+      if (!source) return 0;
+      try {
+        const removed = await source.removeOrphanPools(checkouts);
+        if (removed > 0)
+          this.deps.logger.info({ removed }, "Removed orphaned battle worktree pools");
+        return removed;
+      } finally {
+        await source.close();
+      }
+    } catch (err) {
+      this.deps.logger.warn({ err }, "Orphaned battle worktree pool sweep failed");
+      return 0;
+    }
+  }
+
+  /**
+   * Every checkout an open workspace names that exists: a project's root and each worktree, since
+   * a chat's pools sit inside the checkout it runs in, a New worktree's inside that worktree.
+   */
+  private async orphanSweepCheckouts(): Promise<string[]> {
+    const checkouts: string[] = [];
+    for (const workspace of await this.deps.registry.listAll()) {
+      if (workspace.archivedAt || workspace.cleanup) continue;
+      for (const root of [workspace.mainRepoRoot, workspace.worktreeRoot, workspace.cwd]) {
+        if (!root || checkouts.includes(root)) continue;
+        if (await pathExists(root).catch(() => false)) checkouts.push(root);
+      }
+    }
+    return checkouts;
   }
 
   private deferTrim(wait: number): void {
@@ -306,6 +349,7 @@ export class WorkspaceCleanupService {
   async trimEnvironments(keep: number): Promise<ArenaEnvironmentTrim> {
     const trimmed = await this.trimThroughBackend(keep);
     if (trimmed === "unavailable") throw new Error("The Agent Duel backend is unavailable");
+    await this.removeOrphanPools();
     return trimmed;
   }
 

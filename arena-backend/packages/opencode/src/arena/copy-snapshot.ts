@@ -415,7 +415,7 @@ async function nestedWorktreeRoots(canonical: string, roots: readonly string[]) 
 }
 
 /** Where a root is cloned before it moves into a contestant directory; see `CloneOptions`. */
-const STAGING_DIRNAME = ".staging"
+export const STAGING_DIRNAME = ".staging"
 
 /** The trash a contestant's cleared trees go to: the one the next turn's reclaim sweeps. */
 function seedTrash(canonical: string) {

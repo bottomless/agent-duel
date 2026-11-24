@@ -1,3 +1,4 @@
+import { ArenaDiskSpace } from "./disk-space"
 import { createHash } from "crypto"
 import { ArenaLive } from "./live"
 import { constants } from "fs"
@@ -273,6 +274,8 @@ export class Recorder {
     }
     const failure = this.failures.get(turnID)
     if (!failure) return
+    // A full disk lost these writes, not the turn: record the gap once there is room and go on.
+    if (ArenaDiskSpace.isDiskFull(failure.cause)) return this.recordGapWhenDiskAllows(turnID)
     if (this.gaps.has(turnID)) {
       const previous = this.queues.get(turnID) ?? Promise.resolve()
       const marker = previous
@@ -288,6 +291,39 @@ export class Recorder {
     const current = this.failures.get(turnID)!
     this.failures.delete(turnID)
     throw this.persistenceError(current)
+  }
+
+  /**
+   * Write the gap marker for writes a full disk refused, retrying until the disk has room. The
+   * battle shows it waits (`waitingForDiskSince`). A stop, a resolution or a discard ends the wait
+   * with the persistence failure, as a refused write always ended before.
+   */
+  private async recordGapWhenDiskAllows(turnID: string) {
+    let waiting = false
+    try {
+      while (true) {
+        const failure = this.failures.get(turnID)
+        if (!failure) return
+        try {
+          await this.persistGap(turnID, failure)
+          this.failures.delete(turnID)
+          return
+        } catch (cause) {
+          if (!ArenaDiskSpace.isDiskFull(cause)) throw this.persistenceError({ cause, count: failure.count })
+          const turn = await this.store.turn(turnID).catch(() => undefined)
+          if (turn && (turn.resolution !== undefined || turn.state === "stopping" || turn.state === "discarded")) {
+            throw this.persistenceError(failure)
+          }
+          if (!waiting) {
+            waiting = true
+            await this.store.updateTurn(turnID, { waitingForDiskSince: new Date() }).catch(() => undefined)
+          }
+          await new Promise((resolve) => setTimeout(resolve, ArenaDiskSpace.diskRetryMs()))
+        }
+      }
+    } finally {
+      if (waiting) await this.store.updateTurn(turnID, { waitingForDiskSince: null }).catch(() => undefined)
+    }
   }
 
   private recordFailure(turnID: string, cause: unknown) {

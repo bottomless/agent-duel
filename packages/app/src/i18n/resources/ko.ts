@@ -193,6 +193,12 @@ export const ko: TranslationResources = {
     noneRunning: "실행 중인 항목 없음",
     letResolve: "에이전트에게 해결 요청",
     battlesPaused: "배틀이 일시 중지되었습니다",
+    diskFull: "디스크가 가득 찼습니다",
+    diskFullDetail:
+      "디스크에 공간이 생길 때까지 Agent Duel이 이 배틀을 저장할 수 없습니다. 설정의 정리 등으로 공간을 확보하면 자동으로 마무리됩니다.",
+    lowDisk: "디스크 공간 부족",
+    lowDiskDetail:
+      "이 배틀에는 약 {{needed}}의 여유 공간이 필요하지만 디스크에는 {{free}}만 남아 있습니다. 디스크가 가득 차면 배틀은 실패하지 않고 공간이 생길 때까지 기다립니다.",
     mergeConflicts: "일부 파일에 병합 충돌이 있습니다",
     discardWinning: "승자 변경 사항 삭제",
     winningNotApplied: "승자 변경 사항이 적용되지 않았습니다",
