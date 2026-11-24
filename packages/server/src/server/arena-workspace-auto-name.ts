@@ -31,16 +31,29 @@ export async function applyArenaFirstTurnMetadata(input: {
 }
 
 export async function applyArenaChatTitle(input: {
-  agent: Pick<ManagedAgent, "workspaceId">;
+  agent: Pick<ManagedAgent, "workspaceId" | "cwd">;
   snapshot: ArenaSnapshot;
-  workspaceAutoName: Pick<WorkspaceAutoName, "applyTitle">;
+  workspaceAutoName: Pick<WorkspaceAutoName, "applyTitle" | "nameFromPrompt">;
 }): Promise<void> {
   const { turn, comparison } = input.snapshot;
-  if (turn?.index !== 0 || !comparison?.title || !input.agent.workspaceId) {
+  if (turn?.index !== 0 || !input.agent.workspaceId) {
     return;
   }
-  await input.workspaceAutoName.applyTitle(input.agent.workspaceId, {
-    title: comparison.title,
-    promptTitle: resolveFirstAgentPromptTitle({ prompt: turn.prompt }),
-  });
+  if (comparison?.title) {
+    await input.workspaceAutoName.applyTitle(input.agent.workspaceId, {
+      title: comparison.title,
+      promptTitle: resolveFirstAgentPromptTitle({ prompt: turn.prompt }),
+    });
+    return;
+  }
+  // An early pick, a stopped battle or one that never started has no comparison to name the chat,
+  // and no later comparison names it, so the summary model names it from the prompt. A failed
+  // side's skipped comparison still names it, and that battle ends at a vote.
+  if (turn.comparisonState === "skipped" && turn.resolution && turn.resolution.kind !== "vote") {
+    await input.workspaceAutoName.nameFromPrompt({
+      workspaceId: input.agent.workspaceId,
+      cwd: input.agent.cwd,
+      firstAgentContext: { prompt: turn.prompt },
+    });
+  }
 }

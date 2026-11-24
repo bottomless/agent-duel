@@ -295,8 +295,10 @@ only Changes.
 
 On the first turn the judge also returns a `Title:` line, which the engine removes from the report.
 A new chat shows its prompt's first line until that title arrives; any other workspace name stays
-(`arena-workspace-auto-name.ts`). Equal trees or a failed side request only the title. Battle off
-uses the metadata route described under [Blinding](#blinding). A failed title request leaves the
+(`arena-workspace-auto-name.ts`). Equal trees or a failed side request only the title. An early
+pick, a stop or a battle that never started has no comparison, and later turns ask for no title, so
+the daemon names that chat from its first prompt on the metadata route, as Battle off does (see
+[Blinding](#blinding)). A failed title request leaves the
 prompt's first line. Never start a coding agent to name a chat: it uses the full agent setup for a
 metadata task.
 
