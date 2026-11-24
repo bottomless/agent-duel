@@ -4685,14 +4685,16 @@ export const layer: Layer.Layer<
           completedAt,
         }),
       )
+      const chat = yield* promise(() => store.chat(turn.chatID))
+      if (!chat) return yield* Effect.fail(new Error(`Arena chat not found: ${turn.chatID}`))
       const permanentRef = `${refRoot(turn)}/${run.side}`
       // A finalization that failed after writing the run's refs, on an import below for one,
-      // recorded nothing, and the run can still be retried. Only this run writes those refs, so
-      // what they hold is its own earlier result, and this result moves them on from it.
+      // recorded nothing, and the run can still be retried. Canonical holds what was admitted;
+      // the contestant's host copy of those refs can be rewritten or pruned.
       const previous =
         stored?.permanentRef === permanentRef && stored.finalCommit
           ? { commit: stored.finalCommit, indexTree: stored.finalIndexTree }
-          : yield* withGit(readResultRefs(run.worktree.directory, permanentRef)).pipe(Effect.mapError(error))
+          : yield* withGit(readResultRefs(chat.repository.root, permanentRef)).pipe(Effect.mapError(error))
       // What the contestant left running is paused while the result is read, so it cannot change
       // the files under Git (`pauseOwnedProcessGroups`). Finding it is best effort: without it the
       // snapshot still runs, with only its own retry.
@@ -4704,6 +4706,8 @@ export const layer: Layer.Layer<
               worktree: run.worktree.directory,
               baseSHA: turn.frozenBaseSHA,
               frozenHead: turn.baseSnapshot?.canonicalHead ?? turn.frozenBaseSHA,
+              canonical: chat.repository.root,
+              ...(turn.baseSnapshot?.permanentRef ? { baseRef: turn.baseSnapshot.permanentRef } : {}),
               permanentRef,
               ...(previous.commit ? { expectedPermanentCommit: previous.commit } : {}),
               ...(previous.indexTree ? { expectedFinalIndexTree: previous.indexTree } : {}),
@@ -4711,8 +4715,6 @@ export const layer: Layer.Layer<
           ),
         (paused) => Effect.promise(() => resumeProcessGroups(paused)),
       ).pipe(Effect.mapError(error))
-      const chat = yield* promise(() => store.chat(turn.chatID))
-      if (!chat) return yield* Effect.fail(new Error(`Arena chat not found: ${turn.chatID}`))
       yield* withGit(
         importResultRef({
           canonical: chat.repository.root,
