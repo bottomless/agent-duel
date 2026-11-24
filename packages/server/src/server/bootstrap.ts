@@ -1,3 +1,4 @@
+import os from "node:os";
 import { unarchiveWorkspaceAgents } from "./workspace-archive-service.js";
 import { createRestartRecovery } from "./agent/restart-recovery/index.js";
 import { sendPromptToAgent, unarchiveAgentState } from "./agent/agent-prompt.js";
@@ -168,6 +169,7 @@ import {
 import { CheckoutDiffManager } from "./checkout-diff-manager.js";
 import { DaemonConfigStore, type MutableDaemonConfig } from "./daemon-config-store.js";
 import { createOrchestrationSkills } from "./orchestration-skills/index.js";
+import { createAgentPlugins } from "./agent-plugins/index.js";
 import {
   resolveReloadableConfig,
   type ResolvedDaemonSettings,
@@ -249,7 +251,7 @@ import { createLeaderboardRouter } from "./leaderboard/routes.js";
 import { createFeedbackRouter } from "./feedback/routes.js";
 import { WorkspaceAutoName } from "./workspace-auto-name.js";
 import { createGitMetadataGenerator } from "./session/checkout/git-metadata-generator.js";
-import { configureGitProcessPolicy } from "../utils/run-git-command.js";
+import { configureGitProcessPolicy, runGitCommand } from "../utils/run-git-command.js";
 import { resolveGitProcessPolicy } from "../utils/git-process-scheduler.js";
 import { resolveFirstAgentPromptTitle } from "./agent/create-agent-title.js";
 import type { CreateAgentCommandDependencies } from "./agent/create-agent/create.js";
@@ -776,6 +778,14 @@ export async function createPaseoDaemon(
   const orchestrationSkills = createOrchestrationSkills(daemonConfigStore);
   void orchestrationSkills.autoUpdate().catch((error) => {
     logger.error({ err: error }, "Failed to maintain orchestration skills at startup");
+  });
+  const agentPlugins = createAgentPlugins({
+    paseoHome: config.paseoHome,
+    home: os.homedir(),
+    runGit: runGitCommand,
+  });
+  void agentPlugins.start().catch((error) => {
+    logger.error({ err: error }, "Failed to import Claude Code and Codex plugins at startup");
   });
   const browserToolsPolicy = new DaemonConfigBrowserToolsPolicy(daemonConfigStore);
   const browserToolsBroker = new BrowserToolsBroker({});
@@ -1877,6 +1887,7 @@ export async function createPaseoDaemon(
               pluginRuntime,
               orchestrationSkills,
               workspaceLabelService,
+              agentPlugins,
             );
             pluginRuntime.bindPaseoSessionHost(wsServer);
             await pluginRuntime.start();
