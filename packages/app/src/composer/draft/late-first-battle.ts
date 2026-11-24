@@ -88,6 +88,38 @@ function attachmentIdentity(attachment: UserComposerAttachment): string {
   return JSON.stringify(normalizeComposerAttachment(attachment));
 }
 
+function textBeyondSentPrompt(draftText: string, sentPrompt: string): string {
+  const trimmedDraft = draftText.trim();
+  if (!trimmedDraft) return "";
+  const sent = sentPrompt.trim();
+  if (!sent) return draftText;
+  if (trimmedDraft === sent) return "";
+
+  const leadingTrimmed = draftText.trimStart();
+  if (leadingTrimmed.startsWith(sent)) {
+    return leadingTrimmed.slice(sent.length).trimStart();
+  }
+
+  const trailingTrimmed = draftText.trimEnd();
+  if (trailingTrimmed.endsWith(sent)) {
+    return trailingTrimmed.slice(0, trailingTrimmed.length - sent.length).trimEnd();
+  }
+
+  const index = draftText.indexOf(sent);
+  if (index !== -1) {
+    const before = draftText.slice(0, index);
+    const after = draftText.slice(index + sent.length);
+    const beforeBoundary = before.length === 0 || /\s$/.test(before);
+    const afterBoundary = after.length === 0 || /^\s/.test(after);
+    if (beforeBoundary && afterBoundary) {
+      const separator = before.includes("\n") || after.includes("\n") ? "\n" : " ";
+      return [before.trimEnd(), after.trimStart()].filter(Boolean).join(separator);
+    }
+  }
+
+  return draftText;
+}
+
 /**
  * What the draft holds that the admitted battle does not, or null when that is nothing. The
  * restored prompt and the attachments sent with it stay behind: the battle has them, and a copy
@@ -97,11 +129,9 @@ export function draftBeyondLateFirstBattle(input: {
   battle: Pick<LateFirstBattle, "prompt" | "attachments">;
   draft: DraftInput;
 }): DraftInput | null {
-  const typed = input.draft.text.trim();
-  const isNewText = typed.length > 0 && typed !== input.battle.prompt.trim();
   const sent = new Set(input.battle.attachments.map(attachmentIdentity));
   const beyond: DraftInput = {
-    text: isNewText ? input.draft.text : "",
+    text: textBeyondSentPrompt(input.draft.text, input.battle.prompt),
     attachments: input.draft.attachments.filter(
       (attachment) => !sent.has(attachmentIdentity(attachment)),
     ),

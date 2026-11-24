@@ -484,9 +484,11 @@ const unlimitGit = <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.provideSe
  * interrupt that fiber and wait only briefly for it, since it can be wedged where an interrupt does
  * not reach. Recovery then owns the turn's runs, so a fiber still unwinding is marked abandoned:
  * every later store call and Git step it attempts ends as an interrupt instead of writing over
- * what recovery wrote.
+ * what recovery wrote. `stopped` completes as soon as Stop claims the turn, so a side that already
+ * finished its prompt and is still saving picks up the Git limit mid-step instead of waiting for
+ * the watchdog.
  */
-type TurnWork = { abandoned: boolean }
+type TurnWork = { abandoned: boolean; readonly stopped: Deferred.Deferred<void> }
 const TurnWork = Context.Reference<TurnWork | undefined>("@opencode/Arena/TurnWork", {
   defaultValue: () => undefined,
 })
@@ -505,6 +507,11 @@ function discardRequestMs() {
   const configured = Number(process.env.OPENCODE_ARENA_DISCARD_REQUEST_TIMEOUT_MS)
   return Number.isFinite(configured) && configured > 0 ? configured : 90_000
 }
+function failedCleanupRetryMs() {
+  const configured = Number(process.env.OPENCODE_ARENA_CLEANUP_RETRY_MS)
+  return Number.isFinite(configured) && configured > 0 ? configured : 10_000
+}
+const FAILED_CLEANUP_RETRY_MAX_MS = 60_000
 const interruptAbandoned = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   Effect.flatMap(Effect.service(TurnWork), (work) => (work?.abandoned ? Effect.interrupt : effect))
 
@@ -1653,13 +1660,19 @@ export const layer: Layer.Layer<
      */
     const forkTurnWork = <A, E, R>(turnID: string, effect: Effect.Effect<A, E, R>) =>
       Effect.suspend(() => {
-        const work: TurnWork = { abandoned: false }
+        const work: TurnWork = { abandoned: false, stopped: Deferred.makeUnsafe<void>() }
         return effect.pipe(
           Effect.provideService(TurnWork, work),
           unlimitGit,
           Effect.forkIn(scope),
           Effect.tap((fiber) => Effect.sync(() => trackTurnFiber(turnID, fiber, work))),
         )
+      })
+    const signalTurnStopped = (turnID: string) =>
+      Effect.sync(() => {
+        for (const work of activeTurnFibers.get(turnID)?.values() ?? []) {
+          Deferred.doneUnsafe(work.stopped, Effect.void)
+        }
       })
     const interruptTurnFibers = Effect.fnUntraced(function* (store: Store, turnID: string) {
       const own = yield* Effect.service(TurnWork)
@@ -1692,6 +1705,10 @@ export const layer: Layer.Layer<
     // watchdog's interrupted recovery from racing a manual Discard from stuck `stopping`.
     const stopWatchdogs = new Map<string, Fiber.Fiber<void, never>>()
     const stopRecoveryLocks = KeyedMutex.makeUnsafe<string>()
+    // Per-chat retry loops for worktrees left behind by a failed removal, and a per-run lock so a
+    // background retry and a foreground send never remove the same worktree at once.
+    const failedCleanupRetries = new Map<string, Fiber.Fiber<void, never>>()
+    const runCleanupLocks = KeyedMutex.makeUnsafe<string>()
     const cancelStopWatchdog = Effect.fnUntraced(function* (turnID: string) {
       const fiber = stopWatchdogs.get(turnID)
       if (!fiber) return
@@ -1794,34 +1811,46 @@ export const layer: Layer.Layer<
 
     const withGit = <A, E, R>(effect: Effect.Effect<A, E, R | Git.Service>) =>
       interruptAbandoned(effect.pipe(Effect.provideService(Git.Service, git)))
+    const gitTimeoutMs = () => {
+      const configured = Number(process.env.OPENCODE_ARENA_FINALIZATION_GIT_TIMEOUT_MS)
+      return Number.isFinite(configured) && configured > 0 ? configured : 45_000
+    }
     // Bound the whole step, including retries and time spent waiting for repository locks, where
-    // the fiber is `GitLimited`. Interrupting the Effect releases the Git subprocess before
-    // recovery or cleanup proceeds.
+    // the fiber is `GitLimited` or its turn is stopped while the step runs. Interrupting the
+    // Effect releases the Git subprocess before recovery or cleanup proceeds.
     const gitDeadline =
       (step: string) =>
       <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-        Effect.flatMap(Effect.service(GitLimited), (limited) => {
-          if (!limited) return effect as Effect.Effect<A, E | GitDeadlineError, R>
-          const configured = Number(process.env.OPENCODE_ARENA_FINALIZATION_GIT_TIMEOUT_MS)
-          const duration = Number.isFinite(configured) && configured > 0 ? configured : 45_000
-          return effect.pipe(
-            Effect.timeoutOrElse({
-              duration: Duration.millis(duration),
-              orElse: () => Effect.fail(new GitDeadlineError(`Git timed out while ${step}`)),
-            }),
+        Effect.gen(function* () {
+          const limited = yield* Effect.service(GitLimited)
+          const work = yield* Effect.service(TurnWork)
+          if (limited) {
+            return yield* effect.pipe(
+              Effect.timeoutOrElse({
+                duration: Duration.millis(gitTimeoutMs()),
+                orElse: () => Effect.fail(new GitDeadlineError(`Git timed out while ${step}`)),
+              }),
+            )
+          }
+          if (!work) return yield* effect
+          const deadline = Deferred.await(work.stopped).pipe(
+            Effect.andThen(Effect.sleep(Duration.millis(gitTimeoutMs()))),
+            Effect.andThen(Effect.fail(new GitDeadlineError(`Git timed out while ${step}`))),
           )
+          return yield* Effect.raceFirst(effect, deadline)
         })
-    // Opening a folder reads its Git layout. Where the fiber is `GitLimited` that read is bounded
-    // too; the load itself is left running, so a later battle joins it and waits for Git's answer
-    // instead of the folder being recorded as anything it is not.
+    // Opening a folder reads its Git layout. Where the fiber is `GitLimited` (or its turn has been
+    // stopped) that read is bounded too; the load itself is left running, so a later battle joins
+    // it and waits for Git's answer instead of the folder being recorded as anything it is not.
     const inDirectory = <A, E, R>(directory: string, effect: Effect.Effect<A, E, R>) =>
-      Effect.flatMap(Effect.service(GitLimited), (limited) =>
-        limited
-          ? instances
-              .load({ directory })
-              .pipe(gitDeadline("opening the folder"), Effect.andThen(instances.provide({ directory }, effect)))
-          : instances.provide({ directory }, effect),
-      )
+      Effect.gen(function* () {
+        const limited = yield* Effect.service(GitLimited)
+        const work = yield* Effect.service(TurnWork)
+        if (limited || (work !== undefined && Deferred.isDoneUnsafe(work.stopped))) {
+          yield* instances.load({ directory }).pipe(gitDeadline("opening the folder"))
+        }
+        return yield* instances.provide({ directory }, effect)
+      })
     /**
      * What a contestant session may not change or reach outside its worktree: it reads the main
      * checkout but does not write to it, and does not reach the checkout's `.agent-duel`, which holds
@@ -6656,6 +6685,7 @@ export const layer: Layer.Layer<
           if (current?.state === "running") yield* promise(() => store.transitionTurn(turn._id, "finalizing"))
           yield* promise(() => store.transitionTurn(turn._id, "finalization_failed"))
           yield* promise(() => store.transitionTurn(turn._id, "awaiting_stop_resolution"))
+          yield* cancelStopWatchdog(turn._id)
           return
         }
         yield* finalizeReadyTurn(store, turn, chat.repository.root)
@@ -7343,6 +7373,7 @@ export const layer: Layer.Layer<
           if (current?.state === "running") yield* promise(() => store.transitionTurn(turn._id, "finalizing"))
           yield* promise(() => store.transitionTurn(turn._id, "finalization_failed"))
           yield* promise(() => store.transitionTurn(turn._id, "awaiting_stop_resolution"))
+          yield* cancelStopWatchdog(turn._id)
           return
         }
         yield* finalizeReadyTurn(store, turn, canonical)
@@ -7648,12 +7679,14 @@ export const layer: Layer.Layer<
       store: Store,
       chat: ChatDocument,
       run: RunDocument,
+      options?: { readonly background?: boolean },
     ) {
       const at = new Date()
       const historicalServices = yield* endRunEnvironment(store, run, at)
       yield* removeContestantTmp(run)
       yield* forgetSlot(run.worktree)
-      yield* withRepositoryMutation(
+      const withLock = options?.background ? withBackgroundRepositoryMutation : withRepositoryMutation
+      yield* withLock(
         chat.canonicalCheckout?.commonGitDir ?? chat.repository.root,
         inDirectory(chat.repository.root, worktrees.remove({ directory: run.worktree, keepBranch: false })),
       ).pipe(gitDeadline("removing the contestant worktree"))
@@ -8673,10 +8706,24 @@ export const layer: Layer.Layer<
       )
     })
 
+    const hasFailedCleanup = Effect.fnUntraced(function* (store: Store, chat: ChatDocument) {
+      const turns = yield* promise(() => store.turnsForChat(chat._id))
+      const runs = yield* Effect.forEach(turns, (turn) => promise(() => store.runsForTurn(turn._id)), {
+        concurrency: 4,
+      })
+      return runs
+        .flat()
+        .some(
+          (run) =>
+            run.retention === "cleanup_failed" && run._id !== chat.retainedWinner?.runID && !run.worktreeRemovedAt,
+        )
+    })
+
     const retryFailedRunCleanups = Effect.fn("Arena.retryFailedRunCleanups")(function* (
       store: Store,
       chat: ChatDocument,
       currentTurnID: string,
+      options?: { readonly background?: boolean },
     ) {
       const turns = yield* promise(() => store.turnsForChat(chat._id))
       const priorRuns = yield* Effect.forEach(
@@ -8690,32 +8737,101 @@ export const layer: Layer.Layer<
           (run) =>
             run.retention === "cleanup_failed" && run._id !== chat.retainedWinner?.runID && !run.worktreeRemovedAt,
         )
+      let remaining = 0
       yield* Effect.forEach(
         failed,
-        (run) =>
-          Effect.gen(function* () {
-            const stopped = yield* stopRunServices(store, run)
-            const failures = stopped.filter((record) => record.status === "failed" || !record.verified)
-            if (failures.length > 0) {
-              yield* promise(() =>
-                store.updateTurn(run.turnID, {
-                  cleanup: {
-                    state: "failed",
-                    error: `Arena could not stop ${failures.length} previously losing service${failures.length === 1 ? "" : "s"}`,
-                  },
-                }),
+        (run) => {
+          const attempt = runCleanupLocks.withLock(run._id)(
+            Effect.gen(function* () {
+              const latest = yield* promise(() => store.run(run._id))
+              if (!latest || latest.retention !== "cleanup_failed" || latest.worktreeRemovedAt) return
+              const stopped = yield* stopRunServices(store, latest)
+              const failures = stopped.filter((record) => record.status === "failed" || !record.verified)
+              if (failures.length > 0) {
+                yield* promise(() =>
+                  store.updateTurn(latest.turnID, {
+                    cleanup: {
+                      state: "failed",
+                      error: `Arena could not stop ${failures.length} previously losing service${failures.length === 1 ? "" : "s"}`,
+                    },
+                  }),
+                )
+                return yield* Effect.fail(
+                  new Error(
+                    `Arena could not stop ${failures.length} previously losing service${failures.length === 1 ? "" : "s"}`,
+                  ),
+                )
+              }
+              yield* removeStoppedRun(store, chat, latest, options)
+              const turnRuns = yield* promise(() => store.runsForTurn(latest.turnID))
+              const stillFailed = turnRuns.some(
+                (candidate) => candidate.retention === "cleanup_failed" && !candidate.worktreeRemovedAt,
               )
-              return yield* Effect.fail(
-                new Error(
-                  `Arena could not stop ${failures.length} previously losing service${failures.length === 1 ? "" : "s"}`,
+              if (!stillFailed) {
+                yield* promise(() => store.updateTurn(latest.turnID, { cleanup: { state: "complete" } }))
+              }
+            }),
+          )
+          if (!options?.background) return attempt
+          return attempt.pipe(
+            Effect.catchCause((cause) =>
+              Effect.sync(() => {
+                remaining += 1
+              }).pipe(
+                Effect.andThen(
+                  Effect.logWarning("Arena could not retry failed worktree cleanup", {
+                    chatID: chat._id,
+                    turnID: run.turnID,
+                    runID: run._id,
+                    cause,
+                  }),
                 ),
-              )
-            }
-            yield* removeStoppedRun(store, chat, run)
-            yield* promise(() => store.updateTurn(run.turnID, { cleanup: { state: "complete" } }))
-          }),
+              ),
+            ),
+          )
+        },
         { concurrency: 1, discard: true },
       )
+      return remaining
+    })
+
+    /**
+     * Keep retrying stranded worktree removals for a chat in the background until Git answers
+     * again, so a folder left behind by a Git timeout does not sit on disk until restart.
+     */
+    const scheduleFailedCleanupRetry = Effect.fnUntraced(function* (store: Store, chatID: string) {
+      if (failedCleanupRetries.has(chatID)) return
+      const base = failedCleanupRetryMs()
+      const max = Math.max(base, FAILED_CLEANUP_RETRY_MAX_MS)
+      let delay = base
+      let fiber: Fiber.Fiber<void, never> | undefined
+      fiber = yield* Effect.gen(function* () {
+        while (true) {
+          yield* Effect.sleep(Duration.millis(delay))
+          const current = yield* promise(() => store.chat(chatID))
+          if (!current || current.status === "archived" || current.checkoutEvicted) return
+          if (!(yield* hasFailedCleanup(store, current))) return
+          const remaining = yield* retryFailedRunCleanups(store, current, current.activeTurnID ?? "", {
+            background: true,
+          }).pipe(limitGit)
+          if (remaining === 0 && !(yield* hasFailedCleanup(store, current))) return
+          if (remaining > 0) delay = Math.min(max, delay * 2)
+        }
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.void
+            : Effect.logWarning("Arena failed cleanup retry stopped", { chatID, cause }),
+        ),
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (fiber && failedCleanupRetries.get(chatID) === fiber) failedCleanupRetries.delete(chatID)
+          }),
+        ),
+        Effect.interruptible,
+        Effect.forkIn(scope),
+      )
+      failedCleanupRetries.set(chatID, fiber)
     })
 
     const reuseWarmPairForTurn = Effect.fn("Arena.reuseWarmPairForTurn")(function* (
@@ -9512,6 +9628,7 @@ export const layer: Layer.Layer<
         yield* promise(() =>
           store.updateTurn(turn._id, { cleanup: { state: "failed", error: Cause.pretty(loserCleanup.cause) } }),
         )
+        yield* scheduleFailedCleanupRetry(store, turn.chatID)
         return
       }
       const { instanceStoppedAt, stoppedCount } = loserCleanup.value
@@ -9729,6 +9846,7 @@ export const layer: Layer.Layer<
             : { state: "complete" },
         }),
       )
+      if (errors.length > 0) yield* scheduleFailedCleanupRetry(store, chat._id)
     })
 
     /**
@@ -10360,20 +10478,21 @@ export const layer: Layer.Layer<
               // Trees a previous process moved aside and did not finish deleting.
               yield* sweepSlotTrash(currentChat)
               // Worktrees a failed cleanup left behind (a Git timeout, a service that would not
-              // stop) go here too, so they do not wait for the developer's next send. Skipped while
-              // a send holds the start lock: that send retries the same cleanups itself.
-              yield* turnStartLock(currentChat._id)
-                .withPermitsIfAvailable(1)(
-                  retryFailedRunCleanups(store, currentChat, "").pipe(
-                    Effect.catchCause((cause) =>
-                      Effect.logWarning("Arena could not retry failed worktree cleanups", {
-                        chatID: currentChat._id,
-                        cause,
-                      }),
-                    ),
-                  ),
-                )
-                .pipe(Effect.forkIn(scope))
+              // stop) go here too, so they do not wait for the developer's next send. If Git is
+              // still hung at startup, keep retrying in the background until it recovers.
+              yield* retryFailedRunCleanups(store, currentChat, "", { background: true }).pipe(
+                Effect.flatMap((remaining) =>
+                  remaining > 0 ? scheduleFailedCleanupRetry(store, currentChat._id) : Effect.void,
+                ),
+                Effect.catchCause((cause) =>
+                  Effect.logWarning("Arena could not retry failed worktree cleanups", {
+                    chatID: currentChat._id,
+                    cause,
+                  }).pipe(Effect.andThen(scheduleFailedCleanupRetry(store, currentChat._id))),
+                ),
+                limitGit,
+                Effect.forkIn(scope),
+              )
               const stranded = turns.at(-1)
               if (
                 stranded?.state !== "cleanup_pending" ||
@@ -12001,6 +12120,8 @@ export const layer: Layer.Layer<
           ),
         )
         if (!claimed?.claimed) return
+        // Bound any side that already finished its prompt and is still saving in Git.
+        yield* signalTurnStopped(id)
         // The request acknowledges the claim, not shell shutdown. Cancellation can itself hang.
         yield* startStopWatchdog(store, id)
         environmentCopyStops.get(id)?.abort(new Error("Arena battle was stopped during environment setup"))
@@ -12018,7 +12139,7 @@ export const layer: Layer.Layer<
             },
             { concurrency: 2, discard: true },
           )
-        })
+        }).pipe(limitGit)
         yield* trackOperation(store, id, "stopping_agents", stopAgents).pipe(
           Effect.catchCause((cause) =>
             Cause.hasInterruptsOnly(cause)

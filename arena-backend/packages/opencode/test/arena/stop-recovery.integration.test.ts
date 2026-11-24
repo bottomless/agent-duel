@@ -36,6 +36,7 @@ afterEach(() => {
   delete process.env.OPENCODE_ARENA_STOP_WATCHDOG_MS
   delete process.env.OPENCODE_ARENA_FINALIZATION_GIT_TIMEOUT_MS
   delete process.env.OPENCODE_ARENA_DISCARD_REQUEST_TIMEOUT_MS
+  delete process.env.OPENCODE_ARENA_CLEANUP_RETRY_MS
   setStoreForTest(undefined)
   registry.assignments.clear()
 })
@@ -466,7 +467,10 @@ function createFixtureLayer(root: string, canonicalID: SessionID, secondSideBeha
     holdWorktreeRemovals: () => {
       holdRemovals = true
     },
-    releaseWorktreeRemovals: Deferred.succeed(removalGate, undefined),
+    releaseWorktreeRemovals: Effect.suspend(() => {
+      holdRemovals = false
+      return Deferred.succeed(removalGate, undefined)
+    }),
     /** Opening this folder never answers, as when the Git read of its layout hangs. */
     hangFolder: (directory: string | undefined) => {
       hungFolder = directory
@@ -1308,6 +1312,135 @@ describe("Arena stop recovery, watchdog, and finalization timings", () => {
             expect(existsSync(strandedWorktree)).toBe(false)
           }),
         ).pipe(Effect.provide(fixture2.layer)),
+      )
+    } finally {
+      router.restore()
+      await store.close()
+      await cleanup()
+    }
+  }, 30_000)
+
+  test("pressing Stop bounds an already-finished side whose Git save is still running", async () => {
+    const { repo, dataDir, cleanup } = await createRepo()
+    const store = await connectLocalStore({ directory: dataDir })
+    const router = installOpenRouterStub()
+    process.env.OPENCODE_ARENA = "1"
+    // Watchdog is far longer than the Git limit so the test proves the Git limit ended the save,
+    // not the watchdog.
+    process.env.OPENCODE_ARENA_STOP_WATCHDOG_MS = "60000"
+    process.env.OPENCODE_ARENA_FINALIZATION_GIT_TIMEOUT_MS = "300"
+    setStoreForTest(store)
+    const canonicalID = nextSessionID()
+    const fixture = createFixtureLayer(repo, canonicalID, "cancelable")
+
+    try {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const arena = yield* ArenaService.Service
+            const resolved = yield* arena.session(canonicalID)
+            const started = yield* arena.startTurn(resolved.chat.id, "Stop while first side is saving.")
+            const turnID = started.turn!.id
+            // Hold only the first side's finalize step, leaving the second side free to save when
+            // Stop cancels it.
+            const firstRun = yield* Effect.promise(() =>
+              waitForRun(store, turnID, (run) => run.side === "a", "side a created"),
+            )
+            fixture.holdGit(
+              (cwd, args) => cwd === firstRun.worktree && args[0] === "status" && args.includes("--no-renames"),
+            )
+
+            // Side A answers and enters Git save while the battle is still running (unbounded).
+            yield* Effect.promise(() =>
+              waitForRun(store, turnID, (run) => run._id === firstRun._id && run.runState === "complete", "side a answered"),
+            )
+            yield* Effect.sleep("800 millis")
+            const stillSaving = yield* Effect.promise(() => store.run(firstRun._id))
+            expect(stillSaving?.finalizedAt).toBeUndefined()
+            expect(stillSaving?.error).toBeUndefined()
+
+            // Press Stop while Side A is already stuck inside Git save. Its in-flight save picks up
+            // the 300ms Git limit instead of waiting for the 60s watchdog.
+            const stoppedAt = Date.now()
+            yield* arena.stop(turnID)
+            yield* Effect.promise(() => waitForTurn(store, turnID, "awaiting_stop_resolution"))
+            expect(Date.now() - stoppedAt).toBeLessThan(10_000)
+
+            const runs = yield* Effect.promise(() => store.runsForTurn(turnID))
+            const timedOut = runs.find((run) => run._id === firstRun._id)
+            const other = runs.find((run) => run._id !== firstRun._id)
+            expect(timedOut?.finalizedAt).toBeDefined()
+            expect(timedOut?.selectable).toBe(false)
+            expect(timedOut?.error).toContain("Git timed out while saving worktree changes")
+            expect(timedOut?.finalizationTimings?.failedStep).toBe("snapshotting_changes")
+            expect(other?.runState).toBe("stopped")
+            expect(other?.finalizedAt).toBeDefined()
+            expect(other?.error).toBeUndefined()
+          }),
+        ).pipe(Effect.provide(fixture.layer)),
+      )
+    } finally {
+      router.restore()
+      await store.close()
+      await cleanup()
+    }
+  }, 30_000)
+
+  test("retries a worktree removal that timed out in Git once Git works again, without restarting", async () => {
+    const { repo, dataDir, cleanup } = await createRepo()
+    const store = await connectLocalStore({ directory: dataDir })
+    const router = installOpenRouterStub()
+    process.env.OPENCODE_ARENA = "1"
+    process.env.OPENCODE_ARENA_FINALIZATION_GIT_TIMEOUT_MS = "250"
+    process.env.OPENCODE_ARENA_CLEANUP_RETRY_MS = "100"
+    setStoreForTest(store)
+    const canonicalID = nextSessionID()
+    const fixture = createFixtureLayer(repo, canonicalID, "cancelable")
+
+    try {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const arena = yield* ArenaService.Service
+            const resolved = yield* arena.session(canonicalID)
+            const started = yield* arena.startTurn(resolved.chat.id, "Retry hung worktree removal.")
+            const turnID = started.turn!.id
+            yield* Effect.promise(() =>
+              waitForRun(store, turnID, (run) => run.runState === "complete" && !!run.finalizedAt, "first side"),
+            )
+            yield* arena.stop(turnID)
+            yield* Effect.promise(() => waitForTurn(store, turnID, "awaiting_stop_resolution"))
+
+            // Worktree removal hangs as if Git wedged, so Discard hits its Git limit and leaves
+            // the folders on disk marked `cleanup_failed`.
+            fixture.holdWorktreeRemovals()
+            const discarded = yield* arena.resolveStop(turnID, "discard")
+            expect(discarded.chat.status).toBe("ready")
+
+            const strandedRuns = (yield* Effect.promise(() => store.runsForTurn(turnID))).filter(
+              (run) => run.retention === "cleanup_failed" && !run.worktreeRemovedAt,
+            )
+            expect(strandedRuns.length).toBeGreaterThan(0)
+            for (const run of strandedRuns) expect(existsSync(run.worktree)).toBe(true)
+            expect((yield* Effect.promise(() => store.turn(turnID)))?.cleanup?.state).toBe("failed")
+
+            // Let a background retry hit the same hang and time out cleanly, then unblock Git.
+            yield* Effect.sleep("450 millis")
+            for (const run of strandedRuns) expect(existsSync(run.worktree)).toBe(true)
+            yield* fixture.releaseWorktreeRemovals
+
+            // Without restarting or starting another battle, the background retry removes every
+            // stranded worktree and marks cleanup complete.
+            for (const run of strandedRuns) {
+              const removed = yield* Effect.promise(() =>
+                waitForRun(store, turnID, (candidate) => candidate._id === run._id && !!candidate.worktreeRemovedAt, "background retry"),
+              )
+              expect(removed.retention).toBe("none")
+              expect(existsSync(run.worktree)).toBe(false)
+            }
+            expect((yield* Effect.promise(() => store.turn(turnID)))?.cleanup?.state).toBe("complete")
+          }),
+        ).pipe(Effect.provide(fixture.layer)),
       )
     } finally {
       router.restore()

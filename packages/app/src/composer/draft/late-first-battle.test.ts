@@ -264,9 +264,35 @@ describe("what the draft holds beyond the admitted battle", () => {
     expect(beyond({ text: "  ", attachments: [] })).toBeNull();
   });
 
-  it("is the edited prompt, without the attachments the battle already has", () => {
+  it("strips the restored prompt when new text was typed after it", () => {
     expect(beyond({ text: "build it with tests", attachments: [sent] })).toEqual({
-      text: "build it with tests",
+      text: "with tests",
+      attachments: [],
+    });
+    expect(beyond({ text: "build it\n\nalso check edge cases", attachments: [sent] })).toEqual({
+      text: "also check edge cases",
+      attachments: [],
+    });
+    expect(beyond({ text: "build italso check edge cases", attachments: [sent] })).toEqual({
+      text: "also check edge cases",
+      attachments: [],
+    });
+  });
+
+  it("strips the restored prompt when new text was typed before or around it", () => {
+    expect(beyond({ text: "check logs first\n\nbuild it", attachments: [sent] })).toEqual({
+      text: "check logs first",
+      attachments: [],
+    });
+    expect(beyond({ text: "check logs\nbuild it\nadd tests", attachments: [sent] })).toEqual({
+      text: "check logs\nadd tests",
+      attachments: [],
+    });
+  });
+
+  it("does not strip a substring inside a different word", () => {
+    expect(beyond({ text: "please rebuild it now", attachments: [] })).toEqual({
+      text: "please rebuild it now",
       attachments: [],
     });
   });
@@ -332,10 +358,10 @@ describe("handing the draft to the chat a late battle opens", () => {
     expect(agentComposerDraft()).toBeUndefined();
   });
 
-  it("opens the chat's composer with the text typed while waiting", () => {
-    typeInDraft({ text: "build it with tests", attachments: [sent] });
+  it("opens the chat's composer with only the text typed while waiting", () => {
+    typeInDraft({ text: "build it\n\nwith tests", attachments: [sent] });
     handOff();
-    expect(agentComposerDraft()).toEqual({ text: "build it with tests", attachments: [] });
+    expect(agentComposerDraft()).toEqual({ text: "with tests", attachments: [] });
   });
 
   it("opens the chat's composer with the attachments added while waiting", () => {
