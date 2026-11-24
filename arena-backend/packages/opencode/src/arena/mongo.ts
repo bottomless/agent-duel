@@ -1528,6 +1528,13 @@ export class Store {
   ) {
     const claimed = await this.claimTurn(turn)
     const admitted = claimed.value
+    // A duplicate logical ID can return another admission's document. Only that admission
+    // may dispatch work into its ref namespace, even if this checkout looks ready again.
+    if (admitted.baseSnapshot?.permanentRef !== turn.baseSnapshot?.permanentRef) {
+      const active = await this.chats.findOne({ _id: chatID, activeTurnID: admitted._id })
+      if (active) return { chat: active, turn: admitted, activated: false as const }
+      throw new Error(`Arena turn ${turn._id} was already claimed by another admission`)
+    }
     const clearedConflicts = canonical.trunkConflicts?.length === 0
     const activated = await this.chats
       .findOneAndUpdate(

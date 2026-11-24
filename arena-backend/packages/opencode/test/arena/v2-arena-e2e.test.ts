@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { $ } from "bun"
+import { chatSlug } from "@/arena/domain"
 
 describe("Arena v2 battle integration", () => {
   let originalFetch: typeof globalThis.fetch | undefined
@@ -101,6 +102,8 @@ describe("Arena v2 battle integration", () => {
       mode: "hosted",
       token: "test-token",
       controlPlaneUrl: "https://control.test",
+      researchAccountID: "test-account",
+      researchPartition: "test-partition",
       controlTokenHash: credentials.hashArenaControlToken(controlToken),
     })
     process.env.PASEO_HOME = home
@@ -131,6 +134,12 @@ describe("Arena v2 battle integration", () => {
     })
     expect(attached.status).toBe(200)
     const attachedBody = (await attached.json()) as { chat: { id: string } }
+    // The chat counter was restored, but the checkout still holds the earlier turn 0's results.
+    const legacyRoot = `refs/battles/${chatSlug(attachedBody.chat.id)}/turn-0`
+    const older = (await $`git commit-tree HEAD^{tree} -m earlier-result`.cwd(directory).quiet().text()).trim()
+    for (const name of ["a", "b", "selected"]) {
+      await $`git update-ref ${`${legacyRoot}/${name}`} ${older}`.cwd(directory).quiet()
+    }
     const started = await request(`/arena/chats/${attachedBody.chat.id}/turns`, {
       method: "POST",
       headers: { "x-opencode-directory": directory },
@@ -202,6 +211,9 @@ describe("Arena v2 battle integration", () => {
       current = await snapshot()
     }
     expect(current.chat.activeTurnID).toBeUndefined()
+    for (const name of ["a", "b", "selected"]) {
+      expect((await $`git rev-parse ${`${legacyRoot}/${name}`}`.cwd(directory).quiet().text()).trim()).toBe(older)
+    }
 
     const winnerRun = current.runs?.find((run) => run.side === "a")
     const loserRun = current.runs?.find((run) => run.side === "b")

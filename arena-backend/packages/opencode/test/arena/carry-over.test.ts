@@ -213,7 +213,9 @@ describe("Arena winner ref carry-over", () => {
 
     expect(turn.gitApplication).toMatchObject({
       state: "applied",
-      refs: [{ ref: "refs/heads/stale", action: "deleted", backupRef: expect.stringContaining("/replaced/heads/stale") }],
+      refs: [
+        { ref: "refs/heads/stale", action: "deleted", backupRef: expect.stringContaining("/replaced/heads/stale") },
+      ],
     })
   }, 60_000)
 
@@ -493,7 +495,7 @@ describe("Arena winner ref carry-over", () => {
     )
     // The winner's own tip stays under the turn's battle ref.
     expect(winner.permanentRef).toBeString()
-    expect(await revision(directory.path, `${winner.permanentRef}-refs/heads/main`)).toBe(main?.after)
+    expect(await revision(directory.path, `${winner.refChangesPrefix}/heads/main`)).toBe(main?.after)
   }, 60_000)
 
   test("follows the developer forward on one branch and replays the winner onto their rewind on another", async () => {
@@ -553,7 +555,7 @@ describe("Arena winner ref carry-over", () => {
     expect(await revision(directory.path, "refs/heads/beta^")).toBe(olderTip)
     expect((await $`git log -1 --format=%s refs/heads/beta`.cwd(directory.path).quiet().text()).trim()).toBe("beta")
     expect(winner.permanentRef).toBeString()
-    expect(await revision(directory.path, `${winner.permanentRef}-refs/heads/beta`)).toBe(beta?.after)
+    expect(await revision(directory.path, `${winner.refChangesPrefix}/heads/beta`)).toBe(beta?.after)
   }, 60_000)
 
   test("skips a name git cannot hold and still applies the rest of the list", async () => {
@@ -641,7 +643,10 @@ describe("Arena winner ref carry-over", () => {
     // A lossless move is still asked, because the other worktree loses its branch.
     expect(reviews[0]).toMatchObject([{ key: "refs/heads/main", proposal: "agent", choices: ["agent", "yours"] }])
     expect(reviews[0]?.[0]?.kind === "ref" && reviews[0][0].checkedOutAt).toMatch(/[\\/]arena-second-worktree$/)
-    expect(turn.gitApplication).toMatchObject({ state: "applied", refs: [{ ref: "refs/heads/main", action: "updated" }] })
+    expect(turn.gitApplication).toMatchObject({
+      state: "applied",
+      refs: [{ ref: "refs/heads/main", action: "updated" }],
+    })
 
     // The branch moved, and the other worktree stayed on its commit, detached, with its files.
     expect(await revision(directory.path, "refs/heads/main")).toBe(main?.after)

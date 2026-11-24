@@ -120,7 +120,8 @@ import {
 } from "./domain"
 import {
   acceptWinnerConflicts,
-  battleRefs,
+  allocateBattleBaseRef,
+  refRoot,
   changedBetweenBases,
   compare,
   comparisonFiles,
@@ -599,10 +600,6 @@ function keptReason(ref: ObservedRef, agentVersion: string): string {
     return `The winning agent moved ${label} back${where} and added nothing to it, so your ${label} was kept.`
   }
   return `Your ${label} was kept. The winning agent's version is at ${agentVersion}.`
-}
-
-function refRoot(turn: Pick<TurnDocument, "chatID" | "turnIndex">) {
-  return battleRefs(chatSlug(turn.chatID), turn.turnIndex).base.replace(/\/base$/, "")
 }
 
 function singleAgentResultRef(chatID: string, ratingID: string) {
@@ -3110,9 +3107,7 @@ export const layer: Layer.Layer<
         // left as it is, so a send reaches the battle's git check and says what to install. That
         // check runs here outside the trunk, which may really be gone.
         if (
-          Exit.isFailure(
-            yield* Effect.exit(withGit(requireBattleGit(process.cwd())).pipe(gitDeadline("probing git"))),
-          )
+          Exit.isFailure(yield* Effect.exit(withGit(requireBattleGit(process.cwd())).pipe(gitDeadline("probing git"))))
         ) {
           yield* Effect.logWarning("Arena skipped a canonical inspection because git does not run", {
             chatID: chat._id,
@@ -4951,13 +4946,13 @@ export const layer: Layer.Layer<
         )
         const chat = yield* promise(() => store.chat(turn.chatID))
         if (!chat) return yield* Effect.fail(new Error(`Arena chat not found: ${turn.chatID}`))
-        const permanentRef = `${refRoot(turn)}/${run.side}`
+        const permanentRef = stored?.permanentRef ?? `${refRoot(turn)}/${run.side}`
         // Canonical holds the authoritative admitted refs; a previous attempt may have imported them
         // without recording the result, while the contestant's host copy can be rewritten or pruned.
         const previous = yield* step(
           "snapshotting_changes",
           "gitFinalizeMs",
-          stored?.permanentRef === permanentRef && stored.finalCommit
+          stored?.permanentRef && stored.finalCommit
             ? Effect.succeed({ commit: stored.finalCommit, indexTree: stored.finalIndexTree })
             : withGit(readResultRefs(chat.repository.root, permanentRef)).pipe(gitDeadline("reading result refs")),
         ).pipe(Effect.mapError(error))
@@ -4992,7 +4987,7 @@ export const layer: Layer.Layer<
               Effect.promise(() => resumeProcessGroups(paused)),
             ),
         ).pipe(Effect.mapError(error))
-        const refChanges = yield* step(
+        const { refChanges, refChangesPrefix } = yield* step(
           "importing_results",
           "importRefsMs",
           Effect.gen(function* () {
@@ -5024,7 +5019,7 @@ export const layer: Layer.Layer<
                 canonical: chat.repository.root,
                 sourceRepository: run.worktree.directory,
                 sourceRef: "HEAD",
-                destinationRef: `${permanentRef}-head`,
+                destinationRef: `${permanentRef}-head-${result.rawHead}`,
                 expected: result.rawHead,
               }),
             ).pipe(Effect.mapError(error))
@@ -5038,32 +5033,25 @@ export const layer: Layer.Layer<
               // vote needs, and it started at the frozen head.
               const ref = `refs/heads/${result.branch}`
               refChanges = [{ ref, before: frozenHead, after: result.rawHead }]
+            } else if (host) {
+              refChanges = yield* withGit(diffHostRefs({ host, exclude: [] })).pipe(Effect.mapError(error))
+            }
+            // A reply can replace a tag, or replace branch x with x/y. Keep each set immutable;
+            // a partial import or an older set must never be overwritten to publish the new one.
+            const refChangesPrefix = `${permanentRef}-refs-${digest(refChanges)}`
+            for (const change of refChanges) {
+              if (!change.after) continue
               yield* withGit(
                 importWinnerRef({
                   canonical: chat.repository.root,
-                  sourceRepository: run.worktree.directory,
-                  sourceRef: ref,
-                  destinationRef: `${permanentRef}-refs/heads/${result.branch}`,
-                  expected: result.rawHead,
+                  sourceRepository: host ?? run.worktree.directory,
+                  sourceRef: change.ref,
+                  destinationRef: `${refChangesPrefix}/${change.ref.slice("refs/".length)}`,
+                  expected: change.after,
                 }),
               ).pipe(Effect.mapError(error))
             }
-            if (host) {
-              refChanges = yield* withGit(diffHostRefs({ host, exclude: [] })).pipe(Effect.mapError(error))
-              for (const change of refChanges) {
-                if (!change.after) continue
-                yield* withGit(
-                  importWinnerRef({
-                    canonical: chat.repository.root,
-                    sourceRepository: host,
-                    sourceRef: change.ref,
-                    destinationRef: `${permanentRef}-refs/${change.ref.slice("refs/".length)}`,
-                    expected: change.after,
-                  }),
-                ).pipe(Effect.mapError(error))
-              }
-            }
-            return refChanges
+            return { refChanges, refChangesPrefix }
           }).pipe(gitDeadline("importing result refs")),
         ).pipe(Effect.mapError(error))
         const diff = result.diff.reduce(
@@ -5081,6 +5069,7 @@ export const layer: Layer.Layer<
             ...(result.branch ? { finalBranch: result.branch } : {}),
             branchChanged,
             refChanges,
+            refChangesPrefix,
             ...(result.agentCommit ? { agentCommit: result.agentCommit } : {}),
             agentCommits: result.agentCommits,
             wrapperCreated: result.wrapperCreated,
@@ -6933,6 +6922,11 @@ export const layer: Layer.Layer<
       }
       yield* withGit(requireBattleGit(chat.repository.root)).pipe(Effect.mapError(error))
       const turnID = makeTurnID(chat._id, chat.turnCount)
+      // Ref names can be allocated afresh when only Git survived. An occupied turn record also
+      // owns this logical ID's artifacts and runs; do not start a second battle over them.
+      if (yield* promise(() => store.turn(turnID))) {
+        return yield* Effect.fail(new Error(`Arena turn ${turnID} already exists for this chat`))
+      }
       // The pair is drawn while the base freezes, so the send waits once for both. The draw is
       // account- and turn-scoped and idempotent on the control plane, so a send refused after this
       // point leaves an unused set and nothing else.
@@ -6959,7 +6953,7 @@ export const layer: Layer.Layer<
             withGit(
               snapshotBase({
                 canonical: latest.repository.root,
-                permanentRef: `${refRoot({ chatID: latest._id, turnIndex: latest.turnCount })}/base`,
+                permanentRef: allocateBattleBaseRef(chat._id, chat.turnCount),
               }),
             ).pipe(Effect.mapError(error)),
           )
@@ -10996,6 +10990,7 @@ export const layer: Layer.Layer<
       }
       const frozenHead = turn.baseSnapshot?.canonicalHead ?? turn.frozenBaseSHA
       const permanentRef = winner.permanentRef ?? `${refRoot(turn)}/${winner.side}`
+      const refChangesPrefix = winner.refChangesPrefix ?? `${permanentRef}-refs`
       const canonical = yield* withGit(inspectCanonical(root)).pipe(Effect.mapError(error))
       // A run finalized before the real HEAD was imported may have no commit to move a branch to.
       // Its files alone are measured against the chat branch, which loses what the winner moved
@@ -11069,7 +11064,7 @@ export const layer: Layer.Layer<
         observeWinnerRefs({
           canonical: root,
           changes: winner.refChanges ?? [],
-          sourceRefPrefix: `${permanentRef}-refs`,
+          sourceRefPrefix: refChangesPrefix,
           ...(checkoutBranch ? { checkoutBranch } : {}),
         }),
       ).pipe(Effect.mapError(error))
@@ -11101,7 +11096,7 @@ export const layer: Layer.Layer<
             ...(ref.clash.agent_on_yours || ref.clash.yours_on_agent
               ? { clash: ref.clash.agent_on_yours ?? ref.clash.yours_on_agent ?? [] }
               : {}),
-            ...(ref.agent ? { agentRef: `${permanentRef}-refs/${ref.ref.slice("refs/".length)}` } : {}),
+            ...(ref.agent ? { agentRef: `${refChangesPrefix}/${ref.ref.slice("refs/".length)}` } : {}),
             ...(ref.lost !== undefined ? { lost: ref.lost } : {}),
             ...(ref.lostSubjects?.length ? { lostSubjects: ref.lostSubjects } : {}),
             ...(ref.rewound ? { rewound: true } : {}),
@@ -11125,7 +11120,7 @@ export const layer: Layer.Layer<
             skipped.push({
               ref: ref.ref,
               action: "skipped",
-              reason: keptReason(ref, `${permanentRef}-refs/${ref.ref.slice("refs/".length)}`),
+              reason: keptReason(ref, `${refChangesPrefix}/${ref.ref.slice("refs/".length)}`),
             })
           }
           continue

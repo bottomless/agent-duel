@@ -1024,9 +1024,11 @@ behind the attachments sent with it, which the battle already has (`draftBeyondL
 Keep the error and retry instruction in the scrolling setup area
 until dismissed, so a long startup error cannot cover the composer. Start freezes canonical `HEAD`
 together with the exact staged, unstaged, and
-nonignored-untracked state in `refs/battles/<chat>/turn-<n>/base`, then draws a pair. Both agents
-work from that frozen state, so later canonical movement cannot shift the ground under a running
-battle.
+nonignored-untracked state in `refs/battles/<chat>/turn-<n>-<incarnation>/base`, then draws a pair.
+Allocate a fresh namespace at each start: a restored chat counter can reuse an index whose Git refs
+still exist. Resume, vote, and recovery use the stored base ref, including the old ordinal-only names.
+Both agents work from that frozen state, so later canonical movement cannot shift the ground under a
+running battle.
 
 An untracked embedded repository, a directory with its own `.git` the checkout does not track, is
 frozen as its files: what that repository tracks or leaves unignored, filtered through the

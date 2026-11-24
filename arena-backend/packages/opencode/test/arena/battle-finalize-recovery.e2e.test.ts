@@ -162,8 +162,8 @@ describe("Arena real battle finalize recovery", () => {
               "git switch -q main",
               "git branch -D clean-history >/dev/null",
               "for ref in $(git for-each-ref --format='%(refname)' 'refs/agent-duel/start/'); do git update-ref \"$ref\" \"$NEW_HEAD\"; done",
-              "for ref in $(git for-each-ref --format='%(refname)' 'refs/battles/*/turn-0/b'); do git update-ref \"$ref\" \"$NEW_HEAD\" && echo REF_REWRITTEN:$ref; done",
-              "for ref in $(git for-each-ref --format='%(refname)' 'refs/battles/*/turn-0/b-index'); do git update-ref -d \"$ref\" && echo INDEX_DELETED:$ref; done",
+              "for ref in $(git for-each-ref --format='%(refname)' 'refs/battles/*/turn-0*/b'); do git update-ref \"$ref\" \"$NEW_HEAD\" && echo REF_REWRITTEN:$ref; done",
+              "for ref in $(git for-each-ref --format='%(refname)' 'refs/battles/*/turn-0*/b-index'); do git update-ref -d \"$ref\" && echo INDEX_DELETED:$ref; done",
               "git reflog expire --expire=now --all",
               "git gc --prune=now -q",
               `git cat-file -e ${frozenBaseSHA} 2>/dev/null && echo BASE_PRESENT || echo BASE_PRUNED`,
@@ -301,7 +301,7 @@ describe("Arena real battle finalize recovery", () => {
     expect(initialRunB?.finalCommit).toBeTruthy()
     const firstCommitB = initialRunB!.finalCommit!
     frozenBaseSHA = (
-      await $`git for-each-ref --format='%(objectname)' 'refs/battles/*/turn-0/base'`.cwd(directory).quiet().text()
+      await $`git for-each-ref --format='%(objectname)' 'refs/battles/*/turn-0*/base'`.cwd(directory).quiet().text()
     ).trim()
     expect(frozenBaseSHA).toMatch(/^[0-9a-f]{40}$/)
     expect(frozenBaseSHA).not.toBe(canonicalHead)
