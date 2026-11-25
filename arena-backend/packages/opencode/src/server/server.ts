@@ -439,11 +439,12 @@ export function routeOptions(options: ServerOptions): ServerOptions {
     // upstream models.dev fetch, which adds latency and can fail before the daemon
     // reaches its authenticated native boundary. Explicit test/CLI options may opt in.
     models: { fetch: false, ...options.models },
-    // Contestants read AGENTS.md only. OpenCode 2.3 falls back to CLAUDE.md in a directory without
-    // an AGENTS.md and to ~/.claude/CLAUDE.md without a global AGENTS.md; that would put a user's
-    // personal Claude Code instructions into both contestants' prompts. Off until Agent Duel
-    // decides how project and global instruction files should load.
-    instructions: { claude: false, ...options.instructions },
+    // OpenCode 2.3 falls back to CLAUDE.md in a directory without an AGENTS.md and to
+    // ~/.claude/CLAUDE.md without a global AGENTS.md. With imports, the user's switches decide
+    // whether a project's or their own files load (`config/imported-setup.ts` in core); without
+    // them only AGENTS.md loads, so a user's personal Claude Code instructions never reach both
+    // contestants unasked.
+    instructions: { claude: Boolean(process.env.AGENT_DUEL_IMPORTED_CONFIG), ...options.instructions },
     // The daemon has its own private control-token boundary. Do not enable
     // upstream Basic-auth middleware on the embedded route graph.
     password: undefined,

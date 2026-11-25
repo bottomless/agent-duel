@@ -2717,6 +2717,10 @@ export const en = {
       globalIncluded_other: "Plus {{count}} global plugins",
       manageGlobal: "Manage global plugins",
     },
+    instructions: {
+      project: "This project's instructions",
+      global: "Your own instructions and skills",
+    },
     plugin: {
       repositoryClaude: "This project's Claude Code setup",
       repositoryCodex: "This project's Codex setup",
@@ -2736,6 +2740,7 @@ export const en = {
       titleClaude: "Use this project's Claude Code setup in Agent Duel",
       titleCodex: "Use this project's Codex setup in Agent Duel",
       titleBoth: "Use this project's Claude Code and Codex setup in Agent Duel",
+      titleInstructions: "Use this project's instructions in Agent Duel",
       review: "Review",
       import: "Import",
       dismiss: "Not now",

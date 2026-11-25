@@ -2728,6 +2728,10 @@ export const ru: TranslationResources = {
       globalIncluded_other: "И ещё глобальные плагины: {{count}}",
       manageGlobal: "Управлять глобальными плагинами",
     },
+    instructions: {
+      project: "Инструкции этого проекта",
+      global: "Ваши собственные инструкции и навыки",
+    },
     plugin: {
       repositoryClaude: "Настройка Claude Code этого проекта",
       repositoryCodex: "Настройка Codex этого проекта",
@@ -2747,6 +2751,7 @@ export const ru: TranslationResources = {
       titleClaude: "Используйте настройки Claude Code этого проекта в Agent Duel",
       titleCodex: "Используйте настройки Codex этого проекта в Agent Duel",
       titleBoth: "Используйте настройки Claude Code и Codex этого проекта в Agent Duel",
+      titleInstructions: "Использовать инструкции этого проекта в Agent Duel",
       review: "Просмотреть",
       import: "Импортировать",
       dismiss: "Не сейчас",

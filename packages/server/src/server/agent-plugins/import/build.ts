@@ -12,7 +12,7 @@ import { IMPORT_FEATURES, type DetectedPlugin, type PluginImporter } from "../pl
 import { RulesyncError, runRulesync } from "./rulesync.js";
 
 /** Bump when a build's output changes, so imports made by an older daemon are redone. */
-export const IMPORT_FORMAT = 3;
+export const IMPORT_FORMAT = 4;
 
 /** Why a plugin is missing from the build, by plugin id. */
 export type BuildErrors = Record<string, string>;
@@ -213,14 +213,36 @@ async function askBeforeMcpCalls(configFile: string, servers: readonly string[])
 }
 
 /**
+ * Whether the engine loads this scope's instruction files and skills in place: a project's
+ * AGENTS.md or CLAUDE.md, or the user's own (`config/imported-setup.ts` in the engine's core).
+ */
+export interface ImportSetup {
+  instructions: boolean;
+}
+
+const SETUP_FILE = "agent-duel.json";
+
+async function writeSetup(target: string, setup: ImportSetup): Promise<void> {
+  await fs.mkdir(target, { recursive: true });
+  await fs.writeFile(path.join(target, SETUP_FILE), `${JSON.stringify(setup, null, 2)}\n`);
+}
+
+/**
  * Replaces the files inside `target` rather than the directory itself, so the engine's watch on
  * the directory keeps working across imports.
  */
-async function replaceContents(target: string, output: string | null): Promise<void> {
+async function replaceContents(
+  target: string,
+  output: string | null,
+  setup: ImportSetup,
+): Promise<void> {
   await fs.mkdir(target, { recursive: true });
   for (const entry of await fs.readdir(target)) {
+    if (entry === SETUP_FILE) continue;
     await fs.rm(path.join(target, entry), { recursive: true, force: true });
   }
+  // Rewritten in place, so the engine never reads the scope without its switch.
+  await writeSetup(target, setup);
   if (!output) return;
   const configDir = path.join(output, ".opencode");
   if (await exists(configDir)) {
@@ -240,6 +262,7 @@ export async function buildImport(input: {
   plugins: readonly DetectedPlugin[];
   target: string;
   workRoot: string;
+  setup: ImportSetup;
 }): Promise<BuildErrors> {
   await fs.mkdir(input.workRoot, { recursive: true });
   const work = await fs.mkdtemp(path.join(input.workRoot, "build-"));
@@ -259,7 +282,7 @@ export async function buildImport(input: {
     if (Object.keys(merged.servers).length > 0) await writeMcp(merged.dir, merged.servers);
     const features = await presentMergedFeatures(merged);
     if (features.length === 0) {
-      await replaceContents(input.target, null);
+      await replaceContents(input.target, null, input.setup);
       return errors;
     }
     const output = path.join(work, "out");
@@ -279,12 +302,13 @@ export async function buildImport(input: {
       );
     } catch (error) {
       if (!(error instanceof RulesyncError)) throw error;
-      // The previous import stays in place; every plugin in this one reports the failure.
+      // The previous import stays in place, with this one's switch; every plugin reports the failure.
+      await writeSetup(input.target, input.setup);
       const failed = Object.fromEntries(imported.map((plugin) => [plugin.id, error.reason]));
       return { ...errors, ...failed };
     }
     await askBeforeMcpCalls(path.join(output, "opencode.jsonc"), Object.keys(merged.servers));
-    await replaceContents(input.target, output);
+    await replaceContents(input.target, output, input.setup);
     return errors;
   } finally {
     await fs.rm(work, { recursive: true, force: true });

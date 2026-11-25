@@ -783,6 +783,7 @@ export async function createPaseoDaemon(
   const agentPlugins = createAgentPlugins({
     paseoHome: config.paseoHome,
     home: os.homedir(),
+    configHome: process.env.XDG_CONFIG_HOME || undefined,
     runGit: runGitCommand,
   });
   void agentPlugins.start().catch((error) => {

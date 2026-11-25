@@ -2700,6 +2700,10 @@ export const ko: TranslationResources = {
       globalIncluded_other: "전역 플러그인 {{count}}개 추가 포함",
       manageGlobal: "전역 플러그인 관리",
     },
+    instructions: {
+      project: "이 프로젝트의 지침",
+      global: "내 지침과 스킬",
+    },
     plugin: {
       repositoryClaude: "이 프로젝트의 Claude Code 설정",
       repositoryCodex: "이 프로젝트의 Codex 설정",
@@ -2719,6 +2723,7 @@ export const ko: TranslationResources = {
       titleClaude: "이 프로젝트의 Claude Code 설정을 Agent Duel에서 사용하세요",
       titleCodex: "이 프로젝트의 Codex 설정을 Agent Duel에서 사용하세요",
       titleBoth: "이 프로젝트의 Claude Code 및 Codex 설정을 Agent Duel에서 사용하세요",
+      titleInstructions: "Agent Duel에서 이 프로젝트의 지침 사용",
       review: "검토",
       import: "가져오기",
       dismiss: "나중에",

@@ -23,6 +23,9 @@ export interface Sources {
   readonly project: readonly { readonly path: AbsolutePath; readonly present: boolean }[]
   readonly claude: readonly AbsolutePath[]
   readonly agents: readonly AbsolutePath[]
+  /** ~/.claude and ~/.agents when global sources load; they also lead `claude` and `agents`. */
+  readonly claudeGlobal?: AbsolutePath
+  readonly agentsGlobal?: AbsolutePath
   /** Config dirs Agent Duel imports from the user's Claude Code and Codex plugins (`options.imported`). */
   readonly imported?: {
     readonly global?: Root
@@ -189,6 +192,8 @@ export const discover = Effect.fn("ConfigDiscovery.discover")(function* (options
       { concurrency: "unbounded" },
     ),
     imported,
+    claudeGlobal: globalEnabled && options?.claude !== false ? globalClaudeDirectory : undefined,
+    agentsGlobal: globalEnabled ? globalAgentsDirectory : undefined,
     claude:
       options?.claude === false
         ? []

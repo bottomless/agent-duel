@@ -2739,6 +2739,10 @@ export const ptBR: TranslationResources = {
       globalIncluded_other: "Mais {{count}} plugins globais",
       manageGlobal: "Gerenciar plugins globais",
     },
+    instructions: {
+      project: "As instruções deste projeto",
+      global: "Suas próprias instruções e skills",
+    },
     plugin: {
       repositoryClaude: "Configuração do Claude Code deste projeto",
       repositoryCodex: "Configuração do Codex deste projeto",
@@ -2758,6 +2762,7 @@ export const ptBR: TranslationResources = {
       titleClaude: "Use a configuração do Claude Code deste projeto no Agent Duel",
       titleCodex: "Use a configuração do Codex deste projeto no Agent Duel",
       titleBoth: "Use a configuração do Claude Code e do Codex deste projeto no Agent Duel",
+      titleInstructions: "Use as instruções deste projeto no Agent Duel",
       review: "Revisar",
       import: "Importar",
       dismiss: "Agora não",

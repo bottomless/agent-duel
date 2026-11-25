@@ -2677,6 +2677,10 @@ export const ar: TranslationResources = {
       globalIncluded_other: "بالإضافة إلى {{count}} إضافات عامة",
       manageGlobal: "إدارة الإضافات العامة",
     },
+    instructions: {
+      project: "تعليمات هذا المشروع",
+      global: "تعليماتك ومهاراتك الخاصة",
+    },
     plugin: {
       repositoryClaude: "إعداد Claude Code في هذا المشروع",
       repositoryCodex: "إعداد Codex في هذا المشروع",
@@ -2696,6 +2700,7 @@ export const ar: TranslationResources = {
       titleClaude: "استخدم إعداد Claude Code لهذا المشروع في Agent Duel",
       titleCodex: "استخدم إعداد Codex لهذا المشروع في Agent Duel",
       titleBoth: "استخدم إعداد Claude Code وCodex لهذا المشروع في Agent Duel",
+      titleInstructions: "استخدم تعليمات هذا المشروع في Agent Duel",
       review: "مراجعة",
       import: "استيراد",
       dismiss: "ليس الآن",

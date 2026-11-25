@@ -519,6 +519,20 @@ export type TurnDocument = {
   updatedAt: Date
 }
 
+/** Where an instruction file or skill a contestant loaded came from (`arena/loaded-setup.ts`). */
+export type LoadedSetupScope = "project" | "personal" | "imported" | "other"
+
+/**
+ * The instruction files a contestant's prompt carried, with a hash of each file's text and never the
+ * text itself, and every skill its worktree offered before the agent's own permissions narrowed it.
+ */
+export type LoadedSetup = {
+  readonly instructions:
+    | ReadonlyArray<{ readonly scope: LoadedSetupScope; readonly path: string; readonly sha256: string }>
+    | "unavailable"
+  readonly skills: ReadonlyArray<{ readonly name: string; readonly scope: LoadedSetupScope }>
+}
+
 export type RunDocument = {
   readonly _id: Identifier
   readonly turnID: Identifier
@@ -580,6 +594,8 @@ export type RunDocument = {
    */
   telemetryVersion?: number
   resolvedProviders?: string[]
+  /** What the side's last prompt loaded of the project's and the user's own setup. */
+  loadedSetup?: LoadedSetup
   permissionOutcomes: ReadonlyArray<Readonly<Record<string, unknown>>>
   autoAccept?: boolean
   questionOutcomes: ReadonlyArray<Readonly<Record<string, unknown>>>

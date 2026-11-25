@@ -6,7 +6,7 @@ import { SettingsCard, SettingsRow, SettingsSection } from "@/components/setting
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { settingsStyles } from "@/styles/settings";
-import { pluginLabel } from "./describe";
+import { isPlugin, pluginLabel } from "./describe";
 import { GlobalPluginsSheet } from "./global-sheet";
 import { PluginRow } from "./review-sheet";
 import { useAgentPlugins } from "./use-agent-plugins";
@@ -70,7 +70,7 @@ export function AgentPluginsSection({ serverId }: { serverId: string }) {
           </Button>
         </Alert>
       ) : null}
-      {status && !status.global.reviewed && status.global.plugins.length > 0 ? (
+      {status && !status.global.reviewed && status.global.plugins.some(isPlugin) ? (
         <Alert variant="info" title={t("agentPlugins.settings.notReviewed")}>
           <Button variant="outline" onPress={openReview} testID="agent-plugins-settings-review">
             {t("agentPlugins.settings.review")}
@@ -87,7 +87,8 @@ export function AgentPluginsSection({ serverId }: { serverId: string }) {
                 key={plugin.id}
                 plugin={plugin}
                 // Before the first review every plugin is pending; the sheet decides them together.
-                disabled={isSaving || !status.global.reviewed}
+                // The user's own instruction files are off, not pending, so they switch any time.
+                disabled={isSaving || (!status.global.reviewed && isPlugin(plugin))}
                 onToggle={toggle}
               />
             ))

@@ -201,6 +201,57 @@ describe("InstructionDiscovery", () => {
 })
 
 describe("ConfigInstructionPlugin.Plugin", () => {
+  it.live("follows Agent Duel's switches for project and global files", () =>
+    tmpdirScoped().pipe(
+      Effect.flatMap((tmp) => {
+        const global = path.join(tmp.path, "global")
+        const home = path.join(tmp.path, "home")
+        // Under the home folder, where upstream's walk would also reach the ancestor's file.
+        const project = path.join(home, "code", "repo")
+        const ancestor = path.join(home, "code", "CLAUDE.md")
+        const claudeGlobal = path.join(home, ".claude", "CLAUDE.md")
+        const projectClaude = path.join(project, "CLAUDE.md")
+        return Effect.gen(function* () {
+          yield* Effect.promise(async () => {
+            await fs.mkdir(global, { recursive: true })
+            await fs.mkdir(path.dirname(claudeGlobal), { recursive: true })
+            await fs.mkdir(project, { recursive: true })
+            await fs.writeFile(claudeGlobal, "personal")
+            await fs.writeFile(projectClaude, "project")
+            await fs.writeFile(ancestor, "ancestor")
+          })
+          const config = yield* Config.Test
+          yield* config.setSetup({ project: true, global: false })
+          const events = yield* PubSub.unbounded<ReturnType<typeof configUpdated>>()
+          const discovery = yield* start(host({ event: { subscribe: () => Stream.fromPubSub(events) } }))
+          expect((yield* readInitial(yield* discovery.load())).text).toBe(
+            `Instructions from: ${projectClaude}\nproject`,
+          )
+
+          yield* config.setSetup({ project: false, global: true })
+          yield* triggerAndWait(PubSub.publish(events, configUpdated()).pipe(Effect.asVoid))
+          expect((yield* readInitial(yield* discovery.load())).text).toBe(
+            `Instructions from: ${claudeGlobal}\npersonal`,
+          )
+        }).pipe(
+          Effect.provide(
+            instructionLayer({
+              config: global,
+              home,
+              claude: true,
+              locationServiceLayer: Layer.succeed(
+                Location.Service,
+                Location.Service.of(
+                  location({ directory: AbsolutePath.make(project) }, { projectDirectory: AbsolutePath.make(project) }),
+                ),
+              ),
+            }),
+          ),
+        )
+      }),
+    ),
+  )
+
   it.live("loads global and upward project files and rescans them on change", () =>
     tmpdirScoped().pipe(
       Effect.flatMap((tmp) => {

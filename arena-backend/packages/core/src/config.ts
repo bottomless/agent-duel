@@ -16,6 +16,7 @@ import { AbsolutePath } from "./schema.js"
 import { ConfigVariable } from "./config/variable.js"
 import { ConfigNormalize } from "./config/normalize.js"
 import { ConfigDiscovery } from "./config/discovery.js"
+import { ConfigImportedSetup } from "./config/imported-setup.js"
 import { ConfigWatch } from "./config/watch.js"
 import { ConfigIntegration } from "./config/integration.js"
 import { ConfigManaged } from "./config/managed.js"
@@ -38,6 +39,11 @@ export interface Interface {
     readonly claude: readonly AbsolutePath[]
     readonly agents: readonly AbsolutePath[]
   }>
+  /**
+   * Which of the user's own instruction files and skills Agent Duel loads at this location, or
+   * undefined when nothing was imported and upstream discovery applies.
+   */
+  readonly setup?: () => Effect.Effect<ConfigImportedSetup.Setup | undefined>
   /**
    * Streams raw filesystem updates under config roots. Config owns root
    * topology and watch reconciliation; domain owners filter this feed for the
@@ -79,6 +85,8 @@ export interface TestInterface extends Interface {
   readonly setEntries: (entries: Entry[]) => Effect.Effect<void>
   /** Emits one filesystem update to every changes() subscriber. */
   readonly emitChange: (update: Watcher.Update) => Effect.Effect<void>
+  /** Replaces what subsequent setup() calls return. */
+  readonly setSetup: (setup: ConfigImportedSetup.Setup | undefined) => Effect.Effect<void>
 }
 
 export class Test extends Context.Service<Test, TestInterface>()("@opencode/Config/Test") {}
@@ -94,6 +102,7 @@ export const testLayer = (
   Layer.effectContext(
     Effect.gen(function* () {
       const entries = yield* Ref.make(initial)
+      const setup = yield* Ref.make<ConfigImportedSetup.Setup | undefined>(undefined)
       const integrations = yield* Ref.make(new Map<string, ConfigIntegration.Document>())
       const updates = yield* PubSub.unbounded<Watcher.Update>()
       const service = Test.of({
@@ -102,8 +111,10 @@ export const testLayer = (
             Effect.map(([documents, entries]) => [...documents.values(), ...entries]),
           ),
         compatibility: () => Effect.succeed(compatibility),
+        setup: () => Ref.get(setup),
         changes: () => Stream.fromPubSub(updates),
         setEntries: (next) => Ref.set(entries, next),
+        setSetup: (next) => Ref.set(setup, next),
         emitChange: (update) => PubSub.publish(updates, update).pipe(Effect.asVoid),
         integration: (integrationID, document) =>
           Ref.update(integrations, (current) => {
@@ -188,13 +199,15 @@ export const layer = (options?: Options) =>
         // Logging out drops the saved remote config, so the source supplies nothing until a fresh fetch succeeds.
         if (!variables) return yield* wellknown.clearCached(entry.origin).pipe(Effect.as([]))
         // A failed refresh keeps the last resolved config so remote providers and allowlists do not disappear.
-        const configs = yield* wellknown.resolve(entry, variables).pipe(
-          Effect.catch((error) =>
-            Effect.logWarning("failed to load wellknown config", { source: entry.origin, error }).pipe(
-              Effect.andThen(wellknown.cached(entry.origin)),
+        const configs = yield* wellknown
+          .resolve(entry, variables)
+          .pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("failed to load wellknown config", { source: entry.origin, error }).pipe(
+                Effect.andThen(wellknown.cached(entry.origin)),
+              ),
             ),
-          ),
-        )
+          )
         return yield* Effect.forEach(configs, (config) =>
           ConfigVariable.substitute({
             type: "virtual",
@@ -396,6 +409,7 @@ export const layer = (options?: Options) =>
       const initial = yield* ConfigDiscovery.discover(options)
       let sources = initial
       let configs = yield* load(initial)
+      let setup = yield* ConfigImportedSetup.read(fs, initial)
       const updates = yield* PubSub.unbounded<Watcher.Update>()
       const reloads = yield* PubSub.sliding<void>(1)
       // Readiness rescans recover writes made before a watch attached.
@@ -423,12 +437,15 @@ export const layer = (options?: Options) =>
           const discovered = yield* ConfigDiscovery.discover(options)
           const next = yield* load(discovered)
           yield* reconcile(discovered)
+          const nextSetup = yield* ConfigImportedSetup.read(fs, discovered)
           const compatibilityChanged =
             !isDeepStrictEqual(sources.claude, discovered.claude) ||
-            !isDeepStrictEqual(sources.agents, discovered.agents)
+            !isDeepStrictEqual(sources.agents, discovered.agents) ||
+            !isDeepStrictEqual(setup, nextSetup)
           if (isDeepStrictEqual(configs, next) && !compatibilityChanged) return
           sources = discovered
           configs = next
+          setup = nextSetup
           yield* bus.publish(Event.Updated, {})
         },
         (effect) => reloadLock.withPermit(effect),
@@ -509,11 +526,16 @@ export const layer = (options?: Options) =>
         entries: Effect.fnUntraced(function* () {
           return configs
         }),
-        compatibility: () =>
-          Effect.all({
-            claude: Effect.filter(sources.claude, fs.isDir),
-            agents: Effect.filter(sources.agents, fs.isDir),
-          }),
+        compatibility: () => {
+          // Skills in ~/.claude and ~/.agents are the user's own, which Agent Duel loads only when asked.
+          const personal = setup?.global === false ? [sources.claudeGlobal, sources.agentsGlobal] : []
+          const keep = (roots: readonly AbsolutePath[]) => roots.filter((root) => !personal.includes(root))
+          return Effect.all({
+            claude: Effect.filter(keep(sources.claude), fs.isDir),
+            agents: Effect.filter(keep(sources.agents), fs.isDir),
+          })
+        },
+        setup: () => Effect.succeed(setup),
         changes: () => Stream.fromPubSub(updates),
         update,
         integration: Effect.fn("Config.integration")(function* (integrationID, document) {

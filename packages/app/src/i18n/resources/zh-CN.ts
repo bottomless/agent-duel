@@ -2640,6 +2640,10 @@ export const zhCN: TranslationResources = {
       globalIncluded_other: "另有 {{count}} 个全局插件",
       manageGlobal: "管理全局插件",
     },
+    instructions: {
+      project: "此项目的指令",
+      global: "你自己的指令和技能",
+    },
     plugin: {
       repositoryClaude: "此项目的 Claude Code 配置",
       repositoryCodex: "此项目的 Codex 配置",
@@ -2659,6 +2663,7 @@ export const zhCN: TranslationResources = {
       titleClaude: "在 Agent Duel 中使用此项目的 Claude Code 配置",
       titleCodex: "在 Agent Duel 中使用此项目的 Codex 配置",
       titleBoth: "在 Agent Duel 中使用此项目的 Claude Code 和 Codex 配置",
+      titleInstructions: "在 Agent Duel 中使用此项目的指令",
       review: "查看",
       import: "导入",
       dismiss: "暂不",

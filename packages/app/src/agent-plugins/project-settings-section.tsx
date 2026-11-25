@@ -9,7 +9,7 @@ import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { openSettingsSection } from "@/navigation/settings-navigation";
 import { settingsStyles } from "@/styles/settings";
-import { pluginLabel } from "./describe";
+import { isPlugin, pluginLabel } from "./describe";
 import { SettingsPluginRow } from "./settings-section";
 import { useAgentPlugins } from "./use-agent-plugins";
 
@@ -49,7 +49,9 @@ export function ProjectPluginsSettings({
     void refetch();
   }, [refetch]);
   const manageGlobal = useCallback(() => openSettingsSection("agent-plugins"), []);
-  const globalOn = status?.global.plugins.filter((plugin) => plugin.state === "on").length ?? 0;
+  const globalOn =
+    status?.global.plugins.filter((plugin) => isPlugin(plugin) && plugin.state === "on").length ??
+    0;
   // The global plugins belong to the whole group, so the pointer to them sits on the group's
   // header like the Shortcuts "Reset all" action, not under the last card where it reads as its caption.
   const hasStatus = status !== null && status !== undefined;
