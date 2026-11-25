@@ -1840,6 +1840,12 @@ A content filter ends the contestant's run. Keep its partial answer and saved fi
 different host. Both a filtered stream and an HTTP moderation refusal show the same reason; the
 provider's explanation can identify the contestant or quote the prompt.
 
+A steer queued behind the refused step must not start another step. Core's runner starts a new
+execution for queued input as soon as the refused model call fails, before the side's prompt
+returns, so the engine proxy runs the side's filter handler before it hands the refusal to the
+model call (`runtime.ts` `onContentFilter`). The handler closes the side to new steers and delivers
+the queued ones as unanswered messages, as Stop leaves them.
+
 An output-token cap continues from saved output and tool results under the same assignment. Never
 replay completed tools. Leave unfinished calls unexecuted and request smaller writes or patches.
 Core allows two continuations, then fails on the third consecutive `length` response while

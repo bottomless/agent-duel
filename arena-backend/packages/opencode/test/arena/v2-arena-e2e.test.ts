@@ -338,4 +338,154 @@ describe("Arena v2 battle integration", () => {
     expect(kept.status).toBe(200)
     expect(await kept.text()).toContain("Saved partial reply")
   }, 45_000)
+
+  test("delivers a steer queued behind a content filter without starting another step", async () => {
+    const [{ Server }, credentials] = await Promise.all([import("@/server/server"), import("@/arena/credentials")])
+    home = await mkdtemp(path.join(os.tmpdir(), "agent-duel-v2-filter-steer-home-"))
+    directory = await mkdtemp(path.join(home, "workspace-"))
+    await $`git init`.cwd(directory).quiet()
+    await $`git config user.email test@example.com`.cwd(directory).quiet()
+    await $`git config user.name test`.cwd(directory).quiet()
+    await writeFile(path.join(directory, "README.md"), "arena\n")
+    await writeFile(path.join(directory, "opencode.json"), "{}\n")
+    await $`git add README.md opencode.json`.cwd(directory).quiet()
+    await $`git commit -m initial`.cwd(directory).quiet()
+
+    const steerText = "Steer queued behind the filter."
+    let releaseFilter = () => {}
+    const filterGate = new Promise<void>((resolve) => {
+      releaseFilter = resolve
+    })
+    // Each contestant's first step waits until the steer is queued, then a filter refuses it.
+    const filteredCalls: string[] = []
+    let steeredCalls = 0
+    originalFetch = globalThis.fetch
+    globalThis.fetch = (async (input, init) => {
+      const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url)
+      if (url.origin === "https://control.test") {
+        const request = new Request(input, init)
+        if (url.pathname === "/api/research") {
+          const batch = (await request.json()) as { records: unknown[] }
+          return Response.json({ received: batch.records.length, stored: batch.records.length })
+        }
+        if (url.pathname === "/api/arena/assignments") {
+          const body = (await request.json()) as { action: string; kind: string; decision?: string }
+          if (body.action === "create")
+            return Response.json({
+              assignments: body.kind === "battle" ? [{ assignmentID: "a-1" }, { assignmentID: "b-1" }] : [],
+            })
+          return Response.json({
+            decision: body.decision,
+            assignments: [
+              { assignmentID: "a-1", model: "model-a" },
+              { assignmentID: "b-1", model: "model-b" },
+            ],
+          })
+        }
+        if (url.pathname === "/api/arena/comparison")
+          return Response.json({ provider: "test", choices: [{ message: { content: "comparison" } }] })
+        if (url.pathname === "/api/openrouter/api/v1/chat/completions") {
+          const body = (await request.json()) as { messages?: readonly unknown[]; tools?: readonly unknown[] }
+          const steered = JSON.stringify(body.messages ?? []).includes(steerText)
+          if (body.tools?.length && !steered) {
+            filteredCalls.push(request.headers.get("X-Arena-Assignment-ID") ?? "")
+            await filterGate
+            return new Response(
+              'data: {"id":"f","choices":[{"index":0,"delta":{"role":"assistant","content":"Partial before the filter."},"finish_reason":null}]}\n\n' +
+                'data: {"id":"f","choices":[{"index":0,"delta":{},"finish_reason":"content_filter"}]}\n\n' +
+                "data: [DONE]\n\n",
+              { headers: { "content-type": "text/event-stream" } },
+            )
+          }
+          if (steered) steeredCalls++
+          const content = steered ? "Steered reply." : "Filtered steer title"
+          return new Response(
+            `data: {"id":"r","choices":[{"index":0,"delta":{"role":"assistant","content":"${content}"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n`,
+            { headers: { "content-type": "text/event-stream" } },
+          )
+        }
+      }
+      return originalFetch!(input, init)
+    }) as typeof globalThis.fetch
+    const controlToken = "v2-filter-steer-token"
+    credentials.setArenaCredentials({
+      mode: "hosted",
+      token: "test-token",
+      controlPlaneUrl: "https://control.test",
+      researchAccountID: "test-account",
+      researchPartition: "test-partition",
+      controlTokenHash: credentials.hashArenaControlToken(controlToken),
+    })
+    process.env.PASEO_HOME = home
+    process.env.OPENCODE_ARENA = "1"
+    const app = Server.Default().app
+    const request = (route: string, init?: RequestInit) =>
+      app.request(route, {
+        ...init,
+        headers: {
+          "content-type": "application/json",
+          "x-paseo-control-token": controlToken,
+          "x-opencode-directory": directory!,
+          ...(init?.headers ?? {}),
+        },
+      })
+
+    try {
+      const created = await request("/api/session", {
+        method: "POST",
+        body: JSON.stringify({ location: { directory }, model: { providerID: "arena", id: "medium" } }),
+      })
+      expect(created.status).toBe(200)
+      const source = (await created.json()).data as { id: string }
+      const attached = await request(`/arena/sessions/${source.id}`)
+      if (!attached.ok) throw new Error(await attached.text())
+      const chat = ((await attached.json()) as { chat: { id: string } }).chat
+      const started = await request(`/arena/chats/${chat.id}/turns`, {
+        method: "POST",
+        body: JSON.stringify({ prompt: "Answer after one step." }),
+      })
+      expect(started.status).toBe(200)
+      await started.text()
+
+      type Snapshot = {
+        turn?: { id: string; state: string }
+        runs?: readonly { side: "a" | "b"; sessionID: string; runState: string; error?: string }[]
+      }
+      const snapshot = async () => (await (await request(`/arena/sessions/${source.id}`)).json()) as Snapshot
+      const deadline = Date.now() + 30_000
+      while (Date.now() < deadline && filteredCalls.length < 2) await Bun.sleep(20)
+      expect(filteredCalls).toHaveLength(2)
+      const turnID = (await snapshot()).turn?.id
+      if (!turnID) throw new Error("Arena did not publish the turn ID")
+
+      // Admission is durable once the reply returns, so the steer waits in side A's inbox.
+      const replied = await request(`/arena/turns/${turnID}/reply`, {
+        method: "POST",
+        body: JSON.stringify({ prompt: steerText, target: "a" }),
+      })
+      expect(replied.status).toBe(200)
+      await replied.text()
+      releaseFilter()
+
+      let current = await snapshot()
+      while (Date.now() < deadline && (current.runs ?? []).some((run) => run.runState === "pending")) {
+        await Bun.sleep(100)
+        current = await snapshot()
+      }
+      // Core starts a queued steer's step as soon as the refused call fails; give a late one time to show.
+      await Bun.sleep(500)
+      expect(steeredCalls).toBe(0)
+      expect(filteredCalls).toHaveLength(2)
+      const sideA = current.runs?.find((run) => run.side === "a")
+      expect(sideA).toMatchObject({ runState: "error", error: "A content filter blocked this response." })
+      // The steer stays in side A's thread as an unanswered message, as Stop leaves one.
+      const exported = await request(`/api/experimental/session/${sideA!.sessionID}/export`)
+      expect(exported.status).toBe(200)
+      const history = await exported.text()
+      expect(history).toContain(steerText)
+      expect(history).not.toContain("Steered reply.")
+    } finally {
+      releaseFilter()
+    }
+  }, 45_000)
 })

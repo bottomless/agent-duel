@@ -101,6 +101,30 @@ export type ProxyOptions = {
   readonly keepAlive?: KeepAlive
   /** Upload images and PDFs once and name them in the request (`media-reference.ts`): the hosted control plane. */
   readonly mediaByReference?: boolean
+  /**
+   * Runs when a content filter refuses a session's main request, before the model call sees the
+   * refusal. Core starts the steps a refused run must not take as soon as that call fails.
+   */
+  readonly contentFilter?: (sessionID: string) => Promise<void> | void
+}
+
+// A filter handler that never settles must not hold the refusal back from the model call.
+const CONTENT_FILTER_HANDLER_MS = 5_000
+
+async function settleContentFilter(run: () => Promise<void> | void) {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    await Promise.race([
+      Promise.resolve()
+        .then(run)
+        .catch(() => undefined),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, CONTENT_FILTER_HANDLER_MS)
+      }),
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 type StreamProgress = {
@@ -462,6 +486,7 @@ function sanitizeStream(
   signal?: AbortSignal,
   recovery?: StreamRecovery,
   onEnd?: (complete: boolean) => void,
+  onBlocked?: () => Promise<void>,
 ) {
   const normalize = normalizeToolCutoff(maxTokens)
   let reader = stream.getReader()
@@ -585,6 +610,8 @@ function sanitizeStream(
             if (pending && skip === 0 && (finished || endsResponse(pending))) {
               finished = true
               const sanitized = sanitize(pending)
+              if (blocked) await onBlocked?.()
+              if (settled) return
               emit(controller, sanitized, blocked)
               if (blocked) return finishBlocked(controller)
             }
@@ -626,6 +653,8 @@ function sanitizeStream(
             finished ||= endsResponse(line)
             if (isDataLine(line)) delivered++
             const sanitized = sanitize(line)
+            if (blocked) await onBlocked?.()
+            if (settled) return
             emit(controller, sanitized, blocked)
             if (blocked) return finishBlocked(controller)
             forwarded = true
@@ -739,6 +768,10 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
       startedAt: new Date(),
     }
     await telemetry?.start?.(metadata, rewritten)
+    const contentFilter = options.contentFilter
+    const blocked = async () => {
+      if (kind === "generation" && contentFilter) await settleContentFilter(() => contentFilter(sessionID))
+    }
 
     const upstream = options.upstream.replace(/\/$/, "")
     const execute = options.fetch ?? fetch
@@ -853,13 +886,15 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
       const knownStatus = [400, 401, 402, 403, 413, 503].includes(response.status)
       const body = knownStatus ? await response.text() : undefined
       let payload = { error: { message: "Arena contestant request failed", type: "arena_upstream_error" } }
-      if (response.status === 400 && readContentFilter(body)) payload = contentFilterError()
+      const filtered = response.status === 400 && readContentFilter(body)
+      if (filtered) payload = contentFilterError()
       if (response.status === 401 && readSessionRejected(body)) payload = sessionRejectedError()
       if (response.status === 402) payload = paymentError(readPaymentError(body) ?? "arena_payment_required")
       if (response.status === 503 && readNetworkUnavailable(body)) payload = networkUnavailableError()
       if (response.status === 413 && readCompactionRequired(body)) payload = compactionRequiredError()
       if (response.status === 403 && readSingleAgentAllowance(body)) payload = singleAgentAllowanceError()
       if (body === undefined) await response.body?.cancel().catch(() => undefined)
+      if (filtered) await blocked()
       endWait?.()
       telemetry?.rawChunk?.(metadata, JSON.stringify(payload))
       // A refused attempt is a failed generation, not a completed one. A wait for the user's network
@@ -903,6 +938,7 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
         request.signal,
         recovery,
         (complete) => endWait?.(complete ? ping : undefined),
+        blocked,
       )
       return new Response(body, { status: response.status, headers })
     }
@@ -910,6 +946,7 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
     const raw = JSON.parse(await response.text()) as unknown
     if (inspectionFailedError(raw) || (record(raw) && record(raw.error) && raw.error.type === "content_filter")) {
       const payload = contentFilterError()
+      await blocked()
       endWait?.()
       telemetry?.rawChunk?.(metadata, JSON.stringify(payload))
       await telemetry?.error?.(metadata, new Error(contentFilterMessage), new Date())

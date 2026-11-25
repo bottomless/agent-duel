@@ -29,6 +29,17 @@ export function setTelemetry(next: Telemetry | undefined) {
   telemetry = next
 }
 
+// What each running contestant does when a content filter refuses its main request, by root session.
+const contentFilterHandlers = new Map<string, () => Promise<void>>()
+
+/** Registers the session's filter handler; the returned function removes it. */
+export function onContentFilter(sessionID: string, handler: () => Promise<void>) {
+  contentFilterHandlers.set(sessionID, handler)
+  return () => {
+    if (contentFilterHandlers.get(sessionID) === handler) contentFilterHandlers.delete(sessionID)
+  }
+}
+
 export function setStoreForTest(next: Store | undefined) {
   persistence = next ? Promise.resolve(next) : undefined
   recovery = undefined
@@ -213,6 +224,7 @@ export async function contestantFetch(input: string | URL | Request, init?: Requ
     telemetry,
     keepAlive,
     mediaByReference: target.mediaByReference,
+    contentFilter: (sessionID) => contentFilterHandlers.get(sessionID)?.(),
   })
 }
 

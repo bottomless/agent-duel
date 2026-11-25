@@ -215,7 +215,15 @@ import type {
   WarmWorktreeRecord,
 } from "./records"
 import { battleMetricsSchemaVersion, reviewFlushLimit, runTelemetryVersion } from "./records"
-import { enabled, recoverOnce, registry, setTelemetry, shellLedgerDirectory, store as runtimeStore } from "./runtime"
+import {
+  enabled,
+  onContentFilter,
+  recoverOnce,
+  registry,
+  setTelemetry,
+  shellLedgerDirectory,
+  store as runtimeStore,
+} from "./runtime"
 import { stopOrphanShells } from "./engine-runtime/shell-ledger"
 import { recordStoppedShells } from "./shell-restart"
 import { create as createTelemetry } from "./telemetry"
@@ -5457,6 +5465,37 @@ export const layer: Layer.Layer<
       return result
     })
 
+    /**
+     * A content filter ends the run. A steer queued behind the refused step must not start another
+     * step, but Core's runner starts a new execution for it as soon as the refused call fails, which
+     * is before this run's prompt returns. So when the proxy sees the refusal, and before the model
+     * call does, close the run to new steers and deliver the queued ones as unanswered messages, as
+     * Stop leaves them. A drain with nothing in the inbox ends without a model request.
+     */
+    const keepFilteredSteers = (run: SideRuntime) =>
+      steerGates
+        .withLock(run.runID)(
+          Effect.gen(function* () {
+            closingRuns.add(run.runID)
+            yield* inDirectory(run.worktree.directory, sessions.deliverPending(run.sessionID))
+          }),
+        )
+        .pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("Arena could not hold a filtered contestant's queued steers", {
+              runID: run.runID,
+              cause,
+            }),
+          ),
+        )
+
+    const watchContentFilter = <A, E, R>(run: SideRuntime, effect: Effect.Effect<A, E, R>) =>
+      Effect.gen(function* () {
+        const runPromise = Effect.runPromiseWith(yield* Effect.context<never>())
+        const release = onContentFilter(run.sessionID, () => runPromise(keepFilteredSteers(run)))
+        return yield* effect.pipe(Effect.ensuring(Effect.sync(release)))
+      })
+
     const settleSide = Effect.fn("Arena.settleSide")(function* (
       store: Store,
       turn: TurnDocument,
@@ -5469,7 +5508,10 @@ export const layer: Layer.Layer<
     ) {
       const settled = Deferred.makeUnsafe<void>()
       activePrompts.set(run.runID, settled)
-      const promptExit = yield* runPrompt(store, run, prompt, agent, preservePromptBoundary).pipe(
+      const promptExit = yield* watchContentFilter(
+        run,
+        runPrompt(store, run, prompt, agent, preservePromptBoundary),
+      ).pipe(
         Effect.ensuring(closeShellTurn(run.sessionID, Effect.succeed(false))),
         Effect.ensuring(
           Effect.sync(() => {
