@@ -31,6 +31,7 @@ import {
 import { getArenaDatabaseUpgrade } from "./opencode/arena-upgrade.js";
 import { resolveEngineLogPath } from "./opencode/paths.js";
 import { arenaDaemonUrls, type GetArenaDaemonUrls } from "../../arena/daemon-urls.js";
+import { findArenaLoopbackRequired } from "../../arena/loopback-required.js";
 import { createArenaByokService } from "../../accounts/byok.js";
 import { clearArenaCredentials, installArenaCredentials } from "../../accounts/credentials.js";
 
@@ -253,7 +254,9 @@ describe("OpenCodeServerManager generations", () => {
       getArenaDaemonUrls: () => urls,
     });
 
-    await expect(manager.acquireCurrent()).rejects.toThrow(
+    const error = await manager.acquireCurrent().catch((cause: unknown) => cause);
+    // Windows stop reconnecting on this refusal's code, so it must survive the acquisition.
+    expect(findArenaLoopbackRequired(error)?.message).toBe(
       "Hosted Arena requires a loopback TCP connection to the daemon. Configure the daemon to listen on 127.0.0.1 or [::1].",
     );
     expect(runtime.spawnCalls).toHaveLength(0);

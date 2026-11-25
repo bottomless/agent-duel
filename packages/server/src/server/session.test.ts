@@ -74,6 +74,7 @@ import {
   createProviderSnapshotManagerStub,
 } from "./test-utils/session-stubs.js";
 import { isPlatform } from "../test-utils/platform.js";
+import { ArenaLoopbackRequiredError } from "./arena/loopback-required.js";
 import {
   GitHubAuthenticationError,
   GitHubCliMissingError,
@@ -1090,6 +1091,48 @@ describe("Arena streams", () => {
         expect.any(AbortSignal),
         "signed-in-owner",
       );
+    } finally {
+      await session.cleanup();
+    }
+  });
+
+  test("answers an engine refused off loopback in the daemon's words and code", async () => {
+    const targetedMessages: Array<{ source: object; message: SessionOutboundMessage }> = [];
+    const source = {};
+    const session = createSessionForTest({
+      targetedMessages,
+      agentManager: {
+        waitForAgentClose: vi.fn(async () => {}),
+        getAgent: vi.fn(() => {
+          throw new Error("Failed to start the engine", {
+            cause: new ArenaLoopbackRequiredError(),
+          });
+        }),
+      },
+    });
+    try {
+      await session.handleMessage(
+        {
+          type: "arena.stream.subscribe.request",
+          requestId: "refused",
+          subscriptionId: "sub",
+          agentId: "agent",
+          target: { kind: "current" },
+        },
+        source,
+      );
+      expect(targetedMessages.map(({ message }) => message)).toEqual([
+        {
+          type: "rpc_error",
+          payload: {
+            requestId: "refused",
+            requestType: "arena.stream.subscribe.request",
+            error: new ArenaLoopbackRequiredError().message,
+            code: "arena_loopback_required",
+            requestSettled: true,
+          },
+        },
+      ]);
     } finally {
       await session.cleanup();
     }

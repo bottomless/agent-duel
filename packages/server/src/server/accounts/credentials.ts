@@ -1,4 +1,5 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
+import { ArenaLoopbackRequiredError } from "../arena/loopback-required.js";
 
 /** A signed-in account's session, forwarded to the control plane through the daemon. */
 export interface HostedArenaCredentials {
@@ -133,11 +134,7 @@ export function issueArenaLaunchCredentials(
 ): ArenaCredentialsSnapshot | null {
   if (!current) return null;
   if (current.mode === "byok") return { credentials: current, version };
-  if (!daemonBaseUrl) {
-    throw new Error(
-      "Hosted Arena requires a loopback TCP connection to the daemon. Configure the daemon to listen on 127.0.0.1 or [::1].",
-    );
-  }
+  if (!daemonBaseUrl) throw new ArenaLoopbackRequiredError();
   const token = randomBytes(32).toString("base64url");
   runtimeCredentials.set(token, version);
   return {
