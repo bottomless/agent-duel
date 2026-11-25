@@ -478,13 +478,17 @@ function install(context: Context, options: InstalledOptions) {
     )
 
     // Registered after the Arena retry policy above, so it sees the final decision. A retried
-    // request keeps its request ID, which is how telemetry counts the retry.
+    // request keeps its request ID, which is how telemetry counts the retry. A refused retry fails
+    // the step once this hook returns, and Core then starts the step of any steer queued behind it,
+    // so the run's failure handler settles those steers first (only a root session has one).
     yield* context.session.hook(
       "retry",
       (event) =>
-        Effect.sync(() => {
-          if (arenaSession(options, String(event.sessionID)) && event.decision.retry)
-            sessionRequestIDs.retryScheduled(String(event.sessionID), event.decision.delay)
+        Effect.promise(async () => {
+          const sessionID = String(event.sessionID)
+          if (!arenaSession(options, sessionID)) return
+          if (event.decision.retry) sessionRequestIDs.retryScheduled(sessionID, event.decision.delay)
+          else await ArenaRuntime.runFailed(sessionID)
         }),
       { providerID: String(PROVIDER_ID) },
     )

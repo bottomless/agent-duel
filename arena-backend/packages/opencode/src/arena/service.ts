@@ -217,7 +217,7 @@ import type {
 import { battleMetricsSchemaVersion, reviewFlushLimit, runTelemetryVersion } from "./records"
 import {
   enabled,
-  onContentFilter,
+  onRunFailure,
   recoverOnce,
   registry,
   setTelemetry,
@@ -5466,13 +5466,15 @@ export const layer: Layer.Layer<
     })
 
     /**
-     * A content filter ends the run. A steer queued behind the refused step must not start another
-     * step, but Core's runner starts a new execution for it as soon as the refused call fails, which
-     * is before this run's prompt returns. So when the proxy sees the refusal, and before the model
-     * call does, close the run to new steers and deliver the queued ones as unanswered messages, as
-     * Stop leaves them. A drain with nothing in the inbox ends without a model request.
+     * A step that fails without a retry ends the run: a content filter, or any failure the retry
+     * policy gives up on. A steer queued behind that step must not start another step, but Core's
+     * runner starts a new execution for it as soon as the failed drain ends, which is before this
+     * run's prompt returns. So before Core settles the failure (the proxy for a filter, the final
+     * retry decision for the rest), close the run to new steers and deliver the queued ones as
+     * unanswered messages, as Stop leaves them. A drain with nothing in the inbox ends without a
+     * model request, and a Retry answers the delivered steer from the thread.
      */
-    const keepFilteredSteers = (run: SideRuntime) =>
+    const keepFailedSteers = (run: SideRuntime) =>
       steerGates
         .withLock(run.runID)(
           Effect.gen(function* () {
@@ -5482,17 +5484,17 @@ export const layer: Layer.Layer<
         )
         .pipe(
           Effect.catchCause((cause) =>
-            Effect.logWarning("Arena could not hold a filtered contestant's queued steers", {
+            Effect.logWarning("Arena could not hold a failed contestant's queued steers", {
               runID: run.runID,
               cause,
             }),
           ),
         )
 
-    const watchContentFilter = <A, E, R>(run: SideRuntime, effect: Effect.Effect<A, E, R>) =>
+    const watchRunFailure = <A, E, R>(run: SideRuntime, effect: Effect.Effect<A, E, R>) =>
       Effect.gen(function* () {
         const runPromise = Effect.runPromiseWith(yield* Effect.context<never>())
-        const release = onContentFilter(run.sessionID, () => runPromise(keepFilteredSteers(run)))
+        const release = onRunFailure(run.sessionID, () => runPromise(keepFailedSteers(run)))
         return yield* effect.pipe(Effect.ensuring(Effect.sync(release)))
       })
 
@@ -5508,10 +5510,7 @@ export const layer: Layer.Layer<
     ) {
       const settled = Deferred.makeUnsafe<void>()
       activePrompts.set(run.runID, settled)
-      const promptExit = yield* watchContentFilter(
-        run,
-        runPrompt(store, run, prompt, agent, preservePromptBoundary),
-      ).pipe(
+      const promptExit = yield* watchRunFailure(run, runPrompt(store, run, prompt, agent, preservePromptBoundary)).pipe(
         Effect.ensuring(closeShellTurn(run.sessionID, Effect.succeed(false))),
         Effect.ensuring(
           Effect.sync(() => {
@@ -5561,8 +5560,9 @@ export const layer: Layer.Layer<
       // as in 1.x, and goes with this side's history if it is kept. Left in Core's inbox it would
       // vanish from the thread, and the next resume of this session would deliver it. A finished
       // run closed its turn with none waiting, so for it this only keeps the thread and the kept
-      // history in step. A failed run keeps its queue for Retry, unless the battle halted: it then
-      // has no Retry, also when it failed before the stop.
+      // history in step. A step that failed without a retry delivered its queue when it failed
+      // (`keepFailedSteers`). A failure that never reached the retry decision keeps its queue for
+      // Retry, unless the battle halted: it then has no Retry, also when it failed before the stop.
       if (stopped || halted || Exit.isSuccess(promptExit)) {
         yield* inDirectory(run.worktree.directory, sessions.deliverPending(run.sessionID)).pipe(
           Effect.catchCause((cause) =>

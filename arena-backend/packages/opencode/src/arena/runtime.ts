@@ -29,14 +29,37 @@ export function setTelemetry(next: Telemetry | undefined) {
   telemetry = next
 }
 
-// What each running contestant does when a content filter refuses its main request, by root session.
-const contentFilterHandlers = new Map<string, () => Promise<void>>()
+// What each running contestant does when its main session's step fails for good, by root session.
+const runFailureHandlers = new Map<string, () => Promise<void>>()
 
-/** Registers the session's filter handler; the returned function removes it. */
-export function onContentFilter(sessionID: string, handler: () => Promise<void>) {
-  contentFilterHandlers.set(sessionID, handler)
+// A handler that never settles must not hold the failure back from the model call.
+const RUN_FAILURE_HANDLER_MS = 5_000
+
+/** Registers the session's run-failure handler; the returned function removes it. */
+export function onRunFailure(sessionID: string, handler: () => Promise<void>) {
+  runFailureHandlers.set(sessionID, handler)
   return () => {
-    if (contentFilterHandlers.get(sessionID) === handler) contentFilterHandlers.delete(sessionID)
+    if (runFailureHandlers.get(sessionID) === handler) runFailureHandlers.delete(sessionID)
+  }
+}
+
+/**
+ * Runs the session's handler before Core settles a step that fails without a retry: a content
+ * filter, or any failure the retry policy gives up on. Never rejects, and waits at most 5 s.
+ */
+export async function runFailed(sessionID: string) {
+  const handler = runFailureHandlers.get(sessionID)
+  if (!handler) return
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    await Promise.race([
+      handler().catch(() => undefined),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, RUN_FAILURE_HANDLER_MS)
+      }),
+    ])
+  } finally {
+    clearTimeout(timer)
   }
 }
 
@@ -224,7 +247,7 @@ export async function contestantFetch(input: string | URL | Request, init?: Requ
     telemetry,
     keepAlive,
     mediaByReference: target.mediaByReference,
-    contentFilter: (sessionID) => contentFilterHandlers.get(sessionID)?.(),
+    contentFilter: runFailed,
   })
 }
 

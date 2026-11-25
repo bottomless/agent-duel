@@ -339,9 +339,13 @@ describe("Arena v2 battle integration", () => {
     expect(await kept.text()).toContain("Saved partial reply")
   }, 45_000)
 
-  test("delivers a steer queued behind a content filter without starting another step", async () => {
+  /**
+   * Each contestant's first step waits until a steer is queued for side A, then fails with
+   * `failure` and no retry. Side A must not run another step for the steer.
+   */
+  async function steerBehindFailure(name: string, failure: () => Response, error?: string) {
     const [{ Server }, credentials] = await Promise.all([import("@/server/server"), import("@/arena/credentials")])
-    home = await mkdtemp(path.join(os.tmpdir(), "agent-duel-v2-filter-steer-home-"))
+    home = await mkdtemp(path.join(os.tmpdir(), `agent-duel-v2-${name}-steer-home-`))
     directory = await mkdtemp(path.join(home, "workspace-"))
     await $`git init`.cwd(directory).quiet()
     await $`git config user.email test@example.com`.cwd(directory).quiet()
@@ -351,13 +355,12 @@ describe("Arena v2 battle integration", () => {
     await $`git add README.md opencode.json`.cwd(directory).quiet()
     await $`git commit -m initial`.cwd(directory).quiet()
 
-    const steerText = "Steer queued behind the filter."
-    let releaseFilter = () => {}
-    const filterGate = new Promise<void>((resolve) => {
-      releaseFilter = resolve
+    const steerText = `Steer queued behind the ${name}.`
+    let releaseFailure = () => {}
+    const failureGate = new Promise<void>((resolve) => {
+      releaseFailure = resolve
     })
-    // Each contestant's first step waits until the steer is queued, then a filter refuses it.
-    const filteredCalls: string[] = []
+    const failedCalls: string[] = []
     let steeredCalls = 0
     originalFetch = globalThis.fetch
     globalThis.fetch = (async (input, init) => {
@@ -388,14 +391,9 @@ describe("Arena v2 battle integration", () => {
           const body = (await request.json()) as { messages?: readonly unknown[]; tools?: readonly unknown[] }
           const steered = JSON.stringify(body.messages ?? []).includes(steerText)
           if (body.tools?.length && !steered) {
-            filteredCalls.push(request.headers.get("X-Arena-Assignment-ID") ?? "")
-            await filterGate
-            return new Response(
-              'data: {"id":"f","choices":[{"index":0,"delta":{"role":"assistant","content":"Partial before the filter."},"finish_reason":null}]}\n\n' +
-                'data: {"id":"f","choices":[{"index":0,"delta":{},"finish_reason":"content_filter"}]}\n\n' +
-                "data: [DONE]\n\n",
-              { headers: { "content-type": "text/event-stream" } },
-            )
+            failedCalls.push(request.headers.get("X-Arena-Assignment-ID") ?? "")
+            await failureGate
+            return failure()
           }
           if (steered) steeredCalls++
           const content = steered ? "Steered reply." : "Filtered steer title"
@@ -407,7 +405,7 @@ describe("Arena v2 battle integration", () => {
       }
       return originalFetch!(input, init)
     }) as typeof globalThis.fetch
-    const controlToken = "v2-filter-steer-token"
+    const controlToken = `v2-${name}-steer-token`
     credentials.setArenaCredentials({
       mode: "hosted",
       token: "test-token",
@@ -453,8 +451,8 @@ describe("Arena v2 battle integration", () => {
       }
       const snapshot = async () => (await (await request(`/arena/sessions/${source.id}`)).json()) as Snapshot
       const deadline = Date.now() + 30_000
-      while (Date.now() < deadline && filteredCalls.length < 2) await Bun.sleep(20)
-      expect(filteredCalls).toHaveLength(2)
+      while (Date.now() < deadline && failedCalls.length < 2) await Bun.sleep(20)
+      expect(failedCalls).toHaveLength(2)
       const turnID = (await snapshot()).turn?.id
       if (!turnID) throw new Error("Arena did not publish the turn ID")
 
@@ -465,19 +463,19 @@ describe("Arena v2 battle integration", () => {
       })
       expect(replied.status).toBe(200)
       await replied.text()
-      releaseFilter()
+      releaseFailure()
 
       let current = await snapshot()
       while (Date.now() < deadline && (current.runs ?? []).some((run) => run.runState === "pending")) {
         await Bun.sleep(100)
         current = await snapshot()
       }
-      // Core starts a queued steer's step as soon as the refused call fails; give a late one time to show.
+      // Core starts a queued steer's step as soon as the failed call ends; give a late one time to show.
       await Bun.sleep(500)
       expect(steeredCalls).toBe(0)
-      expect(filteredCalls).toHaveLength(2)
+      expect(failedCalls).toHaveLength(2)
       const sideA = current.runs?.find((run) => run.side === "a")
-      expect(sideA).toMatchObject({ runState: "error", error: "A content filter blocked this response." })
+      expect(sideA).toMatchObject({ runState: "error", ...(error ? { error } : {}) })
       // The steer stays in side A's thread as an unanswered message, as Stop leaves one.
       const exported = await request(`/api/experimental/session/${sideA!.sessionID}/export`)
       expect(exported.status).toBe(200)
@@ -485,7 +483,27 @@ describe("Arena v2 battle integration", () => {
       expect(history).toContain(steerText)
       expect(history).not.toContain("Steered reply.")
     } finally {
-      releaseFilter()
+      releaseFailure()
     }
+  }
+
+  test("delivers a steer queued behind a content filter without starting another step", async () => {
+    await steerBehindFailure(
+      "filter",
+      () =>
+        new Response(
+          'data: {"id":"f","choices":[{"index":0,"delta":{"role":"assistant","content":"Partial before the filter."},"finish_reason":null}]}\n\n' +
+            'data: {"id":"f","choices":[{"index":0,"delta":{},"finish_reason":"content_filter"}]}\n\n' +
+            "data: [DONE]\n\n",
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+      "A content filter blocked this response.",
+    )
+  }, 45_000)
+
+  test("delivers a steer queued behind a failure the retry policy refuses without starting another step", async () => {
+    await steerBehindFailure("refused-retry", () =>
+      Response.json({ error: { code: 400, message: "Provider returned error" } }, { status: 400 }),
+    )
   }, 45_000)
 })
