@@ -1,7 +1,8 @@
 import { randomBytes } from "node:crypto";
+import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { app } from "electron";
+import { app, autoUpdater as electronAutoUpdater } from "electron";
 import { UUID } from "builder-util-runtime";
 import log from "electron-log/main";
 import { autoUpdater } from "electron-updater";
@@ -150,6 +151,25 @@ export function shouldInstallAppUpdateOnQuit(platform: NodeJS.Platform): boolean
   return platform !== "linux";
 }
 
+/**
+ * The launcher a deb or rpm update must reopen the app through, or null to let the updater relaunch.
+ * DebUpdater and RpmUpdater relaunch with a plain app.relaunch(), which starts agent-duel.bin and
+ * skips the agent-duel launcher next to it. Ubuntu 24.04's AppArmor profile covers only the
+ * launcher, so the new version's sandbox is denied and it crashes. The AppImage updater relaunches
+ * the AppImage itself.
+ */
+export function linuxPackageLauncher(input: {
+  platform: NodeJS.Platform;
+  execPath: string;
+  isAppImage: boolean;
+  exists: (file: string) => boolean;
+}): string | null {
+  if (input.platform !== "linux" || input.isAppImage || !input.execPath.endsWith(".bin"))
+    return null;
+  const launcher = input.execPath.slice(0, -".bin".length);
+  return input.exists(launcher) ? launcher : null;
+}
+
 class ElectronAppUpdateRuntime implements AppUpdateRuntime {
   private configured = false;
 
@@ -222,12 +242,29 @@ class ElectronAppUpdateRuntime implements AppUpdateRuntime {
   }
 
   quitAndInstall({ targetVersion, isSilent, isForceRunAfter }: AppUpdateInstallRequest): void {
-    autoUpdater.autoRunAppAfterInstall = isForceRunAfter;
     updateLifecycleLog.quitAndInstallRequested({
       targetVersion,
       isSilent,
       isForceRunAfter,
     });
+    const launcher = isForceRunAfter
+      ? linuxPackageLauncher({
+          platform: process.platform,
+          execPath: process.execPath,
+          isAppImage: Boolean(process.env.APPIMAGE),
+          exists: existsSync,
+        })
+      : null;
+    if (launcher) {
+      // Fired only after the package installed, so a failed or cancelled install leaves no relaunch.
+      electronAutoUpdater.once("before-quit-for-update", () =>
+        app.relaunch({ execPath: launcher }),
+      );
+      autoUpdater.autoRunAppAfterInstall = false;
+      autoUpdater.quitAndInstall(isSilent, false);
+      return;
+    }
+    autoUpdater.autoRunAppAfterInstall = isForceRunAfter;
     autoUpdater.quitAndInstall(isSilent, isForceRunAfter);
   }
 }
