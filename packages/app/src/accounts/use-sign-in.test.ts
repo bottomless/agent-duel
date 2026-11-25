@@ -95,3 +95,68 @@ describe("useSignIn flow counts", () => {
     expect(await startEmailFlow()).toMatchObject({ method: "email", returning: false });
   });
 });
+
+describe("useSignIn claim polling", () => {
+  const user = { id: "user-1", email: "dev@example.com", name: null, image: null };
+
+  // Counts claims in flight; each takes `delayMs` on the fake clock before it answers.
+  function slowClaims(answers: ClaimSignInFlowResponse[], delayMs: number) {
+    const inFlight = { now: 0, max: 0 };
+    mocks.claimSignInFlow.mockImplementation(async () => {
+      inFlight.now += 1;
+      inFlight.max = Math.max(inFlight.max, inFlight.now);
+      const answer = answers.shift() ?? { status: "expired" };
+      // The control plane hands a session over once; a claim after it answers expired at once.
+      if (answer.status !== "expired") await new Promise((resolve) => setTimeout(resolve, delayMs));
+      inFlight.now -= 1;
+      return answer;
+    });
+    return inFlight;
+  }
+
+  async function advance(ms: number) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  }
+
+  async function waitingForEmail() {
+    vi.useFakeTimers();
+    const hook = renderHook(() => useSignIn(endpoint, acceptance));
+    act(() => hook.result.current.startEmail("dev@example.com"));
+    await advance(0);
+    expect(hook.result.current.state.kind).toBe("awaiting-email");
+    return hook;
+  }
+
+  it("keeps a slow signed-in claim when a later poll would have read expired", async () => {
+    const inFlight = slowClaims(
+      [{ status: "signed-in", sessionToken: "token-1", method: "email", user }],
+      3_000,
+    );
+    const { result } = await waitingForEmail();
+
+    await advance(2_000 + 3_000);
+    expect(inFlight.max).toBe(1);
+    expect(useAccountSessionStore.getState().session).toEqual({
+      token: "token-1",
+      user,
+      method: "email",
+    });
+    expect(result.current.state.kind).toBe("awaiting-email");
+
+    await advance(10_000);
+    expect(mocks.claimSignInFlow).toHaveBeenCalledTimes(1);
+  });
+
+  it("claims again 2 s after a pending answer settles", async () => {
+    const inFlight = slowClaims([{ status: "pending" }, { status: "pending" }], 3_000);
+    await waitingForEmail();
+
+    await advance(2_000 + 3_000 + 2_000 - 1);
+    expect(mocks.claimSignInFlow).toHaveBeenCalledTimes(1);
+    await advance(1);
+    expect(mocks.claimSignInFlow).toHaveBeenCalledTimes(2);
+    expect(inFlight.max).toBe(1);
+  });
+});

@@ -106,27 +106,31 @@ export function useSignIn(
       return;
     }
 
+    // One claim at a time, the next one 2 s after the last settles. The control plane hands the
+    // session over once and answers any later claim with expired, so a poll that overlapped a slow
+    // successful claim could fail a sign-in that had already succeeded.
     let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const poll = async () => {
       const result = await claimSignInFlow(endpoint, flow).catch(() => null);
-      if (stopped || !result) {
+      if (stopped) {
         return;
       }
-      if (result.status === "expired") {
+      if (result?.status === "expired") {
         dispatch({ type: "flow-expired", message: "This sign-in expired. Start again." });
         return;
       }
-      if (result.status === "signed-in") {
+      if (result?.status === "signed-in") {
         setSession({ token: result.sessionToken, user: result.user, method: result.method });
+        return;
       }
+      timer = setTimeout(() => void poll(), CLAIM_POLL_INTERVAL_MS);
     };
 
-    const handle = setInterval(() => {
-      void poll();
-    }, CLAIM_POLL_INTERVAL_MS);
+    timer = setTimeout(() => void poll(), CLAIM_POLL_INTERVAL_MS);
     return () => {
       stopped = true;
-      clearInterval(handle);
+      clearTimeout(timer);
     };
   }, [endpoint, flow, setSession]);
 
