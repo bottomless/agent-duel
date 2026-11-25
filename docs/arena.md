@@ -85,14 +85,16 @@ Research readers use `resolveResearchDocument` from arena-service under the same
 Deploy the control plane's updated arena-service dependency before shipping this protocol: an old
 server refuses chunks, which the desktop retains for automatic recovery after the server upgrade.
 
-The desktop's per-call copies are scrubbed, so in hosted battles the control plane keeps each
-contestant call as OpenRouter received it, with the real model, routing, cache key and restored
-reasoning, and its raw response (`arena-service/src/generation-capture.ts`, `captureGenerations`).
-Messages, tools and images are stored once per account by content, because each call resends the
-whole history. Single-agent chats, keep-alive pings and the service's own comparison and metadata
-calls are not kept. A retried Carbon call (see [Request](#blinding)) keeps its refused attempt as a
-separate record under a new generation id, linked by `retriedByGenerationID`. BYOK leaves capture
-off: its store is on the voter's machine, and those fields name the model.
+The desktop's per-call copies are scrubbed, so the hosted control plane keeps each contestant call
+as OpenRouter received it, with the real model, routing, cache key and restored reasoning, and its
+raw response (`arena-service/src/generation-capture.ts`, `captureGenerations`). Messages, tools and
+images are stored once per account by content, because each call resends the whole history.
+Single-agent turns are kept the same way: their scope ID is the `singleAgentRatings` record's ID,
+so a capture joins to the rating it belongs to the way a battle's joins to its turn. Keep-alive
+pings and the service's own comparison and metadata calls are not kept. A retried Carbon call (see
+[Request](#blinding)) keeps its refused attempt as a separate record under a new generation id,
+linked by `retriedByGenerationID`. BYOK leaves capture off: its store is on the voter's machine,
+and those fields name the model.
 
 The control plane also adds the endpoint's quantization to each stored request row, from a catalog of
 OpenRouter's endpoint lists that it saves itself (`arena-service/src/endpoint-label.ts`, `recordEndpointLabels`).
@@ -1078,8 +1080,8 @@ reply takes the same attachments as a chat message, and both contestants get ide
   (`/api/openrouter/api/v1/arena/media`, `arena/media-reference.ts`), names it
   `arena-media:sha256:<digest>:<type>`, and the proxy puts the data back before OpenRouter sees the
   body (arena-service `media.ts`). Uploads are stored per account for 72 hours, apart from the
-  generation-capture parts, because single-agent chats are not kept; a battle's capture stores its
-  own copy of what the call sent. An expired file is missing, and the engine uploads it again under
+  generation-capture parts: a capture stores its own copy of what the call sent. An expired file is
+  missing, and the engine uploads it again under
   the same reference, so the prompt and its cache do not change.
   The route is its own Vercel function in the control-plane repository, which must ship it before a
   desktop release relies on it; a control plane without it answers 404, and the engine sends the
