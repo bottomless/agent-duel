@@ -1805,9 +1805,12 @@ describe("OpenRouter proxy", () => {
       const db = fakeDb({ assignmentSets: () => [assignmentSet] })
       let clock = 1_000_000
       const now = spyOn(Date, "now").mockImplementation(() => clock)
-      const logged: Array<{ readonly message: unknown; readonly detail: unknown }> = []
+      const logged: Array<{ readonly level: string; readonly message: unknown; readonly detail: unknown }> = []
       const error = spyOn(console, "error").mockImplementation((message: unknown, detail: unknown) => {
-        logged.push({ message, detail })
+        logged.push({ level: "error", message, detail })
+      })
+      const info = spyOn(console, "info").mockImplementation((message: unknown, detail: unknown) => {
+        logged.push({ level: "info", message, detail })
       })
       const payload = {
         id: "private-upstream-id",
@@ -1882,6 +1885,8 @@ describe("OpenRouter proxy", () => {
         }
 
         expect(logged).toHaveLength(1)
+        // A cancel this soon is a Stop or a vote; a broken connection is the provider's.
+        expect(logged[0]?.level).toBe(ending === "cancelled" ? "info" : "error")
         expect(logged[0]?.message).toBe("[arena-service] OpenRouter contestant stream ended early")
         const detail = String(logged[0]?.detail)
         expect(JSON.parse(detail)).toEqual({
@@ -1895,12 +1900,13 @@ describe("OpenRouter proxy", () => {
         expect(detail).not.toContain("secret thought")
       } finally {
         error.mockRestore()
+        info.mockRestore()
         now.mockRestore()
       }
     },
   )
 
-  test("measures quiet time across OpenRouter processing comments before cancellation", async () => {
+  test("measures quiet time across OpenRouter processing comments and logs the idle cut as an error", async () => {
     const db = fakeDb({
       assignmentSets: () => [
         { userId: "user-1", scopeID: "turn-1", assignments: [{ assignmentID: "opaque-id", model: pool[0] }] },

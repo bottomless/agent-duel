@@ -113,6 +113,13 @@ function generation(value: unknown) {
   return record(value) && record(value.response) ? value.response : value
 }
 
+/**
+ * The engine cuts a contestant call after this long without a model event
+ * (`opencode/src/arena/model-idle.ts`). The proxy sees each event before the engine does, so its
+ * own quiet time for that cut is never shorter.
+ */
+const ENGINE_IDLE_CUT_MS = 150_000
+
 function metricsCollector(generationID: string, startedAt: number) {
   let usagePayload: unknown
   let finished: string | undefined
@@ -264,7 +271,10 @@ function sanitizeStream(
     if (earlyEndLogged) return
     earlyEndLogged = true
     const { upstreamGenerationID, provider } = metrics.observed()
-    console.error(
+    // A Stop or a vote cancels open streams too. Only the engine's idle cut comes after that much
+    // quiet, and a broken connection is never the client's doing.
+    const stalled = state === "failed" || quiet >= ENGINE_IDLE_CUT_MS
+    ;(stalled ? console.error : console.info)(
       "[arena-service] OpenRouter contestant stream ended early",
       JSON.stringify({
         generationID,

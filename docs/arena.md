@@ -2002,7 +2002,8 @@ Only a complete row has usage and only complete rows reach the reveal. A row kee
 OpenRouter's `upstreamGenerationID` when the stream showed them; an early end also keeps `quietMs`,
 the silence since the last upstream data event, so a stall is measurable after the runtime logs
 expire. A Stop or a vote also ends open streams as `cancelled`, so count stalls by a `quietMs` near
-the 150-second idle deadline. A `complete` row without `finishReason` is a stream that closed before
+the 150-second idle deadline. The proxy's `stream ended early` log follows the same split: an error
+for those and for `failed`, info for any other cancel. A `complete` row without `finishReason` is a stream that closed before
 its finish, often a provider cutting it. The legacy `arena model response idle` log is emitted by `session/llm.ts`; the V2 fetch
 adapter does not emit it.
 
