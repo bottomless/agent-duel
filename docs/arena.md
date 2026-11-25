@@ -96,6 +96,14 @@ pings and the service's own comparison and metadata calls are not kept. A retrie
 linked by `retriedByGenerationID`. BYOK leaves capture off: its store is on the voter's machine,
 and those fields name the model.
 
+A profile with `topLogprobs` also asks each chat call for token logprobs, which only the capture's raw
+response keeps. The proxy strips `logprobs` from every choice before the engine sees it, because the
+tokens show the tokenizer and their presence shows the model. It also drops any logprob fields the
+engine sent. Providers return logprobs for visible text only, so a step that answers with only
+reasoning and tool calls has none. Under `require_parameters` the setting also limits the model to
+the endpoints that return them, and catalog validation refuses it for a model that lists none.
+OpenRouter keeps no logprobs after a call, so this is the only way to get them.
+
 The control plane also adds the endpoint's quantization to each stored request row, from a catalog of
 OpenRouter's endpoint lists that it saves itself (`arena-service/src/endpoint-label.ts`, `recordEndpointLabels`).
 OpenRouter never reports quantization for a call, so the label is what the catalog listed for that

@@ -1295,6 +1295,108 @@ describe("OpenRouter proxy", () => {
     120_000,
   )
 
+  test("probes a profile that collects logprobs with the logprob fields", async () => {
+    const bodies: Record<string, unknown>[] = []
+    await probeRouting([{ ...pool[1]!, topLogprobs: 5 }, pool[0]!], "key", async (_input, init) => {
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
+      return Response.json({ choices: [] })
+    })
+    expect(bodies[0]).toMatchObject({ logprobs: true, top_logprobs: 5 })
+    expect(bodies[1]).not.toHaveProperty("logprobs")
+    expect(bodies[1]).not.toHaveProperty("top_logprobs")
+  })
+
+  test.each([
+    { name: "a profile that collects them", topLogprobs: 5, stream: true },
+    { name: "a profile that collects them, unstreamed", topLogprobs: 0, stream: false },
+    { name: "a profile that does not", topLogprobs: undefined, stream: true },
+  ])("asks for logprobs only for $name, and never returns them to the client", async ({ topLogprobs, stream }) => {
+    let upstreamBody: Record<string, unknown> | undefined
+    const logprobs = { content: [{ token: "Ins", logprob: -0.01, top_logprobs: [{ token: "Ins", logprob: -0.01 }] }] }
+    const db = fakeDb({
+      assignmentSets: () => [
+        {
+          userId: "user-1",
+          scopeID: "turn-1",
+          assignments: [{ assignmentID: "opaque-id", model: { ...pool[0], topLogprobs } }],
+        },
+      ],
+    })
+    const proxy = openrouter({
+      db: async () => db,
+      fetch: async (_input, init) => {
+        upstreamBody = JSON.parse(new TextDecoder().decode(init?.body as ArrayBuffer)) as Record<string, unknown>
+        if (!stream) return Response.json({ choices: [{ index: 0, message: { content: "Insertion" }, logprobs }] })
+        return new Response(
+          [
+            `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: "Insertion" }, logprobs }] })}`,
+            "data: [DONE]",
+            "",
+          ].join("\n\n"),
+          { headers: { "content-type": "text/event-stream" } },
+        )
+      },
+    })
+    const response = await proxy(
+      new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Arena-Assignment-ID": "opaque-id",
+          "X-Arena-Scope-ID": "turn-1",
+        },
+        // The engine cannot know whether its hidden model returns them.
+        body: JSON.stringify({ model: "contestant", messages: [], stream, logprobs: false, top_logprobs: 2 }),
+      }),
+    )
+
+    const body = await response.text()
+    expect(response.status).toBe(200)
+    expect(body).toContain("Insertion")
+    expect(body).not.toContain("logprob")
+    if (topLogprobs === undefined) {
+      expect(upstreamBody).not.toHaveProperty("logprobs")
+      expect(upstreamBody).not.toHaveProperty("top_logprobs")
+    } else {
+      expect(upstreamBody).toMatchObject({ logprobs: true, top_logprobs: topLogprobs })
+    }
+  })
+
+  test("asks for no logprobs on a responses call", async () => {
+    let upstreamBody: Record<string, unknown> | undefined
+    const proxy = openrouter({
+      db: async () =>
+        fakeDb({
+          assignmentSets: () => [
+            {
+              userId: "user-1",
+              scopeID: "turn-1",
+              assignments: [{ assignmentID: "opaque-id", model: { ...pool[0], topLogprobs: 5 } }],
+            },
+          ],
+        }),
+      fetch: async (_input, init) => {
+        upstreamBody = JSON.parse(new TextDecoder().decode(init?.body as ArrayBuffer)) as Record<string, unknown>
+        return Response.json({ output: [] })
+      },
+    })
+    const response = await proxy(
+      new Request("https://control.test/api/openrouter/api/v1/responses", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Arena-Assignment-ID": "opaque-id",
+          "X-Arena-Scope-ID": "turn-1",
+        },
+        body: JSON.stringify({ model: "contestant", input: [], stream: false }),
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(upstreamBody).not.toHaveProperty("logprobs")
+    expect(upstreamBody).not.toHaveProperty("top_logprobs")
+  })
+
   test("leaves sampling to each provider, because the engine cannot choose it for a hidden model", async () => {
     let upstreamBody: Record<string, unknown> | undefined
     const db = fakeDb({
