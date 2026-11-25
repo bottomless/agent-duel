@@ -1841,6 +1841,117 @@ export const AgentSkillsImportLegacySelectionRequestSchema = z
   })
   .strict();
 
+// Plugins the user installed in Claude Code or Codex, imported into the engine's OpenCode config
+// (`packages/server/src/server/agent-plugins/`). Global plugins are decided once; project plugins are
+// decided per project, from the banner above the composer.
+export const AgentPluginSourceSchema = z.enum(["claude-code", "codex"]);
+export type AgentPluginSource = z.infer<typeof AgentPluginSourceSchema>;
+
+/** `plugin` is an installed plugin; `repository` is the project's own `.claude/` or `.codex/` setup. */
+export const AgentPluginKindSchema = z.enum(["plugin", "repository"]);
+export type AgentPluginKind = z.infer<typeof AgentPluginKindSchema>;
+
+/** `pending` has not been decided yet, so it is not imported. */
+export const AgentPluginStateSchema = z.enum(["on", "off", "pending"]);
+export type AgentPluginState = z.infer<typeof AgentPluginStateSchema>;
+
+export const AgentPluginMcpServerSchema = z
+  .object({
+    name: z.string(),
+    /** The command line a local server runs, or a remote server's URL. */
+    launch: z.string(),
+  })
+  .strict();
+export type AgentPluginMcpServer = z.infer<typeof AgentPluginMcpServerSchema>;
+
+export const AgentPluginContentsSchema = z
+  .object({
+    skills: z.number().int(),
+    commands: z.number().int(),
+    agents: z.number().int(),
+    mcpServers: z.array(AgentPluginMcpServerSchema),
+  })
+  .strict();
+export type AgentPluginContents = z.infer<typeof AgentPluginContentsSchema>;
+
+export const AgentPluginSchema = z
+  .object({
+    id: z.string(),
+    name: z.string(),
+    source: AgentPluginSourceSchema,
+    kind: AgentPluginKindSchema,
+    description: z.string().nullable(),
+    version: z.string().nullable(),
+    contents: AgentPluginContentsSchema,
+    state: AgentPluginStateSchema,
+    /** What of this plugin the last import could not convert; the rest of it is in the engine. */
+    importError: z.string().nullable(),
+  })
+  .strict();
+export type AgentPlugin = z.infer<typeof AgentPluginSchema>;
+
+export const AgentPluginsGlobalStatusSchema = z
+  .object({
+    /** False until the user first imports or dismisses the global plugins; every plugin is pending. */
+    reviewed: z.boolean(),
+    plugins: z.array(AgentPluginSchema),
+    /** Plugins imported automatically since the user last saw the list. */
+    added: z.array(z.string()),
+  })
+  .strict();
+export type AgentPluginsGlobalStatus = z.infer<typeof AgentPluginsGlobalStatusSchema>;
+
+export const AgentPluginsProjectStatusSchema = z
+  .object({
+    projectRoot: z.string(),
+    plugins: z.array(AgentPluginSchema),
+    /** Skills in the project's `.claude/skills` and `.agents/skills`, which the engine reads itself. */
+    nativeSkills: z.array(z.string()),
+  })
+  .strict();
+export type AgentPluginsProjectStatus = z.infer<typeof AgentPluginsProjectStatusSchema>;
+
+export const AgentPluginsStatusSchema = z
+  .object({
+    global: AgentPluginsGlobalStatusSchema,
+    project: AgentPluginsProjectStatusSchema.nullable(),
+  })
+  .strict();
+export type AgentPluginsStatus = z.infer<typeof AgentPluginsStatusSchema>;
+
+export const AgentPluginScopeSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("global") }).strict(),
+  z.object({ kind: z.literal("project"), projectRoot: z.string() }).strict(),
+]);
+export type AgentPluginScope = z.infer<typeof AgentPluginScopeSchema>;
+
+export const AgentPluginsGetStatusRequestSchema = z
+  .object({
+    type: z.literal("agent_plugins.get_status.request"),
+    requestId: z.string(),
+    /** The chat's directory; the daemon resolves its project. Null asks for the global plugins only. */
+    cwd: z.string().nullable(),
+  })
+  .strict();
+
+export const AgentPluginsSaveSelectionRequestSchema = z
+  .object({
+    type: z.literal("agent_plugins.save_selection.request"),
+    requestId: z.string(),
+    scope: AgentPluginScopeSchema,
+    enabled: z.array(z.string()),
+    disabled: z.array(z.string()),
+  })
+  .strict();
+
+export const AgentPluginsAcknowledgeAddedRequestSchema = z
+  .object({
+    type: z.literal("agent_plugins.acknowledge_added.request"),
+    requestId: z.string(),
+    ids: z.array(z.string()),
+  })
+  .strict();
+
 export const GetDaemonConfigRequestMessageSchema = z.object({
   type: z.literal("get_daemon_config_request"),
   requestId: z.string(),
@@ -3090,6 +3201,7 @@ export const ProjectGithubCloneRequestSchema = z.object({
 export const ArchiveWorkspaceRequestSchema = z.object({
   type: z.literal("archive_workspace_request"),
   workspaceId: z.string(),
+  emptyDraftAgentId: z.string().nullable().optional(),
   requestId: z.string(),
 });
 
@@ -3730,6 +3842,9 @@ export const SessionInboundMessageSchema = z.discriminatedUnion("type", [
   AgentSkillsUninstallRequestSchema,
   AgentSkillsSaveSelectionRequestSchema,
   AgentSkillsImportLegacySelectionRequestSchema,
+  AgentPluginsGetStatusRequestSchema,
+  AgentPluginsSaveSelectionRequestSchema,
+  AgentPluginsAcknowledgeAddedRequestSchema,
   GetDaemonConfigRequestMessageSchema,
   SetDaemonConfigRequestMessageSchema,
   ReadProjectConfigRequestMessageSchema,
@@ -4321,6 +4436,9 @@ export const RpcErrorMessageSchema = z.object({
     requestType: z.string().optional(),
     error: z.string(),
     code: z.string().optional(),
+    // The operation was refused before dispatch or its owner returned a terminal response.
+    // Does not imply that it made no changes.
+    requestSettled: z.literal(true).optional(),
   }),
 });
 
@@ -7515,6 +7633,22 @@ export const AgentSkillsImportLegacySelectionResponseSchema = z.object({
   }),
 });
 
+function agentPluginsResponse<const Type extends string>(type: Type) {
+  return z.object({
+    type: z.literal(type),
+    payload: AgentPluginsStatusSchema.extend({ requestId: z.string() }),
+  });
+}
+export const AgentPluginsGetStatusResponseSchema = agentPluginsResponse(
+  "agent_plugins.get_status.response",
+);
+export const AgentPluginsSaveSelectionResponseSchema = agentPluginsResponse(
+  "agent_plugins.save_selection.response",
+);
+export const AgentPluginsAcknowledgeAddedResponseSchema = agentPluginsResponse(
+  "agent_plugins.acknowledge_added.response",
+);
+
 export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   HostsListResponseSchema,
   HostsChangedSchema,
@@ -7587,6 +7721,9 @@ export const SessionOutboundMessageSchema = z.discriminatedUnion("type", [
   AgentSkillsUninstallResponseSchema,
   AgentSkillsSaveSelectionResponseSchema,
   AgentSkillsImportLegacySelectionResponseSchema,
+  AgentPluginsGetStatusResponseSchema,
+  AgentPluginsSaveSelectionResponseSchema,
+  AgentPluginsAcknowledgeAddedResponseSchema,
   ActivityLogMessageSchema,
   AssistantChunkMessageSchema,
   AudioOutputMessageSchema,

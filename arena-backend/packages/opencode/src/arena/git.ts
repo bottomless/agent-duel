@@ -42,6 +42,10 @@ export type FinalizeInput = {
   readonly baseSHA: string
   /** Frozen canonical HEAD. Use this when `baseSHA` is a hidden dirty-tree evidence commit. */
   readonly frozenHead?: string
+  /** Canonical repository holding the frozen base and admitted result refs, when isolated from `worktree`. */
+  readonly canonical?: string
+  /** Canonical ref anchoring `baseSHA` (and its parent `frozenHead`). */
+  readonly baseRef?: string
   readonly permanentRef: string
   /** Previous result admitted to this pre-vote side ref, when continuing a completed run. */
   readonly expectedPermanentCommit?: string
@@ -688,17 +692,208 @@ const advanceRef = Effect.fn("ArenaGit.advanceRef")(function* (
   }
 })
 
-/** What a run's permanent ref and its index ref hold in the run's own repository, if anything. */
+const readRefOptional = Effect.fnUntraced(function* (git: Git.Interface, cwd: string, ref: string, operation: string) {
+  const current = yield* git.run(["rev-parse", "--verify", "--quiet", ref], { cwd })
+  if (current.exitCode === 0) return output(current)
+  if (current.exitCode === 1) return undefined
+  const detail = current.stderr.toString("utf8").trim() || "Failed to inspect permanent battle ref"
+  return yield* Effect.fail(new OperationError(operation, detail))
+})
+
+const isSymbolicRef = Effect.fnUntraced(function* (git: Git.Interface, cwd: string, ref: string) {
+  const checked = yield* git.run(["symbolic-ref", "--quiet", ref], { cwd })
+  return checked.exitCode === 0
+})
+
+/** True when `worktree` and `canonical` have separate common git directories (an isolated host). */
+const isIsolatedRepository = Effect.fnUntraced(function* (
+  git: Git.Interface,
+  root: string,
+  canonical: string | undefined,
+) {
+  if (!canonical) return false
+  const [rootCommon, canonicalCommon] = yield* Effect.all(
+    [
+      read(git, root, "read_worktree_common_git_dir", ["rev-parse", "--path-format=absolute", "--git-common-dir"]),
+      read(git, canonical, "read_canonical_common_git_dir", [
+        "rev-parse",
+        "--path-format=absolute",
+        "--git-common-dir",
+      ]),
+    ],
+    { concurrency: "unbounded" },
+  )
+  const [resolvedRoot, resolvedCanonical] = yield* Effect.promise(() =>
+    Promise.all([
+      realpath(rootCommon).catch(() => resolve(rootCommon)),
+      realpath(canonicalCommon).catch(() => resolve(canonicalCommon)),
+    ]),
+  )
+  return FSUtil.normalizePath(resolvedRoot) !== FSUtil.normalizePath(resolvedCanonical)
+})
+
+const missingBaseObjects = Effect.fnUntraced(function* (
+  git: Git.Interface,
+  root: string,
+  baseSHA: string,
+  frozenHead: string,
+) {
+  const checks: { readonly query: string; readonly oid: string; readonly type: "commit" | "tree" }[] = [
+    { query: `${baseSHA}^{commit}`, oid: baseSHA, type: "commit" },
+    { query: `${baseSHA}^{tree}`, oid: baseSHA, type: "tree" },
+    ...(frozenHead !== baseSHA ? [{ query: `${frozenHead}^{commit}`, oid: frozenHead, type: "commit" as const }] : []),
+  ]
+  const checked = yield* read(git, root, "check_base_objects", ["cat-file", "--batch-check"], {
+    stdin: Stream.make(new TextEncoder().encode(`${checks.map((item) => item.query).join("\n")}\n`)),
+  })
+  const lines = checked.split(/\r?\n/)
+  const missing = new Set<string>()
+  for (let index = 0; index < checks.length; index++) {
+    const [, type] = (lines[index] ?? "").split(" ")
+    if (type !== checks[index]!.type) missing.add(checks[index]!.oid)
+  }
+  return [...missing]
+})
+
+/**
+ * Restore the frozen base commit and frozen HEAD from `canonical` when the contestant pruned them
+ * (for example via `git filter-repo` + `git gc --prune=now`) from its isolated host.
+ */
+const ensureBaseObjects = Effect.fn("ArenaGit.ensureBaseObjects")(function* (
+  git: Git.Interface,
+  root: string,
+  input: {
+    readonly baseSHA: string
+    readonly frozenHead: string
+    readonly canonical?: string
+    readonly baseRef?: string
+    readonly isolated: boolean
+  },
+) {
+  if (!input.canonical || !input.isolated) return
+  const missing = yield* missingBaseObjects(git, root, input.baseSHA, input.frozenHead)
+  if (missing.length === 0) return
+
+  let remaining = missing
+  if (input.baseRef) {
+    const fetched = yield* git.run(
+      ["fetch", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules", input.canonical, input.baseRef],
+      { cwd: root },
+    )
+    if (fetched.exitCode === 0) {
+      remaining = yield* missingBaseObjects(git, root, input.baseSHA, input.frozenHead)
+    }
+  }
+  if (remaining.length > 0) {
+    yield* run(git, root, "fetch_base_objects", [
+      "fetch",
+      "--no-tags",
+      "--no-write-fetch-head",
+      "--no-recurse-submodules",
+      input.canonical,
+      ...remaining,
+    ])
+    remaining = yield* missingBaseObjects(git, root, input.baseSHA, input.frozenHead)
+  }
+  if (remaining.length > 0) {
+    return yield* Effect.fail(
+      new OperationError(
+        "fetch_base_objects",
+        `Missing frozen base objects after fetching from canonical: ${remaining.join(", ")}`,
+      ),
+    )
+  }
+  yield* Effect.logWarning("Arena refetched missing base objects from canonical during finalization", {
+    root,
+    canonical: input.canonical,
+    missing,
+  })
+})
+
+/**
+ * Write or advance one of a run's private result refs (`permanentRef` or `${permanentRef}-index`).
+ *
+ * When `worktree` shares `canonical`, strict write-once / compare-and-swap applies. When `worktree`
+ * runs in an isolated host, the contestant has full shell access to the host's refs and can rewrite
+ * or delete `refs/battles/...` (for example with `git filter-repo` or `update-ref`). In that case,
+ * `canonical` is the untouched source of truth for what was previously admitted: if `canonical`
+ * still agrees with `expected` (or has no admitted ref when `expected` is absent), the host ref
+ * mismatch is contestant interference and the host ref is repaired; `importResultRef` still
+ * enforces strict compare-and-swap against `canonical`.
+ */
+const writeResultRef = Effect.fn("ArenaGit.writeResultRef")(function* (
+  git: Git.Interface,
+  root: string,
+  input: {
+    readonly ref: string
+    readonly target: string
+    readonly expected?: string
+    readonly canonical?: string
+    readonly isolated: boolean
+  },
+) {
+  if (!input.isolated || !input.canonical) {
+    if (input.expected) {
+      yield* advanceRef(git, root, input.ref, input.target, input.expected)
+    } else {
+      yield* preserveRef(git, root, input.ref, input.target)
+    }
+    return
+  }
+
+  const operation = input.expected ? "advance_ref" : "preserve_ref"
+  yield* run(git, root, "validate_ref", ["check-ref-format", input.ref])
+  const [symbolic, current] = yield* Effect.all(
+    [isSymbolicRef(git, root, input.ref), readRefOptional(git, root, input.ref, operation)],
+    { concurrency: "unbounded" },
+  )
+  if (!symbolic && current === input.target) return
+
+  if (!symbolic && input.expected && current === input.expected) {
+    yield* advanceRef(git, root, input.ref, input.target, input.expected)
+    return
+  }
+  if (!symbolic && !input.expected && current === undefined) {
+    yield* preserveRef(git, root, input.ref, input.target)
+    return
+  }
+
+  const authoritative = yield* readRefOptional(git, input.canonical, input.ref, operation)
+  if (authoritative !== input.expected) {
+    if (input.expected) {
+      const message = current
+        ? `Pre-vote battle ref changed from ${input.expected} to ${current}`
+        : "Pre-vote battle ref is missing"
+      return yield* Effect.fail(new OperationError("advance_ref", message))
+    }
+    return yield* Effect.fail(
+      new OperationError("preserve_ref", `Permanent battle ref ${input.ref} points to ${current}, not ${input.target}`),
+    )
+  }
+
+  yield* Effect.logWarning("Arena repaired contestant-modified result ref in isolated host", {
+    root,
+    ref: input.ref,
+    expected: input.expected ?? null,
+    actual: current ?? null,
+    symbolic,
+  })
+  // `--no-deref` without old-oid replaces direct refs, dangling refs, and live or dangling symrefs
+  // without moving any branch a symref pointed to.
+  yield* run(git, root, operation, ["update-ref", "--no-deref", input.ref, input.target])
+  const verified = yield* read(git, root, "verify_ref", ["rev-parse", "--verify", input.ref])
+  if (verified !== input.target) {
+    return yield* Effect.fail(new OperationError("verify_ref", "Pre-vote battle ref verification failed"))
+  }
+})
+
+/** What a run's permanent ref and its index ref hold in the given repository, if anything. */
 export const readResultRefs = Effect.fn("ArenaGit.readResultRefs")(function* (worktree: string, permanentRef: string) {
   const git = yield* Git.Service
-  const value = Effect.fnUntraced(function* (ref: string) {
-    const current = yield* git.run(["rev-parse", "--verify", "--quiet", ref], { cwd: worktree })
-    if (current.exitCode === 0) return output(current)
-    if (current.exitCode === 1) return undefined
-    const detail = current.stderr.toString("utf8").trim() || "Failed to inspect permanent battle ref"
-    return yield* Effect.fail(new OperationError("read_result_ref", detail))
-  })
-  return { commit: yield* value(permanentRef), indexTree: yield* value(`${permanentRef}-index`) }
+  return {
+    commit: yield* readRefOptional(git, worktree, permanentRef, "read_result_ref"),
+    indexTree: yield* readRefOptional(git, worktree, `${permanentRef}-index`, "read_result_ref"),
+  }
 })
 
 const REF_VALUE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})\n?$|^ref: /
@@ -3129,6 +3324,15 @@ export const snapshotBase = Effect.fn("ArenaGit.snapshotBase")(function* (input:
 export const finalize = Effect.fn("ArenaGit.finalize")(function* (input: FinalizeInput) {
   const git = yield* Git.Service
   const root = yield* readRoot(git, input.worktree, "find_worktree_root")
+  const frozenHead = input.frozenHead ?? input.baseSHA
+  const isolated = yield* isIsolatedRepository(git, root, input.canonical)
+  yield* ensureBaseObjects(git, root, {
+    baseSHA: input.baseSHA,
+    frozenHead,
+    canonical: input.canonical,
+    baseRef: input.baseRef,
+    isolated,
+  })
   const rawHead = yield* read(git, root, "read_raw_head", ["rev-parse", "--verify", "HEAD"])
   const branchResult = yield* git.run(["symbolic-ref", "--quiet", "--short", "HEAD"], { cwd: root })
   const branch = branchResult.exitCode === 0 ? output(branchResult) || undefined : undefined
@@ -3147,7 +3351,6 @@ export const finalize = Effect.fn("ArenaGit.finalize")(function* (input: Finaliz
   const finalIndexTree = yield* read(git, root, "read_final_index", ["write-tree"])
   const finalTree = yield* readWorkingTree(git, root, { keepFilesOf: input.baseSHA })
   const rawTree = yield* read(git, root, "read_raw_tree", ["rev-parse", `${rawHead}^{tree}`])
-  const frozenHead = input.frozenHead ?? input.baseSHA
   const rawHeadDescendsFromBase = yield* isAncestor(git, root, frozenHead, rawHead)
   const agentCommits = yield* readCommitChain(git, root, frozenHead, rawHead)
   const wrapperCreated = finalTree !== rawTree || !rawHeadDescendsFromBase
@@ -3170,17 +3373,21 @@ export const finalize = Effect.fn("ArenaGit.finalize")(function* (input: Finaliz
       )
     : rawHead
 
-  if (input.expectedPermanentCommit) {
-    yield* advanceRef(git, root, input.permanentRef, finalCommit, input.expectedPermanentCommit)
-  } else {
-    yield* preserveRef(git, root, input.permanentRef, finalCommit)
-  }
+  yield* writeResultRef(git, root, {
+    ref: input.permanentRef,
+    target: finalCommit,
+    expected: input.expectedPermanentCommit,
+    canonical: input.canonical,
+    isolated,
+  })
   const finalIndexRef = `${input.permanentRef}-index`
-  if (input.expectedFinalIndexTree) {
-    yield* advanceRef(git, root, finalIndexRef, finalIndexTree, input.expectedFinalIndexTree)
-  } else {
-    yield* preserveRef(git, root, finalIndexRef, finalIndexTree)
-  }
+  yield* writeResultRef(git, root, {
+    ref: finalIndexRef,
+    target: finalIndexTree,
+    expected: input.expectedFinalIndexTree,
+    canonical: input.canonical,
+    isolated,
+  })
   // Applicability is about the frozen canonical history, never the synthetic dirty-tree
   // evidence commit used to render a comparison.
   const baseIsAncestor = yield* isAncestor(git, root, frozenHead, rawHead)

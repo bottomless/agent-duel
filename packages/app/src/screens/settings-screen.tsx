@@ -21,6 +21,7 @@ import {
   Globe,
   HardDrive,
   MessageSquare,
+  Puzzle,
 } from "lucide-react-native";
 import { DropdownTrigger } from "@/components/ui/dropdown-trigger";
 import { SidebarHeaderRow } from "@/components/sidebar/sidebar-header-row";
@@ -43,6 +44,7 @@ import { EditingTextInput } from "@/components/ui/text-input";
 import { KeyboardShortcutsSection } from "@/screens/settings/keyboard-shortcuts-section";
 import { FilesSection } from "@/screens/settings/files-section";
 import { StorageSection } from "@/screens/settings/storage-section";
+import { AgentPluginsSection } from "@/agent-plugins/settings-section";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { DesktopNotificationsSection } from "@/desktop/components/desktop-notifications-section";
 import { BrowserDataSection } from "@/desktop/browser/settings/browser-data-section";
@@ -128,6 +130,7 @@ const SIDEBAR_SECTION_ITEMS: SidebarSectionItem[] = [
     Content: DesktopNotificationsSection,
   },
   { id: "storage", labelKey: "settings.sections.storage", icon: HardDrive },
+  { id: "agent-plugins", labelKey: "settings.sections.agentPlugins", icon: Puzzle },
 ];
 
 function isSectionAvailable(
@@ -652,6 +655,8 @@ export default function SettingsScreen({ view }: SettingsScreenProps) {
         return <AppearanceSection search={search} />;
       case "storage":
         return <StorageSection serverId={activeHostServerId} />;
+      case "agent-plugins":
+        return activeHostServerId ? <AgentPluginsSection serverId={activeHostServerId} /> : null;
       default:
         return item.Content ? <item.Content /> : null;
     }

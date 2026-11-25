@@ -7,8 +7,8 @@
 <p align="center">A desktop app for head-to-head coding agent battles, with single-agent mode and free inference. Pick the winning agent and continue from its work.</p>
 
 <p align="center">
-  <a href="https://github.com/bottomless/agent-duel/releases/download/v0.4.0-beta.26/Agent-Duel-0.4.0-beta.26-arm64.dmg"><img src="docs/images/download-macos.svg" width="268" height="84" alt="Download for macOS · Apple silicon"></a>
-  <a href="https://github.com/bottomless/agent-duel/releases/download/v0.4.0-beta.26/Agent-Duel-Setup-0.4.0-beta.26-x64.exe"><img src="docs/images/download-windows.svg" width="268" height="84" alt="Download for Windows · 64-bit"></a>
+  <a href="https://agentduel.com/download/mac?from=readme"><img src="docs/images/download-macos.svg" width="268" height="84" alt="Download for macOS · Apple silicon"></a>
+  <a href="https://agentduel.com/download/windows?from=readme"><img src="docs/images/download-windows.svg" width="268" height="84" alt="Download for Windows · 64-bit"></a>
 </p>
 
 <p align="center">
@@ -72,12 +72,12 @@ See [leaderboard](https://agentduel.com/leaderboard) for model performance
 
 Execution stays on your machine:
 
-```text
-Electron UI -> local daemon -> local Arena runtime -> local repositories and agents
-                                       |
-                                       |-> Agent Duel cloud -> OpenRouter (official download)
-                                       `-> OpenRouter (your key in a BYOK build)
-```
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/architecture-dark.svg">
+    <img src="docs/images/architecture.svg" width="560" alt="On your machine: Electron UI, then the local daemon, then the local Arena runtime, then local repositories and agents. Model calls go through Agent Duel cloud to OpenRouter in the official download, or straight to OpenRouter with your key in a BYOK build.">
+  </picture>
+</p>
 
 The UI WebSocket terminates at the local daemon. The packaged desktop
 application contains the daemon, renderer, and compiled Arena runtime.

@@ -8,6 +8,7 @@ import {
   ARENA_CONTROL_PLANE_FAILED_CODE,
   ARENA_CONTROL_PLANE_FAILED_MESSAGE,
 } from "@getpaseo/protocol/accounts/schemas";
+import { SettledArenaRequestError } from "./refusal.js";
 import { arenaSessionRefusals, isArenaSessionRejected } from "../accounts/credentials.js";
 import {
   arenaTermsRefusals,
@@ -19,8 +20,8 @@ import {
 export class ArenaSessionRejectedError extends Error {
   readonly code = ACCOUNT_SESSION_REJECTED_CODE;
 
-  constructor() {
-    super(ACCOUNT_SESSION_REJECTED_MESSAGE);
+  constructor(options?: ErrorOptions) {
+    super(ACCOUNT_SESSION_REJECTED_MESSAGE, options);
     this.name = "ArenaSessionRejectedError";
   }
 }
@@ -74,6 +75,15 @@ export function isArenaAccountError(error: unknown): error is Error & { readonly
   );
 }
 
+// A concurrent request's account refusal can relabel this request's transport failure. Only
+// the underlying engine response, local preparation failure or pre-dispatch gate proves settlement.
+export function arenaRequestSettled(error: Error): boolean {
+  if (error instanceof SettledArenaRequestError) return true;
+  if (!isArenaAccountError(error)) return false;
+  if (error instanceof ArenaSessionRejectedError && !("cause" in error)) return true;
+  return error.cause instanceof SettledArenaRequestError;
+}
+
 // Requests that start or resolve model work. That work reaches the control plane after the
 // request has answered, so a rejected session would otherwise fail it with no sign-in prompt.
 const MODEL_WORK_REQUESTS: ReadonlySet<string> = new Set([
@@ -111,7 +121,8 @@ export async function runWithArenaAccountSession(
   } catch (error) {
     // Not the flag: after a refusal the daemon can fall back to another session of the account,
     // and the request it refused still failed on the session.
-    if (arenaSessionRefusals() > refusalsBefore) throw new ArenaSessionRejectedError();
+    if (arenaSessionRefusals() > refusalsBefore)
+      throw new ArenaSessionRejectedError({ cause: error });
     if (arenaUpdateRefusals() > updatesBefore) throw new ArenaUpdateRequiredError(error);
     if (arenaTermsRefusals() > termsBefore) throw new ArenaTermsRequiredError(error);
     // Only this request's own failed answer, which carries the failure mark in its text.

@@ -74,9 +74,14 @@ the session. Electron opens the system browser, and an email link may be opened 
    signature, and returns it to the app.
 
 Desktop flows include a temporary loopback return address owned by the initiating Electron window.
-The control-plane success page posts to it when you click **Open Agent Duel**. This focuses that
-window without an OS protocol link, which could launch another installed build during development.
-The address carries no account credentials. Browser-only flows keep the manual return instruction.
+The control-plane success page links to it as **Open Agent Duel**. Use a link, never a form: Safari
+warns about a non-secure form whenever an HTTPS page submits one to the loopback address, even with
+`method="get"`. Builds released before the listener accepted a link answer only a POST, so the
+control plane still gives them the form. The desktop answers both with No Content, which focuses the
+window and leaves the browser on the success page. Returning this way avoids an OS protocol link,
+which could launch another installed build during development. The address carries no account
+credentials. Browser-only flows keep the manual return instruction. If the return fails, the app
+still claims the finished flow on its next poll.
 
 OAuth `state` is stored on the flow rather than in a cookie, so the callback can land in a browser
 that shares no cookie jar with the app.
@@ -120,7 +125,10 @@ The daemon password and account session are separate credentials; a remote clien
   a SHA-256 verifier of the loopback OpenCode control token through the child's one-time stdin
   startup pipe, tagged `"mode": "hosted"`. The child consumes and closes the pipe before starting
   services. None of these credentials is installed in environment variables or command-line
-  arguments.
+  arguments. The runtime must reach the daemon over numeric loopback. Use the bound loopback
+  address or, for a wildcard bind, the loopback of the same address family. Looking up `localhost`
+  again can select the other family. A daemon bound only to a LAN address, socket or named pipe
+  cannot start hosted Arena. Browser previews keep their per-side `.localhost` hosts.
 - The daemon's Arena runtime proxy accepts that local capability only on an explicit allowlist:
   assignments, comparison, commit, pull request and branch name text, research upload, and assigned
   OpenRouter chat/responses. It exchanges the

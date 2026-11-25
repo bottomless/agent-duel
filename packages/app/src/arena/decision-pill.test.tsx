@@ -27,7 +27,11 @@ vi.mock("./use-battle-actions", () => ({
   }),
 }));
 
-import { ArenaPastDecision } from "./decision-bar";
+import {
+  ArenaDecisionBar,
+  ArenaPastDecision,
+  STUCK_STOPPING_DISCARD_DELAY_MS,
+} from "./decision-bar";
 import { ArenaDecisionPill } from "./decision-pill";
 
 const noop = () => {};
@@ -445,5 +449,87 @@ describe("ArenaPastDecision", () => {
       expect(taken.style.color).toBe(side.style.color);
       view.unmount();
     }
+  });
+});
+
+describe("ArenaDecisionBar stuck stopping discard", () => {
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  function stoppingSnapshot(stoppingAt: string, recovering = false): ArenaSnapshot {
+    const base = awaitingVote(
+      [
+        run({ id: "run-a", side: "a", runState: "complete", selectable: true }),
+        run({ id: "run-b", side: "b", runState: "pending", selectable: false, applicable: false }),
+      ],
+      { canTie: false, canDiscardBattle: true },
+    );
+    return {
+      ...base,
+      turn: {
+        ...base.turn!,
+        state: recovering ? "interrupted_recovery" : "stopping",
+        stoppingAt,
+        ...(recovering ? { activeOperations: ["snapshotting_changes"] } : {}),
+      },
+    };
+  }
+
+  it("hides Discard during a fresh stop and offers it once stopping takes too long", () => {
+    vi.useFakeTimers();
+    const now = new Date("2026-10-14T10:00:00.000Z");
+    vi.setSystemTime(now);
+
+    const view = render(
+      <ArenaDecisionBar
+        serverId="server"
+        agentId="agent"
+        snapshot={stoppingSnapshot(now.toISOString())}
+        onHeightChange={noop}
+      />,
+    );
+    expect(view.queryByTestId("arena-decision-transitional")).not.toBeNull();
+    expect(view.queryByTestId("arena-stopped-discard")).toBeNull();
+
+    React.act(() => {
+      vi.advanceTimersByTime(STUCK_STOPPING_DISCARD_DELAY_MS - 1);
+    });
+    expect(view.queryByTestId("arena-stopped-discard")).toBeNull();
+
+    React.act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(view.queryByTestId("arena-stopped-discard")).not.toBeNull();
+
+    view.rerender(
+      <ArenaDecisionBar
+        serverId="server"
+        agentId="agent"
+        snapshot={stoppingSnapshot(now.toISOString(), true)}
+        onHeightChange={noop}
+      />,
+    );
+    expect(view.getByText("Stopping the battle · Saving worktree changes")).not.toBeNull();
+    expect(view.getByTestId("arena-stopped-discard")).not.toBeNull();
+  });
+
+  it("offers Discard immediately when reopening a battle already stuck in stopping", () => {
+    vi.useFakeTimers();
+    const now = new Date("2026-10-14T10:01:00.000Z");
+    vi.setSystemTime(now);
+
+    const view = render(
+      <ArenaDecisionBar
+        serverId="server"
+        agentId="agent"
+        snapshot={stoppingSnapshot(
+          new Date(now.getTime() - STUCK_STOPPING_DISCARD_DELAY_MS).toISOString(),
+        )}
+        onHeightChange={noop}
+      />,
+    );
+    expect(view.queryByTestId("arena-stopped-discard")).not.toBeNull();
   });
 });

@@ -2,12 +2,12 @@ import { createHash } from "crypto"
 import { isDuplicateKeyError, type ArenaCollection, type ArenaDb } from "./collection"
 import { mediaPathname, type MediaStore, type StoredMedia } from "./media-store"
 
-// A hosted battle keeps each contestant call as OpenRouter saw it: the body after routing, restored
-// reasoning and the output cap, and the raw response before the scrub. The desktop cannot keep
-// either: real tool-call ids, reasoning formats and the slug name the model, and a BYOK store sits on
-// the voter's machine. A chat resends its whole history on every call, so a body is split into
-// components and media keyed by content under the account: both sides and every later call store
-// only what is new, and a deletion request still removes one account's parts alone.
+// The hosted service keeps each contestant call, battle or single-agent, as OpenRouter saw it: the
+// body after routing, restored reasoning and the output cap, and the raw response before the scrub.
+// The desktop cannot keep either: real tool-call ids, reasoning formats and the slug name the model,
+// and a BYOK store sits on the voter's machine. A chat resends its whole history on every call, so a
+// body is split into components and media keyed by content under the account: both sides and every
+// later call store only what is new, and a deletion request still removes one account's parts alone.
 
 const CAPTURES = "arenaGenerationCaptures"
 const PARTS = "arenaGenerationParts"
@@ -62,6 +62,7 @@ export type CapturedResponse = {
 
 export type CaptureKey = {
   readonly userId: string
+  /** The battle's turn ID, or for a single-agent turn its singleAgentRatings record's _id. */
   readonly scopeID: string
   readonly assignmentID: string
   readonly generationID: string
@@ -220,10 +221,9 @@ async function insertNewParts(db: ArenaDb, userId: string, candidates: ReadonlyA
 }
 
 // Media the engine sends by reference (`media.ts`) is not a capture part: it sits in the control
-// plane's object store (`media-store.ts`), which deletes it 3 to 4 days after the upload. A single-agent
-// chat is never captured, and a battle's capture stores its own copy of what the call sent. An
-// expired file is uploaded again on the next call that names it, and its reference, and so the
-// prompt, stays the same.
+// plane's object store (`media-store.ts`), which deletes it 3 to 4 days after the upload. A capture
+// stores its own copy of what the call sent. An expired file is uploaded again on the next call that
+// names it, and its reference, and so the prompt, stays the same.
 
 // A chat sends the same images on every call, so a warm function keeps the last ones it loaded
 // instead of reading them from the store again each time. Keyed by pathname, so by account too, and

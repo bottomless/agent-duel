@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto"
 import { contestant } from "./model-profile"
-import type { GenerationMetrics } from "./records"
+import type { GenerationFailureKind, GenerationFailurePhase, GenerationMetrics } from "./records"
 import {
   compactionRequiredError,
   networkUnavailableError,
@@ -69,8 +69,18 @@ function requestKind(value: string | null) {
   return value === "generation" || value === "compaction" || value === "utility" ? value : undefined
 }
 
+export type GenerationFailure = {
+  readonly phase: GenerationFailurePhase
+  readonly kind: GenerationFailureKind
+}
+
 export interface Telemetry {
   readonly start?: (metadata: RequestMetadata, body: Readonly<Record<string, unknown>>) => void | Promise<void>
+  readonly dispatched?: (input: {
+    readonly metadata: RequestMetadata
+    readonly dispatchedAt: Date
+    readonly requestBytes: number
+  }) => void | Promise<void>
   readonly response?: (input: {
     readonly metadata: RequestMetadata
     readonly status: number
@@ -79,7 +89,12 @@ export interface Telemetry {
   }) => void | Promise<void>
   readonly rawChunk?: (metadata: RequestMetadata, chunk: string) => void
   readonly complete?: (metadata: RequestMetadata, completedAt: Date) => void | Promise<void>
-  readonly error?: (metadata: RequestMetadata | undefined, error: unknown, at: Date) => void | Promise<void>
+  readonly error?: (
+    metadata: RequestMetadata | undefined,
+    error: unknown,
+    at: Date,
+    failure?: GenerationFailure,
+  ) => void | Promise<void>
   readonly reveal?: (input: {
     readonly runIDs: readonly string[]
     readonly metrics: readonly GenerationMetrics[]
@@ -214,6 +229,14 @@ function record(value: unknown): value is Record<string, unknown> {
 function retryableTransport(error: unknown) {
   if (!record(error) || error.name === "AbortError") return false
   return error.code === "ConnectionRefused" || error.code === "ECONNREFUSED" || error.code === "ECONNRESET"
+}
+
+function hasReasonMessage(value: unknown, expected: string, depth = 0): boolean {
+  if (depth > 4 || value === null || value === undefined) return false
+  if (value instanceof Error) return value.message === expected || hasReasonMessage(value.cause, expected, depth + 1)
+  if (typeof value === "string") return value === expected
+  if (record(value)) return value.message === expected || hasReasonMessage(value.cause, expected, depth + 1)
+  return false
 }
 
 function sessionHeaders(headers: Headers) {
@@ -484,8 +507,16 @@ function sanitizeStream(
     onEnd?.(false)
     tracked.failedAt = Date.now()
     tracked.failure = failure
+    const kind: GenerationFailureKind =
+      failure === "stalled"
+        ? "stream_stalled"
+        : failure === "cut-off"
+          ? "stream_cut_off"
+          : failure === "replay-unavailable"
+            ? "replay_unavailable"
+            : "stream_read"
     try {
-      await telemetry?.error?.(metadata, new Error(message), new Date())
+      await telemetry?.error?.(metadata, new Error(message), new Date(), { phase: "stream", kind })
     } catch {
       controller.error(new Error("Arena telemetry persistence failed"))
       return
@@ -601,8 +632,16 @@ function sanitizeStream(
           : tracked.savingAt !== undefined && tracked.savedAt === undefined
             ? "save"
             : "forward"
+        const kind: GenerationFailureKind = hasReasonMessage(signal?.reason, "SSE read timed out")
+          ? "stream_timeout"
+          : signal?.aborted
+            ? "aborted"
+            : "stream_read"
         try {
-          await telemetry?.error?.(metadata, new Error("Provider response stream failed"), new Date())
+          await telemetry?.error?.(metadata, new Error("Provider response stream failed"), new Date(), {
+            phase: "stream",
+            kind,
+          })
         } catch {
           controller.error(new Error("Arena telemetry persistence failed"))
           return
@@ -620,10 +659,17 @@ function sanitizeStream(
       settled = true
       onEnd?.(false)
       tracked.cancelledAt = Date.now()
+      const kind: GenerationFailureKind =
+        hasReasonMessage(reason, "SSE read timed out") || hasReasonMessage(signal?.reason, "SSE read timed out")
+          ? "stream_timeout"
+          : "stream_cancelled"
       try {
         await reader.cancel(reason)
       } finally {
-        await telemetry?.error?.(metadata, new Error("Arena contestant stream was cancelled"), new Date())
+        await telemetry?.error?.(metadata, new Error("Arena contestant stream was cancelled"), new Date(), {
+          phase: "stream",
+          kind,
+        })
       }
     },
   })
@@ -673,6 +719,7 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
   let metadata: RequestMetadata | undefined
   let telemetry: Telemetry | undefined
   let preHeaderTransportFailure = false
+  const requestState: { phase: GenerationFailurePhase; requestBytes?: number } = { phase: "prepare" }
   let endWait: ((ping?: Ping) => void) | undefined
   try {
     const { requestID, sessionID, parentSessionID } = sessionHeaders(request.headers)
@@ -719,8 +766,17 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
     const dispatch = new AbortController()
     if (request.signal.aborted) dispatch.abort(request.signal.reason)
     else request.signal.addEventListener("abort", () => dispatch.abort(request.signal.reason), { once: true })
-    const send = () =>
-      execute(url, {
+    const send = async () => {
+      const body = outgoing === rewritten ? inlineText() : JSON.stringify(outgoing)
+      const bytes = Buffer.byteLength(body)
+      requestState.requestBytes = bytes
+      await telemetry?.dispatched?.({
+        metadata: metadata!,
+        dispatchedAt: new Date(),
+        requestBytes: bytes,
+      })
+      requestState.phase = "headers"
+      return execute(url, {
         method: "POST",
         headers: {
           ...routing,
@@ -731,14 +787,16 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
             ? { [COMPACTION_HEADER]: COMPACTION_OFFER }
             : {}),
         },
-        body: outgoing === rewritten ? inlineText() : JSON.stringify(outgoing),
+        body,
         signal: dispatch.signal,
       })
+    }
     let inline: string | undefined
     const inlineText = () => (inline ??= JSON.stringify(rewritten))
     const fitsInline = () => Buffer.byteLength(inlineText()) <= REQUEST_BYTES_LIMIT
     const referenced = options.mediaByReference && !sendsInline(upstream) ? referenceMedia(rewritten) : undefined
     const upload = async (media: Iterable<Media>): Promise<UploadFailure | undefined> => {
+      requestState.phase = "upload"
       try {
         return await uploadMedia({
           execute,
@@ -808,6 +866,7 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
       headers: researchHeaders(response.headers),
       receivedAt: new Date(),
     })
+    requestState.phase = response.ok ? "stream" : "http"
 
     const headers = responseHeaders(response.headers)
     const generationID = metadata.generationID
@@ -827,14 +886,20 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
       telemetry?.rawChunk?.(metadata, JSON.stringify(payload))
       // A refused attempt is a failed generation, not a completed one. A wait for the user's network
       // or sign-in is not the provider failing, and telemetry keeps the two apart.
+      const networkWait = readNetworkUnavailable(body)
+      const signInWait = response.status === 401 && readSessionRejected(body)
       await telemetry?.error?.(
         metadata,
-        readNetworkUnavailable(body)
+        networkWait
           ? new ArenaWaitError("network")
-          : response.status === 401 && readSessionRejected(body)
+          : signInWait
             ? new ArenaWaitError("sign-in")
             : new Error(`Arena upstream status ${response.status}`),
         new Date(),
+        {
+          phase: "http",
+          kind: networkWait ? "network_wait" : signInWait ? "sign_in_wait" : "http_status",
+        },
       )
       headers.set("content-type", "application/json")
       return Response.json(payload, { status: response.status, headers })
@@ -876,9 +941,35 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
     endWait?.(ping)
     headers.set("content-type", "application/json")
     return Response.json(payload, { status: response.status, headers })
-  } catch {
+  } catch (error) {
     endWait?.()
-    await telemetry?.error?.(metadata, new Error("Arena contestant request could not be routed"), new Date())
+    const phase = requestState.phase
+    const headerTimedOut =
+      hasReasonMessage(request.signal.reason, "Response headers timed out") ||
+      hasReasonMessage(error, "Response headers timed out")
+    const failure: GenerationFailure = {
+      phase,
+      kind: headerTimedOut
+        ? "header_timeout"
+        : request.signal.aborted
+          ? "aborted"
+          : phase === "stream"
+            ? "stream_read"
+            : preHeaderTransportFailure || phase === "headers" || phase === "upload"
+              ? "transport"
+              : "routing",
+    }
+    if (metadata && (phase === "headers" || phase === "upload")) {
+      console.warn("[arena-proxy] Contestant request failed before response headers", {
+        generationID: metadata.generationID,
+        requestID: metadata.requestID,
+        phase: failure.phase,
+        kind: failure.kind,
+        ...(requestState.requestBytes !== undefined ? { requestBytes: requestState.requestBytes } : {}),
+        elapsedMs: Date.now() - metadata.startedAt.getTime(),
+      })
+    }
+    await telemetry?.error?.(metadata, new Error("Arena contestant request could not be routed"), new Date(), failure)
     return Response.json(
       {
         error: preHeaderTransportFailure

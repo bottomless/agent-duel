@@ -1,6 +1,6 @@
 import { createHash } from "crypto"
 import { describe, expect, test } from "bun:test"
-import { carriesModelOutput, create } from "@/arena/telemetry"
+import { carriesModelOutput, create, sanitizeStoredResponse } from "@/arena/telemetry"
 import { Store } from "@/arena/mongo"
 import type { GenerationDocument, GenerationRetry } from "@/arena/records"
 import { ArenaWaitError, type RequestMetadata } from "@/arena/proxy"
@@ -10,6 +10,16 @@ function store(value: object): Store {
 }
 
 describe("ArenaTelemetry", () => {
+  test("blinds a repeated positional call ID per generation, not per stream fragment", () => {
+    const line = 'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"read_0"}]}}]}'
+    const raw = [line, line].join("\n\n")
+    const stored = sanitizeStoredResponse(raw, "gen_first")
+    const [first, second] = stored.split("\n\n")
+    expect(first).toBe(second)
+    expect(stored).not.toContain("read_0")
+    expect(sanitizeStoredResponse(stored, "gen_first")).toBe(stored)
+    expect(sanitizeStoredResponse(raw, "gen_second")).not.toBe(stored)
+  })
   test("stores generation artifacts without model-fingerprinting metadata", async () => {
     let generation: GenerationDocument | undefined
     let runUsage: GenerationDocument["usage"]
@@ -575,5 +585,53 @@ describe("ArenaTelemetry", () => {
 
     expect(generations.map((generation) => generation.callIndex)).toEqual([0, 1, 2, 3, 4, 5])
     expect(reads).toBe(1)
+  })
+
+  test("records upstream dispatch timing, request size, and failure phase/kind", async () => {
+    const updates = new Map<string, Record<string, unknown>>()
+    const arena = store({
+      storeArtifact: async (input: { _id: string }) => input,
+      saveGeneration: async (input: GenerationDocument) => input,
+      updateGeneration: async (id: string, update: Record<string, unknown>) => {
+        updates.set(id, { ...updates.get(id), ...update })
+      },
+      generationsForRuns: async () => [],
+      recordGenerationRetry: async () => undefined,
+      addDescendant: async () => undefined,
+    })
+    const telemetry = create(arena)
+    const metadata: RequestMetadata = {
+      assignment: {
+        runID: "run-phase",
+        rootSessionID: "session-phase",
+        scopeID: "turn-phase",
+        assignmentID: "assignment-phase",
+        telemetry: true,
+      },
+      generationID: "gen_00000000000000000000000000000030",
+      requestID: "00000000-0000-4000-8000-000000000030",
+      sessionID: "session-phase",
+      requestedModel: "contestant",
+      enforcedReasoning: { effort: "high" },
+      startedAt: new Date("2026-11-21T11:00:00.000Z"),
+    }
+    const dispatchedAt = new Date("2026-11-21T11:00:00.050Z")
+    const failedAt = new Date("2026-11-21T11:02:30.050Z")
+
+    await telemetry.start?.(metadata, { model: "contestant", messages: [] })
+    await telemetry.dispatched?.({ metadata, dispatchedAt, requestBytes: 42_000 })
+    await telemetry.error?.(metadata, new Error("Response headers timed out"), failedAt, {
+      phase: "headers",
+      kind: "header_timeout",
+    })
+
+    expect(updates.get(metadata.generationID)).toMatchObject({
+      upstreamDispatchedAt: dispatchedAt,
+      requestBytes: 42_000,
+      completedAt: failedAt,
+      error: "Arena contestant request failed",
+      failurePhase: "headers",
+      failureKind: "header_timeout",
+    })
   })
 })

@@ -242,6 +242,32 @@ async function forward(
   return null;
 }
 
+function logProxyFailure(
+  logger: Pick<Logger, "warn">,
+  req: express.Request,
+  res: express.Response,
+  startedAt: number,
+  aborted: boolean,
+  error: unknown,
+): void {
+  const details = {
+    path: req.path,
+    generationId: req.header("x-arena-generation-id"),
+    requestBytes: Buffer.isBuffer(req.body) ? req.body.byteLength : 0,
+    elapsedMs: Date.now() - startedAt,
+  };
+  if (aborted) {
+    if (!res.headersSent) {
+      logger.warn(details, "Arena runtime client disconnected before upstream response headers");
+    }
+    return;
+  }
+  logger.warn(
+    { ...details, err: error, headersSent: res.headersSent },
+    "Arena runtime proxy request failed",
+  );
+}
+
 export function createArenaRuntimeRouter(options: {
   readonly logger: Pick<Logger, "warn">;
   readonly appVersion: string;
@@ -275,6 +301,7 @@ export function createArenaRuntimeRouter(options: {
 
     // A contestant stream the runtime abandons would otherwise run, and bill, until the control
     // plane's own deadline.
+    const startedAt = Date.now();
     const disconnected = new AbortController();
     res.on("close", () => {
       if (!res.writableFinished) disconnected.abort();
@@ -324,8 +351,8 @@ export function createArenaRuntimeRouter(options: {
         reader.releaseLock();
       }
     } catch (error) {
+      logProxyFailure(options.logger, req, res, startedAt, disconnected.signal.aborted, error);
       if (disconnected.signal.aborted) return;
-      options.logger.warn({ err: error, path: req.path }, "Arena runtime proxy request failed");
       if (!res.headersSent) {
         sendFailure(res, req.path, error);
       } else {

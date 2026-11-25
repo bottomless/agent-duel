@@ -819,4 +819,54 @@ describe("Arena runtime proxy", () => {
     expect(response.status).toBe(401);
     expect(upstream).not.toHaveBeenCalled();
   });
+
+  it("logs when the runtime disconnects before upstream response headers arrive", async () => {
+    installArenaCredentials({
+      mode: "hosted",
+      researchPartition: "test-research-partition",
+      researchAccountID: "test-account",
+      token: "account-session-token",
+      controlPlaneUrl: "https://control.agentduel.test",
+    });
+    const runtime = issueRuntimeCapability();
+    warn.mockClear();
+    let upstreamStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      upstreamStarted = resolve;
+    });
+    const waitUntilAborted = (signal?: AbortSignal | null) =>
+      new Promise<Response>((_resolve, reject) => {
+        upstreamStarted();
+        const fail = () => reject(new Error("aborted"));
+        signal?.addEventListener("abort", fail, { once: true });
+      });
+    upstream.mockImplementationOnce((_url, init) => waitUntilAborted(init?.signal));
+
+    const clientAbort = new AbortController();
+    const pending = fetch(`${baseUrl}/api/arena-runtime/api/openrouter/api/v1/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${runtime.token}`,
+        "Content-Type": "application/json",
+        "X-Arena-Generation-ID": "gen_preheader_disconnect_1",
+      },
+      body: JSON.stringify({ model: "contestant" }),
+      signal: clientAbort.signal,
+    }).catch(() => undefined);
+
+    await started;
+    clientAbort.abort();
+    await pending;
+    await vi.waitFor(() => {
+      expect(warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          path: "/api/openrouter/api/v1/chat/completions",
+          generationId: "gen_preheader_disconnect_1",
+          requestBytes: JSON.stringify({ model: "contestant" }).length,
+          elapsedMs: expect.any(Number),
+        }),
+        "Arena runtime client disconnected before upstream response headers",
+      );
+    });
+  });
 });

@@ -448,6 +448,9 @@ export function routeOptions(options: ServerOptions): ServerOptions {
     // upstream Basic-auth middleware on the embedded route graph.
     password: undefined,
     app: { version: opencodeVersion, ...(options.app ?? {}) },
+    // The daemon imports the user's Claude Code and Codex plugins into this root
+    // (`packages/server/src/server/agent-plugins/`).
+    config: { imported: process.env.AGENT_DUEL_IMPORTED_CONFIG, ...options.config },
   }
 }
 

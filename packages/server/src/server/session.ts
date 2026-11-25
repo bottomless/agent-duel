@@ -19,8 +19,16 @@ import {
   withStreamImageRefs,
 } from "./arena/history-images.js";
 import { ArenaPayloadTooLargeError } from "./arena/payload-limit.js";
-import { ArenaRefusalError } from "./arena/refusal.js";
-import { isArenaAccountError, runWithArenaAccountSession } from "./arena/account-session.js";
+import { ArenaRefusalError, beforeArenaDispatch } from "./arena/refusal.js";
+import {
+  ArenaLoopbackRequiredError,
+  findArenaLoopbackRequired,
+} from "./arena/loopback-required.js";
+import {
+  arenaRequestSettled,
+  isArenaAccountError,
+  runWithArenaAccountSession,
+} from "./arena/account-session.js";
 import { DiffSession } from "./diff/index.js";
 import { type WorkspaceRuntimeStore } from "./workspace-runtime-store/index.js";
 import type { AgentMessageDelivery } from "./agent/agent-messages/index.js";
@@ -379,6 +387,22 @@ type ProviderSubagentManagerEvent = Extract<
 const LEGACY_PROVIDER_IDS = new Set(["claude", "codex", "opencode"]);
 const MIN_VERSION_ALL_PROVIDERS = "0.1.45";
 const MIN_VERSION_EXPLICIT_WORKSPACE_RECOVERY = "0.1.105";
+function rpcFailure(error: Error) {
+  // An engine that cannot start on this listener fails every Arena request the same way, wrapped or not.
+  const err = findArenaLoopbackRequired(error) ?? error;
+  // Arena diagnostics have user-facing copy and codes independent of whether the request settled.
+  const ownWords =
+    err instanceof ArenaLoopbackRequiredError ||
+    err instanceof ArenaPayloadTooLargeError ||
+    err instanceof ArenaRefusalError ||
+    isArenaAccountError(err);
+  return {
+    error: ownWords ? err.message : `Request failed: ${err.message}`,
+    code: ownWords ? err.code : "handler_error",
+    ...(arenaRequestSettled(err) ? { requestSettled: true as const } : {}),
+  };
+}
+
 function errorToFriendlyMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   if (typeof error === "string") return error;
@@ -654,6 +678,7 @@ export interface SessionOptions {
     listLegacyUsage(): Promise<{ fetchedAt: string; providers: ProviderUsage[] }>;
   };
   orchestrationSkills?: import("./orchestration-skills/index.js").OrchestrationSkills;
+  agentPlugins?: import("./agent-plugins/index.js").AgentPlugins;
   mcpBaseUrl?: string | null;
   stt: Resolvable<SpeechToTextProvider | null>;
   sttLanguage?: string;
@@ -906,6 +931,7 @@ export class Session {
   private readonly pushNotifications: PushNotifications;
   private readonly pluginRuntime: SessionOptions["pluginRuntime"];
   private readonly orchestrationSkills: SessionOptions["orchestrationSkills"];
+  private readonly agentPlugins: SessionOptions["agentPlugins"];
   private unsubscribeAgentEvents: (() => void) | null = null;
   private unsubscribeProjectMutations: (() => void) | null = null;
   private unsubscribePluginChanges: (() => void) | null = null;
@@ -1014,6 +1040,7 @@ export class Session {
       daemonConfigStore,
       pluginRuntime,
       orchestrationSkills,
+      agentPlugins,
       stt,
       sttLanguage,
       tts,
@@ -1074,6 +1101,7 @@ export class Session {
     this.worktreesRoot = worktreesRoot;
     this.pluginRuntime = pluginRuntime;
     this.orchestrationSkills = orchestrationSkills;
+    this.agentPlugins = agentPlugins;
     this.sessionLogger = logger.child({
       module: "session",
       clientId: this.clientId,
@@ -2489,6 +2517,7 @@ export class Session {
               requestType: msg.type,
               error: `Session is not authorized for ${msg.type}`,
               code: msg.type.startsWith("hosts.") ? "permission_denied" : "access_denied",
+              requestSettled: true,
             },
           });
         }
@@ -2499,17 +2528,7 @@ export class Session {
       } catch (error) {
         const err = error instanceof Error ? error : new Error(String(error));
         this.sessionLogger.error({ err }, "Error handling message");
-        // An Arena answer too large to send, an engine refusal the app words itself, or an Arena
-        // failure on the account or the control plane (`arena/account-session.ts`) says so in its
-        // own words, without the generic prefix.
-        const ownWords =
-          err instanceof ArenaPayloadTooLargeError ||
-          err instanceof ArenaRefusalError ||
-          isArenaAccountError(err);
-        const failure = {
-          error: ownWords ? err.message : `Request failed: ${err.message}`,
-          code: ownWords ? err.code : "handler_error",
-        };
+        const failure = rpcFailure(err);
         if (
           msg.type.startsWith("arena.stream.") &&
           "requestId" in msg &&
@@ -2763,7 +2782,7 @@ export class Session {
       this.dispatchWorkspaceLifecycleMessage(msg) ??
       this.dispatchWorkspaceFileMessage(msg, source) ??
       this.dispatchProviderMessage(msg) ??
-      this.dispatchOrchestrationSkillsMessage(msg) ??
+      this.dispatchAgentExtensionMessage(msg) ??
       this.dispatchPluginDirectoryMessage(msg) ??
       this.dispatchPluginMessage(msg) ??
       this.dispatchPluginRpcMessage(msg) ??
@@ -2818,6 +2837,54 @@ export class Session {
         return this.handleAgentMetadataUpdateRequest(msg);
       case "workspace.metadata.update.request":
         return this.handleWorkspaceMetadataUpdateRequest(msg);
+      default:
+        return undefined;
+    }
+  }
+
+  /** Skills Paseo installs into agents, and the Claude Code and Codex plugins Agent Duel imports. */
+  private dispatchAgentExtensionMessage(msg: SessionInboundMessage): Promise<void> | undefined {
+    return this.dispatchOrchestrationSkillsMessage(msg) ?? this.dispatchAgentPluginsMessage(msg);
+  }
+
+  private dispatchAgentPluginsMessage(msg: SessionInboundMessage): Promise<void> | undefined {
+    const agentPlugins = this.agentPlugins;
+    if (!agentPlugins) return undefined;
+    const reply = (
+      type:
+        | "agent_plugins.get_status.response"
+        | "agent_plugins.save_selection.response"
+        | "agent_plugins.acknowledge_added.response",
+      requestId: string,
+      operation: Promise<import("@getpaseo/protocol/messages").AgentPluginsStatus>,
+    ) =>
+      operation.then((status) => {
+        this.emit({ type, payload: { requestId, ...status } });
+        return undefined;
+      });
+    switch (msg.type) {
+      case "agent_plugins.get_status.request":
+        return reply(
+          "agent_plugins.get_status.response",
+          msg.requestId,
+          agentPlugins.getStatus(msg.cwd),
+        );
+      case "agent_plugins.save_selection.request":
+        return reply(
+          "agent_plugins.save_selection.response",
+          msg.requestId,
+          agentPlugins.saveSelection({
+            scope: msg.scope,
+            enabled: msg.enabled,
+            disabled: msg.disabled,
+          }),
+        );
+      case "agent_plugins.acknowledge_added.request":
+        return reply(
+          "agent_plugins.acknowledge_added.response",
+          msg.requestId,
+          agentPlugins.acknowledgeAdded(msg.ids),
+        );
       default:
         return undefined;
     }
@@ -5802,7 +5869,7 @@ export class Session {
     }
   }
 
-  private arenaPromptAttachments(msg: {
+  private async arenaPromptAttachments(msg: {
     images?: Array<{ data: string; mimeType: string }>;
     attachments?: unknown[];
   }): Promise<ArenaPromptAttachment[]> {
@@ -5848,7 +5915,7 @@ export class Session {
       { type: `arena.stream.${string}.request` }
     >,
   ): Promise<void> {
-    const { snapshot, arena } = await this.loadArenaAgent(msg.agentId);
+    const { snapshot, arena } = await this.loadArenaAgent(msg.agentId).catch(beforeArenaDispatch);
 
     try {
       if (isArenaRunRequest(msg)) {
@@ -5901,7 +5968,7 @@ export class Session {
             msg.prompt,
             this.clientId,
             autoAccept,
-            await this.arenaPromptAttachments(msg),
+            await this.arenaPromptAttachments(msg).catch(beforeArenaDispatch),
           );
           this.syncArenaPreviewRoutes(result);
           await applyArenaFirstTurnMetadata({
@@ -9100,13 +9167,34 @@ export class Session {
   }
 
   // Archive the workspace's battle chats in the Arena engine before the workspace itself.
-  private async archiveArenaSessionsInWorkspace(workspaceId: string): Promise<void> {
-    const arenaSessions = this.agentManager
+  private async archiveArenaSessionsInWorkspace(
+    workspaceId: string,
+    emptyDraftAgentId?: string | null,
+  ): Promise<void> {
+    const agents = this.agentManager
       .listAgents()
-      .filter((agent) => agent.workspaceId === workspaceId && agent.session?.arena)
-      .map((agent) => agent.session!.arena!);
+      .filter((agent) => agent.workspaceId === workspaceId);
+    if (emptyDraftAgentId !== undefined) {
+      const matchesEmptyDraft =
+        emptyDraftAgentId === null
+          ? agents.length === 0
+          : agents.length === 1 &&
+            agents[0]?.id === emptyDraftAgentId &&
+            !!agents[0].session?.arena;
+      if (!matchesEmptyDraft) throw new Error("Workspace no longer matches the empty draft");
+    }
+    const arenaSessions = agents.flatMap((agent) =>
+      agent.session?.arena ? [agent.session.arena] : [],
+    );
     for (const arena of new Set(arenaSessions)) {
-      const snapshot = await arena.archive();
+      const snapshot = await arena.archive(
+        emptyDraftAgentId === undefined ? undefined : { onlyIfEmpty: true },
+      );
+      // `null` is the engine's answer for a draft whose chat was never created: the first send
+      // failed before that, and the engine checked that the session holds no prompt.
+      if (emptyDraftAgentId !== undefined && snapshot && snapshot.chat.status !== "archived") {
+        throw new Error("Arena did not confirm the empty draft was archived");
+      }
       if (snapshot) this.syncArenaPreviewRoutes(snapshot);
     }
   }
@@ -9127,7 +9215,10 @@ export class Session {
           if (!existing) {
             throw new Error(`Workspace not found: ${request.workspaceId}`);
           }
-          await this.archiveArenaSessionsInWorkspace(existing.workspaceId);
+          await this.archiveArenaSessionsInWorkspace(
+            existing.workspaceId,
+            request.emptyDraftAgentId,
+          );
           return archiveByScope(
             {
               paseoHome: this.paseoHome,

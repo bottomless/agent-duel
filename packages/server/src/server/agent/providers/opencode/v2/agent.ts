@@ -16,6 +16,7 @@ import { waitForLocationReady } from "./readiness.js";
 import type { SessionInfo, ModelRef } from "@opencode/client";
 
 import type { Logger } from "pino";
+import type { GetArenaDaemonUrls } from "../../../../arena/daemon-urls.js";
 import type {
   AgentCapabilityFlags,
   AgentForkSessionInput,
@@ -70,7 +71,7 @@ interface V2AgentOptions {
   arenaMode?: boolean;
   uploadsRoot?: string;
   serverManager?: OpenCodeServerManagerLike;
-  getArenaPreviewBaseUrl?: () => string | null;
+  getArenaDaemonUrls?: GetArenaDaemonUrls;
 }
 
 interface ArenaEngineHold {
@@ -92,7 +93,7 @@ export class OpenCodeV2AgentClient implements AgentClient {
       (this.arenaMode
         ? OpenCodeServerManager.getInstance(options.logger, options.settings, {
             managedProcesses: options.managedProcesses,
-            getArenaPreviewBaseUrl: options.getArenaPreviewBaseUrl,
+            getArenaDaemonUrls: options.getArenaDaemonUrls,
             createEventSource: managedV2ProcessEvents,
           })
         : undefined);

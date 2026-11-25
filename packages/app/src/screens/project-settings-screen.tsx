@@ -7,6 +7,7 @@ import { StyleSheet } from "react-native-unistyles";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Pencil } from "lucide-react-native";
 import { ProjectIconView } from "@/components/project-icon-view";
+import { ProjectPluginsSettings } from "@/agent-plugins/project-settings-section";
 import type {
   PaseoConfigRaw,
   PaseoConfigRevision,
@@ -281,6 +282,10 @@ function ProjectSettingsBody({
         supportsCustomIcon={supportsCustomIcon}
         snapshot={editSnapshot}
       />
+
+      {isHostGone ? null : (
+        <ProjectPluginsSettings serverId={selectedHost.serverId} repoRoot={selectedHost.repoRoot} />
+      )}
 
       {renderContent({
         readQuery,

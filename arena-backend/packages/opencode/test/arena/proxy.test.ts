@@ -1202,4 +1202,81 @@ describe("ArenaProxy", () => {
     expect(response.status).toBe(400)
     expect(requested).toBe(false)
   })
+
+  test("records phase-split telemetry for dispatched bytes, header timeouts, HTTP refusals, and stream timeouts", async () => {
+    const registry = new AssignmentRegistry()
+    registry.assign("session-phase", { ...assignment, rootSessionID: "session-phase", telemetry: true })
+    const makeRequest = (signal?: AbortSignal) =>
+      new Request("http://arena.local/chat/completions", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-session-id": "session-phase",
+          "x-arena-request-id": requestID,
+        },
+        body: JSON.stringify({ model: "contestant", messages: [{ role: "user", content: "hello" }] }),
+        signal,
+      })
+
+    // 1. Pre-header timeout abort.
+    const headerAbort = new AbortController()
+    let headerDispatch: { dispatchedAt: Date; requestBytes: number } | undefined
+    let headerFailure: { phase: string; kind: string } | undefined
+    const headerResponse = await proxy(makeRequest(headerAbort.signal), registry, {
+      upstream: "https://unit.invalid",
+      fetch: async (_url, init) => {
+        headerAbort.abort(new Error("Response headers timed out"))
+        throw init?.signal?.reason ?? new Error("aborted")
+      },
+      telemetry: {
+        dispatched: ({ dispatchedAt, requestBytes }) => {
+          headerDispatch = { dispatchedAt, requestBytes }
+        },
+        error: (_metadata, _error, _at, failure) => {
+          headerFailure = failure
+        },
+      },
+    })
+    expect(headerResponse.status).toBe(400)
+    expect(headerDispatch?.dispatchedAt).toBeInstanceOf(Date)
+    expect(headerDispatch?.requestBytes).toBeGreaterThan(0)
+    expect(headerFailure).toEqual({ phase: "headers", kind: "header_timeout" })
+
+    // 2. Upstream HTTP 500 refusal.
+    let httpFailure: { phase: string; kind: string } | undefined
+    const httpResponse = await proxy(makeRequest(), registry, {
+      upstream: "https://unit.invalid",
+      fetch: async () => new Response("upstream failure", { status: 500 }),
+      telemetry: {
+        error: (_metadata, _error, _at, failure) => {
+          httpFailure = failure
+        },
+      },
+    })
+    expect(httpResponse.status).toBe(500)
+    expect(httpFailure).toEqual({ phase: "http", kind: "http_status" })
+
+    // 3. Mid-stream SSE read timeout cancel.
+    const streamAbort = new AbortController()
+    let streamFailure: { phase: string; kind: string } | undefined
+    const streamResponse = await proxy(makeRequest(streamAbort.signal), registry, {
+      upstream: "https://unit.invalid",
+      fetch: async () =>
+        new Response(
+          new ReadableStream({
+            start() {},
+          }),
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+      telemetry: {
+        error: (_metadata, _error, _at, failure) => {
+          streamFailure = failure
+        },
+      },
+    })
+    expect(streamResponse.status).toBe(200)
+    streamAbort.abort(new Error("SSE read timed out"))
+    await streamResponse.body?.cancel(new Error("SSE read timed out"))
+    expect(streamFailure).toEqual({ phase: "stream", kind: "stream_timeout" })
+  })
 })
