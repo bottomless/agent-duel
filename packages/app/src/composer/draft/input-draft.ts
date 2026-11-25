@@ -65,6 +65,8 @@ export interface AgentInputDraft {
   textSource: ComposerTextSource;
   editText: (text: string) => void;
   replaceText: (text: string) => void;
+  /** Saves text the input still holds back for paint, so the draft store has all that was typed. */
+  flushText: () => void;
   textReplacement: TextReplacement;
   attachments: UserComposerAttachment[];
   setAttachments: (updater: AttachmentUpdater) => void;
@@ -187,6 +189,8 @@ export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDr
     },
     [draftKey, publishTextReplacement, textPublication],
   );
+
+  const flushText = useCallback(() => textPublication.flush(), [textPublication]);
 
   const setAttachments = useCallback(
     (updater: AttachmentUpdater) => {
@@ -371,6 +375,7 @@ export function useAgentInputDraft(input: UseAgentInputDraftInput): AgentInputDr
     textSource,
     editText,
     replaceText,
+    flushText,
     textReplacement,
     attachments,
     setAttachments,

@@ -149,6 +149,7 @@ import {
   ArenaDiffTooLargeError,
   ArenaPartTooLargeError,
 } from "../../arena/payload-limit.js";
+import { arenaResponseError, beforeArenaDispatch } from "../../arena/refusal.js";
 import {
   buildOpenCodePermissionRules,
   OpenCodeProviderOptionsSchema,
@@ -1547,21 +1548,6 @@ interface OpenCodeMoveSessionInput {
   sourceCwd: string;
   targetCwd: string;
   copyChanges: boolean;
-}
-
-/** The engine's own words for a refused Arena request, or its status. */
-function arenaErrorMessage(value: unknown, status: number): string {
-  const data =
-    value &&
-    typeof value === "object" &&
-    "data" in value &&
-    value.data &&
-    typeof value.data === "object"
-      ? value.data
-      : null;
-  return data && "message" in data && typeof data.message === "string"
-    ? data.message
-    : `Arena request failed with status ${status}`;
 }
 
 class OpenCodeMoveSessionError extends Error {
@@ -4398,10 +4384,11 @@ class OpenCodeAgentSession implements AgentSession {
             body: { ratingID: ratingId, vote, participantID: participantId },
           },
         ),
-      archive: () =>
-        this.arenaOptionalRequest(`/arena/sessions/${encodeURIComponent(this.sessionId)}/archive`, {
-          method: "POST",
-        }),
+      archive: (options) =>
+        this.arenaOptionalRequest(
+          `/arena/sessions/${encodeURIComponent(this.sessionId)}/archive${options?.onlyIfEmpty ? "?onlyIfEmpty=true" : ""}`,
+          { method: "POST" },
+        ),
       snapshot: (chatId) => this.arenaRequest(`/arena/chats/${encodeURIComponent(chatId)}`),
       turn: (turnId) => this.arenaRequest(`/arena/turns/${encodeURIComponent(turnId)}`),
       start: (chatId, prompt, participantId, autoAccept, attachments) =>
@@ -4643,8 +4630,8 @@ class OpenCodeAgentSession implements AgentSession {
       unbounded?: true;
     },
   ): Promise<T> {
-    await this.ensureArenaRuntime();
-    if (!this.serverUrl) throw new Error("OpenCode Arena runtime is unavailable");
+    await this.ensureArenaRuntime().catch(beforeArenaDispatch);
+    if (!this.serverUrl) beforeArenaDispatch(new Error("OpenCode Arena runtime is unavailable"));
     const response = await fetch(new URL(path, `${this.serverUrl.replace(/\/$/, "")}/`), {
       method: options?.method ?? "GET",
       headers: {
@@ -4663,7 +4650,7 @@ class OpenCodeAgentSession implements AgentSession {
     if (response.status === 404 && options?.allowNotFound) {
       return schema.parse(null);
     }
-    if (!response.ok) throw new Error(arenaErrorMessage(value, response.status));
+    if (!response.ok) throw arenaResponseError(value, response.status);
     return schema.parse(value);
   }
 

@@ -221,6 +221,14 @@ describe("ArenaPublic", () => {
     expect(project(input).runs[0]?.error).toBe("Contestant run failed")
   })
 
+  test.each([false, true])("hides a saved Git timeout stack even after reveal, revealed=%s", (revealed) => {
+    const input = snapshot(revealed)
+    input.runs[0]!.runState = "stopped"
+    input.runs[0]!.error =
+      "Arena result finalization failed\nError: Git timed out while importing result refs\n    at private-path:10:5"
+    expect(project(input).runs[0]?.error).toBe("Git timed out before this side’s changes could be saved.")
+  })
+
   test("projects active transition operations only for current active turns", () => {
     const input = snapshot(true)
     input.turn!.activeOperations = ["preparing_workspaces", "applying_changes"]
@@ -355,6 +363,19 @@ describe("ArenaPublic", () => {
     const discarded = { ...turn, state: "discarded" as const, transitionTimestamps: { discarded: endedAt } }
     expect(project({ ...input, turn: discarded, history: [discarded] }).history[0]?.endedAt).toBe(endedAt.toISOString())
     expect(project(snapshot(false)).turn?.endedAt).toBeUndefined()
+  })
+
+  test("projects stoppingAt and canDiscardBattle while a battle is stopping", () => {
+    const input = snapshot(false)
+    const stoppingAt = new Date("2026-08-05T12:04:00.000Z")
+    const turn = {
+      ...input.turn!,
+      state: "stopping" as const,
+      transitionTimestamps: { stopping: stoppingAt },
+    }
+    const output = project({ ...input, turn })
+    expect(output.turn?.canDiscardBattle).toBe(true)
+    expect(output.turn?.stoppingAt).toBe(stoppingAt.toISOString())
   })
 
   test("shows single-agent rating state and reveals identity only after its separate thumbs vote", () => {

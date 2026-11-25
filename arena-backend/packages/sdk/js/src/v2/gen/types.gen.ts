@@ -8399,6 +8399,7 @@ export type ArenaSessionArchiveData = {
   query?: {
     directory?: string
     workspace?: string
+    onlyIfEmpty?: "true"
   }
   url: "/arena/sessions/{sessionID}/archive"
 }

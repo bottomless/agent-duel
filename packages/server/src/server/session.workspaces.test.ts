@@ -27,6 +27,7 @@ import { z } from "zod";
 
 import { CLIENT_CAPS } from "@getpaseo/protocol/client-capabilities";
 import { createTestLogger } from "../test-utils/test-logger.js";
+import { arenaResponseError } from "./arena/refusal.js";
 import type { ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
 import { Session } from "./session.js";
 import type { SessionOptions } from "./session.js";
@@ -6230,11 +6231,29 @@ test("archive_workspace_request hides non-destructive workspace records", async 
   expect(response?.payload.error).toBeNull();
 });
 
-test("archive_workspace_request releases Arena resources before archiving its source agent", async () => {
+test.each([
+  { label: "releases Arena resources before archiving its source agent", onlyIfEmpty: false },
+  {
+    label: "leaves a draft alone when Arena refuses its archive",
+    onlyIfEmpty: true,
+    refuses: true,
+  },
+  {
+    label: "archives a draft whose Arena chat was never created",
+    onlyIfEmpty: true,
+    archives: true,
+  },
+  {
+    label: "leaves a draft alone when Arena answers with a chat it did not archive",
+    onlyIfEmpty: true,
+    unarchived: true,
+  },
+])("archive_workspace_request $label", async ({ onlyIfEmpty, refuses, archives, unarchived }) => {
   const order: string[] = [];
   const arenaArchive = vi.fn(async () => {
     order.push("arena");
-    return null;
+    if (refuses) throw new Error("Arena draft already has a turn");
+    return unarchived ? { chat: { status: "ready" } } : null;
   });
   const workspace = createPersistedWorkspaceRecord({
     workspaceId: "ws-arena-archive",
@@ -6276,11 +6295,63 @@ test("archive_workspace_request releases Arena resources before archiving its so
     type: "archive_workspace_request",
     workspaceId: workspace.workspaceId,
     requestId: "req-arena-archive",
+    ...(onlyIfEmpty ? { emptyDraftAgentId: managed.id } : {}),
   });
 
-  expect(arenaArchive).toHaveBeenCalledOnce();
-  expect(order).toEqual(["arena", "agent"]);
-  expect(workspace.archivedAt).toBeTruthy();
+  expect(arenaArchive).toHaveBeenCalledExactlyOnceWith(
+    onlyIfEmpty ? { onlyIfEmpty: true } : undefined,
+  );
+  const archived = !onlyIfEmpty || archives === true;
+  expect(order).toEqual(archived ? ["arena", "agent"] : ["arena"]);
+  expect(Boolean(workspace.archivedAt)).toBe(archived);
+});
+
+test.each([
+  {
+    label: "engine rejection",
+    error: arenaResponseError({ name: "ArenaApiError", data: { message: "Failure" } }, 400),
+    proof: { requestSettled: true },
+  },
+  { label: "lost engine response", error: new TypeError("Failure"), proof: {} },
+])("reports first battle start settlement over RPC: $label", async ({ error, proof }) => {
+  const emitted: SessionOutboundMessage[] = [];
+  const managed = {
+    ...makeManagedAgent({
+      id: "agent",
+      cwd: REPO_CWD,
+      lifecycle: "idle",
+      updatedAt: "2026-03-01T12:00:00.000Z",
+    }),
+    session: {
+      arena: {
+        start: async () => {
+          throw error;
+        },
+      },
+    },
+  };
+  const session = createSessionForWorkspaceTests({
+    onMessage: (message) => emitted.push(message),
+    agentManager: {
+      getAgent: () => managed,
+      waitForAgentClose: async () => {},
+      effectiveOptionsFor: () => ({}),
+    },
+  });
+  await session.handleMessage({
+    type: "arena.turn.start.request",
+    agentId: managed.id,
+    chatId: "chat",
+    prompt: "hello",
+    requestId: "req",
+  });
+  expect(findByType(emitted, "rpc_error")?.payload).toEqual({
+    requestId: "req",
+    requestType: "arena.turn.start.request",
+    code: "handler_error",
+    error: "Request failed: Failure",
+    ...proof,
+  });
 });
 
 test("arena vote responds before winner timeline hydration finishes", async () => {

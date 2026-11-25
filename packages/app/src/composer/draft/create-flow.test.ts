@@ -63,7 +63,11 @@ describe("useDraftAgentCreateFlow", () => {
     expect(createRequest).not.toHaveBeenCalled();
 
     await act(async () => {
-      await result.current.continueCreateFromAttempt({ attempt, cwd: "/repo" });
+      await result.current.continueCreateFromAttempt({
+        attempt,
+        composerAttachments: [],
+        cwd: "/repo",
+      });
     });
 
     expect(createRequest).toHaveBeenCalledTimes(1);
@@ -72,6 +76,7 @@ describe("useDraftAgentCreateFlow", () => {
       text: "build this",
       images: [image],
       attachments: [attachment],
+      composerAttachments: [],
       cwd: "/repo",
     });
     expect(onCreateSuccess).toHaveBeenCalledTimes(1);
@@ -235,6 +240,7 @@ describe("useDraftAgentCreateFlow", () => {
       }),
       text: "",
       attachments: [attachment.attachment],
+      composerAttachments: [attachment],
       cwd: "/repo",
     });
     expect(onCreateSuccess).toHaveBeenCalledTimes(1);

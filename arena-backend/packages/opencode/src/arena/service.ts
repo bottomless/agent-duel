@@ -90,6 +90,7 @@ import {
   canRetryRun,
   canTie,
   canVote,
+  completedBeforeHalt,
   discardStage,
   earlyResolution,
   chatSlug,
@@ -98,6 +99,7 @@ import {
   INTERRUPTED_RUN_MESSAGE,
   interruptedComparisonState,
   isFinalState,
+  isStoppingBattle,
   isParkedPromotion,
   isStopAbort,
   failedBeforeHalt,
@@ -200,6 +202,7 @@ import type {
   ReviewEventInput,
   ReviewIngestResult,
   RunDocument,
+  RunFinalizationTimings,
   PartialApply,
   SessionArchiveDocument,
   SingleAgentVote,
@@ -347,6 +350,13 @@ export function contestantSystemInstruction(
       : ""
   return [contestantWorktreeInstruction, pendingEnvironment, currentPreview].filter(Boolean).join("\n\n")
 }
+class GitDeadlineError extends Error {}
+
+function finalizationErrorDetail(cause: Cause.Cause<unknown>) {
+  const failure = Cause.squash(cause)
+  return failure instanceof GitDeadlineError ? failure.message : Cause.pretty(cause)
+}
+
 function error(value: unknown) {
   return value instanceof Error ? value : new Error(String(value))
 }
@@ -460,8 +470,59 @@ function archivedParts(store: Store, run: RunDocument): Promise<Map<string, unkn
   return loading
 }
 
+/**
+ * Whether this fiber bounds its Git steps. Stop, recovery and Discard set it, so a hung Git cannot
+ * hold a battle the developer is trying to leave. A running battle leaves it unset and waits for
+ * Git however long it takes: a slow `git add` is not a failed side.
+ */
+const GitLimited = Context.Reference<boolean>("@opencode/Arena/GitLimited", { defaultValue: () => false })
+const limitGit = <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.provideService(effect, GitLimited, true)
+const unlimitGit = <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.provideService(effect, GitLimited, false)
+
+/**
+ * The work one battle fiber does for its turn. The stop watchdog and a Discard from a stuck stop
+ * interrupt that fiber and wait only briefly for it, since it can be wedged where an interrupt does
+ * not reach. Recovery then owns the turn's runs, so a fiber still unwinding is marked abandoned:
+ * every later store call and Git step it attempts ends as an interrupt instead of writing over
+ * what recovery wrote. `stopped` completes as soon as Stop claims the turn, so a side that already
+ * finished its prompt and is still saving picks up the Git limit mid-step instead of waiting for
+ * the watchdog.
+ */
+type TurnWork = { abandoned: boolean; readonly stopped: Deferred.Deferred<void> }
+const TurnWork = Context.Reference<TurnWork | undefined>("@opencode/Arena/TurnWork", {
+  defaultValue: () => undefined,
+})
+const abandonedWork = new Error("Arena turn work was abandoned")
+
+/** One Discard request's hold on recording its discard. See `resolveStop`. */
+type DiscardRequest = {
+  state: "open" | "recording" | "recorded" | "abandoned"
+  /** Settles once a `recording` write has its answer. */
+  recording?: Promise<void>
+  recorded?: { readonly store: Store; readonly chatID: string }
+}
+const DISCARD_NOT_STARTED_MESSAGE = "Discard did not start in time, so the battle was not discarded. Try again."
+/** Shorter than the app's two-minute wait for the request (`arenaResolveStop`), so the engine answers first. */
+function discardRequestMs() {
+  const configured = Number(process.env.OPENCODE_ARENA_DISCARD_REQUEST_TIMEOUT_MS)
+  return Number.isFinite(configured) && configured > 0 ? configured : 90_000
+}
+function failedCleanupRetryMs() {
+  const configured = Number(process.env.OPENCODE_ARENA_CLEANUP_RETRY_MS)
+  return Number.isFinite(configured) && configured > 0 ? configured : 10_000
+}
+const FAILED_CLEANUP_RETRY_MAX_MS = 60_000
+const interruptAbandoned = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.flatMap(Effect.service(TurnWork), (work) => (work?.abandoned ? Effect.interrupt : effect))
+
 function promise<A>(run: () => Promise<A>) {
-  return Effect.tryPromise({ try: run, catch: error })
+  return Effect.flatMap(Effect.service(TurnWork), (work) =>
+    Effect.tryPromise({
+      // Checked where the call is issued: nothing can run between this and the store call.
+      try: () => (work?.abandoned ? Promise.reject(abandonedWork) : run()),
+      catch: (cause) => cause,
+    }).pipe(Effect.catch((cause) => (cause === abandonedWork ? Effect.interrupt : Effect.fail(error(cause))))),
+  )
 }
 
 function bestEffort<A, E, R>(effect: Effect.Effect<A, E, R>) {
@@ -685,14 +746,21 @@ function committedResolution(
 
 /**
  * States a committed discard is recorded in. The failed ones are a battle the engine lost after a
- * Retry claimed it back, which no request could otherwise end.
+ * Retry claimed it back, which no request could otherwise end; `stopping` lets the voter discard a
+ * stop that is stuck without waiting for finalization.
  */
-type DiscardableState = "awaiting_vote" | "awaiting_stop_resolution" | "finalization_failed" | "interrupted_recovery"
+type DiscardableState =
+  | "awaiting_vote"
+  | "awaiting_stop_resolution"
+  | "stopping"
+  | "finalization_failed"
+  | "interrupted_recovery"
 
 function isDiscardable(state: BattleState): state is DiscardableState {
   return (
     state === "awaiting_vote" ||
     state === "awaiting_stop_resolution" ||
+    state === "stopping" ||
     state === "finalization_failed" ||
     state === "interrupted_recovery"
   )
@@ -885,6 +953,16 @@ const initialWarmEnabled = () => process.env.OPENCODE_ARENA_INITIAL_WARM === "1"
  * loaded OpenCode instance until that chat's next send. Tests shorten it.
  */
 const idleUnloadMs = () => Number(process.env.OPENCODE_ARENA_IDLE_UNLOAD_MS) || 5 * 60_000
+
+/**
+ * How long a battle may remain in `stopping` before the watchdog interrupts its stuck fibers and
+ * runs the same `interrupted_recovery` path used on restart. Tests shorten it via env.
+ */
+const DEFAULT_STOP_WATCHDOG_MS = 2 * 60_000
+const stopWatchdogMs = () => {
+  const raw = Number(process.env.OPENCODE_ARENA_STOP_WATCHDOG_MS)
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_STOP_WATCHDOG_MS
+}
 
 /** The worktree a host directory in a chat's worktree directory belongs to, by name. */
 function hostedWorktree(name: string) {
@@ -1302,7 +1380,10 @@ export interface Interface {
     readonly sourceSessionID: string
     readonly messages: ReadonlyMap<string, string>
   }) => Effect.Effect<void, Error>
-  readonly archiveSession: (sessionID: string) => Effect.Effect<ReturnType<typeof project> | null, Error>
+  readonly archiveSession: (
+    sessionID: string,
+    options?: { onlyIfEmpty: true },
+  ) => Effect.Effect<ReturnType<typeof project> | null, Error>
   readonly unarchiveSession: (sessionID: string) => Effect.Effect<ReturnType<typeof project> | null, Error>
   readonly inspectCheckout: (worktreeRoot: string) => Effect.Effect<ArenaCheckoutInspection, Error>
   readonly prepareCheckout: (worktreeRoot: string) => Effect.Effect<void, Error>
@@ -1436,6 +1517,20 @@ function promptFailed(promptExit: Exit.Exit<SessionV1.WithParts | void, unknown>
   return answer?.role === "assistant" && answer.error !== undefined && answer.error.name !== "MessageAbortedError"
 }
 
+/** Whether a contestant prompt finished with a clean terminal assistant answer before a halt. */
+function promptCompleted(promptExit: Exit.Exit<SessionV1.WithParts | void, unknown>) {
+  if (!Exit.isSuccess(promptExit)) return false
+  const answer = promptExit.value?.info
+  return (
+    answer?.role === "assistant" &&
+    answer.error === undefined &&
+    answer.time.completed !== undefined &&
+    Boolean(answer.finish) &&
+    !["error", "tool-calls", "tool_calls", "unknown"].includes(answer.finish!) &&
+    !ArenaResponseRecovery.reason(answer.finish!)
+  )
+}
+
 function singleAgentResponse(transcript: readonly SessionV1.WithParts[], messageID: string) {
   const last = transcript.findLast(
     (message) => message.info.role === "assistant" && message.info.parentID === messageID,
@@ -1539,6 +1634,87 @@ export const layer: Layer.Layer<
       [...new Set(runIDs)].sort().reduceRight((inner, runID) => steerGates.withLock(runID)(inner), effect)
     // Aborted by Stop, so a stopped battle resolves without waiting for the rest of its copy.
     const environmentCopyStops = new Map<string, AbortController>()
+    // Core's interrupt acknowledges before its runner settles. Follow the Arena prompt through
+    // child cleanup, but not the environment check or Git finalization that follows it.
+    const activePrompts = new Map<string, Deferred.Deferred<void>>()
+    // Active execution/continuation fibers per turn, so the stop watchdog or a stuck-stopping
+    // discard can interrupt a hung side without waiting for an engine restart.
+    const activeTurnFibers = new Map<string, Map<Fiber.Fiber<unknown, unknown>, TurnWork>>()
+    const trackTurnFiber = (turnID: string, fiber: Fiber.Fiber<unknown, unknown>, work: TurnWork) => {
+      let fibers = activeTurnFibers.get(turnID)
+      if (!fibers) {
+        fibers = new Map()
+        activeTurnFibers.set(turnID, fibers)
+      }
+      fibers.set(fiber, work)
+      fiber.addObserver(() => {
+        const current = activeTurnFibers.get(turnID)
+        if (!current) return
+        current.delete(fiber)
+        if (current.size === 0) activeTurnFibers.delete(turnID)
+      })
+    }
+    /**
+     * Fork a turn's battle work where the watchdog and Discard can interrupt it. The fiber waits
+     * for Git like any battle, whatever started it: a restart's recovery resumes battles too.
+     */
+    const forkTurnWork = <A, E, R>(turnID: string, effect: Effect.Effect<A, E, R>) =>
+      Effect.suspend(() => {
+        const work: TurnWork = { abandoned: false, stopped: Deferred.makeUnsafe<void>() }
+        return effect.pipe(
+          Effect.provideService(TurnWork, work),
+          unlimitGit,
+          Effect.forkIn(scope),
+          Effect.tap((fiber) => Effect.sync(() => trackTurnFiber(turnID, fiber, work))),
+        )
+      })
+    const signalTurnStopped = (turnID: string) =>
+      Effect.sync(() => {
+        for (const work of activeTurnFibers.get(turnID)?.values() ?? []) {
+          Deferred.doneUnsafe(work.stopped, Effect.void)
+        }
+      })
+    const interruptTurnFibers = Effect.fnUntraced(function* (store: Store, turnID: string) {
+      const own = yield* Effect.service(TurnWork)
+      const fibers = [...(activeTurnFibers.get(turnID) ?? [])]
+      if (fibers.length === 0) return
+      // Request interrupt on every active fiber for this turn, waiting briefly for interruptible
+      // fibers to unwind without blocking forever if one is wedged in an uninterruptible promise.
+      const interrupt = Effect.forEach(
+        fibers,
+        ([fiber]) =>
+          Fiber.interrupt(fiber).pipe(
+            Effect.forkIn(scope),
+            Effect.flatMap((interrupter) => Fiber.await(interrupter).pipe(Effect.timeoutOption(Duration.seconds(2)))),
+          ),
+        { concurrency: "unbounded", discard: true },
+      )
+      // The cancel worker itself is among the fibers being interrupted. Keep the cancel step
+      // visible through the bounded wait for the other fibers, but don't relabel stuck Git as cancel.
+      const canceling = operationTrackerFor(store).snapshot(turnID).includes("stopping_agents")
+      yield* canceling ? trackOperation(store, turnID, "stopping_agents", interrupt) : interrupt
+      // The caller writes the turn's runs next. A fiber that outlived the wait is still unwinding
+      // and may be past the point an interrupt reaches, so it loses the store and Git from here.
+      // Marked in the same step as the check, before the caller runs again.
+      const remaining = activeTurnFibers.get(turnID)
+      for (const [fiber, work] of fibers) {
+        if (work !== own && remaining?.has(fiber)) work.abandoned = true
+      }
+    })
+    // Per-turn watchdog timers started on `Arena.stop`, and a per-turn lock that keeps the
+    // watchdog's interrupted recovery from racing a manual Discard from stuck `stopping`.
+    const stopWatchdogs = new Map<string, Fiber.Fiber<void, never>>()
+    const stopRecoveryLocks = KeyedMutex.makeUnsafe<string>()
+    // Per-chat retry loops for worktrees left behind by a failed removal, and a per-run lock so a
+    // background retry and a foreground send never remove the same worktree at once.
+    const failedCleanupRetries = new Map<string, Fiber.Fiber<void, never>>()
+    const runCleanupLocks = KeyedMutex.makeUnsafe<string>()
+    const cancelStopWatchdog = Effect.fnUntraced(function* (turnID: string) {
+      const fiber = stopWatchdogs.get(turnID)
+      if (!fiber) return
+      stopWatchdogs.delete(turnID)
+      yield* Fiber.interrupt(fiber)
+    })
     const trustedWarmPairs = new WeakMap<Store, Set<string>>()
     // Pairs trusted again from their seal after a restart. Their forks were localized against a
     // port bank an earlier process reserved, so a send forks again rather than reuse them.
@@ -1623,7 +1799,7 @@ export const layer: Layer.Layer<
     const available = Effect.fn("Arena.available")(function* () {
       if (!enabled()) return yield* Effect.fail(new Error("Arena mode is disabled"))
       const store = yield* getStore
-      yield* promise(() => recoverOnce(() => Effect.runPromise(recoverInterrupted(store))))
+      yield* promise(() => recoverOnce(() => Effect.runPromise(recoverInterrupted(store).pipe(limitGit))))
       return store
     })
 
@@ -1633,10 +1809,48 @@ export const layer: Layer.Layer<
     const releaseTelemetry = (turn: TurnDocument) =>
       promise(() => telemetry?.release?.({ runIDs: Object.values(turn.runIDs) }) ?? Promise.resolve())
 
-    const inDirectory = <A, E, R>(directory: string, effect: Effect.Effect<A, E, R>) =>
-      instances.provide({ directory }, effect)
     const withGit = <A, E, R>(effect: Effect.Effect<A, E, R | Git.Service>) =>
-      effect.pipe(Effect.provideService(Git.Service, git))
+      interruptAbandoned(effect.pipe(Effect.provideService(Git.Service, git)))
+    const gitTimeoutMs = () => {
+      const configured = Number(process.env.OPENCODE_ARENA_FINALIZATION_GIT_TIMEOUT_MS)
+      return Number.isFinite(configured) && configured > 0 ? configured : 45_000
+    }
+    // Bound the whole step, including retries and time spent waiting for repository locks, where
+    // the fiber is `GitLimited` or its turn is stopped while the step runs. Interrupting the
+    // Effect releases the Git subprocess before recovery or cleanup proceeds.
+    const gitDeadline =
+      (step: string) =>
+      <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        Effect.gen(function* () {
+          const limited = yield* Effect.service(GitLimited)
+          const work = yield* Effect.service(TurnWork)
+          if (limited) {
+            return yield* effect.pipe(
+              Effect.timeoutOrElse({
+                duration: Duration.millis(gitTimeoutMs()),
+                orElse: () => Effect.fail(new GitDeadlineError(`Git timed out while ${step}`)),
+              }),
+            )
+          }
+          if (!work) return yield* effect
+          const deadline = Deferred.await(work.stopped).pipe(
+            Effect.andThen(Effect.sleep(Duration.millis(gitTimeoutMs()))),
+            Effect.andThen(Effect.fail(new GitDeadlineError(`Git timed out while ${step}`))),
+          )
+          return yield* Effect.raceFirst(effect, deadline)
+        })
+    // Opening a folder reads its Git layout. Where the fiber is `GitLimited` (or its turn has been
+    // stopped) that read is bounded too; the load itself is left running, so a later battle joins
+    // it and waits for Git's answer instead of the folder being recorded as anything it is not.
+    const inDirectory = <A, E, R>(directory: string, effect: Effect.Effect<A, E, R>) =>
+      Effect.gen(function* () {
+        const limited = yield* Effect.service(GitLimited)
+        const work = yield* Effect.service(TurnWork)
+        if (limited || (work !== undefined && Deferred.isDoneUnsafe(work.stopped))) {
+          yield* instances.load({ directory }).pipe(gitDeadline("opening the folder"))
+        }
+        return yield* instances.provide({ directory }, effect)
+      })
     /**
      * What a contestant session may not change or reach outside its worktree: it reads the main
      * checkout but does not write to it, and does not reach the checkout's `.agent-duel`, which holds
@@ -2880,12 +3094,13 @@ export const layer: Layer.Layer<
             return yield* Effect.fail(new Error("Canonical checkout no longer belongs to the recorded repository"))
           }
           return { state, commonGitDir }
-        }),
+        }).pipe(gitDeadline("inspecting the canonical checkout")),
       )
       if (Exit.isFailure(inspection)) {
         const detail = Cause.pretty(inspection.cause)
-        // Git was busy, not missing. Skip this pass and let the next poll read it.
-        if (isGitLockContention(detail)) {
+        // Git was busy, not missing — a lock or a hung subprocess. Skip this pass and let the
+        // next poll read it, rather than blocking a checkout that may be fine.
+        if (isGitLockContention(detail) || Cause.squash(inspection.cause) instanceof GitDeadlineError) {
           yield* Effect.logDebug("Arena skipped a canonical inspection while git was locked", {
             chatID: chat._id,
           })
@@ -2894,7 +3109,11 @@ export const layer: Layer.Layer<
         // Without a git that runs, the checkout was never read: the trunk may be fine. The chat is
         // left as it is, so a send reaches the battle's git check and says what to install. That
         // check runs here outside the trunk, which may really be gone.
-        if (Exit.isFailure(yield* Effect.exit(withGit(requireBattleGit(process.cwd()))))) {
+        if (
+          Exit.isFailure(
+            yield* Effect.exit(withGit(requireBattleGit(process.cwd())).pipe(gitDeadline("probing git"))),
+          )
+        ) {
           yield* Effect.logWarning("Arena skipped a canonical inspection because git does not run", {
             chatID: chat._id,
           })
@@ -4620,199 +4839,288 @@ export const layer: Layer.Layer<
       stopped: boolean,
       runStateOverride?: RunDocument["runState"],
     ) {
-      const stored = yield* promise(() => store.run(run.runID))
-      const completedAt = stored?.completedAt ?? new Date()
-      const assistant =
-        Exit.isSuccess(promptExit) && promptExit.value?.info.role === "assistant" ? promptExit.value.info : undefined
-      const ids = [run.sessionID, ...(yield* descendants(run.sessionID))]
-      const [sessionStates, pendingPermissions, pendingQuestions] = yield* inDirectory(
-        run.worktree.directory,
-        Effect.all([Effect.forEach(ids, (sessionID) => statuses.get(sessionID)), permissions.list(), questions.list()]),
-      )
-      const unsettled: string[] = []
-      if (!stopped && !assistant) unsettled.push("Contestant prompt did not return a terminal assistant message")
-      if (!stopped && assistant && (!assistant.time.completed || (!assistant.finish && !assistant.error))) {
-        unsettled.push("Contestant assistant message was not terminal")
-      }
-      if (!stopped && sessionStates.some((state) => state.type !== "idle")) {
-        unsettled.push("A contestant session was still active after the prompt settled")
-      }
-      if (!stopped && pendingPermissions.some((item) => ids.some((id) => String(id) === String(item.sessionID)))) {
-        unsettled.push("A contestant permission request remained unresolved")
-      }
-      if (!stopped && pendingQuestions.some((item) => ids.some((id) => String(id) === String(item.sessionID)))) {
-        unsettled.push("A contestant question remained unresolved")
-      }
-      // The panes say why a stopped run stopped, so the abort that ends it is not reported here.
-      if (assistant?.error && !isStopAbort({ stopped, error: assistant.error })) {
-        unsettled.push(
-          assistant.error.name === "MessageOutputLengthError"
-            ? ArenaResponseRecovery.EXHAUSTED
-            : `Contestant assistant error: ${JSON.stringify(assistant.error)}`,
+      const finalizeStarted = performance.now()
+      const timings = { pauseMs: 0, gitFinalizeMs: 0, resumeMs: 0, importRefsMs: 0, archiveMs: 0 }
+      let failedStep: ArenaActiveOperation | undefined
+      const step = <A, E, R>(
+        operation: ArenaActiveOperation,
+        timing: keyof typeof timings,
+        work: Effect.Effect<A, E, R>,
+      ) =>
+        Effect.suspend(() => {
+          const started = performance.now()
+          const context = { turnID: turn._id, runID: run.runID, side: run.side, operation }
+          return Effect.logInfo("Arena side finalization step started", context).pipe(
+            Effect.andThen(trackOperation(store, turn._id, operation, work)),
+            Effect.onExit((exit) =>
+              Effect.suspend(() => {
+                const durationMs = Math.round(performance.now() - started)
+                timings[timing] += durationMs
+                if (Exit.isFailure(exit)) failedStep ??= operation
+                return Effect.logInfo("Arena side finalization step ended", {
+                  ...context,
+                  durationMs,
+                  outcome: Exit.isSuccess(exit)
+                    ? "completed"
+                    : Cause.hasInterruptsOnly(exit.cause)
+                      ? "interrupted"
+                      : "failed",
+                })
+              }),
+            ),
+          )
+        })
+      return yield* Effect.gen(function* () {
+        const stored = yield* promise(() => store.run(run.runID))
+        const completedAt = stored?.completedAt ?? new Date()
+        const assistant =
+          Exit.isSuccess(promptExit) && promptExit.value?.info.role === "assistant" ? promptExit.value.info : undefined
+        const ids = [run.sessionID, ...(yield* descendants(run.sessionID))]
+        const [sessionStates, pendingPermissions, pendingQuestions] = yield* inDirectory(
+          run.worktree.directory,
+          Effect.all([
+            Effect.forEach(ids, (sessionID) => statuses.get(sessionID)),
+            permissions.list(),
+            questions.list(),
+          ]),
         )
-      }
-      // On 2.0 a Stop interrupts the prompt instead of returning an aborted assistant, and a stream
-      // torn down by it can die on the way out. A side settles as stopped only when its prompt ends
-      // during the stop, so that failure is the stop too, as with the checks above. A restart's
-      // override keeps its reason.
-      if (Exit.isFailure(promptExit) && (!stopped || runStateOverride !== undefined))
-        unsettled.push(Cause.pretty(promptExit.cause))
-      // A spent model-timeout budget explains the whole failure. The other lines only echo it, and the
-      // session can still read as active for a moment after the failed request settles.
-      if (!stopped && unsettled.some((line) => line.includes(ArenaResponseRecovery.IDLE_EXHAUSTED)))
-        unsettled.splice(0, unsettled.length, ArenaResponseRecovery.IDLE_EXHAUSTED)
-      const runState: RunDocument["runState"] =
-        runStateOverride ?? (stopped ? "stopped" : unsettled.length === 0 ? "complete" : "error")
-      const runError = unsettled.length ? unsettled.join("\n") : undefined
-      // The projection also marks empty compaction summaries for manual Retry. Anything else
-      // about the run being unsettled would fail again.
-      const errorRetryable =
-        runState === "error" &&
-        unsettled.length === 1 &&
-        assistant?.error !== undefined &&
-        SessionRetry.retryable(assistant.error, "arena") !== undefined
-      const durationMs =
-        runState === "complete" && stored?.startedAt
-          ? (stored.priorDurationMs ?? 0) + Math.max(0, completedAt.getTime() - stored.startedAt.getTime())
-          : null
-      yield* promise(() =>
-        store.updateRun(run.runID, {
-          runState,
-          durationMs,
-          ...(assistant ? { terminalAssistantMessageID: assistant.id } : {}),
-          ...(runError ? { error: runError } : {}),
-          ...(errorRetryable ? { errorRetryable } : {}),
-          completedAt,
-        }),
-      )
-      const permanentRef = `${refRoot(turn)}/${run.side}`
-      // A finalization that failed after writing the run's refs, on an import below for one,
-      // recorded nothing, and the run can still be retried. Only this run writes those refs, so
-      // what they hold is its own earlier result, and this result moves them on from it.
-      const previous =
-        stored?.permanentRef === permanentRef && stored.finalCommit
-          ? { commit: stored.finalCommit, indexTree: stored.finalIndexTree }
-          : yield* withGit(readResultRefs(run.worktree.directory, permanentRef)).pipe(Effect.mapError(error))
-      // What the contestant left running is paused while the result is read, so it cannot change
-      // the files under Git (`pauseOwnedProcessGroups`). Finding it is best effort: without it the
-      // snapshot still runs, with only its own retry.
-      const result = yield* Effect.acquireUseRelease(
-        Effect.promise(() => pauseOwnedProcessGroups(run.worktree.directory).catch(() => [])),
-        () =>
-          withGit(
-            finalize({
-              worktree: run.worktree.directory,
-              baseSHA: turn.frozenBaseSHA,
-              frozenHead: turn.baseSnapshot?.canonicalHead ?? turn.frozenBaseSHA,
-              permanentRef,
-              ...(previous.commit ? { expectedPermanentCommit: previous.commit } : {}),
-              ...(previous.indexTree ? { expectedFinalIndexTree: previous.indexTree } : {}),
-            }),
-          ),
-        (paused) => Effect.promise(() => resumeProcessGroups(paused)),
-      ).pipe(Effect.mapError(error))
-      const chat = yield* promise(() => store.chat(turn.chatID))
-      if (!chat) return yield* Effect.fail(new Error(`Arena chat not found: ${turn.chatID}`))
-      yield* withGit(
-        importResultRef({
-          canonical: chat.repository.root,
-          sourceRepository: run.worktree.host ?? run.worktree.directory,
-          sourceRef: result.permanentRef,
-          destinationRef: result.permanentRef,
-          expectedCommit: result.finalCommit,
-          ...(previous.commit ? { expectedDestinationCommit: previous.commit } : {}),
-        }),
-      ).pipe(Effect.mapError(error))
-      yield* withGit(
-        importResultRef({
-          canonical: chat.repository.root,
-          sourceRepository: run.worktree.host ?? run.worktree.directory,
-          sourceRef: result.finalIndexRef,
-          destinationRef: result.finalIndexRef,
-          expectedCommit: result.finalIndexTree,
-          objectType: "tree",
-          ...(previous.indexTree ? { expectedDestinationCommit: previous.indexTree } : {}),
-        }),
-      ).pipe(Effect.mapError(error))
-      // The contestant's real HEAD, which a detached winner's commits hang from and which the
-      // wrapper commit does not reach when HEAD left the frozen base's line.
-      yield* withGit(
-        importWinnerRef({
-          canonical: chat.repository.root,
-          sourceRepository: run.worktree.directory,
-          sourceRef: "HEAD",
-          destinationRef: `${permanentRef}-head`,
-          expected: result.rawHead,
-        }),
-      ).pipe(Effect.mapError(error))
-      // Every ref the contestant moved, its own branch included. Their objects are imported now,
-      // under the run's permanent ref, so the vote can review and apply them without the host.
-      const host = run.worktree.host
-      let refChanges: readonly RefChange[] = []
-      const frozenHead = turn.baseSnapshot?.canonicalHead ?? turn.frozenBaseSHA
-      if (!host && result.branch && result.branch === stored?.branchAtRun && result.rawHead !== frozenHead) {
-        // A worktree without a host copy has no ref snapshot. Its own branch is the one ref the
-        // vote needs, and it started at the frozen head.
-        const ref = `refs/heads/${result.branch}`
-        refChanges = [{ ref, before: frozenHead, after: result.rawHead }]
-        yield* withGit(
-          importWinnerRef({
-            canonical: chat.repository.root,
-            sourceRepository: run.worktree.directory,
-            sourceRef: ref,
-            destinationRef: `${permanentRef}-refs/heads/${result.branch}`,
-            expected: result.rawHead,
-          }),
-        ).pipe(Effect.mapError(error))
-      }
-      if (host) {
-        refChanges = yield* withGit(diffHostRefs({ host, exclude: [] })).pipe(Effect.mapError(error))
-        for (const change of refChanges) {
-          if (!change.after) continue
-          yield* withGit(
-            importWinnerRef({
-              canonical: chat.repository.root,
-              sourceRepository: host,
-              sourceRef: change.ref,
-              destinationRef: `${permanentRef}-refs/${change.ref.slice("refs/".length)}`,
-              expected: change.after,
-            }),
-          ).pipe(Effect.mapError(error))
+        const unsettled: string[] = []
+        if (!stopped && !assistant) unsettled.push("Contestant prompt did not return a terminal assistant message")
+        if (!stopped && assistant && (!assistant.time.completed || (!assistant.finish && !assistant.error))) {
+          unsettled.push("Contestant assistant message was not terminal")
         }
-      }
-      const diff = result.diff.reduce(
-        (total, item) => ({
-          files: total.files + 1,
-          additions: total.additions + item.additions,
-          deletions: total.deletions + item.deletions,
-        }),
-        { files: 0, additions: 0, deletions: 0 },
+        if (!stopped && sessionStates.some((state) => state.type !== "idle")) {
+          unsettled.push("A contestant session was still active after the prompt settled")
+        }
+        if (!stopped && pendingPermissions.some((item) => ids.some((id) => String(id) === String(item.sessionID)))) {
+          unsettled.push("A contestant permission request remained unresolved")
+        }
+        if (!stopped && pendingQuestions.some((item) => ids.some((id) => String(id) === String(item.sessionID)))) {
+          unsettled.push("A contestant question remained unresolved")
+        }
+        // The panes say why a stopped run stopped, so the abort that ends it is not reported here.
+        if (assistant?.error && !isStopAbort({ stopped, error: assistant.error })) {
+          unsettled.push(
+            assistant.error.name === "MessageOutputLengthError"
+              ? ArenaResponseRecovery.EXHAUSTED
+              : `Contestant assistant error: ${JSON.stringify(assistant.error)}`,
+          )
+        }
+        // On 2.0 a Stop interrupts the prompt instead of returning an aborted assistant, and a stream
+        // torn down by it can die on the way out. A side settles as stopped only when its prompt ends
+        // during the stop, so that failure is the stop too, as with the checks above. A restart's
+        // override keeps its reason.
+        if (Exit.isFailure(promptExit) && (!stopped || runStateOverride !== undefined))
+          unsettled.push(Cause.pretty(promptExit.cause))
+        // A spent model-timeout budget explains the whole failure. The other lines only echo it, and the
+        // session can still read as active for a moment after the failed request settles.
+        if (!stopped && unsettled.some((line) => line.includes(ArenaResponseRecovery.IDLE_EXHAUSTED)))
+          unsettled.splice(0, unsettled.length, ArenaResponseRecovery.IDLE_EXHAUSTED)
+        const runState: RunDocument["runState"] =
+          runStateOverride ?? (stopped ? "stopped" : unsettled.length === 0 ? "complete" : "error")
+        const runError =
+          unsettled.length > 0
+            ? unsettled.join("\n")
+            : stopped && runStateOverride === "error"
+              ? stored?.error
+              : undefined
+        // The projection also marks empty compaction summaries for manual Retry. Anything else
+        // about the run being unsettled would fail again.
+        const errorRetryable =
+          runState === "error" &&
+          unsettled.length === 1 &&
+          assistant?.error !== undefined &&
+          SessionRetry.retryable(assistant.error, "arena") !== undefined
+        const durationMs =
+          runState === "complete" && stored?.startedAt
+            ? (stored.priorDurationMs ?? 0) + Math.max(0, completedAt.getTime() - stored.startedAt.getTime())
+            : null
+        yield* promise(() =>
+          store.updateRun(run.runID, {
+            runState,
+            durationMs,
+            ...(assistant ? { terminalAssistantMessageID: assistant.id } : {}),
+            ...(runError ? { error: runError } : {}),
+            ...(errorRetryable ? { errorRetryable } : {}),
+            completedAt,
+          }),
+        )
+        const permanentRef = `${refRoot(turn)}/${run.side}`
+        // Only this run writes its refs. A previous attempt may have written them without recording the result.
+        const previous = yield* step(
+          "snapshotting_changes",
+          "gitFinalizeMs",
+          stored?.permanentRef === permanentRef && stored.finalCommit
+            ? Effect.succeed({ commit: stored.finalCommit, indexTree: stored.finalIndexTree })
+            : withGit(readResultRefs(run.worktree.directory, permanentRef)).pipe(gitDeadline("reading result refs")),
+        ).pipe(Effect.mapError(error))
+        // Pause previews while Git reads the worktree so watchers cannot rewrite files underneath it.
+        const result = yield* Effect.acquireUseRelease(
+          step(
+            "pausing_services",
+            "pauseMs",
+            Effect.promise(() => pauseOwnedProcessGroups(run.worktree.directory).catch(() => [])),
+          ),
+          () =>
+            step(
+              "snapshotting_changes",
+              "gitFinalizeMs",
+              withGit(
+                finalize({
+                  worktree: run.worktree.directory,
+                  baseSHA: turn.frozenBaseSHA,
+                  frozenHead: turn.baseSnapshot?.canonicalHead ?? turn.frozenBaseSHA,
+                  permanentRef,
+                  ...(previous.commit ? { expectedPermanentCommit: previous.commit } : {}),
+                  ...(previous.indexTree ? { expectedFinalIndexTree: previous.indexTree } : {}),
+                }),
+              ).pipe(gitDeadline("saving worktree changes")),
+            ),
+          (paused) =>
+            step(
+              "resuming_services",
+              "resumeMs",
+              Effect.promise(() => resumeProcessGroups(paused)),
+            ),
+        ).pipe(Effect.mapError(error))
+        const chat = yield* promise(() => store.chat(turn.chatID))
+        if (!chat) return yield* Effect.fail(new Error(`Arena chat not found: ${turn.chatID}`))
+        const refChanges = yield* step(
+          "importing_results",
+          "importRefsMs",
+          Effect.gen(function* () {
+            yield* withGit(
+              importResultRef({
+                canonical: chat.repository.root,
+                sourceRepository: run.worktree.host ?? run.worktree.directory,
+                sourceRef: result.permanentRef,
+                destinationRef: result.permanentRef,
+                expectedCommit: result.finalCommit,
+                ...(previous.commit ? { expectedDestinationCommit: previous.commit } : {}),
+              }),
+            ).pipe(Effect.mapError(error))
+            yield* withGit(
+              importResultRef({
+                canonical: chat.repository.root,
+                sourceRepository: run.worktree.host ?? run.worktree.directory,
+                sourceRef: result.finalIndexRef,
+                destinationRef: result.finalIndexRef,
+                expectedCommit: result.finalIndexTree,
+                objectType: "tree",
+                ...(previous.indexTree ? { expectedDestinationCommit: previous.indexTree } : {}),
+              }),
+            ).pipe(Effect.mapError(error))
+            // The contestant's real HEAD, which a detached winner's commits hang from and which the
+            // wrapper commit does not reach when HEAD left the frozen base's line.
+            yield* withGit(
+              importWinnerRef({
+                canonical: chat.repository.root,
+                sourceRepository: run.worktree.directory,
+                sourceRef: "HEAD",
+                destinationRef: `${permanentRef}-head`,
+                expected: result.rawHead,
+              }),
+            ).pipe(Effect.mapError(error))
+            // Every ref the contestant moved, its own branch included. Their objects are imported now,
+            // under the run's permanent ref, so the vote can review and apply them without the host.
+            const host = run.worktree.host
+            let refChanges: readonly RefChange[] = []
+            const frozenHead = turn.baseSnapshot?.canonicalHead ?? turn.frozenBaseSHA
+            if (!host && result.branch && result.branch === stored?.branchAtRun && result.rawHead !== frozenHead) {
+              // A worktree without a host copy has no ref snapshot. Its own branch is the one ref the
+              // vote needs, and it started at the frozen head.
+              const ref = `refs/heads/${result.branch}`
+              refChanges = [{ ref, before: frozenHead, after: result.rawHead }]
+              yield* withGit(
+                importWinnerRef({
+                  canonical: chat.repository.root,
+                  sourceRepository: run.worktree.directory,
+                  sourceRef: ref,
+                  destinationRef: `${permanentRef}-refs/heads/${result.branch}`,
+                  expected: result.rawHead,
+                }),
+              ).pipe(Effect.mapError(error))
+            }
+            if (host) {
+              refChanges = yield* withGit(diffHostRefs({ host, exclude: [] })).pipe(Effect.mapError(error))
+              for (const change of refChanges) {
+                if (!change.after) continue
+                yield* withGit(
+                  importWinnerRef({
+                    canonical: chat.repository.root,
+                    sourceRepository: host,
+                    sourceRef: change.ref,
+                    destinationRef: `${permanentRef}-refs/${change.ref.slice("refs/".length)}`,
+                    expected: change.after,
+                  }),
+                ).pipe(Effect.mapError(error))
+              }
+            }
+            return refChanges
+          }).pipe(gitDeadline("importing result refs")),
+        ).pipe(Effect.mapError(error))
+        const diff = result.diff.reduce(
+          (total, item) => ({
+            files: total.files + 1,
+            additions: total.additions + item.additions,
+            deletions: total.deletions + item.deletions,
+          }),
+          { files: 0, additions: 0, deletions: 0 },
+        )
+        const branchChanged = result.branch !== stored?.branchAtRun
+        yield* promise(() =>
+          store.updateRun(run.runID, {
+            rawHead: result.rawHead,
+            ...(result.branch ? { finalBranch: result.branch } : {}),
+            branchChanged,
+            refChanges,
+            ...(result.agentCommit ? { agentCommit: result.agentCommit } : {}),
+            agentCommits: result.agentCommits,
+            wrapperCreated: result.wrapperCreated,
+            finalCommit: result.finalCommit,
+            finalTree: result.finalTree,
+            finalIndexTree: result.finalIndexTree,
+            fullyCommitted: result.fullyCommitted,
+            baseIsAncestor: result.baseIsAncestor,
+            // Where the winner's history went is the review's question at the vote, not a reason to
+            // refuse it here.
+            applicability: "applicable",
+            permanentRef: result.permanentRef,
+            refVerifiedAt: new Date(),
+            diff,
+          }),
+        )
+        const archived = yield* step(
+          "archiving_transcripts",
+          "archiveMs",
+          archive(store, turn, run, runState, runError),
+        )
+        return { result, ...archived }
+      }).pipe(
+        Effect.onExit((exit) =>
+          Effect.gen(function* () {
+            const finalizationTimings: RunFinalizationTimings = {
+              ...timings,
+              totalMs: Math.round(performance.now() - finalizeStarted),
+              ...(failedStep ? { failedStep } : {}),
+            }
+            const saved = yield* promise(() => store.recordRunFinalizationTimings(run.runID, finalizationTimings)).pipe(
+              Effect.catch(() => Effect.succeed(undefined)),
+            )
+            yield* Effect.logInfo("Arena side finalization timings", {
+              turnID: turn._id,
+              runID: run.runID,
+              side: run.side,
+              outcome: Exit.isSuccess(exit)
+                ? "completed"
+                : Cause.hasInterruptsOnly(exit.cause)
+                  ? "interrupted"
+                  : "failed",
+              ...(saved ?? finalizationTimings),
+            })
+          }),
+        ),
       )
-      const branchChanged = result.branch !== stored?.branchAtRun
-      yield* promise(() =>
-        store.updateRun(run.runID, {
-          rawHead: result.rawHead,
-          ...(result.branch ? { finalBranch: result.branch } : {}),
-          branchChanged,
-          refChanges,
-          ...(result.agentCommit ? { agentCommit: result.agentCommit } : {}),
-          agentCommits: result.agentCommits,
-          wrapperCreated: result.wrapperCreated,
-          finalCommit: result.finalCommit,
-          finalTree: result.finalTree,
-          finalIndexTree: result.finalIndexTree,
-          fullyCommitted: result.fullyCommitted,
-          baseIsAncestor: result.baseIsAncestor,
-          // Where the winner's history went is the review's question at the vote, not a reason to
-          // refuse it here.
-          applicability: "applicable",
-          permanentRef: result.permanentRef,
-          refVerifiedAt: new Date(),
-          diff,
-        }),
-      )
-      const archived = yield* archive(store, turn, run, runState, runError)
-      return { result, ...archived }
     })
     // The run is over, so are its sessions' model-timeout sequences, whether or not finalizing succeeds.
     const finalizeSide = (...args: Parameters<typeof finalizeSettled>) =>
@@ -5150,8 +5458,16 @@ export const layer: Layer.Layer<
       environmentSettled: Effect.Effect<void> = Effect.void,
       stoppedBySibling: () => boolean = () => false,
     ) {
+      const settled = Deferred.makeUnsafe<void>()
+      activePrompts.set(run.runID, settled)
       const promptExit = yield* runPrompt(store, run, prompt, agent, preservePromptBoundary).pipe(
         Effect.ensuring(closeShellTurn(run.sessionID, Effect.succeed(false))),
+        Effect.ensuring(
+          Effect.sync(() => {
+            activePrompts.delete(run.runID)
+            Deferred.doneUnsafe(settled, Exit.void)
+          }),
+        ),
       )
       return yield* settlePromptExit(store, turn, run, promptExit, environmentSettled, stoppedBySibling)
     })
@@ -5170,16 +5486,26 @@ export const layer: Layer.Layer<
       yield* environmentSettled
       const current = yield* promise(() => store.turn(turn._id))
       const halted = current?.state === "stopping" || current?.state === "early_selected"
-      // A prompt that failed before the stop took effect failed on its own: the side shows that
-      // failure, not "Stopped". A stream that dies while the stop tears it down ends after it.
+      const storedRun = halted ? yield* promise(() => store.run(run.runID)) : undefined
+      const haltedAt = halted ? current.transitionTimestamps?.[current.state] : undefined
+      // A prompt that failed or finished cleanly before the stop took effect settled on its own:
+      // the side keeps that outcome instead of being overwritten as "Stopped". A stream that dies
+      // while the stop tears it down ends after it.
       const failedFirst =
         halted &&
         failedBeforeHalt({
           failed: promptFailed(promptExit),
-          haltedAt: current.transitionTimestamps?.[current.state],
-          endedAt: (yield* promise(() => store.run(run.runID)))?.completedAt,
+          haltedAt,
+          endedAt: storedRun?.completedAt,
         })
-      const stopped = (halted && !failedFirst) || stoppedBySibling()
+      const completedFirst =
+        halted &&
+        completedBeforeHalt({
+          completed: promptCompleted(promptExit),
+          haltedAt,
+          endedAt: storedRun?.completedAt,
+        })
+      const stopped = (halted && !failedFirst && !completedFirst) || stoppedBySibling()
       // A steer still queued when the run was cut off stays in the thread as an unanswered message,
       // as in 1.x, and goes with this side's history if it is kept. Left in Core's inbox it would
       // vanish from the thread, and the next resume of this session would deliver it. A finished
@@ -5196,7 +5522,11 @@ export const layer: Layer.Layer<
           ),
         )
       }
-      const outcome = yield* Effect.exit(finalizeSide(store, turn, run, promptExit, stopped))
+      // Only a Stop bounds this side's Git. An early selection or a sibling's failed setup settles
+      // the side inside a battle that goes on, and that waits like any other.
+      const outcome = yield* Effect.exit(
+        finalizeSide(store, turn, run, promptExit, stopped).pipe(current?.state === "stopping" ? limitGit : unlimitGit),
+      )
       // The run's state now routes a reply, so the closing mark has done its job.
       closingRuns.delete(run.runID)
       if (Exit.isSuccess(outcome)) {
@@ -5219,17 +5549,20 @@ export const layer: Layer.Layer<
         )
         return outcome
       }
-      const detail = Cause.pretty(outcome.cause)
+      const detail = finalizationErrorDetail(outcome.cause)
+      const failedRunState = stopped ? "stopped" : "error"
       yield* promise(() =>
         store.updateRun(run.runID, {
-          runState: "error",
+          runState: failedRunState,
           durationMs: null,
           selectable: false,
           error: `${RESULT_NOT_SAVED_MESSAGE}\n${detail}`,
           completedAt: new Date(),
         }),
       )
-      const archived = yield* Effect.exit(archive(store, turn, run, "error", detail))
+      const archived = yield* Effect.exit(
+        trackOperation(store, turn._id, "archiving_transcripts", archive(store, turn, run, failedRunState, detail)),
+      )
       if (Exit.isSuccess(archived)) {
         yield* promise(() => store.updateRun(run.runID, { selectable: false, finalizedAt: new Date() }))
         yield* promise(() =>
@@ -5566,13 +5899,22 @@ export const layer: Layer.Layer<
       if (current?.resolution?.kind === "early" && current.appliedSide) {
         return yield* promote(store, current, current.appliedSide, current.resolution, current.vote, true)
       }
-      if (current?.state === "stopping") {
-        yield* promise(() => store.transitionTurn(turn._id, "awaiting_stop_resolution"))
-        return
-      }
       const claimed = yield* promise(() => store.claimTurnFinalization(turn._id))
-      if (!claimed.claimed) return
-      yield* openVote(store, turn, canonical)
+      if (claimed.claimed) return yield* openVote(store, turn, canonical)
+      if (claimed.turn.state === "stopping") {
+        const settled = yield* promise(() =>
+          store.claimTransition(turn._id, "stopping", "awaiting_stop_resolution"),
+        ).pipe(
+          Effect.catch((cause) =>
+            promise(() => store.turn(turn._id)).pipe(
+              Effect.flatMap((latest) =>
+                latest && latest.state !== "stopping" ? Effect.succeed(undefined) : Effect.fail(cause),
+              ),
+            ),
+          ),
+        )
+        if (settled?.claimed) yield* cancelStopWatchdog(turn._id)
+      }
     })
 
     /** Take a finalizing turn whose sides have all settled to the vote, and start its comparison. */
@@ -6343,6 +6685,7 @@ export const layer: Layer.Layer<
           if (current?.state === "running") yield* promise(() => store.transitionTurn(turn._id, "finalizing"))
           yield* promise(() => store.transitionTurn(turn._id, "finalization_failed"))
           yield* promise(() => store.transitionTurn(turn._id, "awaiting_stop_resolution"))
+          yield* cancelStopWatchdog(turn._id)
           return
         }
         yield* finalizeReadyTurn(store, turn, chat.repository.root)
@@ -6833,6 +7176,9 @@ export const layer: Layer.Layer<
         Effect.scoped,
         Effect.catchCause((cause) =>
           Effect.gen(function* () {
+            // An interrupt comes from the stop watchdog, a stuck-stopping discard, or process
+            // shutdown; the caller owns the turn's transition instead of aborting it here.
+            if (Cause.hasInterruptsOnly(cause)) return
             const current = yield* promise(() => store.turn(activeTurn._id))
             if (current?.warmPreparation?.state === "pending") {
               yield* promise(() =>
@@ -6880,7 +7226,7 @@ export const layer: Layer.Layer<
             yield* Effect.logError("Arena battle failed", { turnID: activeTurn._id, cause })
           }),
         ),
-        Effect.forkIn(scope),
+        (battle) => forkTurnWork(activeTurn._id, battle),
       )
       // The chat holds a pair only for its first turn, which now owns it or went without it.
       // After the battle is running, so nothing here can keep an activated turn from starting.
@@ -7027,12 +7373,14 @@ export const layer: Layer.Layer<
           if (current?.state === "running") yield* promise(() => store.transitionTurn(turn._id, "finalizing"))
           yield* promise(() => store.transitionTurn(turn._id, "finalization_failed"))
           yield* promise(() => store.transitionTurn(turn._id, "awaiting_stop_resolution"))
+          yield* cancelStopWatchdog(turn._id)
           return
         }
         yield* finalizeReadyTurn(store, turn, canonical)
       }).pipe(
         Effect.catchCause((cause) =>
           Effect.gen(function* () {
+            if (Cause.hasInterruptsOnly(cause)) return
             const current = yield* promise(() => store.turn(turn._id))
             if (current?.state === "running") {
               yield* promise(() => store.transitionTurn(turn._id, "finalizing"))
@@ -7050,7 +7398,7 @@ export const layer: Layer.Layer<
           }).pipe(Effect.catchCause(() => Effect.logError(failureMessage, { cause }))),
         ),
       )
-      yield* continuation.pipe(Effect.forkIn(scope))
+      yield* forkTurnWork(turn._id, continuation)
     })
 
     const reply = Effect.fn("Arena.reply")(function* (
@@ -7331,15 +7679,17 @@ export const layer: Layer.Layer<
       store: Store,
       chat: ChatDocument,
       run: RunDocument,
+      options?: { readonly background?: boolean },
     ) {
       const at = new Date()
       const historicalServices = yield* endRunEnvironment(store, run, at)
       yield* removeContestantTmp(run)
       yield* forgetSlot(run.worktree)
-      yield* withRepositoryMutation(
+      const withLock = options?.background ? withBackgroundRepositoryMutation : withRepositoryMutation
+      yield* withLock(
         chat.canonicalCheckout?.commonGitDir ?? chat.repository.root,
         inDirectory(chat.repository.root, worktrees.remove({ directory: run.worktree, keepBranch: false })),
-      )
+      ).pipe(gitDeadline("removing the contestant worktree"))
       yield* promise(() =>
         store.updateRun(run._id, {
           retention: "none",
@@ -8356,10 +8706,24 @@ export const layer: Layer.Layer<
       )
     })
 
+    const hasFailedCleanup = Effect.fnUntraced(function* (store: Store, chat: ChatDocument) {
+      const turns = yield* promise(() => store.turnsForChat(chat._id))
+      const runs = yield* Effect.forEach(turns, (turn) => promise(() => store.runsForTurn(turn._id)), {
+        concurrency: 4,
+      })
+      return runs
+        .flat()
+        .some(
+          (run) =>
+            run.retention === "cleanup_failed" && run._id !== chat.retainedWinner?.runID && !run.worktreeRemovedAt,
+        )
+    })
+
     const retryFailedRunCleanups = Effect.fn("Arena.retryFailedRunCleanups")(function* (
       store: Store,
       chat: ChatDocument,
       currentTurnID: string,
+      options?: { readonly background?: boolean },
     ) {
       const turns = yield* promise(() => store.turnsForChat(chat._id))
       const priorRuns = yield* Effect.forEach(
@@ -8373,32 +8737,101 @@ export const layer: Layer.Layer<
           (run) =>
             run.retention === "cleanup_failed" && run._id !== chat.retainedWinner?.runID && !run.worktreeRemovedAt,
         )
+      let remaining = 0
       yield* Effect.forEach(
         failed,
-        (run) =>
-          Effect.gen(function* () {
-            const stopped = yield* stopRunServices(store, run)
-            const failures = stopped.filter((record) => record.status === "failed" || !record.verified)
-            if (failures.length > 0) {
-              yield* promise(() =>
-                store.updateTurn(run.turnID, {
-                  cleanup: {
-                    state: "failed",
-                    error: `Arena could not stop ${failures.length} previously losing service${failures.length === 1 ? "" : "s"}`,
-                  },
-                }),
+        (run) => {
+          const attempt = runCleanupLocks.withLock(run._id)(
+            Effect.gen(function* () {
+              const latest = yield* promise(() => store.run(run._id))
+              if (!latest || latest.retention !== "cleanup_failed" || latest.worktreeRemovedAt) return
+              const stopped = yield* stopRunServices(store, latest)
+              const failures = stopped.filter((record) => record.status === "failed" || !record.verified)
+              if (failures.length > 0) {
+                yield* promise(() =>
+                  store.updateTurn(latest.turnID, {
+                    cleanup: {
+                      state: "failed",
+                      error: `Arena could not stop ${failures.length} previously losing service${failures.length === 1 ? "" : "s"}`,
+                    },
+                  }),
+                )
+                return yield* Effect.fail(
+                  new Error(
+                    `Arena could not stop ${failures.length} previously losing service${failures.length === 1 ? "" : "s"}`,
+                  ),
+                )
+              }
+              yield* removeStoppedRun(store, chat, latest, options)
+              const turnRuns = yield* promise(() => store.runsForTurn(latest.turnID))
+              const stillFailed = turnRuns.some(
+                (candidate) => candidate.retention === "cleanup_failed" && !candidate.worktreeRemovedAt,
               )
-              return yield* Effect.fail(
-                new Error(
-                  `Arena could not stop ${failures.length} previously losing service${failures.length === 1 ? "" : "s"}`,
+              if (!stillFailed) {
+                yield* promise(() => store.updateTurn(latest.turnID, { cleanup: { state: "complete" } }))
+              }
+            }),
+          )
+          if (!options?.background) return attempt
+          return attempt.pipe(
+            Effect.catchCause((cause) =>
+              Effect.sync(() => {
+                remaining += 1
+              }).pipe(
+                Effect.andThen(
+                  Effect.logWarning("Arena could not retry failed worktree cleanup", {
+                    chatID: chat._id,
+                    turnID: run.turnID,
+                    runID: run._id,
+                    cause,
+                  }),
                 ),
-              )
-            }
-            yield* removeStoppedRun(store, chat, run)
-            yield* promise(() => store.updateTurn(run.turnID, { cleanup: { state: "complete" } }))
-          }),
+              ),
+            ),
+          )
+        },
         { concurrency: 1, discard: true },
       )
+      return remaining
+    })
+
+    /**
+     * Keep retrying stranded worktree removals for a chat in the background until Git answers
+     * again, so a folder left behind by a Git timeout does not sit on disk until restart.
+     */
+    const scheduleFailedCleanupRetry = Effect.fnUntraced(function* (store: Store, chatID: string) {
+      if (failedCleanupRetries.has(chatID)) return
+      const base = failedCleanupRetryMs()
+      const max = Math.max(base, FAILED_CLEANUP_RETRY_MAX_MS)
+      let delay = base
+      let fiber: Fiber.Fiber<void, never> | undefined
+      fiber = yield* Effect.gen(function* () {
+        while (true) {
+          yield* Effect.sleep(Duration.millis(delay))
+          const current = yield* promise(() => store.chat(chatID))
+          if (!current || current.status === "archived" || current.checkoutEvicted) return
+          if (!(yield* hasFailedCleanup(store, current))) return
+          const remaining = yield* retryFailedRunCleanups(store, current, current.activeTurnID ?? "", {
+            background: true,
+          }).pipe(limitGit)
+          if (remaining === 0 && !(yield* hasFailedCleanup(store, current))) return
+          if (remaining > 0) delay = Math.min(max, delay * 2)
+        }
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.void
+            : Effect.logWarning("Arena failed cleanup retry stopped", { chatID, cause }),
+        ),
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (fiber && failedCleanupRetries.get(chatID) === fiber) failedCleanupRetries.delete(chatID)
+          }),
+        ),
+        Effect.interruptible,
+        Effect.forkIn(scope),
+      )
+      failedCleanupRetries.set(chatID, fiber)
     })
 
     const reuseWarmPairForTurn = Effect.fn("Arena.reuseWarmPairForTurn")(function* (
@@ -9195,6 +9628,7 @@ export const layer: Layer.Layer<
         yield* promise(() =>
           store.updateTurn(turn._id, { cleanup: { state: "failed", error: Cause.pretty(loserCleanup.cause) } }),
         )
+        yield* scheduleFailedCleanupRetry(store, turn.chatID)
         return
       }
       const { instanceStoppedAt, stoppedCount } = loserCleanup.value
@@ -9322,7 +9756,7 @@ export const layer: Layer.Layer<
     const settleAbandonedRuns = Effect.fnUntraced(function* (
       store: Store,
       turn: TurnDocument,
-      runState: "error" | "interrupted",
+      runState: "error" | "interrupted" | "stopped",
       message: string,
     ) {
       const runs = yield* promise(() => store.runsForTurn(turn._id))
@@ -9330,14 +9764,19 @@ export const layer: Layer.Layer<
         runs.filter((run) => run.runState === "pending"),
         (run) =>
           Effect.gen(function* () {
-            yield* cancelRun(run.worktree, SessionID.make(run.rootSessionID)).pipe(Effect.ignore)
+            yield* cancelRun(run.worktree, SessionID.make(run.rootSessionID), { shells: true }).pipe(
+              Effect.timeoutOption(Duration.seconds(5)),
+              Effect.ignore,
+            )
+            yield* closeInterruptedResponses(run).pipe(Effect.ignore)
             yield* promise(() =>
               store.updateRun(run._id, {
                 runState,
                 durationMs: null,
                 selectable: false,
-                error: message,
+                ...(runState === "stopped" ? {} : { error: message }),
                 completedAt: new Date(),
+                finalizedAt: new Date(),
               }),
             )
           }),
@@ -9368,11 +9807,19 @@ export const layer: Layer.Layer<
           }).pipe(
             Effect.as(undefined),
             Effect.catchCause((cause) =>
-              Effect.logWarning("Arena worktree cleanup failed", {
-                turnID: turn._id,
-                runID: run._id,
-                cause,
-              }).pipe(Effect.as({ runID: run._id, error: Cause.pretty(cause) })),
+              Effect.gen(function* () {
+                const latest = yield* promise(() => store.run(run._id))
+                // A removal Git never finished reads as an owned worktree, so no pool sweep retires
+                // it. The marker puts it on the retry path (`retryFailedRunCleanups`) instead.
+                if (latest && !latest.worktreeRemovedAt)
+                  yield* promise(() => store.updateRun(run._id, { retention: "cleanup_failed" }))
+                yield* Effect.logWarning("Arena worktree cleanup failed", {
+                  turnID: turn._id,
+                  runID: run._id,
+                  cause,
+                })
+                return { runID: run._id, error: Cause.pretty(cause) }
+              }),
             ),
           ),
         { concurrency: 2 },
@@ -9399,6 +9846,7 @@ export const layer: Layer.Layer<
             : { state: "complete" },
         }),
       )
+      if (errors.length > 0) yield* scheduleFailedCleanupRetry(store, chat._id)
     })
 
     /**
@@ -9614,6 +10062,7 @@ export const layer: Layer.Layer<
       store: Store,
       turn: TurnDocument,
       canonical: string,
+      liveStop = false,
     ) {
       if (turn.state === "early_selected" && turn.resolution?.kind === "early" && turn.appliedSide) {
         const runs = yield* promise(() => store.runsForTurn(turn._id))
@@ -9672,8 +10121,20 @@ export const layer: Layer.Layer<
       }
       const runs = yield* promise(() => store.runsForTurn(turn._id))
       if (canReopenInterruptedBattle(turn, runs)) return yield* reopenInterruptedTurn(store, turn, runs, canonical)
+      if (turn.activeOperations?.length && operationTrackerFor(store).snapshot(turn._id).length === 0) {
+        yield* promise(() => store.updateTurn(turn._id, { activeOperations: [] }))
+      }
+      const stoppedTurn = isStoppingBattle(turn) || turn.transitionTimestamps.stopping !== undefined
       if (turn.state !== "interrupted_recovery") {
-        yield* promise(() => store.transitionTurn(turn._id, "interrupted_recovery"))
+        const claimed = yield* promise(() => store.claimTransition(turn._id, turn.state, "interrupted_recovery"))
+        if (!claimed.claimed) return
+      }
+      if (liveStop && runs.some((run) => run.runState === "pending")) {
+        // Interruption stops Arena's fibers. Try canceling Core's separate session runners too,
+        // but don't let a runner that won't close block recovery.
+        yield* trackOperation(store, turn._id, "stopping_agents", cancelWorkingRuns(store, turn._id)).pipe(
+          Effect.timeoutOption(Duration.seconds(5)),
+        )
       }
       const recovered = new Map<
         Side,
@@ -9691,42 +10152,93 @@ export const layer: Layer.Layer<
               worktree: { name: `turn-${turn.turnIndex}-${saved.side}`, directory: saved.worktree },
               assignment: saved.assignment,
             }
-            const interrupted = "Arena process restarted while the contestant was executing"
-            const result = saved.finalCommit
-              ? yield* promise(() =>
-                  store.updateRun(saved._id, {
-                    runState: "interrupted",
-                    durationMs: null,
-                    error: interrupted,
-                    completedAt: new Date(),
-                  }),
-                ).pipe(
-                  Effect.andThen(archive(store, turn, runtime, "interrupted", interrupted)),
-                  Effect.map((archived) => ({
-                    result: { finalCommit: saved.finalCommit! },
-                    ...archived,
-                  })),
+            // A side that already finished or settled keeps its result, state, and timing.
+            // Overwriting it on stop-recovery or restart wiped out a completed side's outcome.
+            const settledState =
+              saved.runState === "complete" || saved.runState === "error" || saved.runState === "stopped"
+            if (saved.finalizedAt || (settledState && saved.archiveComplete === true && !!saved.finalCommit)) {
+              if (!saved.finalizedAt) {
+                const selectable =
+                  saved.selectable === true ||
+                  (saved.runState === "complete" && !!saved.finalCommit && !!saved.finalTree && !!saved.permanentRef)
+                yield* promise(() => store.updateRun(saved._id, { selectable, finalizedAt: new Date() }))
+                yield* promise(() =>
+                  store.markRunFinalized({ turnID: turn._id, side: saved.side, selectable, at: new Date() }),
                 )
-              : yield* finalizeSide(store, turn, runtime, Exit.fail(new Error(interrupted)), true, "interrupted")
+              }
+              if (!stoppedTurn && saved.finalCommit && turn.comparisonState !== "complete") {
+                const input = yield* comparisonInput(store, turn, saved.side).pipe(Effect.option)
+                if (Option.isSome(input)) recovered.set(saved.side, input.value)
+              }
+              return
+            }
+
+            yield* closeInterruptedResponses(saved)
+            const fallbackState: RunDocument["runState"] = stoppedTurn ? "stopped" : "interrupted"
+            const nextState: RunDocument["runState"] = settledState ? saved.runState : fallbackState
+            const interrupted = stoppedTurn ? undefined : "Arena process restarted while the contestant was executing"
+            const nextError = settledState ? saved.error : interrupted
+            const result = saved.finalCommit
+              ? yield* Effect.gen(function* () {
+                  if (!settledState) {
+                    yield* promise(() =>
+                      store.updateRun(saved._id, {
+                        runState: nextState,
+                        durationMs: null,
+                        ...(nextError ? { error: nextError } : {}),
+                        completedAt: saved.completedAt ?? new Date(),
+                      }),
+                    )
+                  }
+                  const archived = yield* trackOperation(
+                    store,
+                    turn._id,
+                    "archiving_transcripts",
+                    archive(store, turn, runtime, nextState, nextError),
+                  )
+                  return { result: { finalCommit: saved.finalCommit! }, ...archived }
+                })
+              : yield* finalizeSide(
+                  store,
+                  turn,
+                  runtime,
+                  !settledState && nextError ? Exit.fail(new Error(nextError)) : Exit.void,
+                  true,
+                  nextState,
+                )
+            const refreshed = yield* promise(() => store.run(saved._id))
+            const selectable =
+              nextState === "complete" && !!refreshed?.finalCommit && !!refreshed.finalTree && !!refreshed.permanentRef
+            yield* promise(() => store.updateRun(saved._id, { selectable, finalizedAt: new Date() }))
+            yield* promise(() =>
+              store.markRunFinalized({ turnID: turn._id, side: saved.side, selectable, at: new Date() }),
+            )
             recovered.set(saved.side, result)
           }).pipe(
             Effect.catchCause((cause) =>
-              promise(() =>
-                store.updateRun(saved._id, {
-                  runState: "interrupted",
-                  durationMs: null,
-                  error: Cause.pretty(cause),
-                  completedAt: new Date(),
-                }),
-              ).pipe(
-                Effect.andThen(
-                  Effect.logWarning("Arena could not archive an interrupted side", {
-                    turnID: turn._id,
-                    runID: saved._id,
-                    cause,
+              Effect.gen(function* () {
+                if (Cause.hasInterruptsOnly(cause)) return yield* Effect.failCause(cause)
+                yield* promise(() =>
+                  store.updateRun(saved._id, {
+                    ...(saved.runState === "pending"
+                      ? { runState: stoppedTurn ? "stopped" : "interrupted", durationMs: null }
+                      : {}),
+                    selectable: false,
+                    ...(!saved.finalCommit ? { applicability: "blocked" as const } : {}),
+                    error: saved.error ?? `${RESULT_NOT_SAVED_MESSAGE}\n${finalizationErrorDetail(cause)}`,
+                    completedAt: saved.completedAt ?? new Date(),
+                    finalizedAt: new Date(),
                   }),
-                ),
-              ),
+                )
+                yield* promise(() =>
+                  store.markRunFinalized({ turnID: turn._id, side: saved.side, selectable: false, at: new Date() }),
+                )
+                yield* Effect.logWarning("Arena could not archive an interrupted side", {
+                  turnID: turn._id,
+                  runID: saved._id,
+                  cause,
+                })
+              }),
             ),
           ),
         { concurrency: 2, discard: true },
@@ -9734,7 +10246,7 @@ export const layer: Layer.Layer<
       yield* promise(() => store.transitionTurn(turn._id, "awaiting_stop_resolution"))
       const a = recovered.get("a")
       const b = recovered.get("b")
-      if (a && b && turn.comparisonState !== "complete") {
+      if (!stoppedTurn && a && b && turn.comparisonState !== "complete") {
         yield* startUtility(store, turn, a, b, canonical).pipe(
           Effect.catchCause((cause) =>
             promise(() => store.updateTurn(turn._id, { comparisonState: "failed" })).pipe(
@@ -9746,12 +10258,13 @@ export const layer: Layer.Layer<
               ),
             ),
           ),
+          unlimitGit,
           Effect.forkIn(scope),
         )
-      } else if (!a || !b) {
+      } else if (stoppedTurn || !a || !b) {
         yield* promise(() => store.updateTurn(turn._id, { comparisonState: interruptedComparisonState(turn) }))
       }
-    })
+    }, limitGit)
 
     /**
      * A pending pair was being prepared or refreshed when the previous process stopped, and
@@ -9923,6 +10436,7 @@ export const layer: Layer.Layer<
         repositories.values(),
         (root) =>
           withGit(removeBrokenPrivateRefs(root)).pipe(
+            gitDeadline("checking repository refs after restart"),
             Effect.tap((removed) =>
               removed.length > 0
                 ? Effect.logWarning("Arena removed refs a crash left broken", { root, refs: removed.join(", ") })
@@ -9963,6 +10477,22 @@ export const layer: Layer.Layer<
               yield* reconcileWarmPair(store, currentChat)
               // Trees a previous process moved aside and did not finish deleting.
               yield* sweepSlotTrash(currentChat)
+              // Worktrees a failed cleanup left behind (a Git timeout, a service that would not
+              // stop) go here too, so they do not wait for the developer's next send. If Git is
+              // still hung at startup, keep retrying in the background until it recovers.
+              yield* retryFailedRunCleanups(store, currentChat, "", { background: true }).pipe(
+                Effect.flatMap((remaining) =>
+                  remaining > 0 ? scheduleFailedCleanupRetry(store, currentChat._id) : Effect.void,
+                ),
+                Effect.catchCause((cause) =>
+                  Effect.logWarning("Arena could not retry failed worktree cleanups", {
+                    chatID: currentChat._id,
+                    cause,
+                  }).pipe(Effect.andThen(scheduleFailedCleanupRetry(store, currentChat._id))),
+                ),
+                limitGit,
+                Effect.forkIn(scope),
+              )
               const stranded = turns.at(-1)
               if (
                 stranded?.state !== "cleanup_pending" ||
@@ -10001,6 +10531,15 @@ export const layer: Layer.Layer<
                   { $set: { status: "failed", updatedAt: new Date() } },
                 ),
               )
+              return
+            }
+
+            if (
+              isStoppingBattle(turn) &&
+              turn.resolution?.kind === "stopped" &&
+              turn.resolution.resolution === "discard"
+            ) {
+              yield* finishDiscard(store, turn, currentChat)
               return
             }
 
@@ -10206,6 +10745,8 @@ export const layer: Layer.Layer<
         Effect.catchCause((cause) =>
           Effect.logWarning("Arena could not rebuild the latest repository's spare pair", { cause }),
         ),
+        // Recovery's Git limit ends with recovery; this is ordinary preparation.
+        unlimitGit,
         Effect.forkIn(scope),
       )
       // Every chat's, including those released before this was cleaned up after each turn.
@@ -10229,7 +10770,7 @@ export const layer: Layer.Layer<
         return unloadIdleChats().pipe(
           Effect.catchCause((cause) => Effect.logWarning("Arena could not unload idle chats", { cause })),
         )
-      }).pipe(Effect.andThen(Effect.sleep("1 second")), Effect.forever, Effect.forkIn(scope))
+      }).pipe(Effect.andThen(Effect.sleep("1 second")), Effect.forever, unlimitGit, Effect.forkIn(scope))
     })
 
     // Copies the winner's messages for this turn into the chat's canonical session. The canonical
@@ -11517,39 +12058,150 @@ export const layer: Layer.Layer<
       }
     })
 
+    const startStopWatchdog = Effect.fnUntraced(function* (store: Store, turnID: string) {
+      yield* cancelStopWatchdog(turnID)
+      const delay = stopWatchdogMs()
+      let watchdog: Fiber.Fiber<void, never> | undefined
+      watchdog = yield* Effect.sleep(Duration.millis(delay)).pipe(
+        Effect.andThen(
+          stopRecoveryLocks.withLock(turnID)(
+            Effect.gen(function* () {
+              const current = yield* promise(() => store.turn(turnID))
+              if (!current || !isStoppingBattle(current) || current.resolution !== undefined) return
+              const chat = yield* promise(() => store.chat(current.chatID))
+              if (!chat) return
+              yield* Effect.logWarning("Arena stop watchdog fired; interrupting stuck battle", {
+                turnID,
+                timeoutMs: delay,
+                waitingOn: current.operationProgress?.filter((step) => step.state === "running"),
+              })
+              environmentCopyStops.get(turnID)?.abort(new Error("Arena battle stop timed out"))
+              yield* interruptTurnFibers(store, turnID)
+              const latest = yield* promise(() => store.turn(turnID))
+              if (!latest || !isStoppingBattle(latest) || latest.resolution !== undefined) return
+              yield* recoverExecutingTurn(store, latest, chat.repository.root, true)
+            }),
+          ),
+        ),
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.void
+            : Effect.logWarning("Arena stop watchdog failed", { turnID, cause }),
+        ),
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (watchdog && stopWatchdogs.get(turnID) === watchdog) stopWatchdogs.delete(turnID)
+          }),
+        ),
+        Effect.interruptible,
+        Effect.forkIn(scope),
+      )
+      stopWatchdogs.set(turnID, watchdog)
+    })
+
     const stop = Effect.fn("Arena.stop")(function* (id: string) {
       const store = yield* available()
       const turn = yield* promise(() => store.turn(id))
       if (!turn) return yield* Effect.fail(new Error(`Arena turn not found: ${id}`))
-      if (turn.state === "awaiting_stop_resolution") {
-        return yield* respond(store, turn.chatID)
-      }
       if (turn.state !== "running") {
+        if (turn.transitionTimestamps.stopping || turn.state === "awaiting_stop_resolution") {
+          return yield* respond(store, turn.chatID)
+        }
         return yield* Effect.fail(new Error("Arena battle cannot be stopped in its current state"))
       }
-      yield* promise(() => store.transitionTurn(turn._id, "stopping"))
-      environmentCopyStops.get(turn._id)?.abort(new Error("Arena battle was stopped during environment setup"))
-      const runs = yield* promise(() => store.runsForTurn(turn._id))
-      const cancel = Effect.forEach(
-        runs,
-        (run) => cancelRun(run.worktree, SessionID.make(run.rootSessionID), { shells: true }),
-        {
-          concurrency: 2,
-          discard: true,
-        },
-      )
-      yield* cancel
-      // A stop can win the database transition immediately before prompt fibers
-      // enter SessionPrompt. Yield once and cancel again so both sides observe it.
-      yield* Effect.yieldNow
-      yield* cancel
+      yield* Effect.gen(function* () {
+        const claimed = yield* promise(() => store.claimTransition(id, "running", "stopping")).pipe(
+          Effect.catch((cause) =>
+            promise(() => store.turn(id)).pipe(
+              Effect.flatMap((latest) =>
+                latest?.transitionTimestamps.stopping ? Effect.succeed(undefined) : Effect.fail(cause),
+              ),
+            ),
+          ),
+        )
+        if (!claimed?.claimed) return
+        // Bound any side that already finished its prompt and is still saving in Git.
+        yield* signalTurnStopped(id)
+        // The request acknowledges the claim, not shell shutdown. Cancellation can itself hang.
+        yield* startStopWatchdog(store, id)
+        environmentCopyStops.get(id)?.abort(new Error("Arena battle was stopped during environment setup"))
+        const cancel = cancelWorkingRuns(store, id)
+        const stopAgents = Effect.gen(function* () {
+          yield* cancel
+          yield* Effect.yieldNow
+          // A Retry can enter SessionPrompt just after the first cancellation pass.
+          yield* cancel
+          yield* Effect.forEach(
+            Object.values(turn.runIDs),
+            (runID) => {
+              const prompt = activePrompts.get(runID)
+              return prompt ? timeCancel(store, id, runID, "cancelWaitMs", Deferred.await(prompt)) : Effect.void
+            },
+            { concurrency: 2, discard: true },
+          )
+        }).pipe(limitGit)
+        yield* trackOperation(store, id, "stopping_agents", stopAgents).pipe(
+          Effect.catchCause((cause) =>
+            Cause.hasInterruptsOnly(cause)
+              ? Effect.void
+              : Effect.logWarning("Arena stop cancellation failed", { turnID: id, cause }),
+          ),
+          Effect.interruptible,
+          (cancellation) => forkTurnWork(id, cancellation),
+        )
+      }).pipe(Effect.uninterruptible)
       return yield* respond(store, turn.chatID)
     })
 
+    /**
+     * Discard answers within the app's wait or does not happen. The app gives up on a Discard
+     * after two minutes, and one still queued then (behind startup recovery, or a stuck stop being
+     * interrupted) used to discard the battle after the app had reported it failed. The request
+     * gives up first, and a discard it gave up on is never recorded. One already recorded is
+     * finished in the background, and the request answers with where it stands.
+     */
     const resolveStop = Effect.fn("Arena.resolveStop")(function* (
       id: string,
       selected: StopResolution,
       discardReason?: DiscardReason,
+    ) {
+      if (selected !== "discard") return yield* resolveStopNow(id, selected)
+      const request: DiscardRequest = { state: "open" }
+      const fiber = yield* resolveStopNow(id, selected, discardReason, request).pipe(Effect.forkIn(scope))
+      // One synchronous step with the check in `recordDiscard`, so the request cannot give up on a
+      // discard whose write has gone out, and no write goes out once it has given up.
+      const giveUp: Effect.Effect<boolean> = Effect.suspend(() => {
+        const recording = request.recording
+        if (request.state === "recording" && recording) {
+          // A write already issued has its answer in moments.
+          return Effect.promise(() => recording).pipe(Effect.andThen(giveUp))
+        }
+        if (request.state === "recorded") return Effect.succeed(false)
+        request.state = "abandoned"
+        return Fiber.interrupt(fiber).pipe(Effect.forkIn(scope), Effect.as(true))
+      })
+      const settled = yield* Fiber.await(fiber).pipe(
+        Effect.timeoutOption(Duration.millis(discardRequestMs())),
+        Effect.onInterrupt(() => giveUp),
+      )
+      if (Option.isSome(settled)) {
+        return Exit.isSuccess(settled.value) ? settled.value.value : yield* Effect.failCause(settled.value.cause)
+      }
+      if (yield* giveUp) {
+        yield* Effect.logWarning("Arena gave up on a discard it could not start in time", { turnID: id })
+        return yield* Effect.fail(new Error(DISCARD_NOT_STARTED_MESSAGE))
+      }
+      yield* Effect.logWarning("Arena answered a discard that is still cleaning up", { turnID: id })
+      const recorded = request.recorded
+      if (!recorded) return yield* Effect.fail(new Error(`Arena turn not found: ${id}`))
+      return yield* respond(recorded.store, recorded.chatID)
+    })
+
+    const resolveStopNow = Effect.fn("Arena.resolveStopNow")(function* (
+      id: string,
+      selected: StopResolution,
+      discardReason?: DiscardReason,
+      request?: DiscardRequest,
     ) {
       const store = yield* available()
       const turn = yield* promise(() => store.turn(id))
@@ -11568,10 +12220,7 @@ export const layer: Layer.Layer<
         return yield* promote(store, turn, side, resolved)
       }
 
-      // Archived before the control plane commits, so a failure here leaves the battle undecided.
-      yield* ensureArchives(store, turn)
-      const revealed = yield* promise(() => modelsForDecision(turn, "discard"))
-      yield* discardCommitted(store, turn._id, revealed, discardReason)
+      yield* discardCommitted(store, turn._id, undefined, discardReason, request)
       return yield* respond(store, turn.chatID)
     })
 
@@ -11588,9 +12237,12 @@ export const layer: Layer.Layer<
       reveal: boolean,
       discardStage: DiscardStage,
       discardReason?: DiscardReason,
+      request?: DiscardRequest,
     ) =>
-      promise(() =>
-        store.recordResolution({
+      promise(() => {
+        // Decided where the write is issued, so a request cannot give up between the two.
+        if (request?.state === "abandoned") return Promise.reject(new Error(DISCARD_NOT_STARTED_MESSAGE))
+        const write = store.recordResolution({
           turnID: turn._id,
           resolution: stoppedResolution("discard", reveal ? undefined : { revealed: false }),
           ...(reveal ? { models } : {}),
@@ -11598,18 +12250,66 @@ export const layer: Layer.Layer<
           discardStage,
           ...(discardReason ? { discardReason } : {}),
           at: new Date(),
-        }),
-      ).pipe(
+        })
+        if (request) {
+          request.state = "recording"
+          request.recording = write.then(
+            (result) => {
+              request.state = result.recorded ? "recorded" : "open"
+              if (result.recorded) request.recorded = { store, chatID: turn.chatID }
+            },
+            () => {
+              request.state = "open"
+            },
+          )
+        }
+        return write
+      }).pipe(
         Effect.catch((cause) =>
-          promise(() => store.turn(turn._id)).pipe(
-            Effect.flatMap((latest) =>
-              latest && latest.state !== expectedState
-                ? Effect.succeed({ turn: latest, recorded: false as const })
-                : Effect.fail(cause),
-            ),
-          ),
+          request?.state === "abandoned"
+            ? Effect.fail(cause)
+            : promise(() => store.turn(turn._id)).pipe(
+                Effect.flatMap((latest) =>
+                  latest && latest.state !== expectedState
+                    ? Effect.succeed({ turn: latest, recorded: false as const })
+                    : Effect.fail(cause),
+                ),
+              ),
         ),
       )
+
+    const timeCancel = Effect.fnUntraced(function* <E, R>(
+      store: Store,
+      turnID: string,
+      runID: string,
+      field: "cancelMs" | "cancelWaitMs",
+      work: Effect.Effect<void, E, R>,
+    ) {
+      const context = { turnID, runID, operation: "stopping_agents", timing: field }
+      yield* Effect.logInfo("Arena side cancellation step started", context)
+      const started = performance.now()
+      yield* work.pipe(
+        Effect.onExit((exit) =>
+          Effect.gen(function* () {
+            const durationMs = Math.round(performance.now() - started)
+            const outcome = Exit.isSuccess(exit)
+              ? "completed"
+              : Cause.hasInterruptsOnly(exit.cause)
+                ? "interrupted"
+                : "failed"
+            yield* Effect.logInfo("Arena side cancellation step ended", { ...context, durationMs, outcome })
+            yield* promise(() =>
+              store.writeRun(
+                { _id: runID, turnID },
+                {
+                  $inc: { [`finalizationTimings.${field}`]: durationMs },
+                },
+              ),
+            ).pipe(Effect.ignore)
+          }),
+        ),
+      )
+    })
 
     /**
      * Cancel a stopping battle's runs that are still working. A Retry's prompt starts only after it
@@ -11619,7 +12319,14 @@ export const layer: Layer.Layer<
       const runs = yield* promise(() => store.runsForTurn(turnID))
       yield* Effect.forEach(
         runs.filter((run) => run.runState === "pending"),
-        (run) => cancelRun(run.worktree, SessionID.make(run.rootSessionID)).pipe(Effect.ignore),
+        (run) =>
+          timeCancel(
+            store,
+            turnID,
+            run._id,
+            "cancelMs",
+            cancelRun(run.worktree, SessionID.make(run.rootSessionID), { shells: true }),
+          ).pipe(Effect.ignore),
         { concurrency: 2, discard: true },
       )
     })
@@ -11650,6 +12357,7 @@ export const layer: Layer.Layer<
       turn: TurnDocument,
       chat: ChatDocument,
     ) {
+      yield* cancelStopWatchdog(turn._id)
       // Analytics only, as for a vote: forked and swallowed so it can never block the discard.
       yield* recordBattleMetrics(store, turn._id).pipe(
         Effect.catchCause((cause) => Effect.logError("Arena battle metrics failed", { turnID: turn._id, cause })),
@@ -11657,48 +12365,111 @@ export const layer: Layer.Layer<
       )
       yield* promise(() => store.transitionTurn(turn._id, "discarding"))
       yield* cleanup(store, turn, chat.repository.root)
-      const canonical = yield* withGit(inspectCanonical(chat.repository.root)).pipe(Effect.mapError(error))
+      const canonical = yield* withGit(inspectCanonical(chat.repository.root)).pipe(
+        gitDeadline("checking the checkout after discard"),
+        Effect.catch((cause) =>
+          Effect.logWarning("Arena could not refresh the checkout after discard", { turnID: turn._id, cause }).pipe(
+            Effect.as(undefined),
+          ),
+        ),
+      )
       yield* promise(() => store.transitionTurn(turn._id, "discarded"))
       yield* promise(() =>
         store.completeTurn({
           chatID: chat._id,
           turnID: turn._id,
-          canonicalSHA: canonical.head,
+          // Discard did not change the checkout; keep the last known state when Git cannot read it.
+          canonicalSHA: canonical?.head ?? chat.currentCanonicalSHA,
           canonicalSessionID: chat.canonicalSessionID,
-          ...(canonical.branch ? { branch: canonical.branch } : {}),
-          detached: canonical.detached,
-          indexTree: canonical.indexTree,
-          trunkConflicts: canonical.conflicts,
+          ...(canonical?.branch ? { branch: canonical.branch } : {}),
+          ...(canonical
+            ? { detached: canonical.detached, indexTree: canonical.indexTree, trunkConflicts: canonical.conflicts }
+            : {}),
           completedAt: new Date(),
         }),
       )
     })
 
     /**
-     * Discard a battle the control plane holds as `discard`, whatever this request asked for: that
-     * first decision is final. A Retry or reply from another window can claim the turn back to
-     * `running` between the reveal and the local compare-and-set; its runs are then stopped and the
-     * discard recorded once they settle, so the battle never runs on into a vote nothing can record.
+     * Finish a discard the control plane already holds, or commit a new discard after archiving.
+     * A Retry or reply can claim the turn back to `running` between the reveal and the local
+     * compare-and-set. Stop those runs and record the first decision once they settle.
      */
     const discardCommitted = (
       store: Store,
       turnID: string,
-      revealed: Awaited<ReturnType<typeof resolvedPlacement>>,
+      committed: Awaited<ReturnType<typeof resolvedPlacement>> | undefined,
       discardReason?: DiscardReason,
-    ) => holdingDiscard(turnID, discardCommittedLoop(store, turnID, revealed, discardReason))
+      request?: DiscardRequest,
+    ) => holdingDiscard(turnID, discardCommittedLoop(store, turnID, committed, discardReason, request)).pipe(limitGit)
 
     const discardCommittedLoop = Effect.fn("Arena.discardCommitted")(function* (
       store: Store,
       turnID: string,
-      revealed: Awaited<ReturnType<typeof resolvedPlacement>>,
+      committed: Awaited<ReturnType<typeof resolvedPlacement>> | undefined,
       discardReason?: DiscardReason,
+      request?: DiscardRequest,
     ) {
+      let revealed = committed
       const deadline = Date.now() + 30_000
       while (true) {
         const turn = yield* promise(() => store.turn(turnID))
         if (!turn) return yield* Effect.fail(new Error(`Arena turn not found: ${turnID}`))
         // Another request recorded it first and finishes it.
         if (turn.resolution) return
+        if (isStoppingBattle(turn)) {
+          // Interrupt recovery before taking its lock, otherwise Discard waits behind the same Git work.
+          yield* cancelStopWatchdog(turn._id)
+          const outcome = yield* stopRecoveryLocks
+            .withLock(turn._id)(
+              Effect.gen(function* () {
+                const latest = yield* promise(() => store.turn(turnID))
+                if (!latest) return yield* Effect.fail(new Error(`Arena turn not found: ${turnID}`))
+                if (latest.resolution) return { kind: "done" as const }
+                if (
+                  latest.state !== "stopping" &&
+                  !(latest.state === "interrupted_recovery" && isStoppingBattle(latest))
+                ) {
+                  return { kind: "retry" as const }
+                }
+                const chat = yield* promise(() => store.chat(latest.chatID))
+                if (!chat) return yield* Effect.fail(new Error(`Arena chat not found: ${latest.chatID}`))
+                environmentCopyStops.get(latest._id)?.abort(new Error("Arena battle was discarded while stopping"))
+                yield* interruptTurnFibers(store, latest._id)
+                yield* settleAbandonedRuns(store, latest, "stopped", "Arena battle was discarded")
+                yield* ensureArchives(store, latest)
+                revealed ??= yield* promise(() => modelsForDecision(latest, "discard"))
+                const reveal = yield* promise(() => anySideShowedOutput(store, latest._id))
+                const recorded = yield* recordDiscard(
+                  store,
+                  latest,
+                  latest.state,
+                  revealed.models,
+                  reveal,
+                  "stop",
+                  discardReason,
+                  request,
+                )
+                if (!recorded.recorded) return { kind: "retry" as const }
+                if (reveal) yield* revealTelemetry(recorded.turn, revealed.metrics)
+                else yield* releaseTelemetry(recorded.turn)
+                return { kind: "finish" as const, turn: latest, chat }
+              }),
+            )
+            .pipe(
+              Effect.onError(() =>
+                Effect.gen(function* () {
+                  const latest = yield* promise(() => store.turn(turnID))
+                  if (latest && isStoppingBattle(latest) && !latest.resolution && !stopWatchdogs.has(turnID)) {
+                    yield* startStopWatchdog(store, turnID)
+                  }
+                }).pipe(Effect.ignore),
+              ),
+            )
+          if (outcome.kind === "done") return
+          if (outcome.kind === "finish") return yield* finishDiscard(store, outcome.turn, outcome.chat)
+          continue
+        }
         if (isDiscardable(turn.state)) {
           const expectedState = turn.state
           const chat = yield* promise(() => store.chat(turn.chatID))
@@ -11707,6 +12478,7 @@ export const layer: Layer.Layer<
           // archive to read.
           const lost = expectedState === "finalization_failed" || expectedState === "interrupted_recovery"
           if (!lost) yield* ensureArchives(store, turn)
+          revealed ??= yield* promise(() => modelsForDecision(turn, "discard"))
           const reveal = lost || (yield* promise(() => anySideShowedOutput(store, turn._id)))
           const stage = discardStage(turn, yield* promise(() => store.runsForTurn(turn._id)))
           const recorded = yield* recordDiscard(
@@ -11717,6 +12489,7 @@ export const layer: Layer.Layer<
             reveal,
             stage,
             discardReason,
+            request,
           )
           if (recorded.recorded) {
             if (reveal) yield* revealTelemetry(recorded.turn, revealed.metrics)
@@ -11725,7 +12498,6 @@ export const layer: Layer.Layer<
             return yield* finishDiscard(store, turn, chat)
           }
         } else if (turn.state === "running") yield* stop(turn._id).pipe(Effect.ignore)
-        else if (turn.state === "stopping") yield* cancelWorkingRuns(store, turn._id)
         else if (turn.state !== "finalizing") {
           return yield* Effect.fail(new Error(`Arena battle cannot be discarded in its current state: ${turn.state}`))
         }
@@ -11736,14 +12508,49 @@ export const layer: Layer.Layer<
       }
     })
 
-    const archiveSession = Effect.fn("Arena.archiveSession")(function* (sessionID: string) {
+    const archiveSession = Effect.fn("Arena.archiveSession")(function* (
+      sessionID: string,
+      options?: { onlyIfEmpty: true },
+    ) {
       const store = yield* available()
-      const found = yield* promise(() => store.chatForSession(sessionID))
-      if (!found) return null
-      if (found.status === "archived") return yield* respond(store, found._id)
-      // Warm-up adopts and creates the chat's worktrees under this lock, so none is being built
-      // while they are taken away, and none is started after.
-      return yield* turnStartLock(found._id).withPermits(1)(archiveChat(store, found))
+      // Behind the creation lock for a draft, so a resolve still creating the chat is seen.
+      const lookup = promise(() => store.chatForSession(sessionID))
+      const found = yield* options?.onlyIfEmpty ? chatCreationLock(sessionID).withPermits(1)(lookup) : lookup
+      if (!found) {
+        if (!options?.onlyIfEmpty) return null
+        // A first send that failed before its chat existed (the folder's Git could not be read,
+        // say) leaves a session with no chat. No start can be waiting on it: a start names the
+        // chat a resolve created. It is empty once the session holds no message of the user's.
+        const messages = yield* sessions
+          .messages({ sessionID: SessionID.make(sessionID) })
+          .pipe(Effect.mapError(() => new Error("Arena could not verify the draft chat is empty")))
+        if (activeNormalTurns.active(sessionID) || messages.some(({ info }) => info.role === "user")) {
+          return yield* Effect.fail(new Error("Arena draft already has a turn"))
+        }
+        return null
+      }
+      // Share the admission lock: a lost start response can still commit a turn after a snapshot.
+      return yield* turnStartLock(found._id).withPermits(1)(
+        Effect.gen(function* () {
+          if (options?.onlyIfEmpty) {
+            const chat = yield* promise(() => store.chat(found._id))
+            const turns = yield* promise(() => store.turnsForChat(found._id))
+            const messages = yield* sessions
+              .messages({ sessionID: SessionID.make(sessionID) })
+              .pipe(Effect.mapError(error))
+            if (
+              !chat ||
+              chat.activeTurnID ||
+              turns.length ||
+              activeNormalTurns.active(sessionID) ||
+              messages.some(({ info }) => info.role === "user")
+            ) {
+              return yield* Effect.fail(new Error("Arena draft already has a turn"))
+            }
+          }
+          return yield* archiveChat(store, found)
+        }),
+      )
     })
 
     const archiveChat = Effect.fn("Arena.archiveChat")(function* (store: Store, found: ChatDocument) {
@@ -12041,7 +12848,7 @@ export const layer: Layer.Layer<
       stream,
       session: (sessionID, userID) => ensureChat(sessionID, userID).pipe(Effect.mapError(error)),
       recordFork: (input) => recordFork(input).pipe(Effect.mapError(error)),
-      archiveSession: (sessionID) => archiveSession(sessionID).pipe(Effect.mapError(error)),
+      archiveSession: (sessionID, options) => archiveSession(sessionID, options).pipe(Effect.mapError(error)),
       unarchiveSession,
       inspectCheckout,
       prepareCheckout,

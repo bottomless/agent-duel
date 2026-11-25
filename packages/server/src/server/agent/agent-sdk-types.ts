@@ -843,7 +843,7 @@ export interface AgentSession {
       vote: "up" | "down",
       participantId: string,
     ): Promise<ArenaSnapshot>;
-    archive(): Promise<ArenaSnapshot | null>;
+    archive(options?: { onlyIfEmpty: true }): Promise<ArenaSnapshot | null>;
     snapshot(chatId: string): Promise<ArenaSnapshot>;
     turn(turnId: string): Promise<ArenaSnapshot>;
     start(

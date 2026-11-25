@@ -275,11 +275,29 @@ describe("arenaDecisionPhase", () => {
     });
   });
 
-  it("waits while a stop is in flight, then asks what to keep", () => {
+  it("waits while a stop is in flight and exposes discard metadata for stuck stops, then asks what to keep", () => {
     expect(arenaDecisionPhase(snapshot({ state: "stopping" }))).toEqual({
       kind: "transitional",
       label: "Stopping the battle",
       busy: true,
+    });
+    expect(
+      arenaDecisionPhase(
+        snapshot({
+          state: "stopping",
+          turn: {
+            canDiscardBattle: true,
+            stoppingAt: "2026-09-03T10:01:00.000Z",
+            activeOperations: ["stopping_agents"],
+          },
+        }),
+      ),
+    ).toEqual({
+      kind: "transitional",
+      label: "Stopping the battle · Canceling agents",
+      busy: true,
+      canDiscard: true,
+      stoppingAt: "2026-09-03T10:01:00.000Z",
     });
     expect(
       arenaDecisionPhase(

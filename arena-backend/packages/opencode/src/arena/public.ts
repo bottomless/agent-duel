@@ -3,12 +3,14 @@ import { basename } from "path"
 import {
   canAcceptFailed,
   canDiscardBattle,
+  isStoppingBattle,
   canResumeBattle,
   canRetryRun,
   canTie,
   canVote,
   identitiesRevealed,
   INTERRUPTED_RUN_MESSAGE,
+  RESULT_NOT_SAVED_MESSAGE,
   type Resolution,
   type Side,
 } from "./domain"
@@ -261,16 +263,42 @@ const ACTIVE_TURN_STATES = new Set([
   "cleanup_pending",
 ])
 
+function runErrorMessage(run: RunDocument, revealed: boolean, byok: boolean) {
+  const message = run.error
+  // Older runs persisted Effect's stack with the timeout. Never echo arbitrary diagnostic text
+  // from it into the blind view (or the revealed history).
+  if (message?.startsWith(RESULT_NOT_SAVED_MESSAGE) && message.includes("Git timed out while ")) {
+    return "Git timed out before this side’s changes could be saved."
+  }
+  if (run.runState === "interrupted") return INTERRUPTED_RUN_MESSAGE
+  if (!message) return undefined
+  for (const safe of [
+    ArenaResponseRecovery.EXHAUSTED,
+    ArenaResponseRecovery.IDLE_EXHAUSTED,
+    requestTooLargeMessage,
+    ArenaResponseRecovery.COMPACTION_EMPTY,
+  ]) {
+    if (message.includes(safe)) return safe
+  }
+  return (
+    runPaymentMessage(message) ??
+    (byok ? runAuthMessage(message) : undefined) ??
+    (revealed ? message : "Contestant run failed")
+  )
+}
+
 export function project(snapshot: BattleSnapshot) {
   const turn = snapshot.turn
   const revealed = identitiesRevealed(turn?.resolution)
   const byok = arenaCredentials()?.mode === "byok"
   // Progress is stored on the turn, so it can hold a step name from an older or newer build. The
   // snapshot schema accepts only this build's names, and one unknown name would fail the snapshot.
+  const stopping = turn !== undefined && isStoppingBattle(turn)
+  const showActiveOperations = turn !== undefined && (stopping || ACTIVE_TURN_STATES.has(turn.state))
   const operationProgress = turn?.operationProgress?.filter(
     (entry) =>
       ArenaActiveOperation.includes(entry.operation) &&
-      (entry.state !== "running" || ACTIVE_TURN_STATES.has(turn.state)),
+      (entry.state !== "running" || (showActiveOperations && turn.activeOperations?.includes(entry.operation))),
   )
   const selected = turn?.appliedSide ? snapshot.runs.find((run) => run.side === turn.appliedSide) : undefined
   const trunkBranch = snapshot.chat.canonicalCheckout?.branch ?? snapshot.chat.arenaBranch
@@ -335,9 +363,7 @@ export function project(snapshot: BattleSnapshot) {
           singleAgent: singleAgent(snapshot.singleAgentRating),
         }
       : {}),
-    ...(snapshot.singleAgentTurns?.length
-      ? { singleAgentTurns: snapshot.singleAgentTurns.map(singleAgentTurn) }
-      : {}),
+    ...(snapshot.singleAgentTurns?.length ? { singleAgentTurns: snapshot.singleAgentTurns.map(singleAgentTurn) } : {}),
     ...(turn
       ? {
           turn: {
@@ -351,7 +377,7 @@ export function project(snapshot: BattleSnapshot) {
             state: turn.state,
             comparisonState: turn.comparisonState,
             ...(operationProgress?.length ? { operationProgress } : {}),
-            ...(ACTIVE_TURN_STATES.has(turn.state) && turn.activeOperations?.length
+            ...(showActiveOperations && turn.activeOperations?.length
               ? {
                   activeOperations: turn.activeOperations.filter((operation) =>
                     ArenaActiveOperation.includes(operation),
@@ -384,6 +410,9 @@ export function project(snapshot: BattleSnapshot) {
             revealed,
             // Background cleanup can update updatedAt after ordinary chat resumes.
             endedAt: turn.transitionTimestamps.complete ?? turn.transitionTimestamps.discarded,
+            ...(stopping && turn.transitionTimestamps.stopping
+              ? { stoppingAt: turn.transitionTimestamps.stopping }
+              : {}),
             createdAt: turn.createdAt,
             updatedAt: turn.updatedAt,
           },
@@ -451,23 +480,7 @@ export function project(snapshot: BattleSnapshot) {
           : {}),
         ...(run.retention ? { retention: run.retention } : {}),
         runState: run.runState,
-        ...(run.runState === "interrupted"
-          ? { error: INTERRUPTED_RUN_MESSAGE }
-          : run.error
-            ? {
-                error: run.error.includes(ArenaResponseRecovery.EXHAUSTED)
-                  ? ArenaResponseRecovery.EXHAUSTED
-                  : run.error.includes(ArenaResponseRecovery.IDLE_EXHAUSTED)
-                    ? ArenaResponseRecovery.IDLE_EXHAUSTED
-                    : run.error.includes(requestTooLargeMessage)
-                      ? requestTooLargeMessage
-                      : run.error.includes(ArenaResponseRecovery.COMPACTION_EMPTY)
-                        ? ArenaResponseRecovery.COMPACTION_EMPTY
-                        : (runPaymentMessage(run.error) ??
-                          (byok ? runAuthMessage(run.error) : undefined) ??
-                          (revealed ? run.error : "Contestant run failed")),
-              }
-            : {}),
+        error: runErrorMessage(run, revealed, byok),
         ...(run.startedAt ? { startedAt: run.startedAt } : {}),
         ...(run.firstEventAt ? { firstEventAt: run.firstEventAt } : {}),
         ...(run.lastEventAt ? { lastEventAt: run.lastEventAt } : {}),

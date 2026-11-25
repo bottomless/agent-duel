@@ -1062,12 +1062,16 @@ export class DaemonConnectionError extends Error {
   }
 }
 
-class DaemonRpcError extends Error {
+/** A creation receipt confirmed that no agent was registered and no prompt was admitted. */
+export class AgentCreationRefusedError extends Error {}
+
+export class DaemonRpcError extends Error {
   readonly requestId: string;
   readonly requestType?: string;
   readonly code?: string;
   readonly serverId?: string;
   readonly userMessage: string;
+  readonly requestSettled: boolean;
 
   constructor(params: {
     requestId: string;
@@ -1075,6 +1079,7 @@ class DaemonRpcError extends Error {
     requestType?: string;
     code?: string;
     serverId?: string;
+    requestSettled?: true;
   }) {
     const parts = [params.error];
     if (params.requestType) parts.push(`requestType=${params.requestType}`);
@@ -1086,6 +1091,7 @@ class DaemonRpcError extends Error {
     this.code = params.code;
     this.serverId = params.serverId;
     this.userMessage = params.error;
+    this.requestSettled = params.requestSettled === true;
   }
 }
 
@@ -2331,6 +2337,7 @@ export class DaemonClient {
               error: msg.payload.error,
               requestType: msg.payload.requestType,
               code: msg.payload.code,
+              requestSettled: msg.payload.requestSettled,
             }),
           };
         }
@@ -3747,12 +3754,14 @@ export class DaemonClient {
   async archiveWorkspace(
     workspaceId: string,
     requestId?: string,
+    options?: { emptyDraftAgentId: string | null },
   ): Promise<ArchiveWorkspacePayload> {
     return this.sendCorrelatedSessionRequest({
       requestId,
       message: {
         type: "archive_workspace_request",
         workspaceId,
+        ...options,
       },
       responseType: "archive_workspace_response",
     });
@@ -3933,6 +3942,14 @@ export class DaemonClient {
         ? await this.routeLegacyCreateConfig(config)
         : config,
     });
+    if (
+      result.error &&
+      result.creation?.phase === "failed" &&
+      result.creation.outcomeUnknown === false &&
+      !result.agent
+    ) {
+      throw new AgentCreationRefusedError(result.error);
+    }
     if (result.error || !result.agent) throw new Error(result.error ?? "Agent creation failed");
     return result.agent;
   }

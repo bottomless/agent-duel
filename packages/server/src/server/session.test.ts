@@ -1164,6 +1164,7 @@ describe("session authorization permissions", () => {
           requestType: "ping",
           error: "Session is not authorized for ping",
           code: "access_denied",
+          requestSettled: true,
         },
       },
     ]);
@@ -1189,6 +1190,7 @@ describe("session authorization permissions", () => {
           requestType: "ping",
           error: "Session is not authorized for ping",
           code: "access_denied",
+          requestSettled: true,
         },
       },
       {

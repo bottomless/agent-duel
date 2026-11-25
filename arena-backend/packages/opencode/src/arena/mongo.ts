@@ -38,6 +38,7 @@ import type {
   BattleMetricsDocument,
   ReviewEventDocument,
   RunDocument,
+  RunFinalizationTimings,
   SessionArchiveDocument,
   SingleAgentRatingDocument,
   SingleAgentVote,
@@ -830,6 +831,25 @@ export class Store {
     return updated
   }
 
+  async recordRunFinalizationTimings(runID: string, timings: RunFinalizationTimings) {
+    // Stop measures the cancel calls and prompt wait independently. Neither writer can replace
+    // the other's fields, even when a runner finishes before the cancel call acknowledges.
+    const fields = Object.fromEntries(
+      Object.entries(timings).map(([key, value]) => [`finalizationTimings.${key}`, value]),
+    )
+    const updated = await this.runs.findOneAndUpdate(
+      { _id: runID },
+      {
+        $set: { ...fields, updatedAt: new Date() },
+        ...(!timings.failedStep ? { $unset: { "finalizationTimings.failedStep": "" } } : {}),
+      },
+      { returnDocument: "after" },
+    )
+    if (!updated) throw new Error(`Arena run not found: ${runID}`)
+    this.changed({ turnID: updated.turnID })
+    return updated.finalizationTimings
+  }
+
   async claimReplyContinuation(turnID: string, sides: readonly Side[], at = new Date()) {
     requireTransition("awaiting_vote", "running")
     const current = await this.turns.findOne({ _id: turnID })
@@ -942,6 +962,7 @@ export class Store {
           transcriptArchiveID: "",
           archiveComplete: "",
           finalizedAt: "",
+          finalizationTimings: "",
           suggestedTitle: "",
         },
       },
@@ -1244,6 +1265,7 @@ export class Store {
           state: to,
           updatedAt: at,
           [`transitionTimestamps.${to}`]: at,
+          ...(to === "stopping" ? { comparisonState: "skipped" as const } : {}),
         },
       },
       { returnDocument: "after" },
@@ -1310,8 +1332,13 @@ export class Store {
     readonly appliedSide?: Side
     /** Left out for a discard that names nobody (`identitiesRevealed`). */
     readonly models?: Readonly<Record<Side, string>>
-    /** A failed state only for a discard the control plane already holds (`discardCommitted`). */
-    readonly expectedState: "awaiting_vote" | "awaiting_stop_resolution" | "finalization_failed" | "interrupted_recovery"
+    /** A failed or stopping state for a discard recorded directly (`discardCommitted`). */
+    readonly expectedState:
+      | "awaiting_vote"
+      | "awaiting_stop_resolution"
+      | "stopping"
+      | "finalization_failed"
+      | "interrupted_recovery"
     readonly at: Date
   }) {
     const candidate = await this.turns.findOne({ _id: input.turnID })
