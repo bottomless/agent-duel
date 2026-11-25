@@ -104,6 +104,7 @@ describe("Arena real battle finalize recovery", () => {
           if (body.action === "create") {
             return Response.json({
               assignments: [{ assignmentID: "assign-a" }, { assignmentID: "assign-b" }],
+              decided: false,
             })
           }
           return Response.json({

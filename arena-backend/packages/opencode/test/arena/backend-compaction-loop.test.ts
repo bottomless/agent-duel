@@ -125,7 +125,10 @@ for (const oversizedNewMessage of [false, true]) {
             ),
           )
           expect(assigned.status).toBe(200)
-          expect(yield* Effect.promise(() => assigned.json())).toEqual({ assignments: [{ assignmentID: "opaque" }] })
+          expect(yield* Effect.promise(() => assigned.json())).toEqual({
+            assignments: [{ assignmentID: "opaque" }],
+            decided: false,
+          })
           const chat = yield* sessions.create({
             title: "Compaction fixture",
             permission: [{ permission: "*", pattern: "*", action: "allow" }],

@@ -77,7 +77,12 @@ import {
 } from "./port-retarget"
 import { comparisonTimeline, showedOutput } from "./comparison-timeline"
 import { ArenaContestant, contestantPermissions } from "./contestant"
-import { createBattleAssignments, createSingleAssignment, resolveAssignments } from "./assignment-client"
+import {
+  battleAssignmentsDecided,
+  createBattleAssignments,
+  createSingleAssignment,
+  resolveAssignments,
+} from "./assignment-client"
 import type { BattleAssignmentDecision } from "@agent-duel/arena-service/assignment-decision"
 import { ArenaAttachments } from "./attachments"
 import { forkSessionInto, type ArenaFork } from "./fork"
@@ -353,6 +358,18 @@ export function contestantSystemInstruction(
   return [contestantWorktreeInstruction, pendingEnvironment, currentPreview].filter(Boolean).join("\n\n")
 }
 class GitDeadlineError extends Error {}
+
+// Each skip proves an index was used; a chat restored this far behind is not worth chasing further.
+const MAX_DECIDED_TURN_SKIPS = 3
+
+/** The hosted pair drawn for a turn index was already decided: an earlier battle used that index. */
+class DecidedTurnIndexError extends Error {
+  constructor(turnID: string) {
+    super(
+      `Arena turn ${turnID} was already used by an earlier battle, and the next turn numbers were too. Send your message again.`,
+    )
+  }
+}
 
 function finalizationErrorDetail(cause: Cause.Cause<unknown>) {
   const failure = Cause.squash(cause)
@@ -6931,6 +6948,22 @@ export const layer: Layer.Layer<
       yield* Effect.logWarning("Arena removed a turn that was never activated", { chatID: chat._id, turnID: turn._id })
     })
 
+    /** Moves the counter past an index whose hosted pair an earlier battle already decided. */
+    const skipDecidedTurnIndex = Effect.fnUntraced(function* (store: Store, chat: ChatDocument) {
+      const advanced = yield* promise(() =>
+        store.updateChatReturning(
+          { _id: chat._id, status: "ready", activeTurnID: { $exists: false }, turnCount: chat.turnCount },
+          { $set: { turnCount: chat.turnCount + 1, updatedAt: new Date() } },
+        ),
+      )
+      if (!advanced) return yield* Effect.fail(new Error("Arena chat changed while starting a battle"))
+      yield* Effect.logWarning("Arena skipped a turn index whose pair was already decided", {
+        chatID: chat._id,
+        from: chat.turnCount,
+        to: chat.turnCount + 1,
+      })
+    })
+
     const startTurnUnlocked = Effect.fn("Arena.startTurnUnlocked")(function* (
       store: Store,
       id: string,
@@ -6989,10 +7022,16 @@ export const layer: Layer.Layer<
       if (yield* promise(() => store.turn(turnID))) {
         return yield* Effect.fail(new Error(`Arena turn ${turnID} already exists for this chat`))
       }
-      // The pair is drawn while the base freezes, so the send waits once for both. The draw is
-      // account- and turn-scoped and idempotent on the control plane, so a send refused after this
-      // point leaves an unused set and nothing else.
-      const pairDraw = createBattleAssignments(turnID)
+      // The pair is drawn while the base freezes and the copy work below runs, so the send waits
+      // once for all of them. The draw is account- and turn-scoped and idempotent on the control
+      // plane, so a send refused after this point leaves an unused set and nothing else. A restored
+      // store whose old refs are gone can still reuse an index the control plane already decided;
+      // the draw's answer says so. Only a control plane that predates that answer costs the replay
+      // probe's round trip.
+      const pairDraw = createBattleAssignments(turnID).then(async (pair) => ({
+        pair,
+        decided: pair.decided ?? (await battleAssignmentsDecided(turnID, pair.a.assignmentID)),
+      }))
       pairDraw.catch(() => undefined)
       const freezeStartedAt = Date.now()
       const baseExit = yield* withRepositoryMutation(
@@ -7135,9 +7174,18 @@ export const layer: Layer.Layer<
       // worktrees' own watches keep running: they cover the battle too, up to the next sync.
       warmMarks.delete(warmPairKey(chat._id, chat.turnCount))
       yield* discardWarmSeal(store, chat._id)
+      // Before anything else takes this index: a decided set means an earlier battle used it.
       const assignmentWaitStartedAt = Date.now()
-      const pair = yield* promise(() => pairDraw).pipe(Effect.onError(() => discardUnactivatedCopy.pipe(Effect.ignore)))
+      const drawn = yield* promise(() => pairDraw).pipe(
+        Effect.onError(() => discardUnactivatedCopy.pipe(Effect.ignore)),
+      )
       const assignmentWaitMs = Date.now() - assignmentWaitStartedAt
+      if (drawn.decided) {
+        yield* discardUnactivatedCopy
+        yield* skipDecidedTurnIndex(store, chat)
+        return yield* Effect.fail(new DecidedTurnIndexError(turnID))
+      }
+      const pair = drawn.pair
       const placed = {
         a: assignment(pair.a),
         b: assignment(pair.b),
@@ -7315,7 +7363,16 @@ export const layer: Layer.Layer<
       const receivedAt = Date.now()
       const store = yield* available()
       const lock = turnStartLock(id)
-      const admission = startTurnUnlocked(store, id, userPrompt, rawParticipantID, receivedAt, autoAccept, attachments)
+      // A skipped decided index starts the admission again on the next one, a few times at most.
+      const admission = startTurnUnlocked(
+        store,
+        id,
+        userPrompt,
+        rawParticipantID,
+        receivedAt,
+        autoAccept,
+        attachments,
+      ).pipe(Effect.retry({ times: MAX_DECIDED_TURN_SKIPS, while: (cause) => cause instanceof DecidedTurnIndexError }))
       return yield* Effect.gen(function* () {
         const immediate = yield* lock.withPermitsIfAvailable(1)(admission)
         if (Option.isSome(immediate)) return immediate.value

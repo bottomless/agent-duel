@@ -1034,7 +1034,12 @@ contestants fail at once. The chat's counter can lag behind what exists: a resto
 older count while later turn records or battle refs survive, and an engine stopped between a turn's
 insert and its activation leaves an unactivated `creating` record. Before each start, remove such a
 record and its base ref, and move the counter past every index a turn record or a `turn-<n>` ref of
-the chat claims.
+the chat claims. When neither survives, only the control plane remembers the index, so the draw's
+answer carries `decided` for a set an earlier battle already resolved. Keep that answer on the draw:
+a separate check is a round trip every start waits for. A control plane that predates `decided`
+gets the old check instead, a replay-route request for a generation that cannot exist, refused with
+403 for a decided set; only those starts wait for it. On a decided set, drop the frozen base and copy
+manifest, move the counter one index on, and start again (three times at most).
 Both agents work from that frozen state, so later canonical movement cannot shift the ground under a
 running battle.
 

@@ -487,6 +487,7 @@ function installOpenRouterStub(options?: {
         }
         return Response.json({
           assignments: set.assignments.map(({ assignmentID }) => ({ assignmentID })),
+          decided: set.decision !== undefined,
         })
       }
       if (!set) return Response.json({ error: "not found" }, { status: 404 })
