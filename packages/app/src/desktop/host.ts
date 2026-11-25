@@ -49,6 +49,8 @@ export interface DesktopNotificationBridge {
 
 export interface DesktopAccountsBridge {
   createReturnUrl?: () => Promise<string>;
+  /** Whether an earlier desktop build ran on this install, read before this launch's settings. */
+  installOpenedBefore?: () => Promise<boolean>;
   session?: {
     load?: () => Promise<string | null>;
     save?: (value: string) => Promise<void>;

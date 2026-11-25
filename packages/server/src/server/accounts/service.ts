@@ -54,7 +54,9 @@ export interface CreateAccountsServiceOptions {
 export function createAccountsService(options: CreateAccountsServiceOptions): AccountsService {
   const backend =
     options.backend ??
-    new AccountsBackend(options.config.controlPlaneUrl, options.logger, options.appVersion);
+    new AccountsBackend(options.config.controlPlaneUrl, options.logger, options.appVersion, {
+      development: options.config.development,
+    });
   const publicKey = resolveSessionPublicKey({
     PASEO_SESSION_PUBLIC_KEY: options.config.sessionPublicKey,
   });

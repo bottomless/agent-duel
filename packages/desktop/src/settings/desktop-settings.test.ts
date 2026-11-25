@@ -7,6 +7,7 @@ import {
   DEFAULT_DESKTOP_SETTINGS,
   type DesktopSettings,
   createDesktopSettingsStore,
+  desktopSettingsFileExists,
 } from "./desktop-settings";
 
 async function createTempUserDataDir(): Promise<string> {
@@ -27,6 +28,14 @@ describe("desktop-settings", () => {
       }),
     );
     directories.clear();
+  });
+
+  it("tells an install an earlier build ran in from one whose first settings read is still ahead", async () => {
+    const userDataPath = await createTempUserDataDir();
+    directories.add(userDataPath);
+    expect(desktopSettingsFileExists(userDataPath)).toBe(false);
+    await createDesktopSettingsStore({ userDataPath }).get();
+    expect(desktopSettingsFileExists(userDataPath)).toBe(true);
   });
 
   it("defaults missing notification categories without changing a saved sound preference", async () => {

@@ -173,6 +173,22 @@ The daemon password and account session are separate credentials; a remote clien
   windows hear of it (`session-end`), so the app marks every marker then (`recordSessionEnding`).
   The boot-time check in `claimRunningMarker` misses it: a shut down with Fast Startup keeps the
   uptime.
+- The control plane counts each sign-in step anonymously per day, so the drop between installing and
+  signing in can be read. Each app window load reports once through `POST /api/auth/opened`, from
+  the screen it shows: `signed-in` or `signed-out`, `first` or `repeat`, and whether this install
+  has held a session (`returning`) (`packages/app/src/accounts/app-opened.ts`). Spinner, update,
+  unreachable and disabled screens report nothing. `first` goes only to an install where no earlier
+  build ran: the desktop checks at startup whether `desktop-settings.json` exists, before its own
+  first settings read creates it. `returning` starts with the build that sets the mark, so an
+  install that held a session only under an older build and was signed out when it upgraded reads
+  false. The daemon answers 204 only once the control plane counted the report, so a first launch
+  whose count was lost is sent again on a later window load. A flow request names
+  the button that opened it (`method`) and whether the install has held a session. Both requests
+  carry the usual client headers (`clientHeaders` in `packages/server/src/server/accounts/config.ts`);
+  the counts keep only OS, version and build. A source build sends
+  `X-Agent-Duel-Build: development` so its counts can be left out. BYOK builds and the browser
+  harness send nothing. Never add anything that tells installs or people apart. The private
+  repository's `docs/accounts.md` owns the steps and the report.
 - The control plane can refuse builds below a minimum version or on a blocklist. It then answers
   `/api/auth/methods` with `updateRequired: true`, and the account gate shows the update screen
   (`packages/app/src/accounts/update-required.tsx`) in place of sign-in, terms and the app. The

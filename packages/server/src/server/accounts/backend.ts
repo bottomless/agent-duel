@@ -6,6 +6,7 @@ import {
   currentSessionResponseSchema,
   type OpenSignInFlowRequest,
   type AcceptTermsRequest,
+  type AppOpenedRequest,
 } from "@getpaseo/protocol/accounts/schemas";
 import { clientHeaders } from "./config.js";
 
@@ -48,15 +49,27 @@ export type AccountUser = z.infer<typeof accountUserSchema>;
 export type SignInMethod = z.infer<typeof signInMethodSchema>;
 export type ClaimedFlow = z.infer<typeof claimedFlowSchema>;
 
+// The open report waits on nothing the user sees, so a slow control plane only loses one count.
+const APP_OPENED_TIMEOUT_MS = 5_000;
+
+export interface AccountsBackendOptions {
+  /** A source build (`npm run dev:desktop`); the control plane leaves its sign-in counts out. */
+  readonly development?: boolean;
+  readonly appOpenedTimeoutMs?: number;
+}
+
 export class AccountsBackend {
   private readonly baseUrl: string;
+  private readonly buildHeaders: Record<string, string>;
 
   constructor(
     baseUrl: string,
     private readonly logger: Logger,
     private readonly appVersion: string,
+    private readonly options: AccountsBackendOptions = {},
   ) {
     this.baseUrl = baseUrl.replace(/\/$/, "");
+    this.buildHeaders = options.development ? { "X-Agent-Duel-Build": "development" } : {};
   }
 
   private async request<T>(
@@ -70,6 +83,7 @@ export class AccountsBackend {
         headers: {
           Accept: "application/json",
           ...clientHeaders(this.appVersion),
+          ...this.buildHeaders,
           ...(options.body === undefined ? {} : { "Content-Type": "application/json" }),
           ...(options.token ? { Authorization: `Bearer ${options.token}` } : {}),
         },
@@ -110,6 +124,36 @@ export class AccountsBackend {
 
   async sendMagicLink(input: { email: string; flowId: string }) {
     await this.request("/magic-link", okSchema, { body: input });
+  }
+
+  /**
+   * Counts one app open at the control plane. Never throws; gives up after a few seconds.
+   * Resolves whether the control plane took the count.
+   */
+  async appOpened(input: AppOpenedRequest): Promise<boolean> {
+    try {
+      const response = await fetch(`${this.baseUrl}/api/auth/opened`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...clientHeaders(this.appVersion),
+          ...this.buildHeaders,
+        },
+        body: JSON.stringify(input),
+        signal: AbortSignal.timeout(this.options.appOpenedTimeoutMs ?? APP_OPENED_TIMEOUT_MS),
+      });
+      // An older control plane answers 404 and one that rejects the body answers 400; the count is
+      // lost and nothing else changes. Only the status is logged, at warn because daemon.log keeps
+      // info and above by default and a missing route must show there.
+      if (!response.ok) {
+        this.logger.warn({ status: response.status }, "Control-plane app open report refused");
+      }
+      await response.body?.cancel();
+      return response.ok;
+    } catch (error) {
+      this.logger.debug({ err: error }, "Control-plane app open report failed");
+      return false;
+    }
   }
 
   oauthStartUrl(provider: "google" | "github", flowId: string) {

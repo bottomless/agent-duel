@@ -85,6 +85,7 @@ import {
   type OwnedDesktopWindow,
 } from "./window/desktop-window-owner.js";
 import { getDesktopSettingsStore } from "./settings/desktop-settings-electron.js";
+import { desktopSettingsFileExists } from "./settings/desktop-settings.js";
 import {
   MIN_WINDOW_HEIGHT,
   MIN_WINDOW_WIDTH,
@@ -406,6 +407,11 @@ ipcMain.handle("paseo:get-pending-open-project", (event) => {
 ipcMain.handle("paseo:agent-navigation:ready", (event) => {
   return agentNavigationInbox.windowReady(event.sender.id);
 });
+
+// Set at the start of bootstrap(), before the first settings read creates the file it looks for.
+// The app's anonymous sign-in counts read it so an upgraded install never reports a first launch.
+let installOpenedBefore = false;
+ipcMain.handle("paseo:accounts:installOpenedBefore", () => installOpenedBefore);
 
 ipcMain.handle("paseo:accounts:createReturnUrl", async (event) => {
   const window = BrowserWindow.fromWebContents(event.sender);
@@ -946,6 +952,7 @@ async function bootstrap(): Promise<void> {
   if (!setupSingleInstanceLock()) {
     return;
   }
+  installOpenedBefore = desktopSettingsFileExists(app.getPath("userData"));
 
   await app.whenReady();
   startCrashReporting();

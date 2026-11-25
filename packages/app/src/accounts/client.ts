@@ -11,6 +11,7 @@ import {
   type OpenSignInFlowRequest,
   type SignInMethod,
   type AcceptTermsRequest,
+  type AppOpenedRequest,
 } from "@getpaseo/protocol/accounts/schemas";
 
 export interface AccountsEndpoint {
@@ -70,7 +71,7 @@ async function request(
       await readErrorMessage(response, `Request failed with ${response.status}`),
     );
   }
-  return response.json();
+  return response.status === 204 ? null : response.json();
 }
 
 export async function fetchAuthMethods(endpoint: AccountsEndpoint): Promise<AuthMethodsResponse> {
@@ -122,6 +123,14 @@ export async function sendMagicLink(
   input: { email: string; flowId: string },
 ): Promise<void> {
   await request(endpoint, { path: "/api/auth/magic-link", method: "POST", body: input });
+}
+
+/** Resolves once the control plane counted the open; throws when the count was lost. */
+export async function reportAppOpened(
+  endpoint: AccountsEndpoint,
+  input: AppOpenedRequest,
+): Promise<void> {
+  await request(endpoint, { path: "/api/auth/opened", method: "POST", body: input });
 }
 
 export async function signOut(endpoint: AccountsEndpoint, sessionToken: string): Promise<void> {

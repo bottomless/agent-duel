@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useReducer } from "react";
 import { getDesktopHost } from "@/desktop/host";
 import { openExternalUrl } from "@/utils/open-external-url";
+import { hasHeldSession } from "./app-opened";
 import { useAccountSessionStore } from "./session-store";
-import type { AcceptTermsRequest } from "@getpaseo/protocol/accounts/schemas";
+import type { AcceptTermsRequest, SignInMethod } from "@getpaseo/protocol/accounts/schemas";
 import {
   buildOAuthStartUrl,
   claimSignInFlow,
@@ -31,13 +32,21 @@ function messageFor(error: unknown, fallback: string): string {
   return error instanceof Error && error.message.trim() ? error.message : fallback;
 }
 
-async function openAppSignInFlow(endpoint: AccountsEndpoint, acceptance: AcceptTermsRequest) {
+async function openAppSignInFlow(
+  endpoint: AccountsEndpoint,
+  acceptance: AcceptTermsRequest,
+  method: SignInMethod,
+) {
   // Returning to the desktop is optional; a local listener failure must not
   // prevent signing in. Browser clients keep the manual return instruction.
-  const desktopReturnUrl = await getDesktopHost()
-    ?.accounts?.createReturnUrl?.()
-    .catch(() => undefined);
-  return openSignInFlow(endpoint, { desktopReturnUrl, acceptance });
+  // Whether the install held a session feeds the anonymous sign-in counts; it never throws.
+  const [desktopReturnUrl, returning] = await Promise.all([
+    getDesktopHost()
+      ?.accounts?.createReturnUrl?.()
+      .catch(() => undefined),
+    hasHeldSession(),
+  ]);
+  return openSignInFlow(endpoint, { desktopReturnUrl, acceptance, method, returning });
 }
 
 export function useSignIn(
@@ -53,7 +62,7 @@ export function useSignIn(
       dispatch({ type: "start", method: "email" });
       void (async () => {
         try {
-          const flow = await openAppSignInFlow(endpoint, acceptance);
+          const flow = await openAppSignInFlow(endpoint, acceptance, "email");
           await sendMagicLink(endpoint, { email, flowId: flow.flowId });
           dispatch({ type: "email-sent", email, flow });
         } catch (error) {
@@ -73,7 +82,7 @@ export function useSignIn(
       dispatch({ type: "start", method: provider });
       void (async () => {
         try {
-          const flow = await openAppSignInFlow(endpoint, acceptance);
+          const flow = await openAppSignInFlow(endpoint, acceptance, provider);
           await openExternalUrl(buildOAuthStartUrl(endpoint, { provider, flowId: flow.flowId }));
           dispatch({ type: "browser-opened", provider, flow });
         } catch (error) {
