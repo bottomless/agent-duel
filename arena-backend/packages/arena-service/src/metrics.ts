@@ -18,6 +18,9 @@ export type GenerationMetrics = {
   readonly finishReason?: string
 }
 
+/** How a contestant call ended. A row written before this field existed is `complete`. */
+export type GenerationOutcome = "complete" | "cancelled" | "failed" | "error"
+
 /**
  * What the control plane stores for a call. The provider that served it stays here: no response or
  * reveal returns it, and the engine shares `GenerationMetrics`, which has no field to hold it.
@@ -26,6 +29,14 @@ export type StoredGenerationMetrics = GenerationMetrics &
   Partial<EndpointLabel> & {
     readonly provider?: string
     readonly startedAt?: Date
+    /** How the call ended; absent only on rows written before outcomes existed. */
+    readonly outcome?: GenerationOutcome
+    /** OpenRouter's own id for the call, when the stream showed it. */
+    readonly upstreamGenerationID?: string
+    /** OpenRouter's HTTP status when it refused the call. */
+    readonly status?: number
+    /** Silence since the last upstream data event when a stream ended early. */
+    readonly quietMs?: number
   }
 
 /** What the endpoint catalog says about the provider that served a call (`endpoint-label.ts`). */

@@ -120,7 +120,9 @@ async function revealedAssignments(db: ArenaDb, document: AssignmentSetDocument)
   const metrics = await metricsCollection(db).find({ userId: document.userId, scopeID: document.scopeID }).toArray()
   return document.assignments.map(({ assignmentID, model }) => {
     const revealedMetrics = metrics
-      .filter((item) => item.assignmentID === assignmentID)
+      // Only a call that finished normally has usage to reveal. An early end is for measuring
+      // stalls, and a row written before outcomes existed is complete.
+      .filter((item) => item.assignmentID === assignmentID && (item.outcome ?? "complete") === "complete")
       .map(({ generationID, usage, finishReason }) => ({
         generationID,
         ...(usage ? { usage } : {}),
