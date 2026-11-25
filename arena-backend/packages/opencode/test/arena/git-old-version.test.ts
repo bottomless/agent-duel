@@ -355,7 +355,7 @@ describe("ArenaGit battle git check", () => {
         expect(message).toContain("quit and reopen Agent Duel")
       } else {
         // Linux has no Command Line Tools, so the hint names the distro's package manager.
-        expect(message).toContain(process.platform === "linux" ? "sudo apt install git" : "xcode-select --install")
+        expect(message).toContain(process.platform === "linux" ? "ppa:git-core/ppa" : "xcode-select --install")
       }
     }),
   )

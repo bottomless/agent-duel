@@ -45,9 +45,7 @@ describe("project Git bootstrap", () => {
       "Battles need Git, and Agent Duel couldn't find it.",
     );
     // Each platform names its own way to install Git.
-    const hint = { win32: "git-scm.com", linux: "sudo apt install git" }[
-      process.platform as string
-    ];
+    const hint = { win32: "git-scm.com", linux: "ppa:git-core/ppa" }[process.platform as string];
     await expect(inspectProjectGit(folder, gitNotFound)).rejects.toThrow(
       hint ?? "xcode-select --install",
     );

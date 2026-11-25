@@ -455,9 +455,12 @@ function battleGitProblem(result: Git.Result, gitOnPath: boolean): string | unde
 
 // Windows never reaches this: its missing-Git message names the installer and asks for a restart.
 // Linux has no Command Line Tools or Homebrew by default, and no one package manager, so its hint
-// names the two that cover most desktops.
+// names the two that cover most desktops. Ubuntu 22.04's own Git is older than battles need, so the
+// apt hint goes through the git-core PPA, as the update hint does.
 function gitInstallHint() {
-  if (process.platform === "linux") return "sudo apt install git or sudo dnf install git"
+  if (process.platform === "linux") {
+    return "sudo add-apt-repository ppa:git-core/ppa && sudo apt install git, or sudo dnf install git"
+  }
   return "xcode-select --install"
 }
 

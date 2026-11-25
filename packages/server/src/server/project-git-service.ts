@@ -14,7 +14,9 @@ const INITIAL_COMMIT_MESSAGE = "Initialize project";
 const INSTALL_GIT_HINTS: Partial<Record<NodeJS.Platform, string>> = {
   win32:
     "Install Git for Windows from git-scm.com, or with winget install Git.Git, then quit and reopen Agent Duel.",
-  linux: "Install Git, for example with sudo apt install git or sudo dnf install git, then retry.",
+  // Ubuntu 22.04's own Git is older than battles need, hence the git-core PPA.
+  linux:
+    "Install Git, for example with sudo add-apt-repository ppa:git-core/ppa && sudo apt install git, or sudo dnf install git, then retry.",
 };
 
 /**
