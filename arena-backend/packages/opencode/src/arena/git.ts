@@ -1037,6 +1037,30 @@ export function refRoot(turn: Pick<TurnDocument, "chatID" | "turnIndex" | "baseS
   return base.replace(/\/base$/, "")
 }
 
+// `turn-<n>/` in the original layout, `turn-<n>-<uuid>/` for a namespace allocated per admission.
+const TURN_NAMESPACE = /^turn-(0|[1-9]\d*)(?:-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?\//
+
+/** One past the highest turn index any of the chat's battle refs claims; 0 when none does. */
+export const nextUnclaimedTurnIndex = Effect.fn("ArenaGit.nextUnclaimedTurnIndex")(function* (input: {
+  readonly canonical: string
+  readonly chatID: string
+}) {
+  const git = yield* Git.Service
+  const root = yield* readRoot(git, input.canonical, "find_repository_root")
+  const prefix = `refs/battles/${chatSlug(input.chatID)}/`
+  const listing = yield* read(git, root, "list_battle_turn_refs", [
+    "for-each-ref",
+    "--format=%(refname)",
+    prefix.slice(0, -1),
+  ])
+  let next = 0
+  for (const ref of listing.split("\n")) {
+    const match = ref.startsWith(prefix) ? TURN_NAMESPACE.exec(ref.slice(prefix.length)) : null
+    if (match) next = Math.max(next, Number(match[1]) + 1)
+  }
+  return next
+})
+
 /** Build the stable branch name shared by every turn of a chat side. */
 export function sideBranchName(chatSlug: string, side: Side): string {
   return `agent-duel/${chatSlug}-agent-${side}`

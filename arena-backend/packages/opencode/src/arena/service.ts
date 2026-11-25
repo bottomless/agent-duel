@@ -121,6 +121,7 @@ import {
 import {
   acceptWinnerConflicts,
   allocateBattleBaseRef,
+  nextUnclaimedTurnIndex,
   refRoot,
   changedBetweenBases,
   compare,
@@ -6869,6 +6870,67 @@ export const layer: Layer.Layer<
       return yield* finalizeRuns(outcomeA, outcomeB)
     })
 
+    /**
+     * The chat's counter can lag what already exists: a restored store keeps an older count while
+     * later turn records or battle refs survive, and an engine stopped between a turn's insert and
+     * its activation leaves an unactivated `creating` record at the count. The logical turn ID
+     * built from the count also keys the hosted pair draw, research uploads and the leaderboard,
+     * so a reused index gets the old, possibly revealed pair back. Remove the unactivated record
+     * and move the counter past every index a record or ref claims; never reuse one.
+     */
+    const skipClaimedTurnIndexes = Effect.fnUntraced(function* (store: Store, chat: ChatDocument) {
+      let next = chat.turnCount
+      for (const turn of yield* promise(() => store.turnsForChat(chat._id))) {
+        if (turn.turnIndex < chat.turnCount) continue
+        next = Math.max(next, turn.turnIndex + 1)
+        if (turn.state === "creating" && chat.activeTurnID !== turn._id) {
+          yield* discardUnactivatedTurn(store, chat, turn)
+        }
+      }
+      const claimed = yield* withGit(
+        nextUnclaimedTurnIndex({ canonical: chat.repository.root, chatID: chat._id }),
+      ).pipe(Effect.mapError(error))
+      next = Math.max(next, claimed)
+      if (next === chat.turnCount) return chat
+      const advanced = yield* promise(() =>
+        store.updateChatReturning(
+          { _id: chat._id, status: "ready", activeTurnID: { $exists: false }, turnCount: chat.turnCount },
+          { $set: { turnCount: next, updatedAt: new Date() } },
+        ),
+      )
+      if (!advanced) return yield* Effect.fail(new Error("Arena chat changed while starting a battle"))
+      yield* Effect.logWarning("Arena moved a chat's turn counter past turns that already exist", {
+        chatID: chat._id,
+        from: chat.turnCount,
+        to: next,
+      })
+      return advanced
+    })
+
+    /** A turn inserted by an admission that never activated it: no runs, worktrees or vote exist. */
+    const discardUnactivatedTurn = Effect.fnUntraced(function* (store: Store, chat: ChatDocument, turn: TurnDocument) {
+      const permanentRef = turn.baseSnapshot?.permanentRef
+      if (permanentRef) {
+        yield* withRepositoryMutation(
+          chat.canonicalCheckout?.commonGitDir ?? chat.repository.root,
+          withGit(
+            removeRef({ canonical: chat.repository.root, ref: permanentRef, expectedCommit: turn.frozenBaseSHA }),
+          ),
+        ).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("Arena kept the base ref of an unactivated turn", { turnID: turn._id, cause }),
+          ),
+        )
+      }
+      const artifacts = [turn.copySnapshot?.manifestID, turn.copySnapshot?.ignoredSeedID].filter(
+        (id): id is string => !!id,
+      )
+      if (artifacts.length)
+        yield* promise(() => store.artifacts.deleteMany({ _id: { $in: artifacts }, turnID: turn._id }))
+      yield* promise(() => store.turns.deleteOne({ _id: turn._id, state: "creating" }))
+      yield* Effect.logWarning("Arena removed a turn that was never activated", { chatID: chat._id, turnID: turn._id })
+    })
+
     const startTurnUnlocked = Effect.fn("Arena.startTurnUnlocked")(function* (
       store: Store,
       id: string,
@@ -6900,30 +6962,30 @@ export const layer: Layer.Layer<
       if (yield* promise(() => store.checkoutEviction(storedCheckoutRoot))) {
         return yield* Effect.fail(new Error("Arena checkout is currently being evicted"))
       }
-      const chat = yield* reconcileCanonicalAvailability(store, storedChat)
-      if (chat.checkoutEvicted) {
+      const available = yield* reconcileCanonicalAvailability(store, storedChat)
+      if (available.checkoutEvicted) {
         return yield* Effect.fail(new Error("Arena checkout is currently being evicted"))
       }
-      if (chat.status === "blocked") {
-        return yield* Effect.fail(new Error(chat.blockedReason ?? canonicalUnavailableReason))
+      if (available.status === "blocked") {
+        return yield* Effect.fail(new Error(available.blockedReason ?? canonicalUnavailableReason))
       }
-      if (chat.status !== "ready" || chat.activeTurnID) {
+      if (available.status !== "ready" || available.activeTurnID) {
         return yield* Effect.fail(new Error("Arena chat already has an active battle"))
       }
-      if (activeNormalTurns.active(chat.canonicalSessionID)) {
+      if (activeNormalTurns.active(available.canonicalSessionID)) {
         return yield* Effect.fail(new Error("Arena chat has an active normal turn"))
       }
       // A conflicted trunk cannot be snapshotted, but the chat stays usable: refuse only the
       // battle so a single agent can still be asked to resolve the conflicts in place. The
       // reconcile above already refreshed this list.
-      const conflicts = chat.trunkConflicts ?? []
+      const conflicts = available.trunkConflicts ?? []
       if (conflicts.length > 0) {
         return yield* Effect.fail(new Error(trunkConflictReason(conflicts)))
       }
-      yield* withGit(requireBattleGit(chat.repository.root)).pipe(Effect.mapError(error))
+      yield* withGit(requireBattleGit(available.repository.root)).pipe(Effect.mapError(error))
+      const chat = yield* skipClaimedTurnIndexes(store, available)
       const turnID = makeTurnID(chat._id, chat.turnCount)
-      // Ref names can be allocated afresh when only Git survived. An occupied turn record also
-      // owns this logical ID's artifacts and runs; do not start a second battle over them.
+      // Unreachable after the skip above unless another admission raced this one.
       if (yield* promise(() => store.turn(turnID))) {
         return yield* Effect.fail(new Error(`Arena turn ${turnID} already exists for this chat`))
       }

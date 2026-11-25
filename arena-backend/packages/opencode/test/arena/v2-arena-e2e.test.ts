@@ -3,7 +3,8 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { $ } from "bun"
-import { chatSlug } from "@/arena/domain"
+import { chatSlug, turnID as makeTurnID } from "@/arena/domain"
+import type { TurnDocument } from "@/arena/records"
 
 describe("Arena v2 battle integration", () => {
   let originalFetch: typeof globalThis.fetch | undefined
@@ -47,6 +48,7 @@ describe("Arena v2 battle integration", () => {
     await $`git commit -m initial`.cwd(directory).quiet()
 
     let assignmentCount = 0
+    const battleScopes: string[] = []
     const completionRequests: Array<{
       readonly sessionID: string
       readonly messages: readonly unknown[]
@@ -59,8 +61,9 @@ describe("Arena v2 battle integration", () => {
       if (url.origin === "https://control.test") {
         const request = new Request(input, init)
         if (url.pathname === "/api/arena/assignments") {
-          const body = (await request.json()) as { action: string; kind: string; decision?: string }
+          const body = (await request.json()) as { action: string; kind: string; scopeID: string; decision?: string }
           if (body.action === "create") {
+            if (body.kind === "battle") battleScopes.push(body.scopeID)
             assignmentCount++
             return Response.json({
               assignments:
@@ -140,6 +143,20 @@ describe("Arena v2 battle integration", () => {
     for (const name of ["a", "b", "selected"]) {
       await $`git update-ref ${`${legacyRoot}/${name}`} ${older}`.cwd(directory).quiet()
     }
+    // An engine stopped between turn 1's insert and its activation left that record unactivated.
+    const store = await ArenaRuntime.store()
+    const orphanID = makeTurnID(attachedBody.chat.id, 1)
+    const orphanRef = `refs/battles/${chatSlug(attachedBody.chat.id)}/turn-1-00000000-0000-4000-8000-000000000000/base`
+    const head = (await $`git rev-parse HEAD`.cwd(directory).quiet().text()).trim()
+    await $`git update-ref ${orphanRef} ${head}`.cwd(directory).quiet()
+    await store.turns.insertOne({
+      _id: orphanID,
+      chatID: attachedBody.chat.id,
+      turnIndex: 1,
+      state: "creating",
+      frozenBaseSHA: head,
+      baseSnapshot: { canonicalHead: head, tree: "", indexTree: "", permanentRef: orphanRef },
+    } as unknown as TurnDocument)
     const started = await request(`/arena/chats/${attachedBody.chat.id}/turns`, {
       method: "POST",
       headers: { "x-opencode-directory": directory },
@@ -197,6 +214,12 @@ describe("Arena v2 battle integration", () => {
     }
     const turnID = current.turn?.id
     if (!turnID) throw new Error("Arena did not publish a turn ID")
+    // The surviving turn-0 refs and the unactivated turn 1 claim their indexes, so the battle takes
+    // index 2: the logical turn ID also keys the hosted pair draw, which must not hand back an old pair.
+    expect(turnID).toBe(makeTurnID(attachedBody.chat.id, 2))
+    expect(battleScopes).toEqual([turnID])
+    expect(await store.turn(orphanID)).toBeNull()
+    expect((await $`git rev-parse --verify --quiet ${orphanRef}`.cwd(directory).quiet().nothrow()).exitCode).toBe(1)
     const voted = await request(`/arena/turns/${turnID}/vote`, {
       method: "POST",
       headers: { "x-opencode-directory": directory },

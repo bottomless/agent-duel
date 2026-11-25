@@ -9,6 +9,7 @@ import {
   allocateBattleBaseRef,
   importResultRef,
   importWinnerRef,
+  nextUnclaimedTurnIndex,
   refRoot,
   selectResult,
   snapshotBase,
@@ -147,4 +148,20 @@ test("only a continuing run's previous index tree can advance to a new one", asy
   expect(await run(importResultRef(admitted))).toBe(next)
   expect(await run(importResultRef(admitted))).toBe(next)
   expect(await revision(canonical, ref)).toBe(next)
+})
+
+test("the next unclaimed turn index is one past every turn namespace of the chat", async () => {
+  expect(await run(nextUnclaimedTurnIndex({ canonical, chatID: "chat" }))).toBe(0)
+  const head = await revision(canonical, "HEAD")
+  const root = "refs/battles/31e06f7d89feb99a"
+  for (const ref of [
+    `${root}/turn-0/selected`,
+    `${root}/turn-3-0b6e8f8e-2f5c-4a8e-9a43-6f2d4f0c9e11/a-head-${head}`,
+    `${root}/single-agent/${"f".repeat(64)}`,
+    `${root}/turn-9x/base`,
+    "refs/battles/0000000000000000/turn-12/base",
+  ]) {
+    await $`git update-ref ${ref} ${head}`.cwd(canonical).quiet()
+  }
+  expect(await run(nextUnclaimedTurnIndex({ canonical, chatID: "chat" }))).toBe(4)
 })

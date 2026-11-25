@@ -1025,8 +1025,16 @@ Keep the error and retry instruction in the scrolling setup area
 until dismissed, so a long startup error cannot cover the composer. Start freezes canonical `HEAD`
 together with the exact staged, unstaged, and
 nonignored-untracked state in `refs/battles/<chat>/turn-<n>-<incarnation>/base`, then draws a pair.
-Allocate a fresh namespace at each start: a restored chat counter can reuse an index whose Git refs
-still exist. Resume, vote, and recovery use the stored base ref, including the old ordinal-only names.
+Allocate a fresh namespace at each start. Resume, vote, and recovery use the stored base ref,
+including the old ordinal-only names.
+
+Never reuse a turn index. The logical turn ID built from it also keys the hosted pair draw, research
+uploads and the leaderboard, so a reused index gets the old, possibly revealed pair back, and both
+contestants fail at once. The chat's counter can lag behind what exists: a restored store keeps an
+older count while later turn records or battle refs survive, and an engine stopped between a turn's
+insert and its activation leaves an unactivated `creating` record. Before each start, remove such a
+record and its base ref, and move the counter past every index a turn record or a `turn-<n>` ref of
+the chat claims.
 Both agents work from that frozen state, so later canonical movement cannot shift the ground under a
 running battle.
 
