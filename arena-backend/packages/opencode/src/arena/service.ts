@@ -1630,6 +1630,9 @@ export const layer: Layer.Layer<
     // Runs being cancelled while their turn still reads as running, as when the other side's
     // environment setup failed. A cancelled child's result must not count as new work for them.
     const haltingRuns = new Set<string>()
+    // Runs whose user declined the pending question or permission. Core ends that prompt with an
+    // interrupt, which would otherwise read as a failure; the run settled on the user's answer.
+    const declinedRuns = new Set<string>()
     const withSteerGates = <A, E, R>(runIDs: readonly string[], effect: Effect.Effect<A, E, R>) =>
       [...new Set(runIDs)].sort().reduceRight((inner, runID) => steerGates.withLock(runID)(inner), effect)
     // Aborted by Stop, so a stopped battle resolves without waiting for the rest of its copy.
@@ -2801,6 +2804,9 @@ export const layer: Layer.Layer<
     ) {
       const store = yield* available()
       const run = yield* runForReply(store, runID)
+      // A plain reject fails the waiting tool as a decline, which Core answers by interrupting the
+      // prompt. Mark the run before the reply lands: the prompt fiber settles within milliseconds.
+      if (response === "reject") declinedRuns.add(runID)
       yield* inDirectory(
         run.worktree,
         permissions.reply({ requestID: PermissionV1.ID.make(requestID), reply: response }),
@@ -2860,6 +2866,9 @@ export const layer: Layer.Layer<
     const rejectQuestion = Effect.fn("Arena.rejectQuestion")(function* (runID: string, requestID: string) {
       const store = yield* available()
       const run = yield* runForReply(store, runID)
+      // A dismissal fails the question tool as a decline, which Core answers by interrupting the
+      // prompt. Mark the run before the reply lands: the prompt fiber settles within milliseconds.
+      declinedRuns.add(runID)
       yield* inDirectory(run.worktree, questions.reject(QuestionID.make(requestID))).pipe(Effect.mapError(error))
       yield* promise(() =>
         store.writeRun(
@@ -4838,6 +4847,8 @@ export const layer: Layer.Layer<
       promptExit: Exit.Exit<SessionV1.WithParts | void, unknown>,
       stopped: boolean,
       runStateOverride?: RunDocument["runState"],
+      /** The user declined this run's question or permission, which ends the prompt with an interrupt. */
+      declined = false,
     ) {
       const finalizeStarted = performance.now()
       const timings = { pauseMs: 0, gitFinalizeMs: 0, resumeMs: 0, importRefsMs: 0, archiveMs: 0 }
@@ -4884,22 +4895,26 @@ export const layer: Layer.Layer<
             questions.list(),
           ]),
         )
+        // A declined run ended on the user's answer rather than on its own state, so the checks
+        // that a stopped run skips are skipped for it too — including the interrupt Core ends the
+        // prompt with, which lands in the failure check below and would otherwise be the error.
+        const settled = stopped || declined
         const unsettled: string[] = []
-        if (!stopped && !assistant) unsettled.push("Contestant prompt did not return a terminal assistant message")
-        if (!stopped && assistant && (!assistant.time.completed || (!assistant.finish && !assistant.error))) {
+        if (!settled && !assistant) unsettled.push("Contestant prompt did not return a terminal assistant message")
+        if (!settled && assistant && (!assistant.time.completed || (!assistant.finish && !assistant.error))) {
           unsettled.push("Contestant assistant message was not terminal")
         }
-        if (!stopped && sessionStates.some((state) => state.type !== "idle")) {
+        if (!settled && sessionStates.some((state) => state.type !== "idle")) {
           unsettled.push("A contestant session was still active after the prompt settled")
         }
-        if (!stopped && pendingPermissions.some((item) => ids.some((id) => String(id) === String(item.sessionID)))) {
+        if (!settled && pendingPermissions.some((item) => ids.some((id) => String(id) === String(item.sessionID)))) {
           unsettled.push("A contestant permission request remained unresolved")
         }
-        if (!stopped && pendingQuestions.some((item) => ids.some((id) => String(id) === String(item.sessionID)))) {
+        if (!settled && pendingQuestions.some((item) => ids.some((id) => String(id) === String(item.sessionID)))) {
           unsettled.push("A contestant question remained unresolved")
         }
         // The panes say why a stopped run stopped, so the abort that ends it is not reported here.
-        if (assistant?.error && !isStopAbort({ stopped, error: assistant.error })) {
+        if (assistant?.error && !isStopAbort({ stopped: settled, error: assistant.error })) {
           unsettled.push(
             assistant.error.name === "MessageOutputLengthError"
               ? ArenaResponseRecovery.EXHAUSTED
@@ -4910,12 +4925,12 @@ export const layer: Layer.Layer<
         // torn down by it can die on the way out. A side settles as stopped only when its prompt ends
         // during the stop, so that failure is the stop too, as with the checks above. A restart's
         // override keeps its reason.
-        if (Exit.isFailure(promptExit) && (!stopped || runStateOverride !== undefined))
+        if (Exit.isFailure(promptExit) && (!settled || runStateOverride !== undefined))
           unsettled.push(Cause.pretty(promptExit.cause))
         // A spent timeout budget explains the whole failure. The other lines only echo it, and the
         // session can still read as active for a moment after the failed request settles.
         for (const exhausted of [ArenaResponseRecovery.IDLE_EXHAUSTED, ArenaResponseRecovery.HEADER_TIMEOUT_EXHAUSTED]) {
-          if (!stopped && unsettled.some((line) => line.includes(exhausted))) {
+          if (!settled && unsettled.some((line) => line.includes(exhausted))) {
             unsettled.splice(0, unsettled.length, exhausted)
             break
           }
@@ -5344,8 +5359,10 @@ export const layer: Layer.Layer<
     ) {
       const turn = yield* promise(() => store.turn(run.turnID))
       if (turn?.state === "stopping" || turn?.state === "early_selected") return Exit.void
-      // A new loop for this run opens its turn to steers again.
+      // A new loop for this run opens its turn to steers again, and no longer carries an earlier
+      // decline: only the prompt a decline interrupts may settle because of it.
       closingRuns.delete(run.runID)
+      declinedRuns.delete(run.runID)
       yield* openShellTurn(run.sessionID)
       const storedRun = yield* promise(() => store.run(run.runID))
       yield* settleAutoAccept(
@@ -5513,13 +5530,23 @@ export const layer: Layer.Layer<
           endedAt: storedRun?.completedAt,
         })
       const stopped = (halted && !failedFirst && !completedFirst) || stoppedBySibling()
+      // The user declined this run's question or permission, and Core ends that prompt with an
+      // interrupt instead of an assistant. The run settled on the user's answer: it is complete,
+      // and only an interrupt that decline caused may read that way — a stop or a restart reaches
+      // finalization through its own state above.
+      const declined =
+        !stopped &&
+        declinedRuns.has(run.runID) &&
+        Exit.isFailure(promptExit) &&
+        Cause.hasInterruptsOnly(promptExit.cause)
       // A steer still queued when the run was cut off stays in the thread as an unanswered message,
       // as in 1.x, and goes with this side's history if it is kept. Left in Core's inbox it would
       // vanish from the thread, and the next resume of this session would deliver it. A finished
       // run closed its turn with none waiting, so for it this only keeps the thread and the kept
       // history in step. A failed run keeps its queue for Retry, unless the battle halted: it then
-      // has no Retry, also when it failed before the stop.
-      if (stopped || halted || Exit.isSuccess(promptExit)) {
+      // has no Retry, also when it failed before the stop. A declined run finishes like the
+      // finished run, so its queue goes with its history too.
+      if (stopped || halted || declined || Exit.isSuccess(promptExit)) {
         yield* inDirectory(run.worktree.directory, sessions.deliverPending(run.sessionID)).pipe(
           Effect.catchCause((cause) =>
             Effect.logWarning("Arena could not keep a contestant's queued steers", {
@@ -5532,10 +5559,14 @@ export const layer: Layer.Layer<
       // Only a Stop bounds this side's Git. An early selection or a sibling's failed setup settles
       // the side inside a battle that goes on, and that waits like any other.
       const outcome = yield* Effect.exit(
-        finalizeSide(store, turn, run, promptExit, stopped).pipe(current?.state === "stopping" ? limitGit : unlimitGit),
+        finalizeSide(store, turn, run, promptExit, stopped, undefined, declined).pipe(
+          current?.state === "stopping" ? limitGit : unlimitGit,
+        ),
       )
-      // The run's state now routes a reply, so the closing mark has done its job.
+      // The run's state now routes a reply, so the closing mark has done its job, and a decline
+      // only ever explains the prompt that just settled.
       closingRuns.delete(run.runID)
+      declinedRuns.delete(run.runID)
       if (Exit.isSuccess(outcome)) {
         const settled = yield* promise(() => store.run(run.runID))
         const selectable =
