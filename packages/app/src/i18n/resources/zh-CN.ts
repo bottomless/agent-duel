@@ -2643,6 +2643,9 @@ export const zhCN: TranslationResources = {
     instructions: {
       project: "此项目的指令",
       global: "你自己的指令和技能",
+      sectionTitle: "指令和技能",
+      projectSectionTitle: "指令",
+      info: "你自己的 CLAUDE.md 或 AGENTS.md，以及 ~/.claude/skills 和 ~/.agents/skills 中的技能。默认关闭，这样对战会在没有你个人设置的情况下比较模型。",
     },
     plugin: {
       repositoryClaude: "此项目的 Claude Code 配置",

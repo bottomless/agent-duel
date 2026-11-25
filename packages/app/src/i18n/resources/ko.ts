@@ -2703,6 +2703,9 @@ export const ko: TranslationResources = {
     instructions: {
       project: "이 프로젝트의 지침",
       global: "내 지침과 스킬",
+      sectionTitle: "지침과 스킬",
+      projectSectionTitle: "지침",
+      info: "내 CLAUDE.md 또는 AGENTS.md와 ~/.claude/skills, ~/.agents/skills의 스킬입니다. 기본값은 꺼짐이므로 배틀은 개인 설정 없이 모델을 비교합니다.",
     },
     plugin: {
       repositoryClaude: "이 프로젝트의 Claude Code 설정",

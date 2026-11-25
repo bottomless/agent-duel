@@ -2724,6 +2724,9 @@ export const ja: TranslationResources = {
     instructions: {
       project: "このプロジェクトの指示",
       global: "自分の指示とスキル",
+      sectionTitle: "指示とスキル",
+      projectSectionTitle: "指示",
+      info: "自分の CLAUDE.md または AGENTS.md と、~/.claude/skills と ~/.agents/skills のスキル。既定ではオフで、バトルは個人の設定なしでモデルを比較します。",
     },
     plugin: {
       repositoryClaude: "このプロジェクトの Claude Code 設定",

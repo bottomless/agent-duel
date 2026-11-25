@@ -2720,6 +2720,9 @@ export const en = {
     instructions: {
       project: "This project's instructions",
       global: "Your own instructions and skills",
+      sectionTitle: "Instructions and skills",
+      projectSectionTitle: "Instructions",
+      info: "Your own CLAUDE.md or AGENTS.md and the skills in ~/.claude/skills and ~/.agents/skills. Off by default, so battles compare the models without your personal setup.",
     },
     plugin: {
       repositoryClaude: "This project's Claude Code setup",

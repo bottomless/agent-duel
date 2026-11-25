@@ -6,14 +6,15 @@ import { SettingsCard, SettingsRow, SettingsSection } from "@/components/setting
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { settingsStyles } from "@/styles/settings";
-import { isPlugin, pluginLabel } from "./describe";
+import { isLoaded, isPlugin, pluginLabel } from "./describe";
 import { GlobalPluginsSheet } from "./global-sheet";
 import { PluginRow } from "./review-sheet";
 import { useAgentPlugins } from "./use-agent-plugins";
 
 /**
- * Settings → Plugins: the global plugins, managed here after the first review. Project plugins are
- * managed in each project's settings.
+ * Settings → Claude Code and Codex: the user's own instruction files, switched any time, and the
+ * global plugins, managed here after the first review. Project plugins are managed in each
+ * project's settings.
  */
 export function AgentPluginsSection({ serverId }: { serverId: string }) {
   const { t } = useTranslation();
@@ -29,7 +30,7 @@ export function AgentPluginsSection({ serverId }: { serverId: string }) {
 
   const toggle = useCallback(
     (plugin: AgentPlugin) => {
-      const on = plugin.state !== "on";
+      const on = !isLoaded(plugin);
       setToggleError(null);
       save({
         scope: { kind: "global" },
@@ -51,59 +52,86 @@ export function AgentPluginsSection({ serverId }: { serverId: string }) {
     [isFetching, scan, t],
   );
 
+  const instructions = status?.global.plugins.filter((plugin) => !isPlugin(plugin)) ?? [];
+  const plugins = status?.global.plugins.filter(isPlugin) ?? [];
+  const hasInstructions = instructions.length > 0;
+
   return (
-    <SettingsSection
-      title={t("agentPlugins.settings.sectionTitle")}
-      info={t("agentPlugins.description")}
-      trailing={scanButton}
-      testID="agent-plugins-settings"
-    >
-      {/* A failed Scan again keeps the last list, so its error shows above it. */}
-      {error ? (
-        <Alert
-          variant="error"
-          title={t("agentPlugins.settings.loadFailed")}
-          description={error.message}
+    <>
+      {/* The user's own instruction files are switched, not imported, so they get their own
+          heading rather than sitting in the plugin list. Scan again rescans both. */}
+      {hasInstructions ? (
+        <SettingsSection
+          title={t("agentPlugins.instructions.sectionTitle")}
+          info={t("agentPlugins.instructions.info")}
+          trailing={scanButton}
+          testID="agent-plugins-instructions"
         >
-          <Button variant="outline" onPress={scan}>
-            {t("agentPlugins.settings.retry")}
-          </Button>
-        </Alert>
-      ) : null}
-      {status && !status.global.reviewed && status.global.plugins.some(isPlugin) ? (
-        <Alert variant="info" title={t("agentPlugins.settings.notReviewed")}>
-          <Button variant="outline" onPress={openReview} testID="agent-plugins-settings-review">
-            {t("agentPlugins.settings.review")}
-          </Button>
-        </Alert>
-      ) : null}
-      {status ? (
-        <SettingsCard testID="agent-plugins-settings-list">
-          {status.global.plugins.length === 0 ? (
-            <SettingsRow label={t("agentPlugins.settings.empty")} />
-          ) : (
-            status.global.plugins.map((plugin) => (
+          <SettingsCard>
+            {instructions.map((entry) => (
               <SettingsPluginRow
-                key={plugin.id}
-                plugin={plugin}
-                // Before the first review every plugin is pending; the sheet decides them together.
-                // The user's own instruction files are off, not pending, so they switch any time.
-                disabled={isSaving || (!status.global.reviewed && isPlugin(plugin))}
+                key={entry.id}
+                plugin={entry}
+                // Off, never pending, so it switches before the plugins are reviewed.
+                disabled={isSaving}
                 onToggle={toggle}
               />
-            ))
-          )}
-        </SettingsCard>
+            ))}
+          </SettingsCard>
+        </SettingsSection>
       ) : null}
-      {toggleError ? (
-        <View>
-          <Text accessibilityRole="alert" style={settingsStyles.rowError}>
-            {toggleError}
-          </Text>
-        </View>
-      ) : null}
-      <GlobalPluginsSheet controller={controller} visible={reviewing} onClose={closeReview} />
-    </SettingsSection>
+      <SettingsSection
+        title={t("agentPlugins.settings.sectionTitle")}
+        info={t("agentPlugins.description")}
+        trailing={hasInstructions ? undefined : scanButton}
+        testID="agent-plugins-settings"
+      >
+        {/* A failed Scan again keeps the last list, so its error shows above it. */}
+        {error ? (
+          <Alert
+            variant="error"
+            title={t("agentPlugins.settings.loadFailed")}
+            description={error.message}
+          >
+            <Button variant="outline" onPress={scan}>
+              {t("agentPlugins.settings.retry")}
+            </Button>
+          </Alert>
+        ) : null}
+        {status && !status.global.reviewed && plugins.length > 0 ? (
+          <Alert variant="info" title={t("agentPlugins.settings.notReviewed")}>
+            <Button variant="outline" onPress={openReview} testID="agent-plugins-settings-review">
+              {t("agentPlugins.settings.review")}
+            </Button>
+          </Alert>
+        ) : null}
+        {status ? (
+          <SettingsCard testID="agent-plugins-settings-list">
+            {plugins.length === 0 ? (
+              <SettingsRow label={t("agentPlugins.settings.empty")} />
+            ) : (
+              plugins.map((plugin) => (
+                <SettingsPluginRow
+                  key={plugin.id}
+                  plugin={plugin}
+                  // Before the first review every plugin is pending; the sheet decides them together.
+                  disabled={isSaving || !status.global.reviewed}
+                  onToggle={toggle}
+                />
+              ))
+            )}
+          </SettingsCard>
+        ) : null}
+        {toggleError ? (
+          <View>
+            <Text accessibilityRole="alert" style={settingsStyles.rowError}>
+              {toggleError}
+            </Text>
+          </View>
+        ) : null}
+        <GlobalPluginsSheet controller={controller} visible={reviewing} onClose={closeReview} />
+      </SettingsSection>
+    </>
   );
 }
 
@@ -120,7 +148,7 @@ export function SettingsPluginRow({
   return (
     <PluginRow
       plugin={plugin}
-      checked={plugin.state === "on"}
+      checked={isLoaded(plugin)}
       disabled={disabled}
       onToggle={handleToggle}
     />

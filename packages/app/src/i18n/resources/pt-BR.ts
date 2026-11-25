@@ -2742,6 +2742,9 @@ export const ptBR: TranslationResources = {
     instructions: {
       project: "As instruções deste projeto",
       global: "Suas próprias instruções e skills",
+      sectionTitle: "Instruções e skills",
+      projectSectionTitle: "Instruções",
+      info: "Seu próprio CLAUDE.md ou AGENTS.md e as skills em ~/.claude/skills e ~/.agents/skills. Desativado por padrão, para que as batalhas comparem os modelos sem sua configuração pessoal.",
     },
     plugin: {
       repositoryClaude: "Configuração do Claude Code deste projeto",

@@ -9,13 +9,14 @@ import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { openSettingsSection } from "@/navigation/settings-navigation";
 import { settingsStyles } from "@/styles/settings";
-import { isPlugin, pluginLabel } from "./describe";
+import { isLoaded, isPlugin, pluginLabel } from "./describe";
 import { SettingsPluginRow } from "./settings-section";
 import { useAgentPlugins } from "./use-agent-plugins";
 
 /**
- * Project settings → Plugins: this project's plugins, each switched on or off on its own. An
- * undecided plugin shows as off until the user decides, here or in the line below the composer.
+ * Project settings → Claude Code and Codex: this project's instruction file and plugins, each
+ * switched on or off on its own. An undecided plugin shows as off until the user decides, here or
+ * in the line below the composer; an undecided instruction file shows as on, since it loads.
  */
 export function ProjectPluginsSettings({
   serverId,
@@ -29,11 +30,14 @@ export function ProjectPluginsSettings({
   const [toggleError, setToggleError] = useState<string | null>(null);
   const project = status?.project ?? null;
   const projectRoot = project?.projectRoot ?? null;
+  const instructions = project?.plugins.filter((plugin) => !isPlugin(plugin)) ?? [];
+  const plugins = project?.plugins.filter(isPlugin) ?? [];
+  const hasNative = (project?.nativeSkills.length ?? 0) > 0;
 
   const toggle = useCallback(
     (plugin: AgentPlugin) => {
       if (!projectRoot) return;
-      const on = plugin.state !== "on";
+      const on = !isLoaded(plugin);
       setToggleError(null);
       save({
         scope: { kind: "project", projectRoot },
@@ -90,33 +94,34 @@ export function ProjectPluginsSettings({
           </Button>
         </Alert>
       ) : null}
+      <InstructionsSection entries={instructions} disabled={isSaving} onToggle={toggle} />
       {project ? (
-        <SettingsCard testID="project-plugins-list">
-          {project.plugins.length === 0 ? (
-            <SettingsRow label={t("agentPlugins.project.empty")} />
-          ) : (
-            project.plugins.map((plugin) => (
-              <SettingsPluginRow
-                key={plugin.id}
-                plugin={plugin}
-                disabled={isSaving}
-                onToggle={toggle}
-              />
-            ))
-          )}
-        </SettingsCard>
+        <SettingsSection title={t("agentPlugins.settings.sectionTitle")} flush={!hasNative}>
+          <SettingsCard testID="project-plugins-list">
+            {plugins.length === 0 ? (
+              <SettingsRow label={t("agentPlugins.project.empty")} />
+            ) : (
+              plugins.map((plugin) => (
+                <SettingsPluginRow
+                  key={plugin.id}
+                  plugin={plugin}
+                  disabled={isSaving}
+                  onToggle={toggle}
+                />
+              ))
+            )}
+          </SettingsCard>
+        </SettingsSection>
       ) : null}
-      {project && project.nativeSkills.length > 0 ? (
-        <View style={styles.native}>
-          <SettingsSection title={t("agentPlugins.sheet.alreadyAvailable")} flush>
-            <SettingsCard>
-              <SettingsRow
-                label={project.nativeSkills.join(", ")}
-                hint={t("agentPlugins.sheet.alreadyAvailableHint")}
-              />
-            </SettingsCard>
-          </SettingsSection>
-        </View>
+      {project && hasNative ? (
+        <SettingsSection title={t("agentPlugins.sheet.alreadyAvailable")} flush>
+          <SettingsCard>
+            <SettingsRow
+              label={project.nativeSkills.join(", ")}
+              hint={t("agentPlugins.sheet.alreadyAvailableHint")}
+            />
+          </SettingsCard>
+        </SettingsSection>
       ) : null}
       {toggleError ? (
         <Text accessibilityRole="alert" style={settingsStyles.rowError}>
@@ -127,12 +132,38 @@ export function ProjectPluginsSettings({
   );
 }
 
+/** The project's instruction file, switched rather than imported, under its own heading. */
+function InstructionsSection({
+  entries,
+  disabled,
+  onToggle,
+}: {
+  entries: AgentPlugin[];
+  disabled: boolean;
+  onToggle: (plugin: AgentPlugin) => void;
+}) {
+  const { t } = useTranslation();
+  if (entries.length === 0) return null;
+  return (
+    <SettingsSection
+      title={t("agentPlugins.instructions.projectSectionTitle")}
+      testID="project-plugins-instructions"
+    >
+      <SettingsCard>
+        {entries.map((entry) => (
+          <SettingsPluginRow
+            key={entry.id}
+            plugin={entry}
+            disabled={disabled}
+            onToggle={onToggle}
+          />
+        ))}
+      </SettingsCard>
+    </SettingsSection>
+  );
+}
+
 const styles = StyleSheet.create((theme) => ({
-  // The first card has no header of its own, so this gap stands in for its section's bottom
-  // margin (settingsStyles.section). Any less and "Already available" floats between the cards.
-  native: {
-    marginTop: theme.spacing[6],
-  },
   globalPointer: {
     flexDirection: "row",
     alignItems: "center",

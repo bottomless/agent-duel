@@ -2731,6 +2731,9 @@ export const ru: TranslationResources = {
     instructions: {
       project: "Инструкции этого проекта",
       global: "Ваши собственные инструкции и навыки",
+      sectionTitle: "Инструкции и навыки",
+      projectSectionTitle: "Инструкции",
+      info: "Ваш собственный CLAUDE.md или AGENTS.md и навыки из ~/.claude/skills и ~/.agents/skills. По умолчанию выключено, чтобы битвы сравнивали модели без ваших личных настроек.",
     },
     plugin: {
       repositoryClaude: "Настройка Claude Code этого проекта",

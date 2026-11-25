@@ -6,6 +6,15 @@ export function isPlugin(plugin: AgentPlugin): boolean {
   return plugin.kind !== "instructions";
 }
 
+/**
+ * Whether the engine loads it now. An undecided plugin waits for the user, but an undecided
+ * instruction file loads, so its switch shows on until the user turns it off.
+ */
+export function isLoaded(plugin: AgentPlugin): boolean {
+  if (plugin.state === "on") return true;
+  return plugin.state === "pending" && !isPlugin(plugin);
+}
+
 /** A repository's own setup has no plugin name, so it is named after where it came from. */
 export function pluginLabel(plugin: AgentPlugin, t: TFunction): string {
   if (plugin.kind === "plugin") return plugin.name;

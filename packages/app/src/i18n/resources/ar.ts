@@ -2680,6 +2680,9 @@ export const ar: TranslationResources = {
     instructions: {
       project: "تعليمات هذا المشروع",
       global: "تعليماتك ومهاراتك الخاصة",
+      sectionTitle: "التعليمات والمهارات",
+      projectSectionTitle: "التعليمات",
+      info: "ملف CLAUDE.md أو AGENTS.md الخاص بك والمهارات في ‎~/.claude/skills و‎~/.agents/skills. معطّلة افتراضيًا، لتقارن المعارك بين النماذج دون إعدادك الشخصي.",
     },
     plugin: {
       repositoryClaude: "إعداد Claude Code في هذا المشروع",
