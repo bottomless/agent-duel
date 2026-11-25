@@ -22,6 +22,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import type { Logger } from "pino";
 import { z } from "zod";
 import { createBranchChangeRouteHandler } from "./script-route-branch-handler.js";
+import { arenaDaemonUrls } from "./arena/daemon-urls.js";
 
 export type ListenTarget =
   | { type: "tcp"; host: string; port: number }
@@ -1158,8 +1159,7 @@ export async function createPaseoDaemon(
       providerOverrides: config.providerOverrides,
       workspaceGitService,
       managedProcesses,
-      getArenaPreviewBaseUrl: () =>
-        boundListenTarget?.type === "tcp" ? `http://localhost:${boundListenTarget.port}` : null,
+      getArenaDaemonUrls: () => arenaDaemonUrls(httpServer.address()),
       uploadsRoot: path.join(config.paseoHome, "uploads"),
       isDev: config.isDev === true,
       extraClients: config.agentClients,

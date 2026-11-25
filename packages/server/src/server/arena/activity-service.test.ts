@@ -6,6 +6,7 @@ import {
   completionNotifications,
   selectArenaNotificationRecipient,
 } from "./activity-service.js";
+import { ArenaLoopbackRequiredError } from "./loopback-required.js";
 
 function activity(overrides: Partial<ArenaActivity> = {}): ArenaActivity {
   return {
@@ -154,7 +155,7 @@ afterEach(async () => {
   await Promise.all(services.splice(0).map((service) => service.close()));
 });
 
-function serviceHarness() {
+function serviceHarness(logger = pino({ enabled: false })) {
   let rows: ArenaSessionActivity[] = [activity()];
   const read = vi.fn(async () => rows);
   const onChange = vi.fn();
@@ -175,7 +176,7 @@ function serviceHarness() {
     openSource,
     onChange,
     onNotification,
-    logger: pino({ enabled: false }),
+    logger,
   });
   services.push(service);
   return {
@@ -505,4 +506,33 @@ it("does not reannounce a first finisher restored at startup in the same cycle",
   h.setRows([finish(activity(), "a")]);
   await h.service.refresh();
   expect(h.onNotification).not.toHaveBeenCalled();
+});
+
+describe("an engine refused for a non-loopback daemon listener", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("logs the refusal once and polls once a minute until the engine starts", async () => {
+    vi.useFakeTimers();
+    const logger = pino({ enabled: false });
+    const warn = vi.spyOn(logger, "warn");
+    const h = serviceHarness(logger);
+    h.openSource.mockRejectedValue(
+      new Error("start failed", { cause: new ArenaLoopbackRequiredError() }),
+    );
+    await h.service.refresh();
+    await vi.advanceTimersByTimeAsync(59_000);
+    expect(h.openSource).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(h.openSource).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenCalledTimes(1);
+
+    h.openSource.mockResolvedValue({ read: h.read, close: h.close });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(h.openSource).toHaveBeenCalledTimes(3);
+    expect(h.service.snapshot()[0].stale).toBe(false);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(h.read).toHaveBeenCalledTimes(2);
+  });
 });

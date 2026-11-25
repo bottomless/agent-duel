@@ -21,6 +21,10 @@ import {
 import { ArenaPayloadTooLargeError } from "./arena/payload-limit.js";
 import { ArenaRefusalError, beforeArenaDispatch } from "./arena/refusal.js";
 import {
+  ArenaLoopbackRequiredError,
+  findArenaLoopbackRequired,
+} from "./arena/loopback-required.js";
+import {
   arenaRequestSettled,
   isArenaAccountError,
   runWithArenaAccountSession,
@@ -383,9 +387,12 @@ type ProviderSubagentManagerEvent = Extract<
 const LEGACY_PROVIDER_IDS = new Set(["claude", "codex", "opencode"]);
 const MIN_VERSION_ALL_PROVIDERS = "0.1.45";
 const MIN_VERSION_EXPLICIT_WORKSPACE_RECOVERY = "0.1.105";
-function rpcFailure(err: Error) {
+function rpcFailure(error: Error) {
+  // An engine that cannot start on this listener fails every Arena request the same way, wrapped or not.
+  const err = findArenaLoopbackRequired(error) ?? error;
   // Arena diagnostics have user-facing copy and codes independent of whether the request settled.
   const ownWords =
+    err instanceof ArenaLoopbackRequiredError ||
     err instanceof ArenaPayloadTooLargeError ||
     err instanceof ArenaRefusalError ||
     isArenaAccountError(err);
