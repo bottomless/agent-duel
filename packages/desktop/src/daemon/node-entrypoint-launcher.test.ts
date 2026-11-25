@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  createElectronNodeEnv,
   createNodeEntrypointInvocation,
   type NodeEntrypointSpec,
 } from "./node-entrypoint-launcher";
@@ -110,6 +111,28 @@ describe("node-entrypoint-launcher", () => {
           PASEO_NODE_ENV: "production",
         },
       });
+    });
+  });
+
+  describe("createElectronNodeEnv", () => {
+    const appDir = "/tmp/.mount_Agent-abc";
+
+    it("drops the AppImage's library directories and empty entries", () => {
+      const env = createElectronNodeEnv({
+        APPDIR: appDir,
+        LD_LIBRARY_PATH: `${appDir}/usr/lib::/opt/cuda/lib64`,
+      });
+      expect(env.LD_LIBRARY_PATH).toBe("/opt/cuda/lib64");
+    });
+
+    it("removes LD_LIBRARY_PATH when only the AppImage's entries were in it", () => {
+      const env = createElectronNodeEnv({ APPDIR: appDir, LD_LIBRARY_PATH: `${appDir}/usr/lib:` });
+      expect("LD_LIBRARY_PATH" in env).toBe(false);
+    });
+
+    it("keeps LD_LIBRARY_PATH outside an AppImage", () => {
+      const env = createElectronNodeEnv({ LD_LIBRARY_PATH: "/opt/cuda/lib64" });
+      expect(env.LD_LIBRARY_PATH).toBe("/opt/cuda/lib64");
     });
   });
 });
