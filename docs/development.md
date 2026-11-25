@@ -63,6 +63,11 @@ packages.
   the build if it does not start; install `xvfb` and `xauth` first. The smoke creates a terminal
   without signing in, so it needs `PASEO_BYOK_BUILD=1` too, as CI sets (a hosted build fails with
   "Sign in to use Agent Duel").
+- Start a packaged Linux app through its `agent-duel` launcher, never `agent-duel.bin`. The
+  launcher picks the sandbox mode, and Ubuntu 24.04's AppArmor profile covers only the launcher:
+  `agent-duel.bin` started directly is denied the sandbox and crashes with SIGTRAP. Electron's
+  `app.relaunch()` starts `process.execPath`, which is `agent-duel.bin`, so pass the launcher as
+  `execPath` (`packages/desktop/src/features/auto-updater.ts`).
 
 ## Running the dev server
 
