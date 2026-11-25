@@ -1428,7 +1428,9 @@ field. Each layer has its own file:
 - **Session data** (`arena/privacy.ts`, `arena/v2-privacy.ts`) — keep each active assignment's
   canonical Core history intact for provider replay. Blind the native `/api` JSON and SSE boundary, the Arena recorder, and public
   transcript projections. Remove provider state and identity metadata, redact reasoning, zero usage
-  and cost, flatten provider errors, and rehash tool-call IDs to `call_arena_<hash>`. Never run the
+  and cost, flatten provider errors, and blind tool-call IDs by assistant message: some providers
+  start again at `read_0` on every step. On outbound replay, keep the first occurrence of each ID
+  and rename later collisions with their results, including in already-blinded history. Never run the
   native sanitizer over `/arena` responses: resolved battles deliberately reveal identities and
   costs. Stable streamed part IDs and UTF-16 delta offsets let clients assemble live updates;
   native exports do not define those stream IDs.

@@ -350,16 +350,17 @@ describe("ArenaPrivacy", () => {
     process.env.OPENCODE_ARENA = "1"
     const callID = "call-70293612-c1d2-4a95-a9c5-1fb870da15df-68"
     const sessionID = SessionID.create()
+    const messageID = MessageID.ascending()
     const toolPart = ArenaPrivacy.part({
       id: PartID.ascending(),
       sessionID,
-      messageID: MessageID.ascending(),
+      messageID,
       type: "tool",
       callID,
       tool: "read",
       state: { status: "pending" },
     })
-    const stable = ArenaPrivacy.part({
+    const nextStep = ArenaPrivacy.part({
       id: PartID.ascending(),
       sessionID,
       messageID: MessageID.ascending(),
@@ -372,11 +373,14 @@ describe("ArenaPrivacy", () => {
     // two, so both paths have to agree on the mapping.
     const event = ArenaPrivacy.event({
       type: "session.next.tool.called",
-      properties: { sessionID, callID, tool: "read" },
+      properties: { sessionID, assistantMessageID: messageID, callID, tool: "read" },
     }) as { properties: { callID: string } }
     const synthetic = toolPart.type === "tool" ? toolPart.callID : ""
 
-    expect(stable.type === "tool" ? stable.callID : "").toBe(synthetic)
+    expect(nextStep.type === "tool" ? nextStep.callID : "").not.toBe(synthetic)
+    expect(
+      ArenaPrivacy.event({ type: "permission.asked", properties: { sessionID, tool: { messageID, callID } } }),
+    ).toMatchObject({ properties: { tool: { messageID, callID: synthetic } } })
     expect(event.properties.callID).toBe(synthetic)
     expect(event.properties.callID).not.toBe(callID)
     // Redaction runs again on replay of already-stored events; it must not re-hash.

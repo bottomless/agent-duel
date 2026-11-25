@@ -391,7 +391,14 @@ describe("Arena v2 engine runtime", () => {
               { type: "tool-call", id: "call_current", name: "read", input: {} },
             ],
           }),
+          Message.tool({ id: "call_current", name: "read", result: "first" }),
           Message.make({ id: "msg_31", role: "assistant", content: [{ type: "reasoning", text: "" }] }),
+          Message.make({
+            id: "msg_32",
+            role: "assistant",
+            content: [{ type: "tool-call", id: "call_current", name: "read", input: {} }],
+          }),
+          Message.tool({ id: "call_current", name: "read", result: "second" }),
         ],
         options: {},
       }
@@ -401,7 +408,7 @@ describe("Arena v2 engine runtime", () => {
         { type: "text", text: "Keep the user instructions." },
       ])
 
-      expect(contextEvent.messages).toHaveLength(2)
+      expect(contextEvent.messages).toHaveLength(5)
       expect(contextEvent.messages[0].content).toEqual([{ type: "text", text: "Earlier answer" }])
       expect(JSON.stringify(contextEvent.messages[1])).toContain("arena_reasoning_v1.current")
       const retriedContext = { ...contextEvent, messages: [...contextEvent.messages] }
@@ -494,7 +501,7 @@ describe("Arena v2 engine runtime", () => {
       const request = ai.stream({
         model,
         system: contextEvent.system,
-        prompt: "hello",
+        messages: [...contextEvent.messages, Message.user("hello")],
         headers: requestHeaders({ sessionID: "ses_probe", parentSessionID: "ses_root", kind: "primary" }),
       })
       yield* request.pipe(Stream.runDrain, Effect.provide(clientLayer))
@@ -509,6 +516,11 @@ describe("Arena v2 engine runtime", () => {
     const request = requests[0]!
     const body = request.body
     expect(body.model).toBe("contestant")
+    // The chat-completions history OpenRouter translates to Responses has exactly one output per ID.
+    const messages = body.messages as { role: string; tool_calls?: { id: string }[]; tool_call_id?: string }[]
+    const ids = messages.flatMap((message) => (message.tool_calls ?? []).map((call) => call.id))
+    expect(ids).toEqual(["call_current", expect.stringMatching(/^call_arena_[0-9a-f]{32}$/)])
+    expect(messages.filter((message) => message.role === "tool").map((message) => message.tool_call_id)).toEqual(ids)
     expect(body.provider).toBeUndefined()
     expect(JSON.stringify(body)).toContain(CONTESTANT_IDENTITY)
     expect(JSON.stringify(body)).not.toContain("leaked/provider")
@@ -609,11 +621,13 @@ describe("Arena v2 engine runtime", () => {
       const send = (next: typeof mode, kind: "primary" | "title" = "primary") =>
         Effect.suspend(() => {
           mode = next
-          return ai.stream({
-            model,
-            prompt: "hello",
-            headers: requestHeaders({ sessionID, kind }),
-          }).pipe(Stream.runCollect, Effect.provide(clientLayer), Effect.result)
+          return ai
+            .stream({
+              model,
+              prompt: "hello",
+              headers: requestHeaders({ sessionID, kind }),
+            })
+            .pipe(Stream.runCollect, Effect.provide(clientLayer), Effect.result)
         })
       const failure = Effect.fn(function* (next: typeof mode, kind: "primary" | "title" = "primary") {
         const result = yield* send(next, kind)
