@@ -3984,10 +3984,18 @@ export const applyPromotionState = Effect.fn("ArenaGit.applyPromotionState")(fun
     // replayed. Git's normal cherry-pick machinery is intentionally used so conflicts remain
     // visible in the index and worktree for the caller to resolve.
     yield* run(git, root, "reset_before_agent_replay", ["reset", "--hard", head])
+    // The replay keeps each commit's author and makes the developer the committer. With no Git
+    // identity and an empty full name in passwd, common on Linux, cherry-pick refuses ("Committer
+    // identity unknown"), so it falls back to the identity Add Project uses for its first commit.
+    const committer = yield* git.run(["var", "GIT_COMMITTER_IDENT"], { cwd: root })
+    const replayEnv =
+      committer.exitCode === 0
+        ? undefined
+        : { GIT_COMMITTER_NAME: "Agent Duel", GIT_COMMITTER_EMAIL: "agent-duel@localhost" }
     for (const commit of commits) {
       const replayed = yield* git.run(
         ["cherry-pick", "--allow-empty", "--keep-redundant-commits", commit],
-        { cwd: root },
+        { cwd: root, ...(replayEnv ? { env: replayEnv } : {}) },
       )
       if (replayed.exitCode !== 0) {
         const replayConflicts = yield* conflictPaths(git, root)
