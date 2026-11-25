@@ -1,6 +1,6 @@
 import { createHash } from "crypto"
 import type { Store } from "./mongo"
-import { ArenaWaitError, type RequestMetadata, type Telemetry } from "./proxy"
+import { ArenaWaitError, type GenerationFailure, type RequestMetadata, type Telemetry } from "./proxy"
 import type { GenerationMetrics, UsageTotals } from "./records"
 import { ArenaPrivacy } from "./privacy"
 
@@ -367,6 +367,14 @@ export function create(store: Store): Telemetry {
       }
       active.set(metadata, { id, callIndex, metadata, chunks: [] })
     },
+    async dispatched({ metadata, dispatchedAt, requestBytes }) {
+      const generation = active.get(metadata)
+      if (!generation) return
+      await store.updateGeneration(generation.id, {
+        upstreamDispatchedAt: dispatchedAt,
+        requestBytes,
+      })
+    },
     async response({ metadata, status, headers, receivedAt }) {
       const generation = active.get(metadata)
       if (!generation) return
@@ -422,7 +430,7 @@ export function create(store: Store): Telemetry {
         })
       }
     },
-    async error(metadata, error, at) {
+    async error(metadata, error, at, failure?: GenerationFailure) {
       if (!metadata) return
       const generation = active.get(metadata)
       if (!generation) return
@@ -458,6 +466,7 @@ export function create(store: Store): Telemetry {
         ...(hasResponse ? { payloadHashes: { response: hash(response) } } : {}),
         error: "Arena contestant request failed",
         ...(wait ? { wait } : {}),
+        ...(failure ? { failurePhase: failure.phase, failureKind: failure.kind } : {}),
       })
       const measured = usageFromPayload(terminalPayload(raw), Math.max(0, at.getTime() - metadata.startedAt.getTime()))
       const finished = finishReason(raw)

@@ -4912,10 +4912,14 @@ export const layer: Layer.Layer<
         // override keeps its reason.
         if (Exit.isFailure(promptExit) && (!stopped || runStateOverride !== undefined))
           unsettled.push(Cause.pretty(promptExit.cause))
-        // A spent model-timeout budget explains the whole failure. The other lines only echo it, and the
+        // A spent timeout budget explains the whole failure. The other lines only echo it, and the
         // session can still read as active for a moment after the failed request settles.
-        if (!stopped && unsettled.some((line) => line.includes(ArenaResponseRecovery.IDLE_EXHAUSTED)))
-          unsettled.splice(0, unsettled.length, ArenaResponseRecovery.IDLE_EXHAUSTED)
+        for (const exhausted of [ArenaResponseRecovery.IDLE_EXHAUSTED, ArenaResponseRecovery.HEADER_TIMEOUT_EXHAUSTED]) {
+          if (!stopped && unsettled.some((line) => line.includes(exhausted))) {
+            unsettled.splice(0, unsettled.length, exhausted)
+            break
+          }
+        }
         const runState: RunDocument["runState"] =
           runStateOverride ?? (stopped ? "stopped" : unsettled.length === 0 ? "complete" : "error")
         const runError =

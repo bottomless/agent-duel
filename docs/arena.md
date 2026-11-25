@@ -1919,16 +1919,25 @@ by the other side or a new prompt. Use `canRetryRun` in `arena/domain.ts` for bo
 refusal and the app's button.
 
 An Arena model request that gets no response headers, or no SSE event, for 150 seconds fails with
-`Response headers timed out` or `SSE read timed out`. Recovery uses the retry or continuation
-policy above. The pane shows **Continuing after model timeout** until the recovery stream ends. Three timeouts in a row
-are recovered; the fourth fails the run with only the neutral `IDLE_EXHAUSTED` text, and completed
-work stays. The label stays until the run settles, so the pane goes straight to Failed. Only the
-contestant's own model requests count; title and compaction requests neither count nor end a
-recovery. A new prompt, the end of the run, or a response whose SSE finish reason is `stop` or
-`tool_calls` starts the count again. A `length` cutoff or an error event inside the stream does not.
-A normally finished response resets the count even if its tool failed: the fetch layer cannot
-see tool results. The counter lives in memory and resets after an engine restart; continuing an
-interrupted battle still requires Resume.
+`Response headers timed out` or `SSE read timed out`. Pre-header and mid-stream timeouts keep
+separate budgets (`engine-runtime/idle.ts`).
+
+A mid-stream `SSE read timed out` uses the continuation policy above, shows **Continuing after
+model timeout** until the recovery stream ends, and recovers three timeouts in a row
+(`MAX_RECOVERIES`); the fourth fails the run with only the neutral `IDLE_EXHAUSTED` text, and
+completed work stays. The label stays until the run settles, so the pane goes straight to Failed.
+A new prompt, the end of the run, or a response whose SSE finish reason is `stop` or `tool_calls`
+starts the count again. A `length` cutoff or an error event inside the stream does not. A normally
+finished response resets the count even if its tool failed: the fetch layer cannot see tool results.
+
+A pre-header `Response headers timed out` never spends the mid-stream recovery budget, sets no
+continuation note, and shows **Waiting for network** during Core's normal retry backoff (not a
+persistent wait). Five consecutive pre-header timeouts are retried (`MAX_HEADER_TIMEOUT_RETRIES`);
+the sixth fails the run with the neutral `HEADER_TIMEOUT_EXHAUSTED` text and marks it retryable
+through **Retry**. Any 2xx response, a new prompt, or the end of the run resets that count. Only
+the contestant's own model requests count toward either budget; title and compaction requests
+neither count nor end a recovery. Both counters live in memory and reset after an engine restart;
+continuing an interrupted battle still requires Resume.
 
 The chunk deadline is Core's, inside `AISDK.providerFetch`. It moves on every parsed SSE event, so
 chunks that carry only OpenRouter `reasoning_details` keep a long thought alive, and keep-alive

@@ -37,6 +37,8 @@ import {
   setArenaAutoAccept,
 } from "@/arena/engine-runtime"
 import { ArenaResponseRecovery } from "@/arena/response-recovery"
+import { failedAnswer } from "@/arena/session-runtime/projection"
+import { SessionRetry } from "@/session/retry"
 import { contestant } from "@/arena/model-profile"
 import type { Model } from "@opencode/schema/model"
 
@@ -666,18 +668,32 @@ describe("Arena v2 engine runtime", () => {
       ).toBe(true)
       expect(idleRecovery(sessionID)).toBeUndefined()
 
-      // 1st timeout of a new sequence: no headers at all is bounded by the same deadline, as in 1.x.
+      // Pre-header timeouts do not spend the mid-stream model recovery budget, set no continuation
+      // note, and retry with "Waiting for network" (bounded, not persistent).
       const headless = yield* failure("no-headers")
       expect(headless.reason).toMatchObject({
         _tag: "Transport",
         operation: "request",
         message: "Response headers timed out",
       })
-      expect(yield* retryDecision({ type: "provider.transport", message: "Response headers timed out" })).toMatchObject(
-        { retry: true, message: "Continuing after model timeout" },
-      )
+      expect(idleRecovery(sessionID)).toBeUndefined()
+      expect(yield* retryDecision({ type: "provider.transport", message: "Response headers timed out" })).toEqual({
+        retry: true,
+        delay: 2_000,
+        message: "Waiting for network",
+      })
+      const headerContinuation = {
+        sessionID,
+        model: contestantModel.ref,
+        error: { type: "provider.transport", message: "Response headers timed out" },
+        message: undefined,
+        text: undefined as string | undefined,
+      }
+      yield* runHooks("continuation", headerContinuation)
+      expect(headerContinuation.text).toBeUndefined()
 
-      // The 2nd and 3rd are recovered; the 4th in a row ends the run with the 1.x explanation.
+      // Mid-stream SSE timeouts keep their own 3-recovery budget; the 4th in a row ends the run.
+      expect((yield* failure("heartbeat")).message).toContain("SSE read timed out")
       expect((yield* failure("heartbeat")).message).toContain("SSE read timed out")
       expect((yield* failure("heartbeat")).message).toContain("SSE read timed out")
       expect(idleRecovery(sessionID)).toBe(3)
@@ -687,11 +703,22 @@ describe("Arena v2 engine runtime", () => {
       // The label stays until the run settles, so the pane never reads "Working" before "Failed".
       expect(idleRecovery(sessionID)).toBe(3)
 
-      // A new prompt ends a running sequence too.
+      // A new prompt resets both timeout sequences.
       expect((yield* failure("heartbeat")).message).toContain("SSE read timed out")
       expect(idleRecovery(sessionID)).toBe(1)
       yield* runHooks("prompt", { sessionID })
       expect(idleRecovery(sessionID)).toBeUndefined()
+
+      // Pre-header timeouts still have their own cap so a run cannot wait forever.
+      for (let attempt = 0; attempt < ArenaResponseRecovery.MAX_HEADER_TIMEOUT_RETRIES; attempt++) {
+        expect((yield* failure("no-headers")).message).toContain("Response headers timed out")
+        expect(idleRecovery(sessionID)).toBeUndefined()
+      }
+      const headerExhausted = yield* failure("no-headers")
+      expect(headerExhausted.message).toBe(ArenaResponseRecovery.HEADER_TIMEOUT_EXHAUSTED)
+      expect(yield* retryDecision({ type: "provider.unknown", message: headerExhausted.message })).toEqual({
+        retry: false,
+      })
     }).pipe(Effect.provide(AISDK.locationLayer), Effect.scoped)
 
     try {
@@ -798,6 +825,27 @@ describe("Arena v2 engine runtime", () => {
         expect(await timeout(child, root)).toBe("SSE read timed out")
         expect(idleRecovery(child)).toBe(attempt)
       }
+      resetIdleRun(root)
+
+      // Pre-header timeouts keep their own cap and reset as soon as 2xx headers arrive.
+      const headerTimeout = (sessionID: string, rootSessionID = sessionID) => {
+        answer = () => Promise.reject(new Error("Response headers timed out"))
+        return request(sessionID, rootSessionID).then(
+          () => "finished",
+          (error: Error) => error.message,
+        )
+      }
+      for (let attempt = 0; attempt < ArenaResponseRecovery.MAX_HEADER_TIMEOUT_RETRIES; attempt++) {
+        expect(await headerTimeout(root)).toBe("Response headers timed out")
+        expect(idleRecovery(root)).toBeUndefined()
+      }
+      // Even a `length`-cut 200 response proves headers arrived and resets the pre-header count,
+      // while leaving the mid-stream model recovery budget untouched.
+      await respond(() => sse(finish("length")))
+      for (let attempt = 0; attempt < ArenaResponseRecovery.MAX_HEADER_TIMEOUT_RETRIES; attempt++) {
+        expect(await headerTimeout(root)).toBe("Response headers timed out")
+      }
+      expect(await headerTimeout(root)).toBe(ArenaResponseRecovery.HEADER_TIMEOUT_EXHAUSTED)
     } finally {
       for (const sessionID of [root, child, other]) resetIdleBudget(sessionID)
     }
@@ -1048,4 +1096,44 @@ describe("Arena v2 engine runtime", () => {
       await Effect.runPromise(Scope.close(scope, Exit.void))
     }
   }, 30_000)
+
+  it("marks exhausted pre-header timeouts manually retryable while keeping idle exhaustion terminal", () => {
+    const transcript = [
+      {
+        info: {
+          id: "msg_user_1" as never,
+          sessionID: "ses_1" as never,
+          role: "user" as const,
+          time: { created: 1_000 },
+          agent: "build" as never,
+          model: { providerID: "arena" as never, modelID: "contestant" as never },
+        },
+        parts: [],
+      },
+    ]
+    const headerFailed = failedAnswer(
+      transcript,
+      { type: "provider.unknown", message: ArenaResponseRecovery.HEADER_TIMEOUT_EXHAUSTED },
+      { started: 1_000, now: 2_000 },
+    )
+    expect(headerFailed?.info.role).toBe("assistant")
+    const headerError = headerFailed?.info.role === "assistant" ? headerFailed.info.error : undefined
+    expect(headerError).toEqual({
+      name: "APIError",
+      data: { message: ArenaResponseRecovery.HEADER_TIMEOUT_EXHAUSTED, isRetryable: true },
+    })
+    expect(SessionRetry.retryable(headerError!, "arena")).toBeDefined()
+
+    const idleFailed = failedAnswer(
+      transcript,
+      { type: "provider.unknown", message: ArenaResponseRecovery.IDLE_EXHAUSTED },
+      { started: 1_000, now: 2_000 },
+    )
+    const idleError = idleFailed?.info.role === "assistant" ? idleFailed.info.error : undefined
+    expect(idleError).toEqual({
+      name: "UnknownError",
+      data: { message: ArenaResponseRecovery.IDLE_EXHAUSTED },
+    })
+    expect(SessionRetry.retryable(idleError!, "arena")).toBeUndefined()
+  })
 })

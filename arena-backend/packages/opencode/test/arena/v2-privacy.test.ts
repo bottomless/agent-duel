@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { REDACTED_THINKING } from "@agent-duel/arena-service/reasoning"
 import { requestTooLargeMessage, singleAgentAllowanceMessage } from "@agent-duel/arena-service/request-error"
+import { ArenaResponseRecovery } from "@/arena/response-recovery"
 import { sanitizeV2 } from "@/arena/v2-privacy"
 
 describe("sanitizeV2", () => {
@@ -245,4 +246,23 @@ test("keeps the single-agent limit refusal on a failed step while hiding upstrea
     type: "session.step.failed",
     data: { error: { type: "provider.api", message: singleAgentAllowanceMessage } },
   })
+})
+
+test("keeps neutral timeout exhaustion explanations while hiding upstream details", () => {
+  for (const message of [ArenaResponseRecovery.IDLE_EXHAUSTED, ArenaResponseRecovery.HEADER_TIMEOUT_EXHAUSTED]) {
+    const result = sanitizeV2({
+      type: "session.step.failed",
+      data: {
+        error: {
+          type: "provider.unknown",
+          message,
+          response: { body: "private upstream text" },
+        },
+      },
+    })
+    expect(result).toEqual({
+      type: "session.step.failed",
+      data: { error: { type: "provider.unknown", message } },
+    })
+  }
 })

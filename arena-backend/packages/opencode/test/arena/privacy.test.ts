@@ -139,6 +139,18 @@ describe("ArenaPrivacy", () => {
       error: { data: { message: ArenaResponseRecovery.IDLE_EXHAUSTED, isRetryable: false } },
     })
     expect(JSON.stringify(result)).not.toContain(hiddenSlug)
+
+    const headerTimeout = contestantMessage()
+    if (headerTimeout.info.role !== "assistant") throw new Error("Expected assistant fixture")
+    headerTimeout.info.error = {
+      name: "APIError",
+      data: { message: ArenaResponseRecovery.HEADER_TIMEOUT_EXHAUSTED, isRetryable: true, responseBody: hiddenSlug },
+    }
+    const sanitizedHeaderTimeout = ArenaPrivacy.messages([headerTimeout])[0]!
+    expect(sanitizedHeaderTimeout.info).toMatchObject({
+      error: { data: { message: ArenaResponseRecovery.HEADER_TIMEOUT_EXHAUSTED, isRetryable: true } },
+    })
+    expect(JSON.stringify(sanitizedHeaderTimeout)).not.toContain(hiddenSlug)
   })
 
   test("keeps the request-too-large explanation while stripping provider details", () => {

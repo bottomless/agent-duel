@@ -8,7 +8,10 @@ export function reason(finish?: string): Reason | undefined {
 export const IDLE_RECOVERING = "Continuing after model timeout"
 export const COMPACTION_EMPTY = "The agent could not summarize its context. Retry to continue."
 export const IDLE_EXHAUSTED =
-  "The model stopped responding after three recovery attempts. Completed work has been preserved. Continue with a smaller request."
+  "The response timed out after three recovery attempts. Completed work has been preserved. Try again or continue with a smaller request."
+export const MAX_HEADER_TIMEOUT_RETRIES = 5
+export const HEADER_TIMEOUT_EXHAUSTED =
+  "No response arrived before the request timed out. Completed work has been preserved. Retry to continue."
 export const IDLE_TOOL_INTERRUPTED =
   "The model stopped responding while generating this tool call. This call was not executed. Replace it with smaller writes or patches. Do not repeat successful tool calls."
 export const IDLE_CONTINUE =
