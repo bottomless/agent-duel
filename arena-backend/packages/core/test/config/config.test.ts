@@ -95,6 +95,58 @@ const provider = {
 }
 
 describe("Config", () => {
+  it.live("loads imported plugin config below the user's own config at each level", () =>
+    Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const root = yield* Effect.promise(() => fs.realpath(tmp.path))
+          const project = path.join(root, "repo")
+          const globalDirectory = path.join(root, "global")
+          const imported = path.join(root, "agent-plugins")
+          const importedGlobal = path.join(imported, "global")
+          const importedProject = ConfigDiscovery.importedProjectDirectory(imported, project)
+          yield* Effect.promise(async () => {
+            await fs.mkdir(path.join(project, ".opencode"), { recursive: true })
+            await fs.mkdir(globalDirectory, { recursive: true })
+            await fs.mkdir(importedGlobal, { recursive: true })
+            await fs.mkdir(importedProject, { recursive: true })
+            await fs.writeFile(path.join(importedGlobal, "opencode.json"), JSON.stringify({ shell: "imported-global" }))
+            await fs.writeFile(path.join(importedProject, "opencode.json"), JSON.stringify({ shell: "imported-project" }))
+          })
+
+          const entries = yield* Effect.gen(function* () {
+            const config = yield* Config.Service
+            return yield* config.entries()
+          }).pipe(
+            Effect.provide(
+              testLayer(
+                project,
+                globalDirectory,
+                project,
+                undefined,
+                Watcher.testLayer,
+                emptyCredentialNode,
+                emptyWellknownNode,
+                { imported },
+              ),
+            ),
+          )
+
+          const directories = entries.flatMap((entry) =>
+            entry.type === "directory" && inFixture(root, entry.path) ? [entry.path] : [],
+          )
+          expect(directories).toEqual([
+            AbsolutePath.make(importedGlobal),
+            AbsolutePath.make(globalDirectory),
+            importedProject,
+            AbsolutePath.make(path.join(project, ".opencode")),
+          ])
+          expect(Config.latest(entries, "shell")).toBe("imported-project")
+        }),
+      ),
+    ),
+  )
+
   it.live("excludes home-level claude and agents directories when global is disabled", () =>
     Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
       Effect.flatMap((tmp) => {

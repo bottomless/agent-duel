@@ -10,6 +10,9 @@ export function plan(sources: ConfigDiscovery.Sources) {
     ...(sources.system?.present ? [sources.system.path] : []),
     ...(sources.global ? [sources.global] : []),
     ...sources.project.filter((root) => root.present).map((root) => root.path),
+    ...importedRoots(sources)
+      .filter((root) => root.present)
+      .map((root) => root.path),
   ]
   const files = [
     ...(sources.system ? [sources.system.path] : []),
@@ -18,6 +21,8 @@ export function plan(sources: ConfigDiscovery.Sources) {
     ...sources.claude,
     ...sources.agents,
     ...(sources.explicit ? [sources.explicit] : []),
+    // The daemon creates an import's dir when the user first imports, so watch for its arrival.
+    ...importedRoots(sources).map((root) => root.path),
   ]
   // Keep a parent watch for each root so deletion/recreation is observable.
   const parents = Map.groupBy(
@@ -38,4 +43,8 @@ export function plan(sources: ConfigDiscovery.Sources) {
       })),
     ].map((target) => [JSON.stringify(target), target satisfies Watcher.WatchInput]),
   )
+}
+
+function importedRoots(sources: ConfigDiscovery.Sources) {
+  return [...(sources.imported?.global ? [sources.imported.global] : []), ...(sources.imported?.project ?? [])]
 }

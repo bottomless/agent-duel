@@ -29,6 +29,12 @@ export const ArenaActiveOperationSchema = z.enum([
   "copying_environment",
   "checking_workspace",
   "releasing_environment",
+  "stopping_agents",
+  "pausing_services",
+  "snapshotting_changes",
+  "resuming_services",
+  "importing_results",
+  "archiving_transcripts",
   "preserving_results",
   "applying_changes",
   "updating_conversation",
@@ -486,6 +492,7 @@ export const ArenaSnapshotSchema = z
       canRetryResolution: z.boolean(),
       canDiscardWinner: z.boolean().optional(),
       revealed: z.boolean(),
+      stoppingAt: z.string().optional(),
     })
       .passthrough()
       .optional(),

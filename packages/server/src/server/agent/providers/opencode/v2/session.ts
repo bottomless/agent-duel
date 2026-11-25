@@ -255,7 +255,7 @@ export class OpenCodeV2Session implements AgentSession {
       resolve: (userId) => api().resolve(userId),
       singleAgentVote: (ratingId, vote, participantId) =>
         api().singleAgentVote(ratingId, vote, participantId),
-      archive: () => api().archive(),
+      archive: (options) => api().archive(options),
       snapshot: (chatId) => api().snapshot(chatId),
       turn: (turnId) => api().turn(turnId),
       start: (chatId, prompt, participantId, autoAccept, attachments) =>

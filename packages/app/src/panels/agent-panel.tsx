@@ -6,6 +6,7 @@ import {
   singleAgentRatingRequired,
   singleAgentTurnsByPrompt,
 } from "@/arena/single-agent";
+import { AgentPluginsBanner } from "@/agent-plugins/project-plugins";
 import { SingleAgentRatingDialog, SingleAgentComposerTooltip } from "@/arena/single-agent-rating";
 import { usePendingArenaPrompt } from "@/arena/use-pending-arena-prompt";
 import { ArenaStreamStatus } from "@/arena/stream-status";
@@ -1320,6 +1321,7 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
     textSource,
     editText,
     replaceText,
+    flushText,
     textReplacement,
     attachments,
     setAttachments,
@@ -1333,6 +1335,7 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
       textSource,
       editText,
       replaceText,
+      flushText,
       textReplacement,
       attachments,
       setAttachments,
@@ -1345,6 +1348,7 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
       textSource,
       editText,
       replaceText,
+      flushText,
       textReplacement,
       attachments,
       setAttachments,
@@ -2984,6 +2988,10 @@ function ActiveAgentComposer({
   const handleMessageSent = useCallback(() => {
     if (!battleReplyEnabled) onMessageSent();
   }, [battleReplyEnabled, onMessageSent]);
+  const pluginsBanner = useMemo(
+    () => (cwd ? <AgentPluginsBanner serverId={serverId} cwd={cwd} /> : undefined),
+    [cwd, serverId],
+  );
 
   return (
     <View style={animatedStaticStyles.inputAreaWrapper} onLayout={onInputAreaLayout}>
@@ -3034,6 +3042,7 @@ function ActiveAgentComposer({
           isCompactLayout={isCompactComposerLayout}
         />
       </SingleAgentComposerTooltip>
+      {pluginsBanner}
     </View>
   );
 }

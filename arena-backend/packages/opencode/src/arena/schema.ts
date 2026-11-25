@@ -354,6 +354,7 @@ export const Snapshot = Schema.Struct({
       canRetryResolution: Schema.Boolean,
       canDiscardWinner: Schema.Boolean,
       revealed: Schema.Boolean,
+      stoppingAt: Schema.optional(Schema.String),
     }),
   ),
   history: Schema.Array(HistoryItem),

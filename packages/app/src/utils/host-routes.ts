@@ -497,6 +497,7 @@ export const SETTINGS_SECTION_SLUGS = [
   "shortcuts",
   "notifications",
   "storage",
+  "agent-plugins",
 ] as const;
 
 export type SettingsSectionSlug = (typeof SETTINGS_SECTION_SLUGS)[number];

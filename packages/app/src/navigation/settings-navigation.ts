@@ -6,6 +6,7 @@ import {
   buildProjectsSettingsRoute,
   buildSettingsHostSectionRoute,
   buildSettingsRoute,
+  buildSettingsSectionRoute,
   type HostSectionSlug,
   type SettingsSectionSlug,
 } from "@/utils/host-routes";
@@ -16,6 +17,10 @@ export type SettingsView =
   | { kind: "section"; section: SettingsSectionSlug }
   | { kind: "host"; serverId: string; section: HostSectionSlug }
   | { kind: "project"; serverId: string; projectId: string };
+
+export function openSettingsSection(section: SettingsSectionSlug): void {
+  router.push(buildSettingsSectionRoute(section));
+}
 
 export function openProjectSettings(serverId: string, projectId: string): void {
   router.push(buildProjectSettingsRoute(serverId, projectId));

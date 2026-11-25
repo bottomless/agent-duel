@@ -29,6 +29,28 @@ describe("arena operation progress", () => {
     ])
   })
 
+  test("keeps the interrupted prompt wait when the watchdog retries cancellation", () => {
+    const interrupted = {
+      operation: "stopping_agents",
+      state: "interrupted",
+      startedAt: 1_000,
+      finishedAt: 121_000,
+    } as const
+    const recovery = mergeOperationProgress([interrupted], {
+      operation: "stopping_agents",
+      state: "running",
+      startedAt: 123_000,
+    })
+    expect(
+      mergeOperationProgress(recovery, {
+        operation: "stopping_agents",
+        state: "completed",
+        startedAt: 123_000,
+        finishedAt: 123_010,
+      }),
+    ).toEqual([{ operation: "stopping_agents", state: "completed", startedAt: 3_000, finishedAt: 123_010 }])
+  })
+
   test("starts a step that runs again in a new attempt fresh", () => {
     const checked = {
       operation: "checking_workspace",

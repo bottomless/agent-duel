@@ -241,7 +241,7 @@ const group = HttpApiGroup.make("arena")
   .add(
     HttpApiEndpoint.post("archiveSession", "/arena/sessions/:sessionID/archive", {
       params: { sessionID: Schema.String },
-      query: WorkspaceRoutingQuery,
+      query: Schema.Struct({ ...WorkspaceRoutingQueryFields, onlyIfEmpty: Schema.optional(Schema.Literal("true")) }),
       success: Schema.NullOr(ArenaSchema.Snapshot),
       error: ArenaApiError,
     }).annotateMerge(

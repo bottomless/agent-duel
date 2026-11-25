@@ -10,11 +10,13 @@ import {
   noteArenaTermsRefusal,
   noteArenaUpdateRequired,
 } from "../accounts/control-plane-outcomes.js";
+import { SettledArenaRequestError } from "./refusal.js";
 import {
   ArenaControlPlaneError,
   ArenaSessionRejectedError,
   ArenaTermsRequiredError,
   ArenaUpdateRequiredError,
+  arenaRequestSettled,
   runWithArenaAccountSession,
 } from "./account-session.js";
 
@@ -46,6 +48,21 @@ describe("runWithArenaAccountSession", () => {
       message: "Your session expired. Sign in again to continue.",
     });
   });
+
+  it.each([new SettledArenaRequestError("Rejected"), new TypeError("fetch failed")])(
+    "a parallel account refusal does not change settlement of %s",
+    async (failure) => {
+      signIn("account-session-token");
+      const result = await runWithArenaAccountSession("arena.turn.start.request", async () => {
+        noteArenaSessionRefusal();
+        throw failure;
+      }).catch((error: unknown) => error);
+      expect(result).toBeInstanceOf(ArenaSessionRejectedError);
+      expect(result instanceof Error && arenaRequestSettled(result)).toBe(
+        failure instanceof SettledArenaRequestError,
+      );
+    },
+  );
 
   it("refuses model work before it starts, but lets a battle stop", async () => {
     signIn("account-session-token");

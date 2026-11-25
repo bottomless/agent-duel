@@ -19,6 +19,8 @@ import {
   type ProviderRuntimeSettings,
 } from "../../provider-launch-config.js";
 import { resolveEngineLogPath, resolveOpenCodeHomeDir } from "./paths.js";
+import { resolveAgentPluginsLayout } from "../../../agent-plugins/layout.js";
+import { resolvePaseoHome } from "../../../paseo-home.js";
 import {
   openCodeStartupTimeoutMessage,
   hasArenaDatabaseUpgradeLine,
@@ -938,6 +940,10 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
               }
             : {}),
           OPENCODE_LOG_FILE: resolveEngineLogPath(),
+          // The engine loads the user's imported Claude Code and Codex plugins from here.
+          AGENT_DUEL_IMPORTED_CONFIG: input.isArenaLaunch
+            ? resolveAgentPluginsLayout(resolvePaseoHome()).imported
+            : undefined,
           [OPENCODE_CONTROL_TOKEN_ENV]: input.isArenaLaunch ? undefined : this.controlToken,
         },
       });

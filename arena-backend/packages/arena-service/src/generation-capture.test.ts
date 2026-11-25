@@ -39,9 +39,14 @@ function matches(row: Row, filter: Record<string, unknown>) {
   })
 }
 
-/** Keeps every collection the proxy writes in memory. `single` makes the assignment a single-agent one. */
+/** Keeps every collection the proxy writes in memory. `modelSize` makes the assignment a single-agent one. */
 function memoryDb(
-  input: { readonly single?: boolean; readonly failCaptures?: boolean; readonly model?: typeof model } = {},
+  input: {
+    readonly modelSize?: "medium" | "frontier"
+    readonly scopeID?: string
+    readonly failCaptures?: boolean
+    readonly model?: typeof model
+  } = {},
 ) {
   const collections = new Map<string, Map<string, Row>>()
   const rows = (name: string) => {
@@ -50,9 +55,13 @@ function memoryDb(
   }
   const assignmentSet = {
     userId: "user-1",
-    scopeID: "turn-1",
+    scopeID: input.scopeID ?? "turn-1",
     assignments: [
-      { assignmentID: "opaque-id", model: input.model ?? model, ...(input.single ? { modelSize: "frontier" } : {}) },
+      {
+        assignmentID: "opaque-id",
+        model: input.model ?? model,
+        ...(input.modelSize ? { modelSize: input.modelSize } : {}),
+      },
     ],
   }
   const db = {
@@ -111,17 +120,17 @@ function proxy(db: ArenaDb, fetch: ArenaServiceOptions["fetch"], options: Partia
   }).openrouter
 }
 
-function contestantRequest(messages: unknown[], id = generationID) {
+function contestantRequest(messages: unknown[], id = generationID, scopeID = "turn-1", model = "contestant") {
   return new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "X-Arena-Assignment-ID": "opaque-id",
-      "X-Arena-Scope-ID": "turn-1",
+      "X-Arena-Scope-ID": scopeID,
       "X-Arena-Generation-ID": id,
     },
     body: JSON.stringify({
-      model: "contestant",
+      model,
       messages,
       tools: [{ type: "function", function: { name: "read", parameters: {} } }],
       stream: true,
@@ -380,12 +389,36 @@ describe("generation capture", () => {
     })
   })
 
-  test("skips single-agent chats and services that leave it off", async () => {
-    const single = memoryDb({ single: true })
-    await (await proxy(single.db, recordingFetch([]))(contestantRequest([{ role: "user", content: "hi" }]))).text()
-    expect(single.rows("arenaGenerationCaptures")).toHaveLength(0)
-    expect(single.rows("arenaGenerationParts")).toHaveLength(0)
+  test.each(["medium", "frontier"] as const)(
+    "captures a %s single-agent turn under its rating's scope, sharing parts across calls",
+    async (modelSize) => {
+      const sessionID = "ses_single"
+      const messageID = "msg_prompt"
+      const ratingID = `single-agent|${sessionID.length}:${sessionID}|${messageID.length}:${messageID}`
+      const store = memoryDb({ modelSize, scopeID: ratingID })
+      const sent: string[] = []
+      const send = proxy(store.db, recordingFetch(sent))
+      const model = modelSize === "medium" ? "medium" : "contestant"
+      const first = [{ role: "user", content: "Fix this" }]
+      await (await send(contestantRequest(first, generationID, ratingID, model))).text()
+      const loaded = await loadGenerationCapture(store.db, "user-1", generationID)
+      expect(loaded?.verified).toBe(true)
+      expect(JSON.stringify(loaded!.body)).toBe(sent[0]!)
+      expect(loaded!.capture).toMatchObject({ scopeID: ratingID, assignmentID: "opaque-id" })
+      expect(loaded!.capture.response).toMatchObject({ state: "complete", status: 200 })
+      const firstParts = store.rows("arenaGenerationParts").length
 
+      const second = "gen_fedcba9876543210fedcba9876543210"
+      await (
+        await send(contestantRequest([...first, { role: "assistant", content: "Done." }], second, ratingID, model))
+      ).text()
+      expect(store.rows("arenaGenerationCaptures")).toHaveLength(2)
+      // The follow-up resends the history; only its new message is a new part.
+      expect(store.rows("arenaGenerationParts")).toHaveLength(firstParts + 1)
+    },
+  )
+
+  test("skips capture on services that leave it off", async () => {
     const off = memoryDb()
     const send = proxy(off.db, recordingFetch([]), { captureGenerations: undefined })
     await (await send(contestantRequest([{ role: "user", content: "hi" }]))).text()

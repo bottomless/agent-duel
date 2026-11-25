@@ -74,9 +74,14 @@ the session. Electron opens the system browser, and an email link may be opened 
    signature, and returns it to the app.
 
 Desktop flows include a temporary loopback return address owned by the initiating Electron window.
-The control-plane success page posts to it when you click **Open Agent Duel**. This focuses that
-window without an OS protocol link, which could launch another installed build during development.
-The address carries no account credentials. Browser-only flows keep the manual return instruction.
+The control-plane success page links to it as **Open Agent Duel**. Use a link, never a form: Safari
+warns about a non-secure form whenever an HTTPS page submits one to the loopback address, even with
+`method="get"`. Builds released before the listener accepted a link answer only a POST, so the
+control plane still gives them the form. The desktop answers both with No Content, which focuses the
+window and leaves the browser on the success page. Returning this way avoids an OS protocol link,
+which could launch another installed build during development. The address carries no account
+credentials. Browser-only flows keep the manual return instruction. If the return fails, the app
+still claims the finished flow on its next poll.
 
 OAuth `state` is stored on the flow rather than in a cookie, so the callback can land in a browser
 that shares no cookie jar with the app.

@@ -67,6 +67,8 @@ export const Options = Schema.Struct({
   claude: Schema.optional(Schema.Boolean),
   file: Schema.optional(Schema.String),
   content: Schema.optional(Schema.String),
+  // Root of the config dirs Agent Duel imports from Claude Code and Codex plugins.
+  imported: Schema.optional(Schema.String),
 })
 export type Options = typeof Options.Type
 
@@ -332,6 +334,18 @@ export const layer = (options?: Options) =>
         // their settings, and since policies evaluate earliest-loaded first, only managed policies outrank theirs.
         // Global entries sit below explicit and direct files; project directories rank above them.
         const globalSupplementary = sources.global ? yield* loadDirectory(sources.global).pipe(Effect.orDie) : []
+        // Imports rank below the user's own config at each level: the global import below the
+        // global dir, the project import above it and below the project's own files.
+        const importedGlobal = sources.imported?.global?.present
+          ? yield* loadDirectory(sources.imported.global.path).pipe(Effect.orDie)
+          : []
+        const importedProject = yield* Effect.forEach(
+          sources.imported?.project.filter((root) => root.present) ?? [],
+          (root) => loadDirectory(root.path),
+        ).pipe(
+          Effect.orDie,
+          Effect.map((entries) => entries.flat()),
+        )
         const projectSupplementary = yield* Effect.forEach(
           sources.project.filter((root) => root.present),
           (root) => loadDirectory(root.path),
@@ -368,7 +382,9 @@ export const layer = (options?: Options) =>
           ...managedPolicies,
           ...integrated,
           ...wellknownDocuments.flat(),
+          ...importedGlobal,
           ...globalSupplementary,
+          ...importedProject,
           ...explicit,
           ...direct,
           ...projectSupplementary,

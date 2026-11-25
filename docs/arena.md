@@ -85,14 +85,16 @@ Research readers use `resolveResearchDocument` from arena-service under the same
 Deploy the control plane's updated arena-service dependency before shipping this protocol: an old
 server refuses chunks, which the desktop retains for automatic recovery after the server upgrade.
 
-The desktop's per-call copies are scrubbed, so in hosted battles the control plane keeps each
-contestant call as OpenRouter received it, with the real model, routing, cache key and restored
-reasoning, and its raw response (`arena-service/src/generation-capture.ts`, `captureGenerations`).
-Messages, tools and images are stored once per account by content, because each call resends the
-whole history. Single-agent chats, keep-alive pings and the service's own comparison and metadata
-calls are not kept. A retried Carbon call (see [Request](#blinding)) keeps its refused attempt as a
-separate record under a new generation id, linked by `retriedByGenerationID`. BYOK leaves capture
-off: its store is on the voter's machine, and those fields name the model.
+The desktop's per-call copies are scrubbed, so the hosted control plane keeps each contestant call
+as OpenRouter received it, with the real model, routing, cache key and restored reasoning, and its
+raw response (`arena-service/src/generation-capture.ts`, `captureGenerations`). Messages, tools and
+images are stored once per account by content, because each call resends the whole history.
+Single-agent turns are kept the same way: their scope ID is the `singleAgentRatings` record's ID,
+so a capture joins to the rating it belongs to the way a battle's joins to its turn. Keep-alive
+pings and the service's own comparison and metadata calls are not kept. A retried Carbon call (see
+[Request](#blinding)) keeps its refused attempt as a separate record under a new generation id,
+linked by `retriedByGenerationID`. BYOK leaves capture off: its store is on the voter's machine,
+and those fields name the model.
 
 The control plane also adds the endpoint's quantization to each stored request row, from a catalog of
 OpenRouter's endpoint lists that it saves itself (`arena-service/src/endpoint-label.ts`, `recordEndpointLabels`).
@@ -1008,9 +1010,20 @@ APFS a slot's clones share blocks with the checkout until something writes to th
 ## A turn
 
 **Start** (`startTurn` in `arena/service.ts`). Refuses unless the chat is `ready`, no turn is active, and no
-ordinary turn is in flight. A failed first send returns the saved message to New chat. Keep its
-error and retry instruction in the scrolling setup area until dismissed, so a long startup error
-cannot cover the composer. Freezes canonical `HEAD` together with the exact staged, unstaged, and
+ordinary turn is in flight. Return a refused first send to New chat only when it left the workspace
+empty. Use the creation receipt or a terminal engine response to distinguish a refusal from a lost
+reply. Check the empty draft under the admission lock and wait for the archive to confirm before
+leaving. A resolve that failed before a chat record existed leaves a session with no chat; the
+engine confirms that one as empty once the session holds no prompt, and answers `null`. The daemon
+takes `null` as that confirmation only from an empty-only archive, where a 404 stays a failure. A
+timeout or disconnect leaves the outcome unknown even if a snapshot has no turn yet. Keep
+that workspace and draft, and hand off the battle
+if the engine confirms admission. The composer stays usable while that is pending: carry only what
+was typed there into the chat's composer and never send it. Strip the restored prompt and leave
+behind the attachments sent with it, which the battle already has (`draftBeyondLateFirstBattle`).
+Keep the error and retry instruction in the scrolling setup area
+until dismissed, so a long startup error cannot cover the composer. Start freezes canonical `HEAD`
+together with the exact staged, unstaged, and
 nonignored-untracked state in `refs/battles/<chat>/turn-<n>/base`, then draws a pair. Both agents
 work from that frozen state, so later canonical movement cannot shift the ground under a running
 battle.
@@ -1067,8 +1080,8 @@ reply takes the same attachments as a chat message, and both contestants get ide
   (`/api/openrouter/api/v1/arena/media`, `arena/media-reference.ts`), names it
   `arena-media:sha256:<digest>:<type>`, and the proxy puts the data back before OpenRouter sees the
   body (arena-service `media.ts`). Uploads are stored per account for 72 hours, apart from the
-  generation-capture parts, because single-agent chats are not kept; a battle's capture stores its
-  own copy of what the call sent. An expired file is missing, and the engine uploads it again under
+  generation-capture parts: a capture stores its own copy of what the call sent. An expired file is
+  missing, and the engine uploads it again under
   the same reference, so the prompt and its cache do not change.
   The route is its own Vercel function in the control-plane repository, which must ship it before a
   desktop release relies on it; a control plane without it answers 404, and the engine sends the
@@ -1379,8 +1392,10 @@ field. Each layer has its own file:
   defensive boundary. The shared service seals reasoning text, summaries, signatures, and encrypted
   provider blocks before they leave the cloud (`arena-service/src/reasoning.ts`). Each reasoning
   chunk still crosses the stream, with one neutral `Thinking redacted` marker and opaque continuation
-  envelopes, so thinking does not trigger the model-idle deadline. The service restores the original
-  blocks on the next request; tool continuation must not see the marker in place of its reasoning.
+  envelopes, so thinking does not trigger the model-idle deadline. Replay structured provider
+  blocks and preserve plaintext from chunks without them. Replaying both copies of a structured
+  chunk grows the request and can change the cached prefix. Tool continuation must not see the
+  marker in place of its reasoning.
   Envelopes are authenticated against the account, scope, and assignment using a key derived from the
   service's OpenRouter key. The service drops an envelope that does not open instead of failing the
   request. Reasoning never carries into a later battle, even if both contestants have the same
@@ -1510,11 +1525,40 @@ actually verified. Use one utility request; increase evidence quality before add
   `arena/service.ts`). The engine records a side chosen there as `stopped` with `apply_a` or
   `apply_b`, but the app never shows the difference: the pill reads `Choose`, the result `Won`, as
   at the vote. The owner wants a battle that was stopped to read like one that ran to the end; only
-  a discard reads differently. Do not bring back `Keep` or `Kept`. A stopped battle gets no summary, so the move to `stopping` marks
-  it `skipped` in the same write (`transitionTurn` in `arena/mongo.ts`). Left `pending`, the decision
-  showed a summary on its way, and a restart failed it and offered Retry summary
-  (`interruptedComparisonState`). Keeping a side when the other had already failed, rather than
-  merely stopped, carries the same `voteDiscardedReason`, so metrics do not file it as a win.
+  a discard reads differently. Do not bring back `Keep` or `Kept`. Stop acknowledges the durable
+  claim before canceling agents; a repeat returns the current state. That claim skips comparison
+  in the same write, so the decision never promises a report and a restart cannot offer to retry it.
+  Keep “Canceling agents” in the stopping bar until the prompts settle. Core acknowledges an
+  interrupt before its runner has unwound: `cancelMs` measures the calls, `cancelWaitMs` the wait
+  after them. Neither is part of the time spent saving the result. After ten seconds, offer Discard
+  and keep it available if the watchdog moves the stop to recovery. Bound Git only where the
+  developer is leaving a battle: a stopped side’s save, restart recovery, the watchdog’s recovery,
+  and Discard (`limitGit`). Stopping a battle also starts that limit for a side that already
+  finished its prompt and is still saving (`TurnWork.stopped`), so a hung save ends on the Git
+  limit rather than waiting for the watchdog. A hung step there otherwise blocks every Arena
+  request before it can reach the stopped battle. A running battle waits for Git however long it
+  takes; a limit there failed sides whose `git add` was slow. Work that recovery starts and leaves
+  running, such as a resumed battle or a spare pair, waits too (`unlimitGit`). Opening a folder
+  reads its Git layout, so bound that under the same rule and leave the load running. Do not answer
+  for Git on a timeout: a folder recorded as not a repository stays that way until the engine
+  restarts. If Git times out saving one side, keep the other side’s result available. Keeping a side
+  when the other had already failed, rather than merely stopped, carries the same
+  `voteDiscardedReason`, so metrics do not file it as a win.
+
+  A worktree removal that fails (for instance on a Git timeout) leaves the run marked
+  `cleanup_failed` and schedules a background retry (`scheduleFailedCleanupRetry`) with backoff
+  under the background repository lock, so the folder is removed once Git works again instead of
+  waiting for a restart or the next send.
+
+  The watchdog and Discard wait two seconds for the fibers they interrupt, then recover without
+  them. A fiber wedged past that is marked abandoned (`TurnWork`), and every store call and Git
+  step it reaches afterwards ends as an interrupt, so it cannot write over recovery. Fork a turn’s
+  work with `forkTurnWork` so it carries that mark.
+
+  The app waits two minutes for a Discard. The engine gives up at 90 seconds and refuses, so a
+  Discard still queued behind recovery never runs after the app reported it failed. The check sits
+  where the write is issued (`recordDiscard`). A Discard already recorded answers with the battle
+  as it stands and finishes in the background.
 
 **Applying** (`promoteImpl` in `arena/service.ts`) records the resolution and enters `applying`
 in one compare-and-set. Acknowledge votes, kept sides, and review answers after that durable claim
