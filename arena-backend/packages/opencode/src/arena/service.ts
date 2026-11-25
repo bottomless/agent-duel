@@ -4945,14 +4945,17 @@ export const layer: Layer.Layer<
             completedAt,
           }),
         )
+        const chat = yield* promise(() => store.chat(turn.chatID))
+        if (!chat) return yield* Effect.fail(new Error(`Arena chat not found: ${turn.chatID}`))
         const permanentRef = `${refRoot(turn)}/${run.side}`
-        // Only this run writes its refs. A previous attempt may have written them without recording the result.
+        // Canonical holds the authoritative admitted refs; a previous attempt may have imported them
+        // without recording the result, while the contestant's host copy can be rewritten or pruned.
         const previous = yield* step(
           "snapshotting_changes",
           "gitFinalizeMs",
           stored?.permanentRef === permanentRef && stored.finalCommit
             ? Effect.succeed({ commit: stored.finalCommit, indexTree: stored.finalIndexTree })
-            : withGit(readResultRefs(run.worktree.directory, permanentRef)).pipe(gitDeadline("reading result refs")),
+            : withGit(readResultRefs(chat.repository.root, permanentRef)).pipe(gitDeadline("reading result refs")),
         ).pipe(Effect.mapError(error))
         // Pause previews while Git reads the worktree so watchers cannot rewrite files underneath it.
         const result = yield* Effect.acquireUseRelease(
@@ -4970,6 +4973,8 @@ export const layer: Layer.Layer<
                   worktree: run.worktree.directory,
                   baseSHA: turn.frozenBaseSHA,
                   frozenHead: turn.baseSnapshot?.canonicalHead ?? turn.frozenBaseSHA,
+                  canonical: chat.repository.root,
+                  ...(turn.baseSnapshot?.permanentRef ? { baseRef: turn.baseSnapshot.permanentRef } : {}),
                   permanentRef,
                   ...(previous.commit ? { expectedPermanentCommit: previous.commit } : {}),
                   ...(previous.indexTree ? { expectedFinalIndexTree: previous.indexTree } : {}),
@@ -4983,8 +4988,6 @@ export const layer: Layer.Layer<
               Effect.promise(() => resumeProcessGroups(paused)),
             ),
         ).pipe(Effect.mapError(error))
-        const chat = yield* promise(() => store.chat(turn.chatID))
-        if (!chat) return yield* Effect.fail(new Error(`Arena chat not found: ${turn.chatID}`))
         const refChanges = yield* step(
           "importing_results",
           "importRefsMs",
