@@ -590,6 +590,8 @@ export type RunDocument = {
   branchChanged?: boolean
   /** Refs the contestant moved, created, or deleted besides its own branch, recorded at finalize. */
   refChanges?: readonly RefChange[]
+  /** Absent when the imported refs live at the original `${permanentRef}-refs` prefix. */
+  refChangesPrefix?: string
   agentCommit?: string
   agentCommits?: readonly string[]
   wrapperCreated?: boolean
@@ -641,6 +643,7 @@ export type GenerationFailureKind =
   | "stream_read"
   | "stream_cancelled"
   | "replay_unavailable"
+  | "content_filter"
   | "routing"
 
 export type GenerationDocument = {

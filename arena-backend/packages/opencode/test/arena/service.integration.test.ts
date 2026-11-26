@@ -487,6 +487,7 @@ function installOpenRouterStub(options?: {
         }
         return Response.json({
           assignments: set.assignments.map(({ assignmentID }) => ({ assignmentID })),
+          decided: set.decision !== undefined,
         })
       }
       if (!set) return Response.json({ error: "not found" }, { status: 404 })
@@ -6460,19 +6461,19 @@ describe("Arena service vertical slice", () => {
           { ref: "refs/tags/v9", action: "created" },
         ],
       })
-      // The imported objects stay with the turn's permanent refs. The chat segment of the ref
-      // is a hash of the chat id (`refRoot` in service.ts), so match on the tail. Turn indexes
-      // start at 0, so the first turn of the chat is `turn-0`.
+      // The stored prefix must still locate both objects after the vote.
       const importedRefs = (
-        await $`git for-each-ref --format="%(refname) %(objectname)" refs/battles/`.cwd(directory.path).quiet().text()
+        await $`git for-each-ref --format="%(refname) %(objectname)" ${winner.refChangesPrefix!}`
+          .cwd(directory.path)
+          .quiet()
+          .text()
       )
         .trim()
         .split("\n")
-        .filter((line) => line.includes("/a-refs/"))
         .sort()
       expect(importedRefs).toEqual([
-        expect.stringMatching(new RegExp(`/turn-0/a-refs/heads/arena-main ${main.after}$`)),
-        expect.stringMatching(new RegExp(`/turn-0/a-refs/tags/v9 ${tag.after}$`)),
+        `${winner.refChangesPrefix}/heads/arena-main ${main.after}`,
+        `${winner.refChangesPrefix}/tags/v9 ${tag.after}`,
       ])
     } finally {
       router.restore()

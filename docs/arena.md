@@ -433,7 +433,13 @@ prompt fiber closes its turn under a per-run gate only when no steer waits and n
 otherwise answers it first; a steer is admitted under the same gate and refused once the side is
 closing. The refusal carries the code `arena_side_closing` through the daemon, and the app words it
 (`arena/steer-refusal.ts`) and keeps the draft. A steer still queued when Stop or an early choice cuts the run off
-is delivered as an unanswered message so the thread and a kept side's history agree.
+is delivered as an unanswered message so the thread and a kept side's history agree. So is one
+queued behind a step that fails without a retry: Core starts a new execution for queued input as
+soon as the failed drain ends, before the side's prompt returns, so the side's failure handler
+(`runtime.ts` `onRunFailure`) closes the side and delivers the queue first. The final retry decision
+in `engine-runtime/plugin.ts` runs it; Retry then answers the steer from the thread. A failure that
+never reaches the retry decision (an exhausted retry schedule, a failed compaction) leaves the queue
+for Retry.
 An engine restart leaves it in the inbox: the interrupted run's archive shows it, and Resume delivers it.
 The toolbar stays on one row.
 When its own available width is narrow, shorten the target labels, show tool permissions as a
@@ -1040,9 +1046,24 @@ behind the attachments sent with it, which the battle already has (`draftBeyondL
 Keep the error and retry instruction in the scrolling setup area
 until dismissed, so a long startup error cannot cover the composer. Start freezes canonical `HEAD`
 together with the exact staged, unstaged, and
-nonignored-untracked state in `refs/battles/<chat>/turn-<n>/base`, then draws a pair. Both agents
-work from that frozen state, so later canonical movement cannot shift the ground under a running
-battle.
+nonignored-untracked state in `refs/battles/<chat>/turn-<n>-<incarnation>/base`, then draws a pair.
+Allocate a fresh namespace at each start. Resume, vote, and recovery use the stored base ref,
+including the old ordinal-only names.
+
+Never reuse a turn index. The logical turn ID built from it also keys the hosted pair draw, research
+uploads and the leaderboard, so a reused index gets the old, possibly revealed pair back, and both
+contestants fail at once. The chat's counter can lag behind what exists: a restored store keeps an
+older count while later turn records or battle refs survive, and an engine stopped between a turn's
+insert and its activation leaves an unactivated `creating` record. Before each start, remove such a
+record and its base ref, and move the counter past every index a turn record or a `turn-<n>` ref of
+the chat claims. When neither survives, only the control plane remembers the index, so the draw's
+answer carries `decided` for a set an earlier battle already resolved. Keep that answer on the draw:
+a separate check is a round trip every start waits for. A control plane that predates `decided`
+gets the old check instead, a replay-route request for a generation that cannot exist, refused with
+403 for a decided set; only those starts wait for it. On a decided set, drop the frozen base and copy
+manifest, move the counter one index on, and start again (three times at most).
+Both agents work from that frozen state, so later canonical movement cannot shift the ground under a
+running battle.
 
 An untracked embedded repository, a directory with its own `.git` the checkout does not track, is
 frozen as its files: what that repository tracks or leaves unignored, filtered through the
@@ -1383,8 +1404,13 @@ field. Each layer has its own file:
   single-agent chat draws an assignment per message, so it keys on a hash of the account and session
   that stays the same across the chat. The same refusal rule applies to both fields, and the catalog
   check cannot see it: run `probeRouting` (`arena-service/src/openrouter.ts`) on a pool before it
-  ships. A provider that slows down mid-turn keeps the conversation; OpenRouter leaves it only when
-  that provider is unavailable. Gemini Carbon on Google AI Studio sometimes refuses a request that
+  ships. OpenRouter can leave an unavailable provider. When a Gemini continuation replays signed
+  reasoning, restrict it to the provider that issued the signature: Vertex rejects signatures from
+  Google AI Studio. Seal the signer from the upstream response with the reasoning.
+  A rate limit on the signer follows the usual retry path; it must not send that signature to the
+  other provider. If no replayed signature has a recognized signer, keep the assignment's routing
+  policy. This also applies to envelopes issued before signer tracking.
+  Gemini Carbon on Google AI Studio sometimes refuses a request that
   ends on plain-text tool results with a bare 400 `INVALID_ARGUMENT`, and accepts the same text in
   an object. On that exact refusal the proxy wraps each plain-text result in the pending tool batch
   as `{"output": …}` and sends the request once more, before anything reaches the desktop
@@ -1855,6 +1881,21 @@ credit-limit, and unknown payment failures, but Core classifies HTTP 402 as nonr
 failure (`ai/src/provider-error.ts`). There is no automatic temporary-budget retry in the V2 path.
 Never switch contestants or replay partial work to recover payment failures.
 
+A content filter ends the contestant's run. Keep its partial answer and saved files available through
+**Accept**, without a leaderboard vote. Do not run pending tools, retry the request or send it to a
+different host. A filtered stream and a filtered complete response are detected and handled alike, and
+both show the same neutral reason; the provider's explanation can identify the contestant or quote the
+prompt, so only the service logs it. Record a filtered call as an error, not a completion, but keep its
+usage: the response ended, so its tokens are final. The reveal returns only complete calls, so the
+engine's generation record is the one that keeps a refused call's tokens. A filtered stream carries its
+usage on the finish; a filtered complete response becomes an HTTP 400, so the service sends the usage
+beside the neutral error and the engine proxy takes it for the record before the model call sees the
+error alone.
+
+A steer queued behind the refused step starts no step; it is delivered unanswered, as for any step
+that fails without a retry (see the steer rules above). The engine proxy runs the side's failure
+handler before it hands the refusal to the model call.
+
 An output-token cap continues from saved output and tool results under the same assignment. Never
 replay completed tools. Leave unfinished calls unexecuted and request smaller writes or patches.
 Core allows two continuations, then fails on the third consecutive `length` response while
@@ -2025,7 +2066,8 @@ plane's `arenaAssignmentGenerationMetrics`, which keeps one row for every contes
 `outcome`: `complete`, `cancelled` when the client stopped reading, `failed` when the upstream broke
 or the fetch was refused before an answer, or `error` for an OpenRouter HTTP refusal, which keeps the
 `status` and the `provider` the refusal names. Rows written before `outcome` existed are complete.
-Only a complete row has usage and only complete rows reach the reveal. A row keeps the `provider` and
+Only complete rows reach the reveal. A complete row has usage; a content-filter refusal is an `error`
+row that also keeps its usage, since the response ended. A row keeps the `provider` and
 OpenRouter's `upstreamGenerationID` when the stream showed them; an early end also keeps `quietMs`,
 the silence since the last upstream data event, so a stall is measurable after the runtime logs
 expire. A Stop or a vote also ends open streams as `cancelled`, so count stalls by a `quietMs` near

@@ -9,12 +9,14 @@ import {
   messagesToGraft,
   type CancelOptions,
 } from "./session-runtime"
+import { contentFilterMessage } from "@agent-duel/arena-service/request-error"
 import { ARENA_SENT_AT } from "./session-runtime/projection"
 import { copyKeepingReferences } from "./compaction-reference"
 import { KeyedMutex } from "@opencode/core/effect/keyed-mutex"
 import { awaitedShells, closeShellTurn, openShellTurn, SERVER_CHECK_INTERVAL_MS } from "./engine-runtime/shell"
 import { ArenaActivity } from "./activity"
 import { withChildWaitLimit } from "./child-wait"
+import { createPromptDeclines } from "./prompt-declines"
 import { Stream } from "effect"
 import { createArenaStream, type Frame as ArenaStreamFrame } from "./stream"
 import { execFile as nodeExecFile } from "child_process"
@@ -77,7 +79,12 @@ import {
 } from "./port-retarget"
 import { comparisonTimeline, showedOutput } from "./comparison-timeline"
 import { ArenaContestant, contestantPermissions } from "./contestant"
-import { createBattleAssignments, createSingleAssignment, resolveAssignments } from "./assignment-client"
+import {
+  battleAssignmentsDecided,
+  createBattleAssignments,
+  createSingleAssignment,
+  resolveAssignments,
+} from "./assignment-client"
 import type { BattleAssignmentDecision } from "@agent-duel/arena-service/assignment-decision"
 import { ArenaAttachments } from "./attachments"
 import { forkSessionInto, type ArenaFork } from "./fork"
@@ -120,7 +127,9 @@ import {
 } from "./domain"
 import {
   acceptWinnerConflicts,
-  battleRefs,
+  allocateBattleBaseRef,
+  nextUnclaimedTurnIndex,
+  refRoot,
   changedBetweenBases,
   compare,
   comparisonFiles,
@@ -214,7 +223,15 @@ import type {
   WarmWorktreeRecord,
 } from "./records"
 import { battleMetricsSchemaVersion, reviewFlushLimit, runTelemetryVersion } from "./records"
-import { enabled, recoverOnce, registry, setTelemetry, shellLedgerDirectory, store as runtimeStore } from "./runtime"
+import {
+  enabled,
+  onRunFailure,
+  recoverOnce,
+  registry,
+  setTelemetry,
+  shellLedgerDirectory,
+  store as runtimeStore,
+} from "./runtime"
 import { stopOrphanShells } from "./engine-runtime/shell-ledger"
 import { recordStoppedShells } from "./shell-restart"
 import { create as createTelemetry } from "./telemetry"
@@ -351,6 +368,18 @@ export function contestantSystemInstruction(
   return [contestantWorktreeInstruction, pendingEnvironment, currentPreview].filter(Boolean).join("\n\n")
 }
 class GitDeadlineError extends Error {}
+
+// Each skip proves an index was used; a chat restored this far behind is not worth chasing further.
+const MAX_DECIDED_TURN_SKIPS = 3
+
+/** The hosted pair drawn for a turn index was already decided: an earlier battle used that index. */
+class DecidedTurnIndexError extends Error {
+  constructor(turnID: string) {
+    super(
+      `Arena turn ${turnID} was already used by an earlier battle, and the next turn numbers were too. Send your message again.`,
+    )
+  }
+}
 
 function finalizationErrorDetail(cause: Cause.Cause<unknown>) {
   const failure = Cause.squash(cause)
@@ -599,10 +628,6 @@ function keptReason(ref: ObservedRef, agentVersion: string): string {
     return `The winning agent moved ${label} back${where} and added nothing to it, so your ${label} was kept.`
   }
   return `Your ${label} was kept. The winning agent's version is at ${agentVersion}.`
-}
-
-function refRoot(turn: Pick<TurnDocument, "chatID" | "turnIndex">) {
-  return battleRefs(chatSlug(turn.chatID), turn.turnIndex).base.replace(/\/base$/, "")
 }
 
 function singleAgentResultRef(chatID: string, ratingID: string) {
@@ -1510,6 +1535,11 @@ export function normalTurnReservations() {
   }
 }
 
+function promptBlocked(result: Exit.Exit<SessionV1.WithParts | void, unknown>) {
+  const answer = Exit.isSuccess(result) ? result.value?.info : undefined
+  return answer?.role === "assistant" && answer.error?.name === "ContentFilterError"
+}
+
 /** Whether a contestant prompt ended in a failure of its own: an error or defect, or an errored answer. */
 function promptFailed(promptExit: Exit.Exit<SessionV1.WithParts | void, unknown>) {
   if (Exit.isFailure(promptExit)) return !Cause.hasInterruptsOnly(promptExit.cause)
@@ -1630,6 +1660,7 @@ export const layer: Layer.Layer<
     // Runs being cancelled while their turn still reads as running, as when the other side's
     // environment setup failed. A cancelled child's result must not count as new work for them.
     const haltingRuns = new Set<string>()
+    const promptDeclines = createPromptDeclines()
     const withSteerGates = <A, E, R>(runIDs: readonly string[], effect: Effect.Effect<A, E, R>) =>
       [...new Set(runIDs)].sort().reduceRight((inner, runID) => steerGates.withLock(runID)(inner), effect)
     // Aborted by Stop, so a stopped battle resolves without waiting for the rest of its copy.
@@ -2801,9 +2832,10 @@ export const layer: Layer.Layer<
     ) {
       const store = yield* available()
       const run = yield* runForReply(store, runID)
+      const reply = permissions.reply({ requestID: PermissionV1.ID.make(requestID), reply: response })
       yield* inDirectory(
         run.worktree,
-        permissions.reply({ requestID: PermissionV1.ID.make(requestID), reply: response }),
+        response === "reject" ? promptDeclines.reply(run, reply) : Effect.asVoid(reply),
       ).pipe(Effect.mapError(error))
       yield* promise(() =>
         store.writeRun(
@@ -2860,7 +2892,9 @@ export const layer: Layer.Layer<
     const rejectQuestion = Effect.fn("Arena.rejectQuestion")(function* (runID: string, requestID: string) {
       const store = yield* available()
       const run = yield* runForReply(store, runID)
-      yield* inDirectory(run.worktree, questions.reject(QuestionID.make(requestID))).pipe(Effect.mapError(error))
+      yield* inDirectory(run.worktree, promptDeclines.reply(run, questions.reject(QuestionID.make(requestID)))).pipe(
+        Effect.mapError(error),
+      )
       yield* promise(() =>
         store.writeRun(
           { _id: runID },
@@ -3110,9 +3144,7 @@ export const layer: Layer.Layer<
         // left as it is, so a send reaches the battle's git check and says what to install. That
         // check runs here outside the trunk, which may really be gone.
         if (
-          Exit.isFailure(
-            yield* Effect.exit(withGit(requireBattleGit(process.cwd())).pipe(gitDeadline("probing git"))),
-          )
+          Exit.isFailure(yield* Effect.exit(withGit(requireBattleGit(process.cwd())).pipe(gitDeadline("probing git"))))
         ) {
           yield* Effect.logWarning("Arena skipped a canonical inspection because git does not run", {
             chatID: chat._id,
@@ -4838,6 +4870,8 @@ export const layer: Layer.Layer<
       promptExit: Exit.Exit<SessionV1.WithParts | void, unknown>,
       stopped: boolean,
       runStateOverride?: RunDocument["runState"],
+      /** The user declined this run's question or permission, which ends the prompt with an interrupt. */
+      declined = false,
     ) {
       const finalizeStarted = performance.now()
       const timings = { pauseMs: 0, gitFinalizeMs: 0, resumeMs: 0, importRefsMs: 0, archiveMs: 0 }
@@ -4884,38 +4918,47 @@ export const layer: Layer.Layer<
             questions.list(),
           ]),
         )
+        // A declined run ended on the user's answer rather than on its own state, so the checks
+        // that a stopped run skips are skipped for it too — including the interrupt Core ends the
+        // prompt with, which lands in the failure check below and would otherwise be the error.
+        const settled = stopped || declined
         const unsettled: string[] = []
-        if (!stopped && !assistant) unsettled.push("Contestant prompt did not return a terminal assistant message")
-        if (!stopped && assistant && (!assistant.time.completed || (!assistant.finish && !assistant.error))) {
+        if (!settled && !assistant) unsettled.push("Contestant prompt did not return a terminal assistant message")
+        if (!settled && assistant && (!assistant.time.completed || (!assistant.finish && !assistant.error))) {
           unsettled.push("Contestant assistant message was not terminal")
         }
-        if (!stopped && sessionStates.some((state) => state.type !== "idle")) {
+        if (!settled && sessionStates.some((state) => state.type !== "idle")) {
           unsettled.push("A contestant session was still active after the prompt settled")
         }
-        if (!stopped && pendingPermissions.some((item) => ids.some((id) => String(id) === String(item.sessionID)))) {
+        if (!settled && pendingPermissions.some((item) => ids.some((id) => String(id) === String(item.sessionID)))) {
           unsettled.push("A contestant permission request remained unresolved")
         }
-        if (!stopped && pendingQuestions.some((item) => ids.some((id) => String(id) === String(item.sessionID)))) {
+        if (!settled && pendingQuestions.some((item) => ids.some((id) => String(id) === String(item.sessionID)))) {
           unsettled.push("A contestant question remained unresolved")
         }
         // The panes say why a stopped run stopped, so the abort that ends it is not reported here.
-        if (assistant?.error && !isStopAbort({ stopped, error: assistant.error })) {
+        if (assistant?.error && !isStopAbort({ stopped: settled, error: assistant.error })) {
           unsettled.push(
             assistant.error.name === "MessageOutputLengthError"
               ? ArenaResponseRecovery.EXHAUSTED
-              : `Contestant assistant error: ${JSON.stringify(assistant.error)}`,
+              : assistant.error.name === "ContentFilterError"
+                ? contentFilterMessage
+                : `Contestant assistant error: ${JSON.stringify(assistant.error)}`,
           )
         }
         // On 2.0 a Stop interrupts the prompt instead of returning an aborted assistant, and a stream
         // torn down by it can die on the way out. A side settles as stopped only when its prompt ends
         // during the stop, so that failure is the stop too, as with the checks above. A restart's
         // override keeps its reason.
-        if (Exit.isFailure(promptExit) && (!stopped || runStateOverride !== undefined))
+        if (Exit.isFailure(promptExit) && (!settled || runStateOverride !== undefined))
           unsettled.push(Cause.pretty(promptExit.cause))
         // A spent timeout budget explains the whole failure. The other lines only echo it, and the
         // session can still read as active for a moment after the failed request settles.
-        for (const exhausted of [ArenaResponseRecovery.IDLE_EXHAUSTED, ArenaResponseRecovery.HEADER_TIMEOUT_EXHAUSTED]) {
-          if (!stopped && unsettled.some((line) => line.includes(exhausted))) {
+        for (const exhausted of [
+          ArenaResponseRecovery.IDLE_EXHAUSTED,
+          ArenaResponseRecovery.HEADER_TIMEOUT_EXHAUSTED,
+        ]) {
+          if (!settled && unsettled.some((line) => line.includes(exhausted))) {
             unsettled.splice(0, unsettled.length, exhausted)
             break
           }
@@ -4951,13 +4994,13 @@ export const layer: Layer.Layer<
         )
         const chat = yield* promise(() => store.chat(turn.chatID))
         if (!chat) return yield* Effect.fail(new Error(`Arena chat not found: ${turn.chatID}`))
-        const permanentRef = `${refRoot(turn)}/${run.side}`
+        const permanentRef = stored?.permanentRef ?? `${refRoot(turn)}/${run.side}`
         // Canonical holds the authoritative admitted refs; a previous attempt may have imported them
         // without recording the result, while the contestant's host copy can be rewritten or pruned.
         const previous = yield* step(
           "snapshotting_changes",
           "gitFinalizeMs",
-          stored?.permanentRef === permanentRef && stored.finalCommit
+          stored?.permanentRef && stored.finalCommit
             ? Effect.succeed({ commit: stored.finalCommit, indexTree: stored.finalIndexTree })
             : withGit(readResultRefs(chat.repository.root, permanentRef)).pipe(gitDeadline("reading result refs")),
         ).pipe(Effect.mapError(error))
@@ -4992,7 +5035,7 @@ export const layer: Layer.Layer<
               Effect.promise(() => resumeProcessGroups(paused)),
             ),
         ).pipe(Effect.mapError(error))
-        const refChanges = yield* step(
+        const { refChanges, refChangesPrefix } = yield* step(
           "importing_results",
           "importRefsMs",
           Effect.gen(function* () {
@@ -5024,7 +5067,7 @@ export const layer: Layer.Layer<
                 canonical: chat.repository.root,
                 sourceRepository: run.worktree.directory,
                 sourceRef: "HEAD",
-                destinationRef: `${permanentRef}-head`,
+                destinationRef: `${permanentRef}-head-${result.rawHead}`,
                 expected: result.rawHead,
               }),
             ).pipe(Effect.mapError(error))
@@ -5038,32 +5081,25 @@ export const layer: Layer.Layer<
               // vote needs, and it started at the frozen head.
               const ref = `refs/heads/${result.branch}`
               refChanges = [{ ref, before: frozenHead, after: result.rawHead }]
+            } else if (host) {
+              refChanges = yield* withGit(diffHostRefs({ host, exclude: [] })).pipe(Effect.mapError(error))
+            }
+            // A reply can replace a tag, or replace branch x with x/y. Keep each set immutable;
+            // a partial import or an older set must never be overwritten to publish the new one.
+            const refChangesPrefix = `${permanentRef}-refs-${digest(refChanges)}`
+            for (const change of refChanges) {
+              if (!change.after) continue
               yield* withGit(
                 importWinnerRef({
                   canonical: chat.repository.root,
-                  sourceRepository: run.worktree.directory,
-                  sourceRef: ref,
-                  destinationRef: `${permanentRef}-refs/heads/${result.branch}`,
-                  expected: result.rawHead,
+                  sourceRepository: host ?? run.worktree.directory,
+                  sourceRef: change.ref,
+                  destinationRef: `${refChangesPrefix}/${change.ref.slice("refs/".length)}`,
+                  expected: change.after,
                 }),
               ).pipe(Effect.mapError(error))
             }
-            if (host) {
-              refChanges = yield* withGit(diffHostRefs({ host, exclude: [] })).pipe(Effect.mapError(error))
-              for (const change of refChanges) {
-                if (!change.after) continue
-                yield* withGit(
-                  importWinnerRef({
-                    canonical: chat.repository.root,
-                    sourceRepository: host,
-                    sourceRef: change.ref,
-                    destinationRef: `${permanentRef}-refs/${change.ref.slice("refs/".length)}`,
-                    expected: change.after,
-                  }),
-                ).pipe(Effect.mapError(error))
-              }
-            }
-            return refChanges
+            return { refChanges, refChangesPrefix }
           }).pipe(gitDeadline("importing result refs")),
         ).pipe(Effect.mapError(error))
         const diff = result.diff.reduce(
@@ -5081,6 +5117,7 @@ export const layer: Layer.Layer<
             ...(result.branch ? { finalBranch: result.branch } : {}),
             branchChanged,
             refChanges,
+            refChangesPrefix,
             ...(result.agentCommit ? { agentCommit: result.agentCommit } : {}),
             agentCommits: result.agentCommits,
             wrapperCreated: result.wrapperCreated,
@@ -5233,7 +5270,7 @@ export const layer: Layer.Layer<
     const closeTurn = Effect.fnUntraced(function* (
       store: Store,
       run: SideRuntime,
-      result: Exit.Exit<unknown, unknown>,
+      canAnswer: boolean,
       tried: Set<string>,
     ) {
       return yield* closeShellTurn(
@@ -5241,7 +5278,7 @@ export const layer: Layer.Layer<
         steerGates.withLock(run.runID)(
           Effect.gen(function* () {
             const current = yield* promise(() => store.turn(run.turnID))
-            if (Exit.isSuccess(result) && current?.state === "running" && !haltingRuns.has(run.runID)) {
+            if (canAnswer && current?.state === "running" && !haltingRuns.has(run.runID)) {
               const status = yield* inDirectory(run.worktree.directory, statuses.get(run.sessionID)).pipe(
                 Effect.catchCause(() => Effect.succeed({ type: "idle" as const })),
               )
@@ -5344,8 +5381,10 @@ export const layer: Layer.Layer<
     ) {
       const turn = yield* promise(() => store.turn(run.turnID))
       if (turn?.state === "stopping" || turn?.state === "early_selected") return Exit.void
-      // A new loop for this run opens its turn to steers again.
+      // A new loop for this run opens its turn to steers again, and no longer carries an earlier
+      // decline: only the prompt a decline interrupts may settle because of it.
       closingRuns.delete(run.runID)
+      yield* promptDeclines.take(run.runID)
       yield* openShellTurn(run.sessionID)
       const storedRun = yield* promise(() => store.run(run.runID))
       yield* settleAutoAccept(
@@ -5399,7 +5438,7 @@ export const layer: Layer.Layer<
       const triedSteers = new Set<string>()
       while (true) {
         const steer = interruptingSteers.get(run.runID)
-        if (!steer) {
+        if (!steer || promptBlocked(result)) {
           // A read that fails here leaves the turn to close, and finalization checks every session.
           const answered = result
           result = yield* withChildWaitLimit(awaitChildren(store, run, answered), {
@@ -5412,12 +5451,15 @@ export const layer: Layer.Layer<
               ),
             ),
           )
-          if (interruptingSteers.has(run.runID)) continue
+          // Neither a queued steer nor Send now may start another step after a content filter.
+          const blocked = promptBlocked(result)
+          if (blocked) interruptingSteers.delete(run.runID)
+          else if (interruptingSteers.has(run.runID)) continue
           // The runner's last boundary check and its idle transition are not one step, so a steer can
           // arrive just as the answer ends. Close the turn only when no steer waits and no runner
           // works; otherwise answer the steer here, in the fiber that owns finalization, as 1.x's
           // loop answered a user message written before it ended.
-          const late = yield* closeTurn(store, run, result, triedSteers)
+          const late = yield* closeTurn(store, run, Exit.isSuccess(result) && !blocked, triedSteers)
           if (!late) break
           result = yield* Effect.exit(inDirectory(run.worktree.directory, prompts.loop({ sessionID: run.sessionID })))
           continue
@@ -5455,6 +5497,39 @@ export const layer: Layer.Layer<
       return result
     })
 
+    /**
+     * A step that fails without a retry ends the run: a content filter, or any failure the retry
+     * policy gives up on. A steer queued behind that step must not start another step, but Core's
+     * runner starts a new execution for it as soon as the failed drain ends, which is before this
+     * run's prompt returns. So before Core settles the failure (the proxy for a filter, the final
+     * retry decision for the rest), close the run to new steers and deliver the queued ones as
+     * unanswered messages, as Stop leaves them. A drain with nothing in the inbox ends without a
+     * model request, and a Retry answers the delivered steer from the thread.
+     */
+    const keepFailedSteers = (run: SideRuntime) =>
+      steerGates
+        .withLock(run.runID)(
+          Effect.gen(function* () {
+            closingRuns.add(run.runID)
+            yield* inDirectory(run.worktree.directory, sessions.deliverPending(run.sessionID))
+          }),
+        )
+        .pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("Arena could not hold a failed contestant's queued steers", {
+              runID: run.runID,
+              cause,
+            }),
+          ),
+        )
+
+    const watchRunFailure = <A, E, R>(run: SideRuntime, effect: Effect.Effect<A, E, R>) =>
+      Effect.gen(function* () {
+        const runPromise = Effect.runPromiseWith(yield* Effect.context<never>())
+        const release = onRunFailure(run.sessionID, () => runPromise(keepFailedSteers(run)))
+        return yield* effect.pipe(Effect.ensuring(Effect.sync(release)))
+      })
+
     const settleSide = Effect.fn("Arena.settleSide")(function* (
       store: Store,
       turn: TurnDocument,
@@ -5467,7 +5542,7 @@ export const layer: Layer.Layer<
     ) {
       const settled = Deferred.makeUnsafe<void>()
       activePrompts.set(run.runID, settled)
-      const promptExit = yield* runPrompt(store, run, prompt, agent, preservePromptBoundary).pipe(
+      const promptExit = yield* watchRunFailure(run, runPrompt(store, run, prompt, agent, preservePromptBoundary)).pipe(
         Effect.ensuring(closeShellTurn(run.sessionID, Effect.succeed(false))),
         Effect.ensuring(
           Effect.sync(() => {
@@ -5513,13 +5588,22 @@ export const layer: Layer.Layer<
           endedAt: storedRun?.completedAt,
         })
       const stopped = (halted && !failedFirst && !completedFirst) || stoppedBySibling()
+      // The user declined this run's question or permission, and Core ends that prompt with an
+      // interrupt instead of an assistant. The run settled on the user's answer: it is complete,
+      // and only an interrupt that decline caused may read that way — a stop or a restart reaches
+      // finalization through its own state above.
+      const mainRequestDeclined = yield* promptDeclines.take(run.runID)
+      const declined =
+        !stopped && mainRequestDeclined && Exit.isFailure(promptExit) && Cause.hasInterruptsOnly(promptExit.cause)
       // A steer still queued when the run was cut off stays in the thread as an unanswered message,
       // as in 1.x, and goes with this side's history if it is kept. Left in Core's inbox it would
       // vanish from the thread, and the next resume of this session would deliver it. A finished
       // run closed its turn with none waiting, so for it this only keeps the thread and the kept
-      // history in step. A failed run keeps its queue for Retry, unless the battle halted: it then
-      // has no Retry, also when it failed before the stop.
-      if (stopped || halted || Exit.isSuccess(promptExit)) {
+      // history in step. A step that failed without a retry delivered its queue when it failed
+      // (`keepFailedSteers`). A failure that never reached the retry decision keeps its queue for
+      // Retry, unless the battle halted: it then has no Retry, also when it failed before the stop.
+      // A declined run finishes like a successful run, so its queue goes with its history too.
+      if (stopped || halted || declined || Exit.isSuccess(promptExit)) {
         yield* inDirectory(run.worktree.directory, sessions.deliverPending(run.sessionID)).pipe(
           Effect.catchCause((cause) =>
             Effect.logWarning("Arena could not keep a contestant's queued steers", {
@@ -5532,7 +5616,9 @@ export const layer: Layer.Layer<
       // Only a Stop bounds this side's Git. An early selection or a sibling's failed setup settles
       // the side inside a battle that goes on, and that waits like any other.
       const outcome = yield* Effect.exit(
-        finalizeSide(store, turn, run, promptExit, stopped).pipe(current?.state === "stopping" ? limitGit : unlimitGit),
+        finalizeSide(store, turn, run, promptExit, stopped, undefined, declined).pipe(
+          current?.state === "stopping" ? limitGit : unlimitGit,
+        ),
       )
       // The run's state now routes a reply, so the closing mark has done its job.
       closingRuns.delete(run.runID)
@@ -6880,6 +6966,83 @@ export const layer: Layer.Layer<
       return yield* finalizeRuns(outcomeA, outcomeB)
     })
 
+    /**
+     * The chat's counter can lag what already exists: a restored store keeps an older count while
+     * later turn records or battle refs survive, and an engine stopped between a turn's insert and
+     * its activation leaves an unactivated `creating` record at the count. The logical turn ID
+     * built from the count also keys the hosted pair draw, research uploads and the leaderboard,
+     * so a reused index gets the old, possibly revealed pair back. Remove the unactivated record
+     * and move the counter past every index a record or ref claims; never reuse one.
+     */
+    const skipClaimedTurnIndexes = Effect.fnUntraced(function* (store: Store, chat: ChatDocument) {
+      let next = chat.turnCount
+      for (const turn of yield* promise(() => store.turnsForChat(chat._id))) {
+        if (turn.turnIndex < chat.turnCount) continue
+        next = Math.max(next, turn.turnIndex + 1)
+        if (turn.state === "creating" && chat.activeTurnID !== turn._id) {
+          yield* discardUnactivatedTurn(store, chat, turn)
+        }
+      }
+      const claimed = yield* withGit(
+        nextUnclaimedTurnIndex({ canonical: chat.repository.root, chatID: chat._id }),
+      ).pipe(Effect.mapError(error))
+      next = Math.max(next, claimed)
+      if (next === chat.turnCount) return chat
+      const advanced = yield* promise(() =>
+        store.updateChatReturning(
+          { _id: chat._id, status: "ready", activeTurnID: { $exists: false }, turnCount: chat.turnCount },
+          { $set: { turnCount: next, updatedAt: new Date() } },
+        ),
+      )
+      if (!advanced) return yield* Effect.fail(new Error("Arena chat changed while starting a battle"))
+      yield* Effect.logWarning("Arena moved a chat's turn counter past turns that already exist", {
+        chatID: chat._id,
+        from: chat.turnCount,
+        to: next,
+      })
+      return advanced
+    })
+
+    /** A turn inserted by an admission that never activated it: no runs, worktrees or vote exist. */
+    const discardUnactivatedTurn = Effect.fnUntraced(function* (store: Store, chat: ChatDocument, turn: TurnDocument) {
+      const permanentRef = turn.baseSnapshot?.permanentRef
+      if (permanentRef) {
+        yield* withRepositoryMutation(
+          chat.canonicalCheckout?.commonGitDir ?? chat.repository.root,
+          withGit(
+            removeRef({ canonical: chat.repository.root, ref: permanentRef, expectedCommit: turn.frozenBaseSHA }),
+          ),
+        ).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("Arena kept the base ref of an unactivated turn", { turnID: turn._id, cause }),
+          ),
+        )
+      }
+      const artifacts = [turn.copySnapshot?.manifestID, turn.copySnapshot?.ignoredSeedID].filter(
+        (id): id is string => !!id,
+      )
+      if (artifacts.length)
+        yield* promise(() => store.artifacts.deleteMany({ _id: { $in: artifacts }, turnID: turn._id }))
+      yield* promise(() => store.turns.deleteOne({ _id: turn._id, state: "creating" }))
+      yield* Effect.logWarning("Arena removed a turn that was never activated", { chatID: chat._id, turnID: turn._id })
+    })
+
+    /** Moves the counter past an index whose hosted pair an earlier battle already decided. */
+    const skipDecidedTurnIndex = Effect.fnUntraced(function* (store: Store, chat: ChatDocument) {
+      const advanced = yield* promise(() =>
+        store.updateChatReturning(
+          { _id: chat._id, status: "ready", activeTurnID: { $exists: false }, turnCount: chat.turnCount },
+          { $set: { turnCount: chat.turnCount + 1, updatedAt: new Date() } },
+        ),
+      )
+      if (!advanced) return yield* Effect.fail(new Error("Arena chat changed while starting a battle"))
+      yield* Effect.logWarning("Arena skipped a turn index whose pair was already decided", {
+        chatID: chat._id,
+        from: chat.turnCount,
+        to: chat.turnCount + 1,
+      })
+    })
+
     const startTurnUnlocked = Effect.fn("Arena.startTurnUnlocked")(function* (
       store: Store,
       id: string,
@@ -6911,32 +7074,43 @@ export const layer: Layer.Layer<
       if (yield* promise(() => store.checkoutEviction(storedCheckoutRoot))) {
         return yield* Effect.fail(new Error("Arena checkout is currently being evicted"))
       }
-      const chat = yield* reconcileCanonicalAvailability(store, storedChat)
-      if (chat.checkoutEvicted) {
+      const available = yield* reconcileCanonicalAvailability(store, storedChat)
+      if (available.checkoutEvicted) {
         return yield* Effect.fail(new Error("Arena checkout is currently being evicted"))
       }
-      if (chat.status === "blocked") {
-        return yield* Effect.fail(new Error(chat.blockedReason ?? canonicalUnavailableReason))
+      if (available.status === "blocked") {
+        return yield* Effect.fail(new Error(available.blockedReason ?? canonicalUnavailableReason))
       }
-      if (chat.status !== "ready" || chat.activeTurnID) {
+      if (available.status !== "ready" || available.activeTurnID) {
         return yield* Effect.fail(new Error("Arena chat already has an active battle"))
       }
-      if (activeNormalTurns.active(chat.canonicalSessionID)) {
+      if (activeNormalTurns.active(available.canonicalSessionID)) {
         return yield* Effect.fail(new Error("Arena chat has an active normal turn"))
       }
       // A conflicted trunk cannot be snapshotted, but the chat stays usable: refuse only the
       // battle so a single agent can still be asked to resolve the conflicts in place. The
       // reconcile above already refreshed this list.
-      const conflicts = chat.trunkConflicts ?? []
+      const conflicts = available.trunkConflicts ?? []
       if (conflicts.length > 0) {
         return yield* Effect.fail(new Error(trunkConflictReason(conflicts)))
       }
-      yield* withGit(requireBattleGit(chat.repository.root)).pipe(Effect.mapError(error))
+      yield* withGit(requireBattleGit(available.repository.root)).pipe(Effect.mapError(error))
+      const chat = yield* skipClaimedTurnIndexes(store, available)
       const turnID = makeTurnID(chat._id, chat.turnCount)
-      // The pair is drawn while the base freezes, so the send waits once for both. The draw is
-      // account- and turn-scoped and idempotent on the control plane, so a send refused after this
-      // point leaves an unused set and nothing else.
-      const pairDraw = createBattleAssignments(turnID)
+      // Unreachable after the skip above unless another admission raced this one.
+      if (yield* promise(() => store.turn(turnID))) {
+        return yield* Effect.fail(new Error(`Arena turn ${turnID} already exists for this chat`))
+      }
+      // The pair is drawn while the base freezes and the copy work below runs, so the send waits
+      // once for all of them. The draw is account- and turn-scoped and idempotent on the control
+      // plane, so a send refused after this point leaves an unused set and nothing else. A restored
+      // store whose old refs are gone can still reuse an index the control plane already decided;
+      // the draw's answer says so. Only a control plane that predates that answer costs the replay
+      // probe's round trip.
+      const pairDraw = createBattleAssignments(turnID).then(async (pair) => ({
+        pair,
+        decided: pair.decided ?? (await battleAssignmentsDecided(turnID, pair.a.assignmentID)),
+      }))
       pairDraw.catch(() => undefined)
       const freezeStartedAt = Date.now()
       const baseExit = yield* withRepositoryMutation(
@@ -6959,7 +7133,7 @@ export const layer: Layer.Layer<
             withGit(
               snapshotBase({
                 canonical: latest.repository.root,
-                permanentRef: `${refRoot({ chatID: latest._id, turnIndex: latest.turnCount })}/base`,
+                permanentRef: allocateBattleBaseRef(chat._id, chat.turnCount),
               }),
             ).pipe(Effect.mapError(error)),
           )
@@ -7079,9 +7253,18 @@ export const layer: Layer.Layer<
       // worktrees' own watches keep running: they cover the battle too, up to the next sync.
       warmMarks.delete(warmPairKey(chat._id, chat.turnCount))
       yield* discardWarmSeal(store, chat._id)
+      // Before anything else takes this index: a decided set means an earlier battle used it.
       const assignmentWaitStartedAt = Date.now()
-      const pair = yield* promise(() => pairDraw).pipe(Effect.onError(() => discardUnactivatedCopy.pipe(Effect.ignore)))
+      const drawn = yield* promise(() => pairDraw).pipe(
+        Effect.onError(() => discardUnactivatedCopy.pipe(Effect.ignore)),
+      )
       const assignmentWaitMs = Date.now() - assignmentWaitStartedAt
+      if (drawn.decided) {
+        yield* discardUnactivatedCopy
+        yield* skipDecidedTurnIndex(store, chat)
+        return yield* Effect.fail(new DecidedTurnIndexError(turnID))
+      }
+      const pair = drawn.pair
       const placed = {
         a: assignment(pair.a),
         b: assignment(pair.b),
@@ -7259,7 +7442,16 @@ export const layer: Layer.Layer<
       const receivedAt = Date.now()
       const store = yield* available()
       const lock = turnStartLock(id)
-      const admission = startTurnUnlocked(store, id, userPrompt, rawParticipantID, receivedAt, autoAccept, attachments)
+      // A skipped decided index starts the admission again on the next one, a few times at most.
+      const admission = startTurnUnlocked(
+        store,
+        id,
+        userPrompt,
+        rawParticipantID,
+        receivedAt,
+        autoAccept,
+        attachments,
+      ).pipe(Effect.retry({ times: MAX_DECIDED_TURN_SKIPS, while: (cause) => cause instanceof DecidedTurnIndexError }))
       return yield* Effect.gen(function* () {
         const immediate = yield* lock.withPermitsIfAvailable(1)(admission)
         if (Option.isSome(immediate)) return immediate.value
@@ -10996,6 +11188,7 @@ export const layer: Layer.Layer<
       }
       const frozenHead = turn.baseSnapshot?.canonicalHead ?? turn.frozenBaseSHA
       const permanentRef = winner.permanentRef ?? `${refRoot(turn)}/${winner.side}`
+      const refChangesPrefix = winner.refChangesPrefix ?? `${permanentRef}-refs`
       const canonical = yield* withGit(inspectCanonical(root)).pipe(Effect.mapError(error))
       // A run finalized before the real HEAD was imported may have no commit to move a branch to.
       // Its files alone are measured against the chat branch, which loses what the winner moved
@@ -11069,7 +11262,7 @@ export const layer: Layer.Layer<
         observeWinnerRefs({
           canonical: root,
           changes: winner.refChanges ?? [],
-          sourceRefPrefix: `${permanentRef}-refs`,
+          sourceRefPrefix: refChangesPrefix,
           ...(checkoutBranch ? { checkoutBranch } : {}),
         }),
       ).pipe(Effect.mapError(error))
@@ -11101,7 +11294,7 @@ export const layer: Layer.Layer<
             ...(ref.clash.agent_on_yours || ref.clash.yours_on_agent
               ? { clash: ref.clash.agent_on_yours ?? ref.clash.yours_on_agent ?? [] }
               : {}),
-            ...(ref.agent ? { agentRef: `${permanentRef}-refs/${ref.ref.slice("refs/".length)}` } : {}),
+            ...(ref.agent ? { agentRef: `${refChangesPrefix}/${ref.ref.slice("refs/".length)}` } : {}),
             ...(ref.lost !== undefined ? { lost: ref.lost } : {}),
             ...(ref.lostSubjects?.length ? { lostSubjects: ref.lostSubjects } : {}),
             ...(ref.rewound ? { rewound: true } : {}),
@@ -11125,7 +11318,7 @@ export const layer: Layer.Layer<
             skipped.push({
               ref: ref.ref,
               action: "skipped",
-              reason: keptReason(ref, `${permanentRef}-refs/${ref.ref.slice("refs/".length)}`),
+              reason: keptReason(ref, `${refChangesPrefix}/${ref.ref.slice("refs/".length)}`),
             })
           }
           continue

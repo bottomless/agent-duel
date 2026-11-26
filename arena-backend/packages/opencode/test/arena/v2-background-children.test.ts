@@ -102,6 +102,7 @@ describe("Arena background child agents", () => {
               body.kind === "battle"
                 ? [{ assignmentID: `a-${assignmentCount}` }, { assignmentID: `b-${assignmentCount}` }]
                 : [{ assignmentID: `s-${assignmentCount}` }],
+            decided: false,
           })
         }
         return Response.json({

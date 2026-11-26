@@ -6,8 +6,14 @@ import type { GenerationOutcome, StoredGenerationMetrics, UsageTotals } from "./
 import {
   classifyPaymentError,
   compactionRequiredError,
+  contentFilterError,
+  contentFilterRefusal,
+  filteredStreamChunk,
+  inspectionFailed,
+  inspectionFailedError,
   isContextOverflow,
   networkUnavailableError,
+  refusalUsage,
   retryableStreamError,
 } from "./request-error"
 import { modelLimits, type ModelLimits, type ModelPool, type ModelProfile } from "./pool"
@@ -27,6 +33,7 @@ import {
   type CaptureState,
   type GenerationCapture,
 } from "./generation-capture"
+import { geminiSignatureRouting } from "./gemini-signature-routing"
 import { geminiToolResultRetry } from "./gemini-tool-results"
 import { MEDIA_PATH, MEDIA_TYPE_HEADER, mediaMissingError, mediaTooLargeError, sendsByReference } from "./media"
 import { visibleLogprobs } from "./logprobs"
@@ -97,6 +104,8 @@ function usage(value: unknown, latencyMs: number): UsageTotals | undefined {
 
 function finishReason(value: unknown) {
   if (!record(value)) return undefined
+  if (inspectionFailedError(value)) return "content_filter"
+  if (record(value.error) && value.error.type === "content_filter") return "content_filter"
   if (typeof value.status === "string" && ["completed", "incomplete", "failed"].includes(value.status)) {
     return value.status
   }
@@ -135,21 +144,26 @@ function metricsCollector(generationID: string, startedAt: number) {
       finished = finishReason(value) ?? finished
       if (record(value) && typeof value.provider === "string" && value.provider) provider = value.provider
       if (record(value) && typeof value.id === "string" && value.id) upstreamGenerationID = value.id
+      return provider
     },
     // What the stream showed before it ended, for the log an early end writes.
     observed() {
       return { upstreamGenerationID, provider }
     },
     /**
-     * This call's one row. Only a complete call has usage; an early end keeps what the stream
-     * showed. A stream that closed without a finish reason still gets its row: the provider may have
-     * cut it, which is what these rows are for.
+     * This call's one row. A complete call has usage; an early end keeps what the stream showed. A
+     * content-filter refusal also ended the response, so its usage is final and is kept even though
+     * the call is recorded as an error. A stream that closed without a finish reason still gets its
+     * row: the provider may have cut it, which is what these rows are for.
      */
     value(
       outcome: GenerationOutcome = "complete",
       extra: { readonly quietMs?: number; readonly status?: number } = {},
     ): StoredGenerationMetrics {
-      const measured = outcome === "complete" ? usage(usagePayload, Math.max(0, Date.now() - startedAt)) : undefined
+      const measured =
+        outcome === "complete" || finished === "content_filter"
+          ? usage(usagePayload, Math.max(0, Date.now() - startedAt))
+          : undefined
       return {
         generationID,
         outcome,
@@ -165,6 +179,8 @@ function metricsCollector(generationID: string, startedAt: number) {
 
 function sanitizePayload(value: unknown, generationID: string, stream = false): unknown {
   if (!record(value)) return value
+  const blocked = stream && filteredStreamChunk(value, generationID)
+  if (blocked) return blocked
   if (value.error !== undefined) {
     return {
       error: {
@@ -206,7 +222,8 @@ function sanitizeLine(
   line: string,
   generationID: string,
   reasoning: ReasoningRedactor,
-  observe?: (value: unknown) => void,
+  observe: (value: unknown) => string | undefined,
+  filtered?: (value: unknown) => void,
 ) {
   if (!line.startsWith("data:")) return ""
   const raw = line.slice("data:".length).trimStart()
@@ -218,8 +235,16 @@ function sanitizeLine(
       return tail ? `data: ${JSON.stringify({ id: generationID, ...tail })}\n\n${line}` : line
     }
     const value = JSON.parse(raw) as unknown
-    observe?.(value)
-    return `data: ${JSON.stringify(reasoning.redact(sanitizePayload(value, generationID, true), true))}`
+    const provider = observe(value)
+    const blocked = record(value) && filteredStreamChunk(value, generationID)
+    if (blocked) {
+      reasoning.clear()
+      filtered?.(value)
+      // The filter finish can carry the call's usage; keep it (cost scrubbed) for the engine.
+      const kept = record(value) && record(value.usage) ? { ...blocked, usage: sanitizeUsage(value.usage) } : blocked
+      return `data: ${JSON.stringify(kept)}`
+    }
+    return `data: ${JSON.stringify(reasoning.redact(sanitizePayload(value, generationID, true), true, provider))}`
   } catch {
     reasoning.clear()
     return `data: ${JSON.stringify({
@@ -250,7 +275,7 @@ type RecordCall = (metrics: StoredGenerationMetrics) => Promise<void>
 
 function sanitizeStream(
   stream: ReadableStream<Uint8Array>,
-  generationID: string,
+  refusal: RefusalContext,
   reasoning: ReasoningRedactor,
   startedAt: number,
   recordCall: RecordCall,
@@ -258,6 +283,7 @@ function sanitizeStream(
   capture?: ResponseCapture,
   signal?: AbortSignal,
 ) {
+  const { generationID } = refusal
   const reader = stream.getReader()
   const decoder = new TextDecoder()
   const encoder = new TextEncoder()
@@ -271,7 +297,7 @@ function sanitizeStream(
   const observeData = (event: unknown) => {
     // OpenRouter's processing comments keep the connection alive without ending model silence.
     lastUpstreamDataAt = Date.now()
-    metrics.observe(event)
+    return metrics.observe(event)
   }
   const quietMs = () => Math.max(0, Date.now() - lastUpstreamDataAt)
   // Metrics, including the provider, are recorded when the stream finishes or ends early, so the
@@ -303,16 +329,40 @@ function sanitizeStream(
   // error written into that event becomes one more data line, the client cannot parse the joined
   // data, and a retryable failure turns into a final one.
   let open = false
+  let blocked = false
+  let refusalLogged = false
   const write = (controller: ReadableStreamDefaultController<Uint8Array>, text: string) => {
     controller.enqueue(encoder.encode(text))
     recovery?.record(text)
     lastWrite = Date.now()
   }
-  const writeLine = (controller: ReadableStreamDefaultController<Uint8Array>, line: string) => {
-    if (open && line.startsWith('data: {"error":')) write(controller, "\n")
+  const writeLine = (controller: ReadableStreamDefaultController<Uint8Array>, line: string, fresh = false) => {
+    if (open && (fresh || line.startsWith('data: {"error":'))) write(controller, "\n")
     write(controller, `${line}\n`)
     if (line.startsWith("data:")) open = true
     else if (line === "") open = false
+  }
+  const writeSanitized = (controller: ReadableStreamDefaultController<Uint8Array>, line: string) => {
+    let fresh = false
+    const sanitized = sanitizeLine(line, generationID, reasoning, observeData, (value) => {
+      fresh = true
+      blocked = true
+      // The client only gets a neutral finish, so the reason the provider gave is logged here.
+      if (!refusalLogged) {
+        refusalLogged = true
+        logRefusal(refusal, 200, JSON.stringify(value))
+      }
+    })
+    writeLine(controller, sanitized, fresh)
+  }
+  // A filter finished the choice: the call is an error, but its response ended, so the replay stays
+  // available and any usage the stream showed is kept. A later transport break must not turn it into
+  // a retryable failure.
+  const finishBlocked = async (controller: ReadableStreamDefaultController<Uint8Array>) => {
+    if (open) writeLine(controller, "")
+    stopHeartbeat()
+    await Promise.all([recordCall(metrics.value("error")), recovery?.complete(), capture?.finish("failed")])
+    controller.close()
   }
   return new ReadableStream<Uint8Array>({
     start(controller) {
@@ -338,7 +388,8 @@ function sanitizeStream(
             const rest = decoder.decode()
             capture?.record(rest)
             pending += rest
-            if (pending) writeLine(controller, sanitizeLine(pending, generationID, reasoning, observeData))
+            if (pending) writeSanitized(controller, pending)
+            if (blocked) return finishBlocked(controller)
             if (open) writeLine(controller, "")
             const tail = reasoning.flush()
             if (tail) write(controller, `\n\ndata: ${JSON.stringify({ id: generationID, ...tail })}\n\n`)
@@ -355,13 +406,16 @@ function sanitizeStream(
           const lines = pending.split("\n")
           pending = lines.pop() ?? ""
           if (!lines.length) continue
-          for (const line of lines) writeLine(controller, sanitizeLine(line, generationID, reasoning, observeData))
+          for (const line of lines) writeSanitized(controller, line)
+          // Keep reading after a filter finish so a trailing usage chunk is still observed; the
+          // done/catch paths record the refusal once the upstream ends or the engine cancels.
           return
         }
       } catch {
         reasoning.clear()
         stopHeartbeat()
         if (cancelled) return
+        if (blocked) return finishBlocked(controller)
         // The upstream fetch shares the client's signal, so a client that left can break the read
         // before `cancel` runs. That end is the client's, not the provider's.
         const outcome = signal?.aborted ? "cancelled" : "failed"
@@ -385,15 +439,15 @@ function sanitizeStream(
     cancel(reason) {
       cancelled = true
       const quiet = quietMs()
-      logEarlyEnd("cancelled", quiet)
+      if (!blocked) logEarlyEnd("cancelled", quiet)
       stopHeartbeat()
       reasoning.clear()
-      void recovery?.fail()
+      void (blocked ? recovery?.complete() : recovery?.fail())
       // Awaited: a hosted function may stop once the cancel settles.
       return Promise.all([
         reader.cancel(reason),
-        recordCall(metrics.value("cancelled", { quietMs: quiet })),
-        capture?.finish("cancelled"),
+        recordCall(blocked ? metrics.value("error") : metrics.value("cancelled", { quietMs: quiet })),
+        capture?.finish(blocked ? "failed" : "cancelled"),
       ]).then(() => undefined)
     },
   })
@@ -484,14 +538,19 @@ function cacheKey(
 }
 
 /** The fields the proxy decides for every contestant call, replacing any the engine sent. */
-function assignedRouting(model: ModelProfile, modelSize: SingleAgentModelSize | undefined, key: string) {
+function assignedRouting(
+  model: ModelProfile,
+  modelSize: SingleAgentModelSize | undefined,
+  key: string,
+  provider = model.routing,
+) {
   return {
     model: model.slug,
     reasoning:
       model.reasoningEffort === null
         ? { enabled: true }
         : { effort: model.reasoningEffort ?? (modelSize === "medium" ? "xhigh" : "high") },
-    provider: model.routing,
+    provider,
     // Without these OpenRouter's throughput sort can move a conversation to another provider whose
     // cache is empty, and some providers miss their own cache without a key.
     session_id: key,
@@ -556,7 +615,7 @@ async function logKeepAlive(response: Response | undefined, startedAt: number) {
   const text = await response?.text().catch(() => undefined)
   if (!response?.ok || text === undefined) {
     console.warn("[arena-service] Keep-alive ping failed", JSON.stringify({ status: response?.status ?? "unsent" }))
-    return false
+    return response !== undefined && text !== undefined && inspectionFailed(response.status, text)
   }
   const metrics = metricsCollector("keep-alive", startedAt)
   const values = (response.headers.get("content-type") ?? "").includes("text/event-stream")
@@ -621,9 +680,12 @@ async function sanitizeAssignedResponse(
   const headers = assignedHeaders(response.headers)
   if (!response.ok) {
     const upstream = await response.text().catch(() => "")
-    logRefusal(refusal, response.status, upstream)
     capture?.record(upstream)
+    // Log every refusal, the content filter included: the client's answer is neutral, so this is the
+    // only place the provider's reason is kept.
+    logRefusal(refusal, response.status, upstream)
     const provider = refusedProvider(upstream)
+    const filtered = inspectionFailed(response.status, upstream)
     await Promise.all([
       capture?.finish("failed"),
       recordCall({
@@ -631,8 +693,10 @@ async function sanitizeAssignedResponse(
         outcome: "error",
         status: response.status,
         ...(provider ? { provider } : {}),
+        ...(filtered ? { finishReason: "content_filter" } : {}),
       }),
     ])
+    if (filtered) return Response.json(contentFilterError(), { status: 400, headers })
     if (isContextOverflow(response.status, upstream)) {
       return Response.json(compactionRequiredError(), { status: 413, headers })
     }
@@ -654,7 +718,7 @@ async function sanitizeAssignedResponse(
     const recorder = recovery?.()
     if (recorder) headers.set(HEARTBEAT_HEADER, String(HEARTBEAT_MS))
     return new Response(
-      sanitizeStream(response.body, generationID, reasoning, startedAt, recordCall, recorder, capture, signal),
+      sanitizeStream(response.body, refusal, reasoning, startedAt, recordCall, recorder, capture, signal),
       { status: response.status, headers },
     )
   }
@@ -662,9 +726,21 @@ async function sanitizeAssignedResponse(
   capture?.record(text)
   const raw = JSON.parse(text) as unknown
   const metrics = metricsCollector(generationID, startedAt)
-  metrics.observe(raw)
+  const provider = metrics.observe(raw)
+  // A complete response can carry the same refusal shapes a streamed chunk does; handle them alike.
+  if (contentFilterRefusal(raw)) {
+    logRefusal(refusal, response.status, text)
+    await Promise.all([recordCall(metrics.value("error")), capture?.finish("failed")])
+    // The reveal returns only complete calls, so the engine's own record is the one that keeps this
+    // call's tokens. Send the usage (cost scrubbed) beside the neutral error, as a filtered stream does.
+    const reported = refusalUsage(raw)
+    return Response.json(
+      { ...contentFilterError(), ...(reported ? { usage: sanitizeUsage(reported) } : {}) },
+      { status: 400, headers },
+    )
+  }
   await Promise.all([recordCall(metrics.value()), capture?.finish("complete")])
-  const payload = reasoning.redact(sanitizePayload(raw, generationID))
+  const payload = reasoning.redact(sanitizePayload(raw, generationID), false, provider)
   headers.set("content-type", "application/json")
   return Response.json(payload, { status: response.status, headers })
 }
@@ -769,13 +845,18 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
     if (keepAlive && (suffix !== "/api/v1/chat/completions" || !keepsCacheWarm(routeAssignment.model.slug))) {
       return keepAliveAnswer()
     }
-    const reasoning = createReasoningRedactor(apiKey, {
-      userId: caller.id,
-      scopeID: assignment.scopeID,
-      assignmentID: assignment.assignmentID,
-    })
+    const reasoning = createReasoningRedactor(apiKey, calibrationKey, routeAssignment.model.slug)
+    const signers = new Set<string | null>()
+    const replay = reasoning.restore(input, signers)
+    const provider = geminiSignatureRouting(routeAssignment.model.routing, signers)
+    if (!provider) {
+      return Response.json(
+        { error: { message: "Arena contestant request failed", type: "arena_upstream_error" } },
+        { status: 400 },
+      )
+    }
     // Images and PDFs the engine uploaded come back here, before the budget counts them (`media.ts`).
-    const media = await resolveMedia(db, caller.id, reasoning.restore(input), context.now())
+    const media = await resolveMedia(db, caller.id, replay, context.now())
     // Only Claude pings get this far, so a ping with media the proxy cannot send answers like every
     // other ping, or a made-up reference would tell the sides apart.
     if (keepAlive && (media.tooLarge || media.missing.length > 0)) {
@@ -797,6 +878,7 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
         routeAssignment.model,
         routeAssignment.modelSize,
         cacheKey(apiKey, caller.id, assignment.scopeID, routeAssignment),
+        provider,
       ),
       ...promptCache(routeAssignment.model.slug, input),
       ...logprobRequest(routeAssignment.model, endpoint),
@@ -872,7 +954,7 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
     }
     const retry =
       endpoint === "chat" && !request.signal.aborted ? await geminiToolResultRetry(budget.request, response) : undefined
-    if (retry && !request.signal.aborted) {
+    if (retry && !inspectionFailed(response.status, retry.refusal) && !request.signal.aborted) {
       logRefusal(refusal, response.status, retry.refusal)
       capture?.record(retry.refusal)
       await capture?.finish("failed", response.status)
