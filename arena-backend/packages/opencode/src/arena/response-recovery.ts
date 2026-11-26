@@ -31,7 +31,7 @@ export const TOOL_INTERRUPTED =
 // response that spent the whole limit reasoning and wrote nothing. That reasoning is left out of the next
 // request (`reasoningContext`), so the note cannot point the model at its plan.
 export const REASONING_LIMIT =
-  "Your last response spent its whole output limit on reasoning and wrote no answer or tool call, so that reasoning was not kept. Keep reasoning short. Take the next step now by calling a tool or writing the answer, and write down any plan you need in the answer or a file."
+  "Your last response spent its whole output limit on reasoning and wrote no answer or tool call, so that reasoning was not kept. Keep reasoning short. Take the next step now by calling a tool or writing the answer, and write down any plan you need in the answer."
 export const CONTINUE =
   "The previous response reached its output limit. Continue from the partial response without repeating it. Any unfinished tool call was not executed: replace it with smaller, complete writes or patches. Preserve completed work and do not repeat successful tool calls. Keep reasoning concise and make progress in smaller steps."
 
