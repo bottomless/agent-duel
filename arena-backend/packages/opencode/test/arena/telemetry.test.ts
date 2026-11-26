@@ -1,15 +1,27 @@
 import { createHash } from "crypto"
-import { describe, expect, test } from "bun:test"
-import { carriesModelOutput, create } from "@/arena/telemetry"
+import { describe, expect, spyOn, test } from "bun:test"
+import { createArenaService } from "@agent-duel/arena-service"
+import type { ArenaDb } from "@agent-duel/arena-service/collection"
+import { carriesModelOutput, create, sanitizeStoredResponse } from "@/arena/telemetry"
 import { Store } from "@/arena/mongo"
 import type { GenerationDocument, GenerationRetry } from "@/arena/records"
-import { ArenaWaitError, type RequestMetadata } from "@/arena/proxy"
+import { ArenaWaitError, AssignmentRegistry, proxy, type RequestMetadata } from "@/arena/proxy"
 
 function store(value: object): Store {
   return Object.assign(Object.create(Store.prototype), value)
 }
 
 describe("ArenaTelemetry", () => {
+  test("blinds a repeated positional call ID per generation, not per stream fragment", () => {
+    const line = 'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"read_0"}]}}]}'
+    const raw = [line, line].join("\n\n")
+    const stored = sanitizeStoredResponse(raw, "gen_first")
+    const [first, second] = stored.split("\n\n")
+    expect(first).toBe(second)
+    expect(stored).not.toContain("read_0")
+    expect(sanitizeStoredResponse(stored, "gen_first")).toBe(stored)
+    expect(sanitizeStoredResponse(raw, "gen_second")).not.toBe(stored)
+  })
   test("stores generation artifacts without model-fingerprinting metadata", async () => {
     let generation: GenerationDocument | undefined
     let runUsage: GenerationDocument["usage"]
@@ -575,5 +587,167 @@ describe("ArenaTelemetry", () => {
 
     expect(generations.map((generation) => generation.callIndex)).toEqual([0, 1, 2, 3, 4, 5])
     expect(reads).toBe(1)
+  })
+
+  test("records upstream dispatch timing, request size, and failure phase/kind", async () => {
+    const updates = new Map<string, Record<string, unknown>>()
+    const arena = store({
+      storeArtifact: async (input: { _id: string }) => input,
+      saveGeneration: async (input: GenerationDocument) => input,
+      updateGeneration: async (id: string, update: Record<string, unknown>) => {
+        updates.set(id, { ...updates.get(id), ...update })
+      },
+      generationsForRuns: async () => [],
+      recordGenerationRetry: async () => undefined,
+      addDescendant: async () => undefined,
+    })
+    const telemetry = create(arena)
+    const metadata: RequestMetadata = {
+      assignment: {
+        runID: "run-phase",
+        rootSessionID: "session-phase",
+        scopeID: "turn-phase",
+        assignmentID: "assignment-phase",
+        telemetry: true,
+      },
+      generationID: "gen_00000000000000000000000000000030",
+      requestID: "00000000-0000-4000-8000-000000000030",
+      sessionID: "session-phase",
+      requestedModel: "contestant",
+      enforcedReasoning: { effort: "high" },
+      startedAt: new Date("2026-11-21T11:00:00.000Z"),
+    }
+    const dispatchedAt = new Date("2026-11-21T11:00:00.050Z")
+    const failedAt = new Date("2026-11-21T11:02:30.050Z")
+
+    await telemetry.start?.(metadata, { model: "contestant", messages: [] })
+    await telemetry.dispatched?.({ metadata, dispatchedAt, requestBytes: 42_000 })
+    await telemetry.error?.(metadata, new Error("Response headers timed out"), failedAt, {
+      phase: "headers",
+      kind: "header_timeout",
+    })
+
+    expect(updates.get(metadata.generationID)).toMatchObject({
+      upstreamDispatchedAt: dispatchedAt,
+      requestBytes: 42_000,
+      completedAt: failedAt,
+      error: "Arena contestant request failed",
+      failurePhase: "headers",
+      failureKind: "header_timeout",
+    })
+  })
+
+  test("keeps the tokens of a filtered complete response on the failed generation", async () => {
+    let generation: GenerationDocument | undefined
+    let runUsage: GenerationDocument["usage"]
+    const artifacts: string[] = []
+    const telemetry = create(
+      store({
+        storeArtifact: async (input: { data: Uint8Array }) => {
+          artifacts.push(new TextDecoder().decode(input.data))
+          return input
+        },
+        saveGeneration: async (input: GenerationDocument) => {
+          generation = input
+          return input
+        },
+        updateGeneration: async (_id: string, patch: Partial<GenerationDocument>) => {
+          generation = { ...generation!, ...patch }
+          return generation
+        },
+        generationsForRuns: async () => (generation ? [generation] : []),
+        updateRun: async (_id: string, patch: { usage?: GenerationDocument["usage"] }) => {
+          runUsage = patch.usage
+          return patch
+        },
+        recordGenerationRetry: async () => undefined,
+        addDescendant: async () => undefined,
+      }),
+    )
+    const registry = new AssignmentRegistry()
+    registry.assign("session-root", {
+      runID: "run-filtered",
+      rootSessionID: "session-root",
+      scopeID: "turn-a",
+      assignmentID: "opaque-assignment",
+      telemetry: true,
+    })
+    const assignmentSet = {
+      userId: "user-1",
+      scopeID: "turn-a",
+      assignments: [
+        {
+          assignmentID: "opaque-assignment",
+          model: {
+            displayName: "Hidden Model",
+            slug: "provider/hidden-model",
+            canonicalSlug: "provider/hidden-model-version",
+            contextWindow: 1_000_000,
+            routing: { sort: "throughput" },
+          },
+        },
+      ],
+    }
+    const db = {
+      collection: () => ({ find: () => ({ toArray: async () => [assignmentSet] }), replaceOne: async () => ({}) }),
+    } as unknown as ArenaDb
+    let upstreamCalls = 0
+    // The whole local path: the service the engine runs in process answers the engine proxy.
+    const service = createArenaService({
+      resolveCaller: async () => ({ id: "user-1" }),
+      db: async () => db,
+      pool: [],
+      openRouterApiKey: "server-secret",
+      fetch: async () => {
+        upstreamCalls++
+        return Response.json({
+          id: "upstream-1",
+          provider: "Hidden Provider",
+          choices: [{ message: { content: "partial answer" }, finish_reason: "content_filter" }],
+          usage: { prompt_tokens: 12, completion_tokens: 4, cost: 0.01 },
+        })
+      },
+    })
+    const error = spyOn(console, "error").mockImplementation(() => {})
+    try {
+      const response = await proxy(
+        new Request("http://arena.invalid/api/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Session-Id": "session-root",
+            "x-arena-request-id": "00000000-0000-4000-8000-000000000031",
+          },
+          body: JSON.stringify({ model: "contestant", messages: [] }),
+        }),
+        registry,
+        {
+          upstream: "https://control.test/api/openrouter",
+          fetch: (input, init) => service.openrouter(new Request(input, init)),
+          telemetry,
+        },
+      )
+      // The model call gets only the permanent refusal, once.
+      expect(response.status).toBe(400)
+      expect(await response.json()).toEqual({
+        error: { type: "content_filter", message: "A content filter blocked this response." },
+      })
+      expect(upstreamCalls).toBe(1)
+    } finally {
+      error.mockRestore()
+    }
+
+    // The reveal returns only complete calls, so nothing but the engine's own record has these tokens.
+    await telemetry.reveal?.({ runIDs: ["run-filtered"], metrics: [] })
+    expect(generation).toMatchObject({
+      error: "Arena contestant request failed",
+      failurePhase: "http",
+      failureKind: "content_filter",
+      finishReason: "content_filter",
+      usage: { promptTokens: 12, completionTokens: 4, totalTokens: 16, attempts: 1 },
+    })
+    expect(runUsage).toMatchObject({ promptTokens: 12, completionTokens: 4, totalTokens: 16 })
+    expect(artifacts.join("")).not.toContain("prompt_tokens")
+    expect(artifacts.join("")).not.toContain("Hidden Provider")
   })
 })

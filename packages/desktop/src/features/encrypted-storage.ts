@@ -16,6 +16,29 @@ const ENCRYPTED_VALUES: readonly EncryptedValue[] = [
   { channel: "paseo:byok:key", fileName: "byok-key.safe", label: "OpenRouter key" },
 ];
 
+let plainTextFallbackChosen = false;
+
+/**
+ * Linux without a keyring (no libsecret service or KWallet, as on many tiling window managers)
+ * reports the basic_text backend, and Electron then refuses to encrypt. The session would be lost
+ * on every restart and the OpenRouter key never saved, so fall back to Electron's built-in key, as
+ * Chromium does. The file stays mode 0600, but anyone who can read it can decrypt it.
+ */
+function encryptionAvailable(): boolean {
+  if (
+    process.platform === "linux" &&
+    !plainTextFallbackChosen &&
+    safeStorage.getSelectedStorageBackend() === "basic_text"
+  ) {
+    plainTextFallbackChosen = true;
+    safeStorage.setUsePlainTextEncryption(true);
+    log.warn(
+      "[encrypted-storage] no desktop keyring found; storing the account session and OpenRouter key with Electron's built-in key",
+    );
+  }
+  return safeStorage.isEncryptionAvailable();
+}
+
 function requireApplicationWindow(sender: Electron.WebContents): void {
   const window = BrowserWindow.fromWebContents(sender);
   if (!window || window.isDestroyed()) {
@@ -28,7 +51,7 @@ function filePath(value: EncryptedValue): string {
 }
 
 async function read(value: EncryptedValue): Promise<string | null> {
-  if (!safeStorage.isEncryptionAvailable()) return null;
+  if (!encryptionAvailable()) return null;
   try {
     return safeStorage.decryptString(await readFile(filePath(value)));
   } catch (error) {
@@ -43,7 +66,7 @@ async function write(value: EncryptedValue, payload: unknown): Promise<void> {
   if (typeof payload !== "string") {
     throw new Error(`Invalid ${value.label} payload`);
   }
-  if (!safeStorage.isEncryptionAvailable()) {
+  if (!encryptionAvailable()) {
     throw new Error(`Secure ${value.label} storage is unavailable`);
   }
   const destination = filePath(value);

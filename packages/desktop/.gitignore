@@ -10,3 +10,4 @@ node_modules/
 
 # Isolated dev environment (PASEO_HOME + Electron userData) created by scripts/dev.sh
 .dev/
+release-smoke/

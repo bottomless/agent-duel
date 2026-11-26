@@ -101,6 +101,25 @@ describe("Arena model pool", () => {
     ).toThrow("cannot read images")
   })
 
+  test("collects logprobs only from a model whose catalog lists them, within OpenRouter's range", () => {
+    const listed = {
+      ...catalogModel(pool[0]),
+      supported_parameters: [...catalogModel(pool[0]).supported_parameters, "logprobs", "top_logprobs"],
+    }
+    const collecting = { ...pool[0], topLogprobs: 5 }
+
+    expect(() => validateCatalog([collecting], { data: [listed] })).not.toThrow()
+    expect(() => validateCatalog([pool[0]], { data: [catalogModel(pool[0])] })).not.toThrow()
+    expect(() => validateCatalog([collecting], { data: [catalogModel(pool[0])] })).toThrow(
+      `Arena contestant does not return logprobs: ${pool[0].displayName}`,
+    )
+    for (const topLogprobs of [-1, 21, 2.5]) {
+      expect(() => validateCatalog([{ ...pool[0], topLogprobs }], { data: [listed] })).toThrow(
+        "logprob count is invalid",
+      )
+    }
+  })
+
   test("the service retries a failed catalog validation and keeps a successful one", async () => {
     let calls = 0
     const existingSet = {

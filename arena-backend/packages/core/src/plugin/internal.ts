@@ -259,7 +259,10 @@ const pre = [
   SkillPlugin.Plugin,
   VcsHgPlugin.Plugin,
   ModelsDevPlugin,
-  ...ProviderPlugins,
+  // Agent Duel vendor patch: no OpenCode Console. Every chat runs on Arena's models, but the engine shares the user's
+  // own OpenCode data, so the Console plugin would send their OpenCode key to the Console every minute and could
+  // bring their organization's instructions, skills and policies into a battle.
+  ...ProviderPlugins.filter((plugin) => plugin !== OpencodePlugin),
   ...WebSearchPlugins,
   PatchTool.Plugin,
   // Render model prompts after the patch plugin selects the available editing tools.

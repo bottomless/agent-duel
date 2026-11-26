@@ -23,7 +23,17 @@ export type ModelProfile = {
   }
   /** Null enables reasoning without an effort level for models that do not expose one. */
   readonly reasoningEffort?: "high" | "xhigh" | null
+  /**
+   * Asks each chat call for token logprobs with this many alternatives (0–20), kept only in the
+   * generation capture for research. Under `require_parameters` it also narrows routing to the
+   * endpoints that return them. Providers return them for visible text only, not for reasoning or
+   * tool calls.
+   */
+  readonly topLogprobs?: number
 }
+
+/** OpenRouter's ceiling for `top_logprobs`. */
+export const MAX_TOP_LOGPROBS = 20
 
 export const DEFAULT_MODEL_OUTPUT_LIMIT = 32_000
 /** The savings level every large window compacts at, in measured input tokens. */
@@ -117,6 +127,19 @@ export function validateCatalog(pool: ModelPool, value: unknown) {
       (effort !== null && (!parameters.has("reasoning_effort") || !efforts.has(effort)))
     ) {
       throw new Error(`Arena contestant does not support ${effort ?? "enabled"} reasoning: ${profile.displayName}`)
+    }
+    if (profile.topLogprobs !== undefined) {
+      if (
+        !Number.isSafeInteger(profile.topLogprobs) ||
+        profile.topLogprobs < 0 ||
+        profile.topLogprobs > MAX_TOP_LOGPROBS
+      ) {
+        throw new Error(`Arena contestant logprob count is invalid: ${profile.displayName}`)
+      }
+      // Under `require_parameters` a model without them would find no endpoint, and only its draws would fail.
+      if (!parameters.has("logprobs") || !parameters.has("top_logprobs")) {
+        throw new Error(`Arena contestant does not return logprobs: ${profile.displayName}`)
+      }
     }
   }
 }

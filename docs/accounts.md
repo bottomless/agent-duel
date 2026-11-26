@@ -97,7 +97,10 @@ it through the same variables.
 
 The raw token is returned once and held by the client. Electron persists the signed session through
 `safeStorage`, which uses the operating system's protected credential facility, and removes the
-legacy renderer `AsyncStorage` copy during hydration. The token exists in renderer and daemon memory
+legacy renderer `AsyncStorage` copy during hydration. Linux without a keyring (no libsecret service
+or KWallet) has no such facility, so the session and OpenRouter key files are encrypted with
+Electron's built-in key: only their 0600 mode protects them, and anyone who can read them can
+decrypt them (`packages/desktop/src/features/encrypted-storage.ts`). The token exists in renderer and daemon memory
 while the app is signed in; it is not persisted as plaintext browser storage by the desktop build.
 The browser QA surface continues to use `AsyncStorage` and is not a production session boundary.
 The control plane stores only a SHA-256 hash of each session token, and claims each magic-link token
@@ -125,7 +128,10 @@ The daemon password and account session are separate credentials; a remote clien
   a SHA-256 verifier of the loopback OpenCode control token through the child's one-time stdin
   startup pipe, tagged `"mode": "hosted"`. The child consumes and closes the pipe before starting
   services. None of these credentials is installed in environment variables or command-line
-  arguments.
+  arguments. The runtime must reach the daemon over numeric loopback. Use the bound loopback
+  address or, for a wildcard bind, the loopback of the same address family. Looking up `localhost`
+  again can select the other family. A daemon bound only to a LAN address, socket or named pipe
+  cannot start hosted Arena. Browser previews keep their per-side `.localhost` hosts.
 - The daemon's Arena runtime proxy accepts that local capability only on an explicit allowlist:
   assignments, comparison, commit, pull request and branch name text, research upload, and assigned
   OpenRouter chat/responses. It exchanges the

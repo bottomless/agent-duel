@@ -8,6 +8,7 @@ import {
 import type { ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import { ArenaChatTooLargeError } from "./chat-too-large";
+import { ArenaLoopbackRequiredError, arenaLoopbackRequired } from "./loopback-required";
 
 export interface ArenaStreamClient {
   readonly isConnected: boolean;
@@ -175,7 +176,10 @@ export class ArenaSubscription {
       if (this.id === id) this.recover(new Error(i18n.t("arena.snapshotTimeout")));
     });
     void this.client.arenaStreamSubscribe(this.agentId, id, this.target).catch((error: unknown) => {
-      if (this.id === id) this.recover(error instanceof Error ? error : new Error(String(error)));
+      if (this.id !== id) return;
+      const refused = arenaLoopbackRequired(error);
+      if (refused) this.stop(refused);
+      else this.recover(error instanceof Error ? error : new Error(String(error)));
     });
   }
 
@@ -186,6 +190,13 @@ export class ArenaSubscription {
       subscribe: (listener) => this.client.on("status", listener),
       onTimeout,
     });
+  }
+
+  /** An answer every reconnect would repeat; Retry still asks again. */
+  private stop(error: Error) {
+    this.disconnect();
+    this.failures = 0;
+    this.setError(error);
   }
 
   private recover(error: Error) {
@@ -200,6 +211,22 @@ export class ArenaSubscription {
     }, delay);
   }
 
+  private reset(frame: Extract<ArenaStreamPacket["frame"], { kind: "reset" }>) {
+    if (frame.code === "not_battle_repository") {
+      this.disconnect();
+      this.notBattleRepository = true;
+      this.failures = 0;
+      this.setError(null);
+      this.waiters.forEach((finish) => finish({ isError: false }));
+      return;
+    }
+    // Every reconnect would get the same answer again; Retry still asks.
+    if (frame.code === "chat_too_large") this.stop(new ArenaChatTooLargeError());
+    else if (frame.code === "loopback_required")
+      this.stop(new ArenaLoopbackRequiredError(frame.reason));
+    else this.recover(new Error(frame.reason));
+  }
+
   private receive(packet: ArenaStreamPacket) {
     const id = this.id;
     if (!id) return;
@@ -209,22 +236,7 @@ export class ArenaSubscription {
     }
     if (packet.frame.kind === "reset") {
       if (this.generation !== null && packet.generation !== this.generation) return;
-      if (packet.frame.code === "not_battle_repository") {
-        this.disconnect();
-        this.notBattleRepository = true;
-        this.failures = 0;
-        this.setError(null);
-        this.waiters.forEach((finish) => finish({ isError: false }));
-        return;
-      }
-      if (packet.frame.code === "chat_too_large") {
-        // Every reconnect would rebuild the same snapshot and be refused again; Retry still can.
-        this.disconnect();
-        this.failures = 0;
-        this.setError(new ArenaChatTooLargeError());
-        return;
-      }
-      this.recover(new Error(packet.frame.reason));
+      this.reset(packet.frame);
       return;
     }
     try {

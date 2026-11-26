@@ -69,6 +69,13 @@ function requireOnly(input: Record<string, unknown>, allowed: readonly string[])
   }
 }
 
+// `decided` lets the engine skip a scope an earlier, since-forgotten battle already decided: a store
+// restored behind the control plane reuses turn IDs. It rides on the draw the engine already waits
+// for, so the check costs no round trip of its own.
+function createAnswer(document: AssignmentSetDocument) {
+  return Response.json({ assignments: publicAssignments(document), decided: document.decision !== undefined })
+}
+
 async function createSet(db: ArenaDb, context: ArenaContext, userId: string, input: Record<string, unknown>) {
   requireOnly(input, ["action", "kind", "scopeID", "modelSize"])
   const kind = input.kind
@@ -86,7 +93,7 @@ async function createSet(db: ArenaDb, context: ArenaContext, userId: string, inp
   const assignments = collection(db)
   const id = setID(userId, kind, scopeID)
   const existing = await assignments.findOne({ _id: id, userId, kind, scopeID })
-  if (existing) return Response.json({ assignments: publicAssignments(existing) })
+  if (existing) return createAnswer(existing)
 
   const profiles =
     kind === "battle"
@@ -107,12 +114,12 @@ async function createSet(db: ArenaDb, context: ArenaContext, userId: string, inp
   }
   try {
     await assignments.insertOne(document)
-    return Response.json({ assignments: publicAssignments(document) })
+    return createAnswer(document)
   } catch (error) {
     if (!isDuplicateKeyError(error)) throw error
     const raced = await assignments.findOne({ _id: id, userId, kind, scopeID })
     if (!raced) throw error
-    return Response.json({ assignments: publicAssignments(raced) })
+    return createAnswer(raced)
   }
 }
 
@@ -120,7 +127,9 @@ async function revealedAssignments(db: ArenaDb, document: AssignmentSetDocument)
   const metrics = await metricsCollection(db).find({ userId: document.userId, scopeID: document.scopeID }).toArray()
   return document.assignments.map(({ assignmentID, model }) => {
     const revealedMetrics = metrics
-      .filter((item) => item.assignmentID === assignmentID)
+      // Only a call that finished normally has usage to reveal. An early end is for measuring
+      // stalls, and a row written before outcomes existed is complete.
+      .filter((item) => item.assignmentID === assignmentID && (item.outcome ?? "complete") === "complete")
       .map(({ generationID, usage, finishReason }) => ({
         generationID,
         ...(usage ? { usage } : {}),

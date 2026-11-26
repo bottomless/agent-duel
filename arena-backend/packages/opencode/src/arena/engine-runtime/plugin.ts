@@ -39,11 +39,21 @@ import {
   readSessionRejected,
   SESSION_REJECTED_RETRY_MESSAGE,
 } from "@agent-duel/arena-service/request-error"
+import { replayToolCalls } from "./replay-tool-calls"
 import { withHeldToolCalls } from "./tool-stream"
 import { boundRequestSize, type MediaCarriage } from "./request-size"
 import { MODEL_IDLE_TIMEOUT_MS } from "../model-idle"
 import { ArenaResponseRecovery } from "../response-recovery"
-import { idleBudgetFetch, idleExhausted, idleRecoveryNote, idleTimeout, resetIdleBudget } from "./idle"
+import {
+  headerTimeout,
+  headerTimeoutExhausted,
+  idleBudgetFetch,
+  idleExhausted,
+  idleRecoveryNote,
+  idleTimeout,
+  resetIdleBudget,
+} from "./idle"
+import { ARENA_OFFLINE_MESSAGE } from "../../session/retry"
 import { ArenaShellLedger } from "./shell-ledger"
 import {
   toolExecutionProvider,
@@ -292,9 +302,11 @@ function install(context: Context, options: InstalledOptions) {
       sessionID: Session.ID
     }) => {
       if (!arenaModel(event.model)) return
-      event.messages = reasoningContext(
-        event.messages,
-        options.assignments.assignments.get(String(event.sessionID))?.reasoningFromMessageID,
+      event.messages = replayToolCalls(
+        reasoningContext(
+          event.messages,
+          options.assignments.assignments.get(String(event.sessionID))?.reasoningFromMessageID,
+        ),
       )
       // Replace model-family identity text. Native replay remains intact for user and tool
       // messages, while upstream provider branding cannot reach a blinded contestant.
@@ -446,7 +458,7 @@ function install(context: Context, options: InstalledOptions) {
               retry: true,
               delay: Math.min(Math.max(event.decision.retry ? event.decision.delay : 2_000, 2_000), 10_000),
               persistent: true,
-              message: offline ? "Waiting for network" : SESSION_REJECTED_RETRY_MESSAGE,
+              message: offline ? ARENA_OFFLINE_MESSAGE : SESSION_REJECTED_RETRY_MESSAGE,
             }
             return
           }
@@ -456,11 +468,12 @@ function install(context: Context, options: InstalledOptions) {
               delay: event.decision.delay,
               persistent: false,
             }
-          if (idleExhausted(event.error)) {
+          if (idleExhausted(event.error) || headerTimeoutExhausted(event.error)) {
             event.decision = { retry: false }
             return
           }
-          if (event.decision.retry && idleTimeout(event.error))
+          if (event.decision.retry && headerTimeout(event.error)) event.decision.message = ARENA_OFFLINE_MESSAGE
+          else if (event.decision.retry && idleTimeout(event.error))
             event.decision.message = ArenaResponseRecovery.IDLE_RECOVERING
           if (options.retryDelayMs !== undefined && event.decision.retry) event.decision.delay = options.retryDelayMs
         }),
@@ -478,13 +491,17 @@ function install(context: Context, options: InstalledOptions) {
     )
 
     // Registered after the Arena retry policy above, so it sees the final decision. A retried
-    // request keeps its request ID, which is how telemetry counts the retry.
+    // request keeps its request ID, which is how telemetry counts the retry. A refused retry fails
+    // the step once this hook returns, and Core then starts the step of any steer queued behind it,
+    // so the run's failure handler settles those steers first (only a root session has one).
     yield* context.session.hook(
       "retry",
       (event) =>
-        Effect.sync(() => {
-          if (arenaSession(options, String(event.sessionID)) && event.decision.retry)
-            sessionRequestIDs.retryScheduled(String(event.sessionID), event.decision.delay)
+        Effect.promise(async () => {
+          const sessionID = String(event.sessionID)
+          if (!arenaSession(options, sessionID)) return
+          if (event.decision.retry) sessionRequestIDs.retryScheduled(sessionID, event.decision.delay)
+          else await ArenaRuntime.runFailed(sessionID)
         }),
       { providerID: String(PROVIDER_ID) },
     )

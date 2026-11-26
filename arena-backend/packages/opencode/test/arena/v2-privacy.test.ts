@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { REDACTED_THINKING } from "@agent-duel/arena-service/reasoning"
 import { requestTooLargeMessage, singleAgentAllowanceMessage } from "@agent-duel/arena-service/request-error"
+import { ArenaResponseRecovery } from "@/arena/response-recovery"
 import { sanitizeV2 } from "@/arena/v2-privacy"
 
 describe("sanitizeV2", () => {
@@ -81,6 +82,39 @@ describe("sanitizeV2", () => {
     expect(catalogEntry.providerInfo).toMatchObject({ id: "arena", name: "Arena", package: "" })
     expect(JSON.stringify(catalogEntry)).not.toContain("vendor-secret")
     expect(JSON.stringify(catalogEntry)).not.toContain("vendor-package")
+  })
+
+  test("links native history, permissions and each tool lifecycle event to its assistant step", () => {
+    const row = (id: string) => ({
+      type: "assistant",
+      id,
+      content: ["read_0", "read_1", "call_arena_private-provider"].map((id) => ({ type: "tool", id, name: "read" })),
+    })
+    const history = sanitizeV2([row("msg_first"), row("msg_second")])
+    const ids = history.flatMap((message) => message.content.map((part) => part.id))
+    expect(new Set(ids).size).toBe(6)
+    for (const id of ids) expect(id).toMatch(/^call_arena_[0-9a-f]{32}$/)
+    expect(sanitizeV2(history)).toEqual(history)
+    for (const message of history) {
+      for (const event of [
+        "session.tool.input.started",
+        "session.tool.called",
+        "session.tool.success",
+        "session.tool.failed",
+      ]) {
+        const value = sanitizeV2({
+          type: event,
+          id: "evt_safe",
+          data: { sessionID: "ses_example", assistantMessageID: message.id, id: "read_0", input: { id: "user-data" } },
+        })
+        expect(value.id).toBe("evt_safe")
+        expect(value.data.id).toBe(message.content[0].id)
+        expect(value.data.input.id).toBe("user-data")
+      }
+      expect(sanitizeV2({ source: { type: "tool", messageID: message.id, id: "read_1" } }).source.id).toBe(
+        message.content[1].id,
+      )
+    }
   })
 
   test("sanitizes streaming envelopes without changing event order or safe errors", () => {
@@ -212,4 +246,23 @@ test("keeps the single-agent limit refusal on a failed step while hiding upstrea
     type: "session.step.failed",
     data: { error: { type: "provider.api", message: singleAgentAllowanceMessage } },
   })
+})
+
+test("keeps neutral timeout exhaustion explanations while hiding upstream details", () => {
+  for (const message of [ArenaResponseRecovery.IDLE_EXHAUSTED, ArenaResponseRecovery.HEADER_TIMEOUT_EXHAUSTED]) {
+    const result = sanitizeV2({
+      type: "session.step.failed",
+      data: {
+        error: {
+          type: "provider.unknown",
+          message,
+          response: { body: "private upstream text" },
+        },
+      },
+    })
+    expect(result).toEqual({
+      type: "session.step.failed",
+      data: { error: { type: "provider.unknown", message } },
+    })
+  }
 })

@@ -4,6 +4,7 @@ import { ArenaSnapshotSchema } from "@getpaseo/protocol/arena/rpc-schemas";
 import { ArenaStreamPacketSchema, type ArenaStreamPacket } from "@getpaseo/protocol/arena/stream";
 import { ArenaSubscription, type ArenaStreamClient } from "./stream-subscription";
 import { ArenaChatTooLargeError } from "./chat-too-large";
+import { ArenaLoopbackRequiredError } from "./loopback-required";
 import { arenaRunStatusLabel } from "./run-stats";
 
 class Client implements ArenaStreamClient {
@@ -337,6 +338,49 @@ describe("Arena UI subscription", () => {
       stream.retry();
       expect(client.subscriptions).toHaveLength(2);
       expect(stream.getError()).toBeNull();
+      off();
+      await Promise.resolve();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops reconnecting when the daemon listens off loopback, from a reset or a refused subscribe", async () => {
+    vi.useFakeTimers();
+    try {
+      const loopback =
+        "Hosted Arena requires a loopback TCP connection to the daemon. Configure the daemon to listen on 127.0.0.1 or [::1].";
+      const client = new Client();
+      const refusal = Object.assign(new Error(`${loopback} code=arena_loopback_required`), {
+        code: "arena_loopback_required",
+        userMessage: loopback,
+      });
+      let refuse = false;
+      const subscribe = client.arenaStreamSubscribe.bind(client);
+      client.arenaStreamSubscribe = async (agent: string, id: string) => {
+        await subscribe(agent, id);
+        if (refuse) throw refusal;
+      };
+      const stream = new ArenaSubscription(client, "agent", { kind: "current" }, () => {});
+      const off = stream.retain();
+      await Promise.resolve();
+      client.emit({
+        generation: "g",
+        sequence: 1,
+        frame: { kind: "reset", reason: loopback, code: "loopback_required" },
+      });
+      expect(stream.getError()).toBeInstanceOf(ArenaLoopbackRequiredError);
+      expect(stream.getError()?.message).toBe(loopback);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(client.subscriptions).toHaveLength(1);
+
+      refuse = true;
+      stream.retry();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(stream.getError()).toBeInstanceOf(ArenaLoopbackRequiredError);
+      expect(stream.getError()?.message).toBe(loopback);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(client.subscriptions).toHaveLength(2);
       off();
       await Promise.resolve();
     } finally {

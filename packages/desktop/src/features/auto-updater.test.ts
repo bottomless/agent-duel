@@ -52,6 +52,7 @@ import {
   resolveStagingUserId,
   rolloutManifestSchema,
   shouldAdmitToRollout,
+  linuxPackageLauncher,
   shouldInstallAppUpdateOnQuit,
 } from "./auto-updater";
 
@@ -167,11 +168,35 @@ describe("checkForAppUpdate", () => {
 });
 
 describe("shouldInstallAppUpdateOnQuit", () => {
-  it("keeps Linux AppImage updates on the manual install path", () => {
-    expect(shouldInstallAppUpdateOnQuit({ platform: "linux", isAppImage: true })).toBe(false);
-    expect(shouldInstallAppUpdateOnQuit({ platform: "linux", isAppImage: false })).toBe(true);
-    expect(shouldInstallAppUpdateOnQuit({ platform: "darwin", isAppImage: false })).toBe(true);
-    expect(shouldInstallAppUpdateOnQuit({ platform: "win32", isAppImage: false })).toBe(true);
+  it("keeps every Linux package on the manual install path", () => {
+    expect(shouldInstallAppUpdateOnQuit("linux")).toBe(false);
+    expect(shouldInstallAppUpdateOnQuit("darwin")).toBe(true);
+    expect(shouldInstallAppUpdateOnQuit("win32")).toBe(true);
+  });
+});
+
+describe("linuxPackageLauncher", () => {
+  const exists = (file: string) => file === "/opt/Agent Duel/agent-duel";
+
+  it("reopens a deb or rpm through the launcher next to the Electron binary", () => {
+    expect(
+      linuxPackageLauncher({
+        platform: "linux",
+        execPath: "/opt/Agent Duel/agent-duel.bin",
+        isAppImage: false,
+        exists,
+      }),
+    ).toBe("/opt/Agent Duel/agent-duel");
+  });
+
+  it("leaves the relaunch to the updater for the AppImage, other platforms, and no launcher", () => {
+    const deb = { platform: "linux" as const, execPath: "/opt/Agent Duel/agent-duel.bin", exists };
+    expect(linuxPackageLauncher({ ...deb, isAppImage: true })).toBeNull();
+    expect(linuxPackageLauncher({ ...deb, platform: "darwin", isAppImage: false })).toBeNull();
+    expect(linuxPackageLauncher({ ...deb, isAppImage: false, exists: () => false })).toBeNull();
+    expect(
+      linuxPackageLauncher({ ...deb, execPath: "/opt/Agent Duel/agent-duel", isAppImage: false }),
+    ).toBeNull();
   });
 });
 

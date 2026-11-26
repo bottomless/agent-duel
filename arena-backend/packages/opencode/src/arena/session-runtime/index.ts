@@ -196,7 +196,8 @@ export class SessionStatus extends Context.Service<SessionStatus, StatusInterfac
 
 export interface PermissionInterface {
   readonly list: () => Effect.Effect<ReadonlyArray<PermissionV1.Request>, Error>
-  readonly reply: (input: ArenaPermissionReply) => Effect.Effect<void, Error>
+  /** For a rejection, returns the session whose pending request was rejected. */
+  readonly reply: (input: ArenaPermissionReply) => Effect.Effect<string | undefined, Error>
   readonly setAutoAccept: (sessionID: string, enabled: boolean) => Effect.Effect<void, Error>
 }
 
@@ -208,7 +209,8 @@ export interface QuestionInterface {
     readonly requestID: string
     readonly answers: ReadonlyArray<ReadonlyArray<string>>
   }) => Effect.Effect<void, Error>
-  readonly reject: (requestID: string) => Effect.Effect<void, Error>
+  /** Returns the session whose form was dismissed. */
+  readonly reject: (requestID: string) => Effect.Effect<string, Error>
 }
 
 export class Question extends Context.Service<Question, QuestionInterface>()("@agent-duel/ArenaQuestion") {}
@@ -1032,11 +1034,10 @@ const permissionLayer: Layer.Layer<Permission, never, Directory> = Layer.effect(
           inLocation(
             Effect.gen(function* () {
               const permissions = yield* CorePermission.Service
-              yield* permissions.reply({
-                requestID: PermissionSchema.ID.make(input.requestID),
-                reply: input.reply,
-                message: input.message,
-              })
+              const requestID = PermissionSchema.ID.make(input.requestID)
+              const request = input.reply === "reject" ? yield* permissions.get(requestID) : undefined
+              yield* permissions.reply({ requestID, reply: input.reply, message: input.message })
+              return request?.sessionID
             }),
           ),
         ),
@@ -1096,7 +1097,9 @@ const questionLayer: Layer.Layer<Question, never, Directory> = Layer.effect(
           inLocation(
             Effect.gen(function* () {
               const forms = yield* Form.Service
-              yield* forms.cancel(FormID.make(requestID))
+              const form = yield* forms.get(FormID.make(requestID))
+              yield* forms.cancel(form.id)
+              return form.sessionID
             }),
           ),
         ),

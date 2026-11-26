@@ -74,7 +74,10 @@ describe("Arena backend", () => {
       controlTokenHash: hashArenaControlToken("local-control-token"),
     })
 
-    const { a, b } = await createBattleAssignments("turn-byok")
+    const { a, b, decided } = await createBattleAssignments("turn-byok")
+    // BYOK answers from the local arena-service, so its draw says whether the set is decided and the
+    // start never needs the replay probe.
+    expect(decided).toBe(false)
     const local = await store()
     const sets = await local.db.collection("arenaAssignmentSets").find({}).toArray()
     expect(sets).toEqual([

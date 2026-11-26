@@ -18,6 +18,8 @@ import { MockLanguageModelV3 } from "ai/test"
 import type { LanguageModelV3StreamPart } from "@ai-sdk/provider"
 import { createOpenRouter } from "@openrouter/ai-sdk-provider"
 import { Effect, Layer, Schema, Stream } from "effect"
+import { AssignmentRegistry, proxy } from "../../src/arena/proxy"
+import { toSessionError } from "@opencode/core/session/to-session-error"
 import { withHeldToolCalls } from "../../src/arena/engine-runtime/tool-stream"
 
 const client = LLMClient.layer.pipe(
@@ -83,7 +85,7 @@ const events = (
         event.sdk = createOpenRouter({ apiKey: "test", fetch })
       })
       yield* aisdk.hook.language((event) => {
-        event.language = withHeldToolCalls(event.sdk.languageModel("m"))
+        event.language = withHeldToolCalls(event.sdk.languageModel("contestant"))
       })
       const resolved = yield* aisdk.model(model)
       const stream = LLMClient.stream(ai.request({ model: resolved, messages: [...messages, Message.user("Go")] }))
@@ -251,6 +253,121 @@ describe("withHeldToolCalls", () => {
     )
     expect(seen.filter((event) => event.startsWith("call"))).toEqual(['call call_0 {"a":1}', 'call call_1 {"b":2}'])
     expect(seen.at(-1)).toBe("finish")
+  })
+
+  test.each(["stream", "SSE data_inspection_failed", "HTTP 400"])(
+    "a %s moderation refusal reaches Core without executing a held call",
+    async (kind) => {
+      const registry = new AssignmentRegistry()
+      registry.assign("session", {
+        runID: "run",
+        rootSessionID: "session",
+        scopeID: "scope",
+        assignmentID: "opaque",
+        telemetry: true,
+      })
+      let calls = 0
+      const chunks: string[] = []
+      const seen = await events(async (_input, init) => {
+        const request = new Request("http://arena.invalid/api/v1/chat/completions", init)
+        request.headers.set("X-Session-Id", "session")
+        request.headers.set("x-arena-request-id", crypto.randomUUID())
+        return proxy(request, registry, {
+          upstream: "https://control.invalid",
+          telemetry: {
+            rawChunk: (_metadata, chunk) => {
+              chunks.push(chunk)
+            },
+          },
+          fetch: async () => {
+            calls++
+            if (kind === "HTTP 400")
+              return Response.json({ error: { type: "content_filter", message: "private reason" } }, { status: 400 })
+            if (kind === "SSE data_inspection_failed")
+              return respond(
+                ": OPENROUTER PROCESSING\n\n" +
+                  chunk({ content: "Partial answer" }) +
+                  sse([['{"path":"a.js"}']], "cut") +
+                  `data: ${JSON.stringify({
+                    id: "gen-upstream",
+                    object: "chat.completion.chunk",
+                    model: "qwen/qwen4-max",
+                    provider: "Alibaba",
+                    choices: [],
+                    error: {
+                      code: 400,
+                      message: "private reason",
+                      metadata: { error_type: "invalid_request", provider_code: "data_inspection_failed" },
+                    },
+                  })}\n\n` +
+                  // A following error must not replace the refusal or make the request retryable.
+                  'data: {"error":{"type":"arena_retryable_stream_error"}}\n\n',
+              )()
+            return respond(
+              chunk({ content: "Partial answer" }) +
+                sse([['{"path":"a.js"}']], "cut") +
+                'data: {"choices":[{"index":0,"finish_reason":"tool_calls","delta":{},"native_finish_reason":"content_filter","content_filter_results":{"label":"private reason"}}]}\n\n' +
+                // A following error must not replace the refusal or make the request retryable.
+                'data: {"error":{"type":"arena_retryable_stream_error"}}\n\n',
+            )()
+          },
+        })
+      })
+      expect(calls).toBe(1)
+      expect(chunks.join("")).not.toContain("private reason")
+      expect(chunks.join("")).not.toContain("Alibaba")
+      expect(chunks.join("")).not.toContain("data_inspection_failed")
+      expect(seen.filter((part) => part.type === "tool-call")).toEqual([])
+      if (kind !== "HTTP 400") {
+        expect(seen.filter((part) => part.type === "text-delta").map((part) => part.text)).toEqual(["Partial answer"])
+        expect(seen.at(-1)).toMatchObject({ type: "finish", reason: { normalized: "content-filter" } })
+      } else {
+        const failure = seen.at(-1)
+        expect(failure).toMatchObject({ type: "failed" })
+        if (!failure || !("error" in failure)) throw new Error("Missing provider error")
+        expect(toSessionError(failure.error)).toMatchObject({ type: "provider.content-filter", status: 400 })
+      }
+    },
+  )
+
+  test("a standalone HTTP 200 SSE data_inspection_failed chunk finishes as content-filter without retrying", async () => {
+    const registry = new AssignmentRegistry()
+    registry.assign("session", {
+      runID: "run",
+      rootSessionID: "session",
+      scopeID: "scope",
+      assignmentID: "opaque",
+      telemetry: true,
+    })
+    let calls = 0
+    const seen = await events(async (_input, init) => {
+      const request = new Request("http://arena.invalid/api/v1/chat/completions", init)
+      request.headers.set("X-Session-Id", "session")
+      request.headers.set("x-arena-request-id", crypto.randomUUID())
+      return proxy(request, registry, {
+        upstream: "https://control.invalid",
+        fetch: async () => {
+          calls++
+          return respond(
+            ": OPENROUTER PROCESSING\n\n" +
+              `data: ${JSON.stringify({
+                id: "gen-upstream-empty",
+                object: "chat.completion.chunk",
+                model: "unknown",
+                provider: "Alibaba",
+                choices: [],
+                error: {
+                  code: 400,
+                  message: "Input text data may contain inappropriate content.",
+                  metadata: { error_type: "invalid_request", provider_code: "data_inspection_failed" },
+                },
+              })}\n\n`,
+          )()
+        },
+      })
+    })
+    expect(calls).toBe(1)
+    expect(seen.at(-1)).toMatchObject({ type: "finish", reason: { normalized: "content-filter" } })
   })
 
   test("runs nothing when the stream breaks before the model finishes", async () => {

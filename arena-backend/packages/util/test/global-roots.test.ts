@@ -3,6 +3,12 @@ import os from "os"
 import path from "path"
 import { pathToFileURL } from "url"
 
+// Linux gets a per-user temp directory; macOS and Windows already have one (src/user-tmp.ts).
+const expectedTmp =
+  process.platform === "darwin" || process.platform === "win32"
+    ? path.join(os.tmpdir(), "opencode")
+    : path.join(os.tmpdir(), `opencode-${process.getuid!()}`)
+
 const module = pathToFileURL(path.join(import.meta.dir, "../src/global-roots.ts")).href
 
 describe("global roots", () => {
@@ -20,7 +26,7 @@ describe("global roots", () => {
       cache: path.join(env.XDG_CACHE_HOME, "opencode"),
       config: path.join(env.XDG_CONFIG_HOME, "opencode"),
       state: path.join(env.XDG_STATE_HOME, "opencode"),
-      tmp: path.join(os.tmpdir(), "opencode"),
+      tmp: expectedTmp,
     })
   })
 
@@ -40,7 +46,7 @@ describe("global roots", () => {
       cache: path.join(home, ".cache", "opencode"),
       config: path.join(home, ".config", "opencode"),
       state: path.join(home, ".local", "state", "opencode"),
-      tmp: path.join(os.tmpdir(), "opencode"),
+      tmp: expectedTmp,
     })
   })
 })
