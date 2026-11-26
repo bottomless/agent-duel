@@ -15,6 +15,7 @@ import { KeyedMutex } from "@opencode/core/effect/keyed-mutex"
 import { awaitedShells, closeShellTurn, openShellTurn, SERVER_CHECK_INTERVAL_MS } from "./engine-runtime/shell"
 import { ArenaActivity } from "./activity"
 import { withChildWaitLimit } from "./child-wait"
+import { createPromptDeclines } from "./prompt-declines"
 import { Stream } from "effect"
 import { createArenaStream, type Frame as ArenaStreamFrame } from "./stream"
 import { execFile as nodeExecFile } from "child_process"
@@ -1630,9 +1631,7 @@ export const layer: Layer.Layer<
     // Runs being cancelled while their turn still reads as running, as when the other side's
     // environment setup failed. A cancelled child's result must not count as new work for them.
     const haltingRuns = new Set<string>()
-    // Runs whose user declined the pending question or permission. Core ends that prompt with an
-    // interrupt, which would otherwise read as a failure; the run settled on the user's answer.
-    const declinedRuns = new Set<string>()
+    const promptDeclines = createPromptDeclines()
     const withSteerGates = <A, E, R>(runIDs: readonly string[], effect: Effect.Effect<A, E, R>) =>
       [...new Set(runIDs)].sort().reduceRight((inner, runID) => steerGates.withLock(runID)(inner), effect)
     // Aborted by Stop, so a stopped battle resolves without waiting for the rest of its copy.
@@ -2804,12 +2803,10 @@ export const layer: Layer.Layer<
     ) {
       const store = yield* available()
       const run = yield* runForReply(store, runID)
-      // A plain reject fails the waiting tool as a decline, which Core answers by interrupting the
-      // prompt. Mark the run before the reply lands: the prompt fiber settles within milliseconds.
-      if (response === "reject") declinedRuns.add(runID)
+      const reply = permissions.reply({ requestID: PermissionV1.ID.make(requestID), reply: response })
       yield* inDirectory(
         run.worktree,
-        permissions.reply({ requestID: PermissionV1.ID.make(requestID), reply: response }),
+        response === "reject" ? promptDeclines.reply(run, reply) : Effect.asVoid(reply),
       ).pipe(Effect.mapError(error))
       yield* promise(() =>
         store.writeRun(
@@ -2866,10 +2863,9 @@ export const layer: Layer.Layer<
     const rejectQuestion = Effect.fn("Arena.rejectQuestion")(function* (runID: string, requestID: string) {
       const store = yield* available()
       const run = yield* runForReply(store, runID)
-      // A dismissal fails the question tool as a decline, which Core answers by interrupting the
-      // prompt. Mark the run before the reply lands: the prompt fiber settles within milliseconds.
-      declinedRuns.add(runID)
-      yield* inDirectory(run.worktree, questions.reject(QuestionID.make(requestID))).pipe(Effect.mapError(error))
+      yield* inDirectory(run.worktree, promptDeclines.reply(run, questions.reject(QuestionID.make(requestID)))).pipe(
+        Effect.mapError(error),
+      )
       yield* promise(() =>
         store.writeRun(
           { _id: runID },
@@ -5362,7 +5358,7 @@ export const layer: Layer.Layer<
       // A new loop for this run opens its turn to steers again, and no longer carries an earlier
       // decline: only the prompt a decline interrupts may settle because of it.
       closingRuns.delete(run.runID)
-      declinedRuns.delete(run.runID)
+      yield* promptDeclines.take(run.runID)
       yield* openShellTurn(run.sessionID)
       const storedRun = yield* promise(() => store.run(run.runID))
       yield* settleAutoAccept(
@@ -5534,11 +5530,9 @@ export const layer: Layer.Layer<
       // interrupt instead of an assistant. The run settled on the user's answer: it is complete,
       // and only an interrupt that decline caused may read that way — a stop or a restart reaches
       // finalization through its own state above.
+      const mainRequestDeclined = yield* promptDeclines.take(run.runID)
       const declined =
-        !stopped &&
-        declinedRuns.has(run.runID) &&
-        Exit.isFailure(promptExit) &&
-        Cause.hasInterruptsOnly(promptExit.cause)
+        !stopped && mainRequestDeclined && Exit.isFailure(promptExit) && Cause.hasInterruptsOnly(promptExit.cause)
       // A steer still queued when the run was cut off stays in the thread as an unanswered message,
       // as in 1.x, and goes with this side's history if it is kept. Left in Core's inbox it would
       // vanish from the thread, and the next resume of this session would deliver it. A finished
@@ -5563,10 +5557,8 @@ export const layer: Layer.Layer<
           current?.state === "stopping" ? limitGit : unlimitGit,
         ),
       )
-      // The run's state now routes a reply, so the closing mark has done its job, and a decline
-      // only ever explains the prompt that just settled.
+      // The run's state now routes a reply, so the closing mark has done its job.
       closingRuns.delete(run.runID)
-      declinedRuns.delete(run.runID)
       if (Exit.isSuccess(outcome)) {
         const settled = yield* promise(() => store.run(run.runID))
         const selectable =
