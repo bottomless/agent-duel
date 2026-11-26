@@ -92,6 +92,7 @@ describe("Arena assignment control plane", () => {
     const publicPayload = (await create.json()) as Record<string, unknown>
     expect(publicPayload).toEqual({
       assignments: [{ assignmentID: "assignment-a" }, { assignmentID: "assignment-b" }],
+      decided: false,
     })
     expect(JSON.stringify(publicPayload)).not.toContain("routingToken")
     expect(JSON.stringify(publicPayload)).not.toContain("GLM")
@@ -129,6 +130,11 @@ describe("Arena assignment control plane", () => {
         { assignmentID: "assignment-b", model: "Grok 4.6" },
       ],
     })
+
+    // A store restored behind the control plane draws this scope again: the same pair comes back,
+    // marked decided, so the engine moves to another turn instead of running a revealed pair.
+    const redrawn = await service().assignments(request({ action: "create", kind: "battle", scopeID: "turn-1" }))
+    expect(await redrawn.json()).toEqual({ ...publicPayload, decided: true })
   })
 
   test("rejects invalid decisions without revealing or resolving the assignment", async () => {
@@ -329,7 +335,7 @@ describe("Arena assignment control plane", () => {
     const response = await service({ ids: ["medium-assignment"] }).assignments(
       request({ action: "create", kind: "single", scopeID: "rating-medium", modelSize: "medium" }),
     )
-    expect(await response.json()).toEqual({ assignments: [{ assignmentID: "medium-assignment" }] })
+    expect(await response.json()).toEqual({ assignments: [{ assignmentID: "medium-assignment" }], decided: false })
     const stored = await mongo.db
       .collection<{
         _id: string
@@ -350,7 +356,7 @@ describe("Arena assignment control plane", () => {
     const created = await service({ ids: ["legacy-assignment"] }).assignments(
       request({ action: "create", kind: "single", scopeID: "rating-legacy" }),
     )
-    expect(await created.json()).toEqual({ assignments: [{ assignmentID: "legacy-assignment" }] })
+    expect(await created.json()).toEqual({ assignments: [{ assignmentID: "legacy-assignment" }], decided: false })
     const stored = await mongo.db
       .collection<{
         _id: string

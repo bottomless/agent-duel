@@ -3,6 +3,8 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { $ } from "bun"
+import { chatSlug, turnID as makeTurnID } from "@/arena/domain"
+import type { TurnDocument } from "@/arena/records"
 
 describe("Arena v2 battle integration", () => {
   let originalFetch: typeof globalThis.fetch | undefined
@@ -29,7 +31,8 @@ describe("Arena v2 battle integration", () => {
     directory = undefined
   })
 
-  test("grafts a voted winner, then accepts a filtered partial reply without counting a vote", async () => {
+  // The draw answers `decided`, or the control plane predates that answer and the replay probe does.
+  async function runsVotesGraftsAndAdmits(answersDecided: boolean) {
     const [{ Server }, { ArenaRuntime }, credentials] = await Promise.all([
       import("@/server/server"),
       import("@/arena/runtime"),
@@ -46,6 +49,11 @@ describe("Arena v2 battle integration", () => {
     await $`git commit -m initial`.cwd(directory).quiet()
 
     let assignmentCount = 0
+    const battleScopes: string[] = []
+    // Scopes an earlier battle already decided on the control plane. The draw says so, or for an older
+    // control plane only the replay route does, by refusing them.
+    const decidedScopes = new Set<string>()
+    const replayProbes: string[] = []
     const completionRequests: Array<{
       readonly sessionID: string
       readonly messages: readonly unknown[]
@@ -65,14 +73,16 @@ describe("Arena v2 battle integration", () => {
           return Response.json({ received: batch.records.length, stored: batch.records.length })
         }
         if (url.pathname === "/api/arena/assignments") {
-          const body = (await request.json()) as { action: string; kind: string; decision?: string }
+          const body = (await request.json()) as { action: string; kind: string; scopeID: string; decision?: string }
           if (body.action === "create") {
+            if (body.kind === "battle") battleScopes.push(body.scopeID)
             assignmentCount++
             return Response.json({
               assignments:
                 body.kind === "battle"
                   ? [{ assignmentID: `a-${assignmentCount}` }, { assignmentID: `b-${assignmentCount}` }]
                   : [{ assignmentID: `s-${assignmentCount}` }],
+              ...(answersDecided ? { decided: decidedScopes.has(body.scopeID) } : {}),
             })
           }
           return Response.json({
@@ -82,6 +92,16 @@ describe("Arena v2 battle integration", () => {
               { assignmentID: `b-${assignmentCount}`, model: "model-b" },
             ],
           })
+        }
+        if (url.pathname === "/api/openrouter/api/v1/arena/replay") {
+          const scopeID = request.headers.get("x-arena-scope-id") ?? ""
+          replayProbes.push(scopeID)
+          return decidedScopes.has(scopeID)
+            ? Response.json({ error: { message: "Arena assignment is invalid" } }, { status: 403 })
+            : Response.json(
+                { error: { message: "Arena contestant response is not available", type: "arena_replay_unavailable" } },
+                { status: 404 },
+              )
         }
         if (url.pathname === "/api/arena/comparison")
           return Response.json({ provider: "test", choices: [{ message: { content: "comparison" } }] })
@@ -168,6 +188,29 @@ describe("Arena v2 battle integration", () => {
     if (!attached.ok) throw new Error(await attached.text())
     expect(attached.status).toBe(200)
     const attachedBody = (await attached.json()) as { chat: { id: string } }
+    // The chat counter was restored, but the checkout still holds the earlier turn 0's results.
+    const legacyRoot = `refs/battles/${chatSlug(attachedBody.chat.id)}/turn-0`
+    const older = (await $`git commit-tree HEAD^{tree} -m earlier-result`.cwd(directory).quiet().text()).trim()
+    for (const name of ["a", "b", "selected"]) {
+      await $`git update-ref ${`${legacyRoot}/${name}`} ${older}`.cwd(directory).quiet()
+    }
+    // An engine stopped between turn 1's insert and its activation left that record unactivated.
+    const store = await ArenaRuntime.store()
+    const orphanID = makeTurnID(attachedBody.chat.id, 1)
+    const orphanRef = `refs/battles/${chatSlug(attachedBody.chat.id)}/turn-1-00000000-0000-4000-8000-000000000000/base`
+    const head = (await $`git rev-parse HEAD`.cwd(directory).quiet().text()).trim()
+    await $`git update-ref ${orphanRef} ${head}`.cwd(directory).quiet()
+    await store.turns.insertOne({
+      _id: orphanID,
+      chatID: attachedBody.chat.id,
+      turnIndex: 1,
+      state: "creating",
+      frozenBaseSHA: head,
+      baseSnapshot: { canonicalHead: head, tree: "", indexTree: "", permanentRef: orphanRef },
+    } as unknown as TurnDocument)
+    // Index 2 left no record and no ref, but the control plane already decided its pair.
+    const decidedID = makeTurnID(attachedBody.chat.id, 2)
+    decidedScopes.add(decidedID)
     const started = await request(`/arena/chats/${attachedBody.chat.id}/turns`, {
       method: "POST",
       headers: { "x-opencode-directory": directory },
@@ -225,6 +268,16 @@ describe("Arena v2 battle integration", () => {
     }
     const turnID = current.turn?.id
     if (!turnID) throw new Error("Arena did not publish a turn ID")
+    // The surviving turn-0 refs and the unactivated turn 1 claim their indexes locally; the decided
+    // pair claims index 2, so the battle takes index 3: the logical turn ID also keys the hosted pair
+    // draw, which must not hand back an old pair.
+    expect(turnID).toBe(makeTurnID(attachedBody.chat.id, 3))
+    expect(battleScopes).toEqual([decidedID, turnID])
+    // A draw that answers `decided` leaves the start with no round trip of its own.
+    if (answersDecided) expect(replayProbes).toEqual([])
+    else expect(replayProbes.slice(0, 2)).toEqual([decidedID, turnID])
+    expect(await store.turn(orphanID)).toBeNull()
+    expect((await $`git rev-parse --verify --quiet ${orphanRef}`.cwd(directory).quiet().nothrow()).exitCode).toBe(1)
     const voted = await request(`/arena/turns/${turnID}/vote`, {
       method: "POST",
       headers: { "x-opencode-directory": directory },
@@ -239,6 +292,9 @@ describe("Arena v2 battle integration", () => {
       current = await snapshot()
     }
     expect(current.chat.activeTurnID).toBeUndefined()
+    for (const name of ["a", "b", "selected"]) {
+      expect((await $`git rev-parse ${`${legacyRoot}/${name}`}`.cwd(directory).quiet().text()).trim()).toBe(older)
+    }
 
     const winnerRun = current.runs?.find((run) => run.side === "a")
     const loserRun = current.runs?.find((run) => run.side === "b")
@@ -337,7 +393,20 @@ describe("Arena v2 battle integration", () => {
     })
     expect(kept.status).toBe(200)
     expect(await kept.text()).toContain("Saved partial reply")
-  }, 45_000)
+    if (answersDecided) expect(replayProbes).toEqual([])
+  }
+
+  test(
+    "grafts a voted winner, then accepts a filtered partial reply without counting a vote",
+    () => runsVotesGraftsAndAdmits(true),
+    45_000,
+  )
+
+  test(
+    "grafts a voted winner, then accepts a filtered partial reply without counting a vote on a control plane without the decided answer",
+    () => runsVotesGraftsAndAdmits(false),
+    45_000,
+  )
 
   /**
    * Each contestant's first step waits until a steer is queued for side A, then fails with

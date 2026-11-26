@@ -79,7 +79,12 @@ import {
 } from "./port-retarget"
 import { comparisonTimeline, showedOutput } from "./comparison-timeline"
 import { ArenaContestant, contestantPermissions } from "./contestant"
-import { createBattleAssignments, createSingleAssignment, resolveAssignments } from "./assignment-client"
+import {
+  battleAssignmentsDecided,
+  createBattleAssignments,
+  createSingleAssignment,
+  resolveAssignments,
+} from "./assignment-client"
 import type { BattleAssignmentDecision } from "@agent-duel/arena-service/assignment-decision"
 import { ArenaAttachments } from "./attachments"
 import { forkSessionInto, type ArenaFork } from "./fork"
@@ -122,7 +127,9 @@ import {
 } from "./domain"
 import {
   acceptWinnerConflicts,
-  battleRefs,
+  allocateBattleBaseRef,
+  nextUnclaimedTurnIndex,
+  refRoot,
   changedBetweenBases,
   compare,
   comparisonFiles,
@@ -361,6 +368,18 @@ export function contestantSystemInstruction(
   return [contestantWorktreeInstruction, pendingEnvironment, currentPreview].filter(Boolean).join("\n\n")
 }
 class GitDeadlineError extends Error {}
+
+// Each skip proves an index was used; a chat restored this far behind is not worth chasing further.
+const MAX_DECIDED_TURN_SKIPS = 3
+
+/** The hosted pair drawn for a turn index was already decided: an earlier battle used that index. */
+class DecidedTurnIndexError extends Error {
+  constructor(turnID: string) {
+    super(
+      `Arena turn ${turnID} was already used by an earlier battle, and the next turn numbers were too. Send your message again.`,
+    )
+  }
+}
 
 function finalizationErrorDetail(cause: Cause.Cause<unknown>) {
   const failure = Cause.squash(cause)
@@ -609,10 +628,6 @@ function keptReason(ref: ObservedRef, agentVersion: string): string {
     return `The winning agent moved ${label} back${where} and added nothing to it, so your ${label} was kept.`
   }
   return `Your ${label} was kept. The winning agent's version is at ${agentVersion}.`
-}
-
-function refRoot(turn: Pick<TurnDocument, "chatID" | "turnIndex">) {
-  return battleRefs(chatSlug(turn.chatID), turn.turnIndex).base.replace(/\/base$/, "")
 }
 
 function singleAgentResultRef(chatID: string, ratingID: string) {
@@ -4979,13 +4994,13 @@ export const layer: Layer.Layer<
         )
         const chat = yield* promise(() => store.chat(turn.chatID))
         if (!chat) return yield* Effect.fail(new Error(`Arena chat not found: ${turn.chatID}`))
-        const permanentRef = `${refRoot(turn)}/${run.side}`
+        const permanentRef = stored?.permanentRef ?? `${refRoot(turn)}/${run.side}`
         // Canonical holds the authoritative admitted refs; a previous attempt may have imported them
         // without recording the result, while the contestant's host copy can be rewritten or pruned.
         const previous = yield* step(
           "snapshotting_changes",
           "gitFinalizeMs",
-          stored?.permanentRef === permanentRef && stored.finalCommit
+          stored?.permanentRef && stored.finalCommit
             ? Effect.succeed({ commit: stored.finalCommit, indexTree: stored.finalIndexTree })
             : withGit(readResultRefs(chat.repository.root, permanentRef)).pipe(gitDeadline("reading result refs")),
         ).pipe(Effect.mapError(error))
@@ -5020,7 +5035,7 @@ export const layer: Layer.Layer<
               Effect.promise(() => resumeProcessGroups(paused)),
             ),
         ).pipe(Effect.mapError(error))
-        const refChanges = yield* step(
+        const { refChanges, refChangesPrefix } = yield* step(
           "importing_results",
           "importRefsMs",
           Effect.gen(function* () {
@@ -5052,7 +5067,7 @@ export const layer: Layer.Layer<
                 canonical: chat.repository.root,
                 sourceRepository: run.worktree.directory,
                 sourceRef: "HEAD",
-                destinationRef: `${permanentRef}-head`,
+                destinationRef: `${permanentRef}-head-${result.rawHead}`,
                 expected: result.rawHead,
               }),
             ).pipe(Effect.mapError(error))
@@ -5066,32 +5081,25 @@ export const layer: Layer.Layer<
               // vote needs, and it started at the frozen head.
               const ref = `refs/heads/${result.branch}`
               refChanges = [{ ref, before: frozenHead, after: result.rawHead }]
+            } else if (host) {
+              refChanges = yield* withGit(diffHostRefs({ host, exclude: [] })).pipe(Effect.mapError(error))
+            }
+            // A reply can replace a tag, or replace branch x with x/y. Keep each set immutable;
+            // a partial import or an older set must never be overwritten to publish the new one.
+            const refChangesPrefix = `${permanentRef}-refs-${digest(refChanges)}`
+            for (const change of refChanges) {
+              if (!change.after) continue
               yield* withGit(
                 importWinnerRef({
                   canonical: chat.repository.root,
-                  sourceRepository: run.worktree.directory,
-                  sourceRef: ref,
-                  destinationRef: `${permanentRef}-refs/heads/${result.branch}`,
-                  expected: result.rawHead,
+                  sourceRepository: host ?? run.worktree.directory,
+                  sourceRef: change.ref,
+                  destinationRef: `${refChangesPrefix}/${change.ref.slice("refs/".length)}`,
+                  expected: change.after,
                 }),
               ).pipe(Effect.mapError(error))
             }
-            if (host) {
-              refChanges = yield* withGit(diffHostRefs({ host, exclude: [] })).pipe(Effect.mapError(error))
-              for (const change of refChanges) {
-                if (!change.after) continue
-                yield* withGit(
-                  importWinnerRef({
-                    canonical: chat.repository.root,
-                    sourceRepository: host,
-                    sourceRef: change.ref,
-                    destinationRef: `${permanentRef}-refs/${change.ref.slice("refs/".length)}`,
-                    expected: change.after,
-                  }),
-                ).pipe(Effect.mapError(error))
-              }
-            }
-            return refChanges
+            return { refChanges, refChangesPrefix }
           }).pipe(gitDeadline("importing result refs")),
         ).pipe(Effect.mapError(error))
         const diff = result.diff.reduce(
@@ -5109,6 +5117,7 @@ export const layer: Layer.Layer<
             ...(result.branch ? { finalBranch: result.branch } : {}),
             branchChanged,
             refChanges,
+            refChangesPrefix,
             ...(result.agentCommit ? { agentCommit: result.agentCommit } : {}),
             agentCommits: result.agentCommits,
             wrapperCreated: result.wrapperCreated,
@@ -6957,6 +6966,83 @@ export const layer: Layer.Layer<
       return yield* finalizeRuns(outcomeA, outcomeB)
     })
 
+    /**
+     * The chat's counter can lag what already exists: a restored store keeps an older count while
+     * later turn records or battle refs survive, and an engine stopped between a turn's insert and
+     * its activation leaves an unactivated `creating` record at the count. The logical turn ID
+     * built from the count also keys the hosted pair draw, research uploads and the leaderboard,
+     * so a reused index gets the old, possibly revealed pair back. Remove the unactivated record
+     * and move the counter past every index a record or ref claims; never reuse one.
+     */
+    const skipClaimedTurnIndexes = Effect.fnUntraced(function* (store: Store, chat: ChatDocument) {
+      let next = chat.turnCount
+      for (const turn of yield* promise(() => store.turnsForChat(chat._id))) {
+        if (turn.turnIndex < chat.turnCount) continue
+        next = Math.max(next, turn.turnIndex + 1)
+        if (turn.state === "creating" && chat.activeTurnID !== turn._id) {
+          yield* discardUnactivatedTurn(store, chat, turn)
+        }
+      }
+      const claimed = yield* withGit(
+        nextUnclaimedTurnIndex({ canonical: chat.repository.root, chatID: chat._id }),
+      ).pipe(Effect.mapError(error))
+      next = Math.max(next, claimed)
+      if (next === chat.turnCount) return chat
+      const advanced = yield* promise(() =>
+        store.updateChatReturning(
+          { _id: chat._id, status: "ready", activeTurnID: { $exists: false }, turnCount: chat.turnCount },
+          { $set: { turnCount: next, updatedAt: new Date() } },
+        ),
+      )
+      if (!advanced) return yield* Effect.fail(new Error("Arena chat changed while starting a battle"))
+      yield* Effect.logWarning("Arena moved a chat's turn counter past turns that already exist", {
+        chatID: chat._id,
+        from: chat.turnCount,
+        to: next,
+      })
+      return advanced
+    })
+
+    /** A turn inserted by an admission that never activated it: no runs, worktrees or vote exist. */
+    const discardUnactivatedTurn = Effect.fnUntraced(function* (store: Store, chat: ChatDocument, turn: TurnDocument) {
+      const permanentRef = turn.baseSnapshot?.permanentRef
+      if (permanentRef) {
+        yield* withRepositoryMutation(
+          chat.canonicalCheckout?.commonGitDir ?? chat.repository.root,
+          withGit(
+            removeRef({ canonical: chat.repository.root, ref: permanentRef, expectedCommit: turn.frozenBaseSHA }),
+          ),
+        ).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("Arena kept the base ref of an unactivated turn", { turnID: turn._id, cause }),
+          ),
+        )
+      }
+      const artifacts = [turn.copySnapshot?.manifestID, turn.copySnapshot?.ignoredSeedID].filter(
+        (id): id is string => !!id,
+      )
+      if (artifacts.length)
+        yield* promise(() => store.artifacts.deleteMany({ _id: { $in: artifacts }, turnID: turn._id }))
+      yield* promise(() => store.turns.deleteOne({ _id: turn._id, state: "creating" }))
+      yield* Effect.logWarning("Arena removed a turn that was never activated", { chatID: chat._id, turnID: turn._id })
+    })
+
+    /** Moves the counter past an index whose hosted pair an earlier battle already decided. */
+    const skipDecidedTurnIndex = Effect.fnUntraced(function* (store: Store, chat: ChatDocument) {
+      const advanced = yield* promise(() =>
+        store.updateChatReturning(
+          { _id: chat._id, status: "ready", activeTurnID: { $exists: false }, turnCount: chat.turnCount },
+          { $set: { turnCount: chat.turnCount + 1, updatedAt: new Date() } },
+        ),
+      )
+      if (!advanced) return yield* Effect.fail(new Error("Arena chat changed while starting a battle"))
+      yield* Effect.logWarning("Arena skipped a turn index whose pair was already decided", {
+        chatID: chat._id,
+        from: chat.turnCount,
+        to: chat.turnCount + 1,
+      })
+    })
+
     const startTurnUnlocked = Effect.fn("Arena.startTurnUnlocked")(function* (
       store: Store,
       id: string,
@@ -6988,32 +7074,43 @@ export const layer: Layer.Layer<
       if (yield* promise(() => store.checkoutEviction(storedCheckoutRoot))) {
         return yield* Effect.fail(new Error("Arena checkout is currently being evicted"))
       }
-      const chat = yield* reconcileCanonicalAvailability(store, storedChat)
-      if (chat.checkoutEvicted) {
+      const available = yield* reconcileCanonicalAvailability(store, storedChat)
+      if (available.checkoutEvicted) {
         return yield* Effect.fail(new Error("Arena checkout is currently being evicted"))
       }
-      if (chat.status === "blocked") {
-        return yield* Effect.fail(new Error(chat.blockedReason ?? canonicalUnavailableReason))
+      if (available.status === "blocked") {
+        return yield* Effect.fail(new Error(available.blockedReason ?? canonicalUnavailableReason))
       }
-      if (chat.status !== "ready" || chat.activeTurnID) {
+      if (available.status !== "ready" || available.activeTurnID) {
         return yield* Effect.fail(new Error("Arena chat already has an active battle"))
       }
-      if (activeNormalTurns.active(chat.canonicalSessionID)) {
+      if (activeNormalTurns.active(available.canonicalSessionID)) {
         return yield* Effect.fail(new Error("Arena chat has an active normal turn"))
       }
       // A conflicted trunk cannot be snapshotted, but the chat stays usable: refuse only the
       // battle so a single agent can still be asked to resolve the conflicts in place. The
       // reconcile above already refreshed this list.
-      const conflicts = chat.trunkConflicts ?? []
+      const conflicts = available.trunkConflicts ?? []
       if (conflicts.length > 0) {
         return yield* Effect.fail(new Error(trunkConflictReason(conflicts)))
       }
-      yield* withGit(requireBattleGit(chat.repository.root)).pipe(Effect.mapError(error))
+      yield* withGit(requireBattleGit(available.repository.root)).pipe(Effect.mapError(error))
+      const chat = yield* skipClaimedTurnIndexes(store, available)
       const turnID = makeTurnID(chat._id, chat.turnCount)
-      // The pair is drawn while the base freezes, so the send waits once for both. The draw is
-      // account- and turn-scoped and idempotent on the control plane, so a send refused after this
-      // point leaves an unused set and nothing else.
-      const pairDraw = createBattleAssignments(turnID)
+      // Unreachable after the skip above unless another admission raced this one.
+      if (yield* promise(() => store.turn(turnID))) {
+        return yield* Effect.fail(new Error(`Arena turn ${turnID} already exists for this chat`))
+      }
+      // The pair is drawn while the base freezes and the copy work below runs, so the send waits
+      // once for all of them. The draw is account- and turn-scoped and idempotent on the control
+      // plane, so a send refused after this point leaves an unused set and nothing else. A restored
+      // store whose old refs are gone can still reuse an index the control plane already decided;
+      // the draw's answer says so. Only a control plane that predates that answer costs the replay
+      // probe's round trip.
+      const pairDraw = createBattleAssignments(turnID).then(async (pair) => ({
+        pair,
+        decided: pair.decided ?? (await battleAssignmentsDecided(turnID, pair.a.assignmentID)),
+      }))
       pairDraw.catch(() => undefined)
       const freezeStartedAt = Date.now()
       const baseExit = yield* withRepositoryMutation(
@@ -7036,7 +7133,7 @@ export const layer: Layer.Layer<
             withGit(
               snapshotBase({
                 canonical: latest.repository.root,
-                permanentRef: `${refRoot({ chatID: latest._id, turnIndex: latest.turnCount })}/base`,
+                permanentRef: allocateBattleBaseRef(chat._id, chat.turnCount),
               }),
             ).pipe(Effect.mapError(error)),
           )
@@ -7156,9 +7253,18 @@ export const layer: Layer.Layer<
       // worktrees' own watches keep running: they cover the battle too, up to the next sync.
       warmMarks.delete(warmPairKey(chat._id, chat.turnCount))
       yield* discardWarmSeal(store, chat._id)
+      // Before anything else takes this index: a decided set means an earlier battle used it.
       const assignmentWaitStartedAt = Date.now()
-      const pair = yield* promise(() => pairDraw).pipe(Effect.onError(() => discardUnactivatedCopy.pipe(Effect.ignore)))
+      const drawn = yield* promise(() => pairDraw).pipe(
+        Effect.onError(() => discardUnactivatedCopy.pipe(Effect.ignore)),
+      )
       const assignmentWaitMs = Date.now() - assignmentWaitStartedAt
+      if (drawn.decided) {
+        yield* discardUnactivatedCopy
+        yield* skipDecidedTurnIndex(store, chat)
+        return yield* Effect.fail(new DecidedTurnIndexError(turnID))
+      }
+      const pair = drawn.pair
       const placed = {
         a: assignment(pair.a),
         b: assignment(pair.b),
@@ -7336,7 +7442,16 @@ export const layer: Layer.Layer<
       const receivedAt = Date.now()
       const store = yield* available()
       const lock = turnStartLock(id)
-      const admission = startTurnUnlocked(store, id, userPrompt, rawParticipantID, receivedAt, autoAccept, attachments)
+      // A skipped decided index starts the admission again on the next one, a few times at most.
+      const admission = startTurnUnlocked(
+        store,
+        id,
+        userPrompt,
+        rawParticipantID,
+        receivedAt,
+        autoAccept,
+        attachments,
+      ).pipe(Effect.retry({ times: MAX_DECIDED_TURN_SKIPS, while: (cause) => cause instanceof DecidedTurnIndexError }))
       return yield* Effect.gen(function* () {
         const immediate = yield* lock.withPermitsIfAvailable(1)(admission)
         if (Option.isSome(immediate)) return immediate.value
@@ -11073,6 +11188,7 @@ export const layer: Layer.Layer<
       }
       const frozenHead = turn.baseSnapshot?.canonicalHead ?? turn.frozenBaseSHA
       const permanentRef = winner.permanentRef ?? `${refRoot(turn)}/${winner.side}`
+      const refChangesPrefix = winner.refChangesPrefix ?? `${permanentRef}-refs`
       const canonical = yield* withGit(inspectCanonical(root)).pipe(Effect.mapError(error))
       // A run finalized before the real HEAD was imported may have no commit to move a branch to.
       // Its files alone are measured against the chat branch, which loses what the winner moved
@@ -11146,7 +11262,7 @@ export const layer: Layer.Layer<
         observeWinnerRefs({
           canonical: root,
           changes: winner.refChanges ?? [],
-          sourceRefPrefix: `${permanentRef}-refs`,
+          sourceRefPrefix: refChangesPrefix,
           ...(checkoutBranch ? { checkoutBranch } : {}),
         }),
       ).pipe(Effect.mapError(error))
@@ -11178,7 +11294,7 @@ export const layer: Layer.Layer<
             ...(ref.clash.agent_on_yours || ref.clash.yours_on_agent
               ? { clash: ref.clash.agent_on_yours ?? ref.clash.yours_on_agent ?? [] }
               : {}),
-            ...(ref.agent ? { agentRef: `${permanentRef}-refs/${ref.ref.slice("refs/".length)}` } : {}),
+            ...(ref.agent ? { agentRef: `${refChangesPrefix}/${ref.ref.slice("refs/".length)}` } : {}),
             ...(ref.lost !== undefined ? { lost: ref.lost } : {}),
             ...(ref.lostSubjects?.length ? { lostSubjects: ref.lostSubjects } : {}),
             ...(ref.rewound ? { rewound: true } : {}),
@@ -11202,7 +11318,7 @@ export const layer: Layer.Layer<
             skipped.push({
               ref: ref.ref,
               action: "skipped",
-              reason: keptReason(ref, `${permanentRef}-refs/${ref.ref.slice("refs/".length)}`),
+              reason: keptReason(ref, `${refChangesPrefix}/${ref.ref.slice("refs/".length)}`),
             })
           }
           continue

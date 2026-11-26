@@ -136,6 +136,27 @@ const generationA = `gen_${"a".repeat(32)}`
 const generationB = `gen_${"b".repeat(32)}`
 
 describe("Arena service on the desktop SQLite local store", () => {
+  // A store restored behind the control plane reuses turn IDs. The draw says whether the set it
+  // hands back was already decided, so the engine needs no round trip of its own to find out.
+  test("marks a redrawn battle set decided once a vote resolved it", async () => {
+    await using arena = await localService({ ids: ["assignment-a", "assignment-b"], random: [0, 0.999] })
+    const pair = [{ assignmentID: "assignment-a" }, { assignmentID: "assignment-b" }]
+
+    const created = await arena.assignments({ action: "create", kind: "battle", scopeID: "turn-reused" })
+    expect(await created.json()).toEqual({ assignments: pair, decided: false })
+    const redrawnOpen = await arena.assignments({ action: "create", kind: "battle", scopeID: "turn-reused" })
+    expect(await redrawnOpen.json()).toEqual({ assignments: pair, decided: false })
+
+    const resolved = await arena.assignments({
+      action: "resolve",
+      kind: "battle",
+      scopeID: "turn-reused",
+      decision: "select:a",
+    })
+    expect(resolved.status).toBe(200)
+    const redrawnDecided = await arena.assignments({ action: "create", kind: "battle", scopeID: "turn-reused" })
+    expect(await redrawnDecided.json()).toEqual({ assignments: pair, decided: true })
+  })
   // Sets used to be looked up by the dotted path "assignments.assignmentID",
   // which matches 0 rows here because the query emulation cannot reach into an
   // array, so every contestant call answered 403.
@@ -146,6 +167,7 @@ describe("Arena service on the desktop SQLite local store", () => {
     expect(created.status).toBe(200)
     expect(await created.json()).toEqual({
       assignments: [{ assignmentID: "assignment-a" }, { assignmentID: "assignment-b" }],
+      decided: false,
     })
     expect(arena.validatedKeys).toEqual(["user-key"])
 
@@ -239,7 +261,7 @@ describe("Arena service on the desktop SQLite local store", () => {
       modelSize: "frontier",
     })
     expect(created.status).toBe(200)
-    expect(await created.json()).toEqual({ assignments: [{ assignmentID: "assignment-single" }] })
+    expect(await created.json()).toEqual({ assignments: [{ assignmentID: "assignment-single" }], decided: false })
 
     const routed = await arena.contestant("turn-single", "assignment-single")
     expect(routed.status).toBe(200)
@@ -256,7 +278,7 @@ describe("Arena service on the desktop SQLite local store", () => {
 
     const created = await arena.assignments({ action: "create", kind: "single", scopeID: "turn-medium" })
     expect(created.status).toBe(200)
-    expect(await created.json()).toEqual({ assignments: [{ assignmentID: "assignment-medium" }] })
+    expect(await created.json()).toEqual({ assignments: [{ assignmentID: "assignment-medium" }], decided: false })
 
     const routed = await arena.contestant("turn-medium", "assignment-medium", undefined, "medium")
     expect(routed.status).toBe(200)
