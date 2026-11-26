@@ -32,10 +32,10 @@ if [ -d "${MACOS_DIR}" ]; then
     exit 1
   fi
   APP_EXECUTABLE="${MACOS_HELPER_EXECUTABLE}"
-elif [ -x "${RESOURCES_DIR}/../Agent Duel.bin" ]; then
-  APP_EXECUTABLE="${RESOURCES_DIR}/../Agent Duel.bin"
-elif [ -x "${RESOURCES_DIR}/../Agent Duel" ]; then
-  APP_EXECUTABLE="${RESOURCES_DIR}/../Agent Duel"
+elif [ -x "${RESOURCES_DIR}/../agent-duel.bin" ]; then
+  APP_EXECUTABLE="${RESOURCES_DIR}/../agent-duel.bin"
+elif [ -x "${RESOURCES_DIR}/../agent-duel" ]; then
+  APP_EXECUTABLE="${RESOURCES_DIR}/../agent-duel"
 else
   echo "Bundled Agent Duel executable not found relative to ${RESOURCES_DIR}" >&2
   exit 1

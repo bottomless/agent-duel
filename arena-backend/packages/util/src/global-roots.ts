@@ -1,5 +1,6 @@
 import os from "os"
 import path from "path"
+import { userTmp } from "./user-tmp.js"
 
 const home = os.homedir()
 const data = process.env.XDG_DATA_HOME || (home ? path.join(home, ".local", "share") : undefined)
@@ -14,6 +15,7 @@ export function roots(app: string) {
     cache: path.join(cache!, app),
     config: path.join(config!, app),
     state: path.join(state!, app),
-    tmp: path.join(os.tmpdir(), app),
+    // Agent Duel vendor patch: a per-user temp directory (user-tmp.ts).
+    tmp: userTmp(app, path.join(cache!, app, "tmp")),
   }
 }

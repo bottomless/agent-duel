@@ -23,6 +23,8 @@ import { Git } from "@/git"
 import { FSUtil } from "@opencode/util/fs-util"
 import { PRIVATE_REF_PREFIXES } from "@/worktree/layout"
 import { identicalNumberedCopies } from "./sync-conflict-copy"
+import { chatSlug } from "./domain"
+import type { TurnDocument } from "./records"
 import type { RefChange, RefOutcome } from "./ref-types"
 import type { AgentMove, BranchAction, RefNamespace, RefObservation, YourMove } from "./branch-review"
 
@@ -458,12 +460,23 @@ function battleGitProblem(result: Git.Result, gitOnPath: boolean): string | unde
 }
 
 // Windows never reaches this: its missing-Git message names the installer and asks for a restart.
+// Linux has no Command Line Tools or Homebrew by default, and no one package manager, so its hint
+// names the two that cover most desktops. Ubuntu 22.04's own Git is older than battles need, and
+// the git-core PPA that fixes it works only on Ubuntu, so it is named for that release alone.
 function gitInstallHint() {
+  if (process.platform === "linux") {
+    return "sudo apt install git (on Ubuntu 22.04, first sudo add-apt-repository ppa:git-core/ppa) or sudo dnf install git"
+  }
   return "xcode-select --install"
 }
 
+// A Git older than 2.39 on Linux is usually Ubuntu 22.04's 2.34, which a plain apt upgrade keeps;
+// the git-core PPA carries current Git, but only for Ubuntu.
 function gitUpdateHint() {
   if (process.platform === "win32") return "git update-git-for-windows"
+  if (process.platform === "linux") {
+    return "sudo add-apt-repository ppa:git-core/ppa && sudo apt install git on Ubuntu, or sudo dnf upgrade git on Fedora"
+  }
   return "brew install git"
 }
 
@@ -651,7 +664,7 @@ export const preserveRef = Effect.fn("ArenaGit.preserveRef")(function* (
     const detail = current.stderr.toString("utf8").trim() || "Failed to inspect permanent battle ref"
     return yield* Effect.fail(new OperationError("preserve_ref", detail))
   }
-  yield* run(git, cwd, "preserve_ref", ["update-ref", ref, commit])
+  yield* run(git, cwd, "preserve_ref", ["update-ref", "--no-deref", ref, commit, ""])
   const verified = yield* read(git, cwd, "verify_ref", ["rev-parse", "--verify", ref])
   if (verified !== commit) {
     return yield* Effect.fail(new OperationError("verify_ref", "Permanent battle ref verification failed"))
@@ -679,7 +692,7 @@ const advanceRef = Effect.fn("ArenaGit.advanceRef")(function* (
     )
   }
 
-  const updated = yield* git.run(["update-ref", ref, commit, expectedCommit], { cwd })
+  const updated = yield* git.run(["update-ref", "--no-deref", ref, commit, expectedCommit], { cwd })
   if (updated.exitCode !== 0) {
     const after = yield* git.run(["rev-parse", "--verify", "--quiet", ref], { cwd })
     if (after.exitCode === 0 && output(after) === commit) return
@@ -997,7 +1010,7 @@ export const removeRef = Effect.fn("ArenaGit.removeRef")(function* (input: {
   if (current.exitCode !== 0 || output(current) !== input.expectedCommit) {
     return yield* Effect.fail(new OperationError("remove_ref", "Battle ref no longer matches the unadmitted snapshot"))
   }
-  yield* run(git, root, "remove_ref", ["update-ref", "-d", input.ref, input.expectedCommit])
+  yield* run(git, root, "remove_ref", ["update-ref", "--no-deref", "-d", input.ref, input.expectedCommit])
   return true
 })
 
@@ -1014,21 +1027,50 @@ const deleteRefs = Effect.fn("ArenaGit.deleteRefs")(function* (
 ) {
   const unique = [...new Set(refs)]
   if (unique.length === 0) return
-  yield* run(git, root, operation, ["update-ref", "--stdin"], {
+  yield* run(git, root, operation, ["update-ref", "--no-deref", "--stdin"], {
     stdin: Stream.make(new TextEncoder().encode(unique.map((ref) => `delete ${ref}\n`).join(""))),
   })
 })
 
-/** Return the permanent refs for one turn. `chat` must already be a stable ref-safe slug. */
-export function battleRefs(chat: string, turn: number): BattleRefs {
-  const root = `refs/battles/${chat}/turn-${turn}`
-  return {
-    base: `${root}/base`,
-    a: `${root}/a`,
-    b: `${root}/b`,
-    selected: `${root}/selected`,
-  }
+/** `chat` is a ref-safe slug; `incarnation` is absent for the original ordinal-only layout. */
+export function battleRefs(chat: string, turn: number, incarnation?: string): BattleRefs {
+  const root = `refs/battles/${chat}/turn-${turn}${incarnation ? `-${incarnation}` : ""}`
+  return { base: `${root}/base`, a: `${root}/a`, b: `${root}/b`, selected: `${root}/selected` }
 }
+
+/** Allocate once per admission: the chat's counter can be restored while its Git refs survive. */
+export function allocateBattleBaseRef(chatID: string, turnIndex: number) {
+  return battleRefs(chatSlug(chatID), turnIndex, randomUUID()).base
+}
+
+export function refRoot(turn: Pick<TurnDocument, "chatID" | "turnIndex" | "baseSnapshot">) {
+  const base = turn.baseSnapshot?.permanentRef ?? battleRefs(chatSlug(turn.chatID), turn.turnIndex).base
+  return base.replace(/\/base$/, "")
+}
+
+// `turn-<n>/` in the original layout, `turn-<n>-<uuid>/` for a namespace allocated per admission.
+const TURN_NAMESPACE = /^turn-(0|[1-9]\d*)(?:-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?\//
+
+/** One past the highest turn index any of the chat's battle refs claims; 0 when none does. */
+export const nextUnclaimedTurnIndex = Effect.fn("ArenaGit.nextUnclaimedTurnIndex")(function* (input: {
+  readonly canonical: string
+  readonly chatID: string
+}) {
+  const git = yield* Git.Service
+  const root = yield* readRoot(git, input.canonical, "find_repository_root")
+  const prefix = `refs/battles/${chatSlug(input.chatID)}/`
+  const listing = yield* read(git, root, "list_battle_turn_refs", [
+    "for-each-ref",
+    "--format=%(refname)",
+    prefix.slice(0, -1),
+  ])
+  let next = 0
+  for (const ref of listing.split("\n")) {
+    const match = ref.startsWith(prefix) ? TURN_NAMESPACE.exec(ref.slice(prefix.length)) : null
+    if (match) next = Math.max(next, Number(match[1]) + 1)
+  }
+  return next
+})
 
 /** Build the stable branch name shared by every turn of a chat side. */
 export function sideBranchName(chatSlug: string, side: Side): string {
@@ -1519,43 +1561,62 @@ export const diffHostRefs = Effect.fn("ArenaGit.diffHostRefs")(function* (input:
   return changes as readonly RefChange[]
 })
 
-/**
- * Bring one ref from a host into the canonical repository under a private name, exactly as
- * it is. Unlike `importResultRef` nothing is peeled, so an annotated tag arrives as its tag
- * object. A destination already holding `expected` is left alone.
- */
-export const importWinnerRef = Effect.fn("ArenaGit.importWinnerRef")(function* (input: {
+type PrivateRefImport = {
   readonly canonical: string
   readonly sourceRepository: string
   readonly sourceRef: string
   readonly destinationRef: string
-  /** Exact object id the destination must hold afterwards; never peeled. */
   readonly expected: string
-}) {
+}
+
+const importPrivateRef = Effect.fn("ArenaGit.importPrivateRef")(function* (
+  input: PrivateRefImport & { readonly objectType?: "commit" | "tree"; readonly previous?: string },
+) {
   const git = yield* Git.Service
-  const root = yield* readRoot(git, input.canonical, "find_import_winner_ref_root")
-  yield* run(git, root, "validate_winner_ref", ["check-ref-format", input.destinationRef])
-  const current = yield* git.run(["rev-parse", "--verify", "--quiet", input.destinationRef], { cwd: root })
-  if (current.exitCode === 0 && output(current) === input.expected) return
+  const root = yield* readRoot(git, input.canonical, "find_import_result_root")
+  const ref = input.destinationRef
+  yield* run(git, root, "validate_destination_result_ref", ["check-ref-format", ref])
+  const current = yield* git.run(["rev-parse", "--verify", "--quiet", ref], { cwd: root })
   if (current.exitCode !== 0 && current.exitCode !== 1) {
-    const detail = current.stderr.toString("utf8").trim() || "Failed to inspect the imported ref"
-    return yield* Effect.fail(new OperationError("inspect_winner_ref", detail))
+    return yield* Effect.fail(new OperationError("inspect_imported_result_ref", current.stderr.toString("utf8").trim()))
   }
-  // `+` lets a retry replace a destination left by an earlier attempt. If verification below
-  // fails, the destination is already replaced; acceptable since it is a private battle ref Arena owns.
-  yield* run(git, root, "import_winner_ref", [
+  const existing = current.exitCode === 0 ? output(current) : undefined
+  if (existing === input.expected && !input.objectType) return input.expected
+  if (existing && existing !== input.expected && existing !== input.previous) {
+    return yield* Effect.fail(
+      new OperationError("import_result_ref", `Destination result ref ${ref} already points to ${existing}`),
+    )
+  }
+  const revision = input.objectType ? `${input.sourceRef}^{${input.objectType}}` : input.sourceRef
+  const oid = yield* read(git, input.sourceRepository, "read_source_result_commit", ["rev-parse", "--verify", revision])
+  if (oid !== input.expected) {
+    return yield* Effect.fail(
+      new OperationError("verify_source_result_commit", `Source result changed from ${input.expected} to ${oid}`),
+    )
+  }
+  if (existing === oid) return oid
+  // Fetch only the verified object. A fetch refspec outside heads/tags can overwrite even without
+  // '+', including a ref created after the read above or one of a different object type.
+  yield* run(git, root, "import_result_ref", [
     "fetch",
     "--no-tags",
     "--no-write-fetch-head",
     input.sourceRepository,
-    `+${input.sourceRef}:${input.destinationRef}`,
+    oid,
   ])
-  const imported = yield* read(git, root, "verify_winner_ref", ["rev-parse", "--verify", input.destinationRef])
-  if (imported !== input.expected) {
-    return yield* Effect.fail(
-      new OperationError("verify_winner_ref", `Imported ${input.sourceRef} is ${imported}, expected ${input.expected}`),
-    )
+  const updated = yield* git.run(["update-ref", "--no-deref", ref, oid, existing ?? ""], { cwd: root })
+  if (updated.exitCode !== 0) {
+    const after = yield* git.run(["rev-parse", "--verify", "--quiet", ref], { cwd: root })
+    if (after.exitCode !== 0 || output(after) !== oid) {
+      return yield* Effect.fail(new OperationError("import_result_ref", updated.stderr.toString("utf8").trim()))
+    }
   }
+  return oid
+})
+
+/** Preserve the exact ref object, including an annotated tag, without replacing an existing ref. */
+export const importWinnerRef = Effect.fn("ArenaGit.importWinnerRef")(function* (input: PrivateRefImport) {
+  yield* importPrivateRef(input)
 })
 
 /** A ref the winner changed, measured against the developer's repository for `decideRef`. */
@@ -1633,7 +1694,7 @@ const mergeBase = Effect.fn("ArenaGit.mergeBase")(function* (git: Git.Interface,
 export const observeWinnerRefs = Effect.fn("ArenaGit.observeWinnerRefs")(function* (input: {
   readonly canonical: string
   readonly changes: readonly RefChange[]
-  /** `${permanentRef}-refs`; each change's object is read from `<prefix>/<ref without refs/>`. */
+  /** Each change's object is read from `<prefix>/<ref without refs/>`. */
   readonly sourceRefPrefix: string
   /** The branch the trunk has checked out once the winner is applied. */
   readonly checkoutBranch?: string
@@ -3905,95 +3966,15 @@ export const importResultRef = Effect.fn("ArenaGit.importResultRef")(function* (
   /** Previous admitted destination value when finalization is continuing the same run. */
   readonly expectedDestinationCommit?: string
 }) {
-  const git = yield* Git.Service
-  const root = yield* readRoot(git, input.canonical, "find_import_result_root")
-  const objectType = input.objectType ?? "commit"
-  const sourceCommit = yield* read(git, input.sourceRepository, "read_source_result_commit", [
-    "rev-parse",
-    "--verify",
-    `${input.sourceRef}^{${objectType}}`,
-  ])
-  if (sourceCommit !== input.expectedCommit) {
-    return yield* Effect.fail(
-      new OperationError(
-        "verify_source_result_commit",
-        `Source result changed from ${input.expectedCommit} to ${sourceCommit}`,
-      ),
-    )
-  }
-  yield* run(git, root, "validate_destination_result_ref", ["check-ref-format", input.destinationRef])
-  const current = yield* git.run(["rev-parse", "--verify", "--quiet", `${input.destinationRef}^{${objectType}}`], {
-    cwd: root,
+  return yield* importPrivateRef({
+    canonical: input.canonical,
+    sourceRepository: input.sourceRepository,
+    sourceRef: input.sourceRef,
+    destinationRef: input.destinationRef,
+    expected: input.expectedCommit,
+    objectType: input.objectType ?? "commit",
+    previous: input.expectedDestinationCommit,
   })
-  if (current.exitCode === 0 && output(current) === input.expectedCommit) return input.expectedCommit
-  if (current.exitCode !== 0 && current.exitCode !== 1) {
-    const detail = current.stderr.toString("utf8").trim() || "Failed to inspect imported result ref"
-    return yield* Effect.fail(new OperationError("inspect_imported_result_ref", detail))
-  }
-
-  if (current.exitCode === 0) {
-    const existing = output(current)
-    if (!input.expectedDestinationCommit || existing !== input.expectedDestinationCommit) {
-      return yield* Effect.fail(
-        new OperationError("import_result_ref", `Destination result ref already points to ${existing}`),
-      )
-    }
-    const incomingRef = `${input.destinationRef}-incoming-${randomUUID()}`
-    yield* Effect.gen(function* () {
-      yield* run(git, root, "import_result_ref", [
-        "fetch",
-        "--no-tags",
-        "--no-write-fetch-head",
-        input.sourceRepository,
-        `${input.sourceRef}:${incomingRef}`,
-      ])
-      const imported = yield* read(git, root, "verify_incoming_result_commit", [
-        "rev-parse",
-        "--verify",
-        `${incomingRef}^{${objectType}}`,
-      ])
-      if (imported !== input.expectedCommit) {
-        return yield* Effect.fail(
-          new OperationError(
-            "verify_incoming_result_commit",
-            `Imported result points to ${imported}, expected ${input.expectedCommit}`,
-          ),
-        )
-      }
-      yield* run(git, root, "advance_imported_result_ref", [
-        "update-ref",
-        input.destinationRef,
-        input.expectedCommit,
-        existing,
-      ])
-    }).pipe(
-      Effect.ensuring(
-        git.run(["update-ref", "-d", incomingRef], { cwd: root }).pipe(Effect.ignore),
-      ),
-    )
-  } else {
-    yield* run(git, root, "import_result_ref", [
-      "fetch",
-      "--no-tags",
-      "--no-write-fetch-head",
-      input.sourceRepository,
-      `${input.sourceRef}:${input.destinationRef}`,
-    ])
-  }
-  const destinationCommit = yield* read(git, root, "verify_imported_result_commit", [
-    "rev-parse",
-    "--verify",
-    `${input.destinationRef}^{${objectType}}`,
-  ])
-  if (destinationCommit !== input.expectedCommit) {
-    return yield* Effect.fail(
-      new OperationError(
-        "verify_imported_result_commit",
-        `Imported result points to ${destinationCommit}, expected ${input.expectedCommit}`,
-      ),
-    )
-  }
-  return destinationCommit
 })
 
 /**
@@ -4180,10 +4161,11 @@ export const applyPromotionState = Effect.fn("ArenaGit.applyPromotionState")(fun
     // replayed. Git's normal cherry-pick machinery is intentionally used so conflicts remain
     // visible in the index and worktree for the caller to resolve.
     yield* run(git, root, "reset_before_agent_replay", ["reset", "--hard", head])
+    const replayEnv = yield* replayCommitterEnv(git, root)
     for (const commit of commits) {
       const replayed = yield* git.run(
         ["cherry-pick", "--allow-empty", "--keep-redundant-commits", commit],
-        { cwd: root },
+        { cwd: root, ...(Object.keys(replayEnv).length > 0 ? { env: replayEnv } : {}) },
       )
       if (replayed.exitCode !== 0) {
         const replayConflicts = yield* conflictPaths(git, root)
@@ -4601,6 +4583,18 @@ const arenaCommitterEnv = {
 }
 
 /**
+ * Replaying the winner's commits makes the developer their committer. With no Git identity and an
+ * empty full name in passwd, common on Linux, Git refuses ("Committer identity unknown"), so the
+ * replay falls back to the identity Add Project uses for its first commit. Empty when Git has one.
+ */
+const replayCommitterEnv = Effect.fn("ArenaGit.replayCommitterEnv")(function* (git: Git.Interface, root: string) {
+  const committer = yield* git.run(["var", "GIT_COMMITTER_IDENT"], { cwd: root })
+  const env: Record<string, string> =
+    committer.exitCode === 0 ? {} : { GIT_COMMITTER_NAME: "Agent Duel", GIT_COMMITTER_EMAIL: "agent-duel@localhost" }
+  return env
+})
+
+/**
  * Wrap a tree in a commit so merge-tree and friends can name it. Wrapping both sides of a merge
  * as children of its base makes that base their only merge base, which is how the merge picks
  * its base without `merge-tree --merge-base` (see MIN_BATTLE_GIT).
@@ -4723,6 +4717,7 @@ const replayCommits = Effect.fn("ArenaGit.replayCommits")(function* (
 ) {
   let head = onto
   let lastOriginal: string | undefined
+  const committerEnv = yield* replayCommitterEnv(git, root)
   for (const commit of commits) {
     const parents = (yield* read(git, root, "read_replay_parents", ["rev-list", "--parents", "-n", "1", commit]))
       .split(/\s+/)
@@ -4748,6 +4743,7 @@ const replayCommits = Effect.fn("ArenaGit.replayCommits")(function* (
         GIT_AUTHOR_NAME: name ?? "OpenCode Arena",
         GIT_AUTHOR_EMAIL: email ?? "arena@localhost",
         GIT_AUTHOR_DATE: date ?? wrapperDate,
+        ...committerEnv,
       },
     })
     lastOriginal = commit

@@ -8,8 +8,19 @@ import {
   readCompactionRequired,
   readNetworkUnavailable,
   readPaymentError,
+  refusalUsage,
   runAuthMessage,
 } from "./request-error"
+
+test("reads a refused response's usage wherever its API keeps it, and nothing that is not an object", () => {
+  const usage = { prompt_tokens: 12, completion_tokens: 4 }
+  expect(refusalUsage({ error: { type: "content_filter" }, usage })).toEqual(usage)
+  expect(refusalUsage({ type: "response.failed", response: { usage } })).toEqual(usage)
+  expect(refusalUsage({ data: { usage } })).toEqual(usage)
+  for (const none of [undefined, "usage", { usage: null }, { usage: 16 }, { error: { usage } }]) {
+    expect(refusalUsage(none)).toBeUndefined()
+  }
+})
 
 test("recognizes only a structured rejected-key run error and drops provider text", () => {
   const error = (statusCode: number) =>

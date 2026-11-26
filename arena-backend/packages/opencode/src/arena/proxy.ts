@@ -3,13 +3,20 @@ import { contestant } from "./model-profile"
 import type { GenerationFailureKind, GenerationFailurePhase, GenerationMetrics } from "./records"
 import {
   compactionRequiredError,
+  contentFilterError,
+  contentFilterFinish,
+  contentFilterMessage,
+  contentFilterRefusal,
+  filteredStreamChunk,
   networkUnavailableError,
   paymentError,
   readCompactionRequired,
+  readContentFilter,
   readNetworkUnavailable,
   readPaymentError,
   readSessionRejected,
   readSingleAgentAllowance,
+  refusalUsage,
   retryableStreamError,
   sessionRejectedError,
   singleAgentAllowanceError,
@@ -116,6 +123,30 @@ export type ProxyOptions = {
    * above: the storage host must not get the account's credential.
    */
   readonly mediaUpload?: (input: string, init: RequestInit) => Promise<Response>
+  /**
+   * Runs when a content filter refuses a session's main request, before the model call sees the
+   * refusal. Core starts the steps a refused run must not take as soon as that call fails.
+   */
+  readonly contentFilter?: (sessionID: string) => Promise<void> | void
+}
+
+// A filter handler that never settles must not hold the refusal back from the model call.
+const CONTENT_FILTER_HANDLER_MS = 5_000
+
+async function settleContentFilter(run: () => Promise<void> | void) {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    await Promise.race([
+      Promise.resolve()
+        .then(run)
+        .catch(() => undefined),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, CONTENT_FILTER_HANDLER_MS)
+      }),
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 type StreamProgress = {
@@ -280,6 +311,8 @@ function retryableStreamPayload() {
 
 export function sanitizePayload(value: unknown, generationID: string, stream = false): unknown {
   if (!record(value)) return value
+  const blocked = stream && filteredStreamChunk(value, generationID)
+  if (blocked) return blocked
   if (value.error !== undefined) {
     if (
       stream &&
@@ -306,6 +339,9 @@ export function sanitizePayload(value: unknown, generationID: string, stream = f
       if (["length", "max_tokens", "max_output_tokens"].includes(String(native_finish_reason))) {
         safe.finish_reason = "length"
       }
+      // A refusal is caught before this runs for the model call, so this is only its stored record:
+      // keep the reason once the native field goes.
+      if (native_finish_reason === "content_filter") safe.finish_reason = "content_filter"
       return safe
     })
   }
@@ -326,6 +362,21 @@ export function sanitizePayload(value: unknown, generationID: string, stream = f
     sanitized.data = data
   }
   return sanitized
+}
+
+/**
+ * What the records keep of a refused complete response: its answer and usage under the
+ * `content_filter` finish a filtered stream leaves. The model call still gets the neutral error.
+ * `raw` is the provider's response, or the service's refusal with the usage it kept.
+ */
+function filteredResponseRecord(raw: unknown, generationID: string) {
+  if (record(raw) && raw.error === undefined && contentFilterFinish(raw)) return sanitizePayload(raw, generationID)
+  const usage = refusalUsage(raw)
+  return {
+    id: generationID,
+    choices: [{ index: 0, message: {}, finish_reason: "content_filter" }],
+    ...(usage ? { usage } : {}),
+  }
 }
 
 // Some routes report tool_calls for truncated JSON even in native_finish_reason. Usage can
@@ -410,12 +461,25 @@ function researchHeaders(source: Headers) {
   )
 }
 
-function sanitizeLine(line: string, generationID: string, normalize: (value: unknown) => unknown) {
+function sanitizeLine(
+  line: string,
+  generationID: string,
+  normalize: (value: unknown) => unknown,
+  filtered: () => void,
+) {
   if (!line.startsWith("data:")) return ""
   const raw = line.slice("data:".length).trimStart()
   if (!raw || raw === "[DONE]") return line
   try {
-    return `data: ${JSON.stringify(normalize(sanitizePayload(JSON.parse(raw), generationID, true)))}`
+    const value: unknown = JSON.parse(raw)
+    const blocked = record(value) && filteredStreamChunk(value, generationID)
+    if (blocked) {
+      filtered()
+      // The filter finish can carry the call's usage; keep it so the failed generation records it.
+      const kept = record(value) && record(value.usage) ? { ...blocked, usage: value.usage } : blocked
+      return `data: ${JSON.stringify(kept)}`
+    }
+    return `data: ${JSON.stringify(normalize(sanitizePayload(value, generationID, true)))}`
   } catch {
     return (
       "data: " + JSON.stringify({ error: { message: "Provider response stream failed", type: "arena_stream_error" } })
@@ -472,6 +536,7 @@ function sanitizeStream(
   signal?: AbortSignal,
   recovery?: StreamRecovery,
   onEnd?: (complete: boolean) => void,
+  onBlocked?: () => Promise<void>,
 ) {
   const normalize = normalizeToolCutoff(maxTokens)
   let reader = stream.getReader()
@@ -481,6 +546,54 @@ function sanitizeStream(
   let pending = ""
   let settled = false
   let finished = false
+  let blocked = false
+  const sanitize = (line: string) =>
+    sanitizeLine(line, generationID, normalize, () => {
+      blocked = true
+    })
+  // The SDK emits its finish on EOF. Once a filter has finished the choice, a later transport
+  // failure must not replace it with a retryable error, or leave its prompt armed for cache pings.
+  // `rest` and `initialPending` carry the part of the current read batch after the filter finish, so
+  // a usage chunk that arrived in the same batch is still recorded.
+  const finishBlocked = async (
+    controller: ReadableStreamDefaultController<Uint8Array>,
+    rest: readonly string[] = [],
+    initialPending = "",
+  ) => {
+    settled = true
+    onEnd?.(false)
+    if (open) emit(controller, "")
+    controller.close()
+    tracked.closedAt = Date.now()
+    // Let the service finish recording usage and the response after its final choice. Only the
+    // client stream is closed above; a server that never closes its tail must not hold the reader.
+    const timeout = setTimeout(() => void reader.cancel().catch(() => undefined), 5_000)
+    const feed = (line: string) => {
+      if (isDataLine(line)) telemetry?.rawChunk?.(metadata, `${sanitize(line)}\n`)
+    }
+    try {
+      // Usage can arrive after the filter finish; keep it for the failed generation's metrics.
+      for (const line of rest) feed(line)
+      let tail = initialPending
+      while (true) {
+        const next = await reader.read()
+        if (next.done) break
+        tail += decoder.decode(next.value, { stream: true })
+        const lines = tail.split("\n")
+        tail = lines.pop() ?? ""
+        for (const line of lines) feed(line)
+      }
+      tail += decoder.decode()
+      feed(tail)
+      await telemetry?.error?.(metadata, new Error(contentFilterMessage), new Date(), {
+        phase: "stream",
+        kind: "content_filter",
+      })
+    } finally {
+      clearTimeout(timeout)
+      await reader.cancel().catch(() => undefined)
+    }
+  }
   // Data lines the model call has received. A replay resends the whole response, so it skips them.
   let delivered = 0
   let skip = 0
@@ -490,8 +603,8 @@ function sanitizeStream(
   // An error written into that event joins its data, the SDK cannot parse it, and a retryable
   // failure ends the run instead. Every error here closes the open event first.
   let open = false
-  const emit = (controller: ReadableStreamDefaultController<Uint8Array>, line: string) => {
-    if (open && line.startsWith('data: {"error":')) controller.enqueue(encoder.encode("\n"))
+  const emit = (controller: ReadableStreamDefaultController<Uint8Array>, line: string, fresh = false) => {
+    if (open && (fresh || line.startsWith('data: {"error":'))) controller.enqueue(encoder.encode("\n"))
     const text = `${line}\n`
     telemetry?.rawChunk?.(metadata, text)
     controller.enqueue(encoder.encode(text))
@@ -576,7 +689,11 @@ function sanitizeStream(
             // else is where the bytes ran out, and the model call gets the cut-off error instead.
             if (pending && skip === 0 && (finished || endsResponse(pending))) {
               finished = true
-              emit(controller, sanitizeLine(pending, generationID, normalize))
+              const sanitized = sanitize(pending)
+              if (blocked) await onBlocked?.()
+              if (settled) return
+              emit(controller, sanitized, blocked)
+              if (blocked) return finishBlocked(controller)
             }
             if (finished && open) emit(controller, "")
             if (!finished) {
@@ -604,7 +721,8 @@ function sanitizeStream(
           pending = lines.pop() ?? ""
           if (!lines.length) continue
           let forwarded = false
-          for (const line of lines) {
+          for (let i = 0; i < lines.length; i++) {
+            const line = lines[i]
             if (replayed && line.trim() === REPLAY_UNAVAILABLE_LINE) {
               await failRetryable(controller, "replay-unavailable", "Arena contestant response could not be replayed")
               return
@@ -615,7 +733,11 @@ function sanitizeStream(
             }
             finished ||= endsResponse(line)
             if (isDataLine(line)) delivered++
-            emit(controller, sanitizeLine(line, generationID, normalize))
+            const sanitized = sanitize(line)
+            if (blocked) await onBlocked?.()
+            if (settled) return
+            emit(controller, sanitized, blocked)
+            if (blocked) return finishBlocked(controller, lines.slice(i + 1), pending)
             forwarded = true
           }
           if (forwarded) return
@@ -743,6 +865,10 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
       startedAt: new Date(),
     }
     await telemetry?.start?.(metadata, rewritten)
+    const contentFilter = options.contentFilter
+    const blocked = async () => {
+      if (kind === "generation" && contentFilter) await settleContentFilter(() => contentFilter(sessionID))
+    }
 
     const upstream = options.upstream.replace(/\/$/, "")
     const execute = options.fetch ?? fetch
@@ -882,17 +1008,24 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
     const type = response.headers.get("content-type") ?? ""
     if (!response.ok) {
       // Rebuild allowlisted control responses so upstream text and capability limits never escape.
-      const knownStatus = [401, 402, 403, 413, 503].includes(response.status)
+      const knownStatus = [400, 401, 402, 403, 413, 503].includes(response.status)
       const body = knownStatus ? await response.text() : undefined
       let payload = { error: { message: "Arena contestant request failed", type: "arena_upstream_error" } }
+      const filtered = response.status === 400 && readContentFilter(body)
+      if (filtered) payload = contentFilterError()
       if (response.status === 401 && readSessionRejected(body)) payload = sessionRejectedError()
       if (response.status === 402) payload = paymentError(readPaymentError(body) ?? "arena_payment_required")
       if (response.status === 503 && readNetworkUnavailable(body)) payload = networkUnavailableError()
       if (response.status === 413 && readCompactionRequired(body)) payload = compactionRequiredError()
       if (response.status === 403 && readSingleAgentAllowance(body)) payload = singleAgentAllowanceError()
       if (body === undefined) await response.body?.cancel().catch(() => undefined)
+      if (filtered) await blocked()
       endWait?.()
-      telemetry?.rawChunk?.(metadata, JSON.stringify(payload))
+      // A filtered complete response arrives as this refusal with the usage the service kept.
+      telemetry?.rawChunk?.(
+        metadata,
+        JSON.stringify(filtered && body ? filteredResponseRecord(JSON.parse(body), generationID) : payload),
+      )
       // A refused attempt is a failed generation, not a completed one. A wait for the user's network
       // or sign-in is not the provider failing, and telemetry keeps the two apart.
       const networkWait = readNetworkUnavailable(body)
@@ -907,7 +1040,13 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
         new Date(),
         {
           phase: "http",
-          kind: networkWait ? "network_wait" : signInWait ? "sign_in_wait" : "http_status",
+          kind: networkWait
+            ? "network_wait"
+            : signInWait
+              ? "sign_in_wait"
+              : filtered
+                ? "content_filter"
+                : "http_status",
         },
       )
       headers.set("content-type", "application/json")
@@ -940,11 +1079,26 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
         request.signal,
         recovery,
         (complete) => endWait?.(complete ? ping : undefined),
+        blocked,
       )
       return new Response(body, { status: response.status, headers })
     }
 
-    const payload = sanitizePayload(JSON.parse(await response.text()) as unknown, generationID)
+    const raw = JSON.parse(await response.text()) as unknown
+    // A complete response carries the same refusal shapes a streamed chunk does; handle them alike.
+    if (contentFilterRefusal(raw)) {
+      await blocked()
+      endWait?.()
+      // The neutral error replaces the response, so the record keeps its partial answer and usage.
+      telemetry?.rawChunk?.(metadata, JSON.stringify(filteredResponseRecord(raw, generationID)))
+      await telemetry?.error?.(metadata, new Error(contentFilterMessage), new Date(), {
+        phase: "http",
+        kind: "content_filter",
+      })
+      headers.set("content-type", "application/json")
+      return Response.json(contentFilterError(), { status: 400, headers })
+    }
+    const payload = sanitizePayload(raw, generationID)
     telemetry?.rawChunk?.(metadata, JSON.stringify(payload))
     await telemetry?.complete?.(metadata, new Date())
     endWait?.(ping)

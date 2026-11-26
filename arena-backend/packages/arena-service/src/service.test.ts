@@ -225,6 +225,7 @@ describe("Arena service", () => {
     const publicPayload = await created.json()
     expect(publicPayload).toEqual({
       assignments: [{ assignmentID: "assignment-a" }, { assignmentID: "assignment-b" }],
+      decided: false,
     })
     for (const profile of testPool) {
       expect(JSON.stringify(publicPayload)).not.toContain(profile.displayName)

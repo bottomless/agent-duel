@@ -11,6 +11,14 @@ const FALLBACK_IDENTITY = { name: "Agent Duel", email: "agent-duel@localhost" };
 const FALLBACK_BRANCH = "main";
 const INITIAL_COMMIT_MESSAGE = "Initialize project";
 
+const INSTALL_GIT_HINTS: Partial<Record<NodeJS.Platform, string>> = {
+  win32:
+    "Install Git for Windows from git-scm.com, or with winget install Git.Git, then quit and reopen Agent Duel.",
+  // Ubuntu 22.04's own Git is older than battles need; the git-core PPA fixes it, but only on Ubuntu.
+  linux:
+    "Install Git, for example with sudo apt install git (on Ubuntu 22.04, first sudo add-apt-repository ppa:git-core/ppa) or sudo dnf install git, then retry.",
+};
+
 /**
  * Git that cannot be started fails as "spawn git ENOENT", which tells the user nothing to do.
  * Said here the way the engine's battle check says it. A folder that is gone fails the same
@@ -20,9 +28,8 @@ async function explainMissingGit(cause: unknown, directory: string): Promise<unk
   if ((cause as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") return cause;
   if (!(await stat(directory).then(Boolean, () => false))) return cause;
   const install =
-    process.platform === "win32"
-      ? "Install Git for Windows from git-scm.com, or with winget install Git.Git, then quit and reopen Agent Duel."
-      : "Install Git, for example with xcode-select --install, then retry.";
+    INSTALL_GIT_HINTS[process.platform] ??
+    "Install Git, for example with xcode-select --install, then retry.";
   return new Error(`Battles need Git, and Agent Duel couldn't find it. ${install}`);
 }
 

@@ -297,6 +297,25 @@ describe("ArenaMongo claims", () => {
     expect(current.turnCount).toBe(1)
   })
 
+  test("does not dispatch a fresh admission into a turn claimed with different Git refs", async () => {
+    const current = chat()
+    const earlier = turn("complete")
+    const arena = store({
+      claimTurn: async () => ({ value: earlier, inserted: false }),
+      chats: { findOne: async () => null },
+    })
+    const candidate = {
+      ...turn(),
+      baseSnapshot: {
+        permanentRef: "refs/battles/chat/turn-0-new/base",
+        canonicalHead: "base",
+        tree: "tree",
+        indexTree: "tree",
+      },
+    }
+    await expect(arena.activateTurn(current._id, candidate, canonical(current))).rejects.toThrow("already claimed")
+  })
+
   test("adopts an idle canonical checkout while claiming the battle", async () => {
     let current = chat()
     const candidate = turn()
