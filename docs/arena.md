@@ -1040,9 +1040,24 @@ behind the attachments sent with it, which the battle already has (`draftBeyondL
 Keep the error and retry instruction in the scrolling setup area
 until dismissed, so a long startup error cannot cover the composer. Start freezes canonical `HEAD`
 together with the exact staged, unstaged, and
-nonignored-untracked state in `refs/battles/<chat>/turn-<n>/base`, then draws a pair. Both agents
-work from that frozen state, so later canonical movement cannot shift the ground under a running
-battle.
+nonignored-untracked state in `refs/battles/<chat>/turn-<n>-<incarnation>/base`, then draws a pair.
+Allocate a fresh namespace at each start. Resume, vote, and recovery use the stored base ref,
+including the old ordinal-only names.
+
+Never reuse a turn index. The logical turn ID built from it also keys the hosted pair draw, research
+uploads and the leaderboard, so a reused index gets the old, possibly revealed pair back, and both
+contestants fail at once. The chat's counter can lag behind what exists: a restored store keeps an
+older count while later turn records or battle refs survive, and an engine stopped between a turn's
+insert and its activation leaves an unactivated `creating` record. Before each start, remove such a
+record and its base ref, and move the counter past every index a turn record or a `turn-<n>` ref of
+the chat claims. When neither survives, only the control plane remembers the index, so the draw's
+answer carries `decided` for a set an earlier battle already resolved. Keep that answer on the draw:
+a separate check is a round trip every start waits for. A control plane that predates `decided`
+gets the old check instead, a replay-route request for a generation that cannot exist, refused with
+403 for a decided set; only those starts wait for it. On a decided set, drop the frozen base and copy
+manifest, move the counter one index on, and start again (three times at most).
+Both agents work from that frozen state, so later canonical movement cannot shift the ground under a
+running battle.
 
 An untracked embedded repository, a directory with its own `.git` the checkout does not track, is
 frozen as its files: what that repository tracks or leaves unignored, filtered through the
