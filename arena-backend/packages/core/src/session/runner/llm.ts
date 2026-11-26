@@ -12,6 +12,7 @@ import { Environments } from "../../environment/environments.js"
 import { SessionCwd } from "../cwd.js"
 import { InstructionState } from "../instruction-state.js"
 import { SessionCompaction } from "../compaction.js"
+import { SessionCompactionRequest } from "../compaction-request.js"
 import { SessionContext } from "../context.js"
 import { SessionEvent } from "../event.js"
 import { SessionInbox } from "../inbox.js"
@@ -353,13 +354,13 @@ const layer = Layer.effect(
                 retry: proposed,
               }),
             recoverContinuation,
-            // Agent Duel vendor patch: an Arena savings refusal still fits, so it compacts unchanged rather than as an
-            // overflow (`SessionCompaction.overflowReason`).
+            // Agent Duel vendor patch: a refusal marked as a requested compaction still fits, so it compacts unchanged
+            // rather than as an overflow (`SessionCompactionRequest.overflowReason`).
             recoverOverflow: (failure) =>
               Effect.suspend(() =>
                 recoverOverflow
                   ? compaction
-                      .compact({ reason: SessionCompaction.overflowReason(failure), context: loaded, estimate })
+                      .compact({ reason: SessionCompactionRequest.overflowReason(failure), context: loaded, estimate })
                       .pipe(Effect.map((result) => result.status === "completed"))
                   : Effect.succeed(false),
               ),

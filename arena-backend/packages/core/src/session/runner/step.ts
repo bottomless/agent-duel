@@ -61,8 +61,8 @@ interface Input {
   readonly recoverContinuation: boolean
   /**
    * The runner owns compaction policy; the attempt invokes it only before durable output. Agent Duel vendor patch:
-   * it gets the failure, so an Arena savings refusal compacts as requested, not as an overflow
-   * (`SessionCompaction.overflowReason`).
+   * it gets the failure, so a refusal marked as a requested compaction is not summarized as an overflow
+   * (`SessionCompactionRequest.overflowReason`).
    */
   readonly recoverOverflow: (failure: unknown) => Effect.Effect<boolean>
 }

@@ -22,6 +22,7 @@ import { Job } from "@opencode/core/job"
 import { SessionCompaction } from "@opencode/core/session/compaction"
 import { SessionCompactionBackground } from "@opencode/core/session/compaction-background"
 import { SessionCompactionSubagents } from "@opencode/core/session/compaction-subagents"
+import { SessionCompactionRequest } from "@opencode/core/session/compaction-request"
 import type { SessionContext } from "@opencode/core/session/context"
 import { MessageDecodeError } from "@opencode/core/session/error"
 import { SessionEvent } from "@opencode/core/session/event"
@@ -970,22 +971,19 @@ for (const { reason, synthetic } of [
           text: "Build the first katana level",
           time: { created },
         })
-        // One long exchange: well past the 15k tokens a summary keeps verbatim.
-        const work = Schema.decodeUnknownSync(SessionMessage.Assistant)({
-          id: SessionMessage.ID.create(),
-          type: "assistant",
-          agent: Agent.defaultID,
-          model: { id: "summary-model", providerID: "test" },
-          content: ["cuttable.gd", "cutter.gd", "feel.gd"].map((file) => ({
-            type: "tool",
-            id: `call_${file}`,
-            name: "read",
-            state: { status: "completed", input: { file }, content: [{ type: "text", text: "x".repeat(40_000) }] },
-            time: { created: 0 },
-          })),
-          time: { created: 0, completed: 0 },
-        })
-        const messages = synthetic ? [location, opener, task, work] : [location, task, work]
+        // One exchange whose text fits the 15k tokens a summary keeps verbatim, as a long one does once the tail clips
+        // its tool output, so the kept tail would start at the task.
+        const work = [1, 2, 3, 4].map((step) =>
+          Schema.decodeUnknownSync(SessionMessage.Assistant)({
+            id: SessionMessage.ID.create(),
+            type: "assistant",
+            agent: Agent.defaultID,
+            model: { id: "summary-model", providerID: "test" },
+            content: [{ type: "text", text: `Step ${step} done` }],
+            time: { created: 0, completed: 0 },
+          }),
+        )
+        const messages = synthetic ? [location, opener, task, ...work] : [location, task, ...work]
         yield* storeMessages(id, messages)
         const compaction = yield* SessionCompaction.Service
 
@@ -1004,7 +1002,7 @@ for (const { reason, synthetic } of [
       }),
   )
 
-test("only an Arena savings refusal compacts as requested", () => {
+test("only an overflow marked as a requested compaction compacts as requested", () => {
   const failure = (body: unknown, classification?: "context-overflow") =>
     new AIError({
       reason: new InvalidRequestError({
@@ -1013,18 +1011,18 @@ test("only an Arena savings refusal compacts as requested", () => {
         body: body === undefined ? undefined : typeof body === "string" ? body : JSON.stringify({ error: body }),
       }),
     })
-  const savings = { type: "arena_compaction_required", code: "context_length_exceeded" }
-  expect(SessionCompaction.overflowReason(failure(savings, "context-overflow"))).toBe("requested")
+  const requested = { code: "context_length_exceeded", compaction: "requested" }
+  expect(SessionCompactionRequest.overflowReason(failure(requested, "context-overflow"))).toBe("requested")
   for (const body of [
-    { ...savings, overflow: true },
-    { ...savings, code: "arena_irreducible_input" },
-    { code: "context_length_exceeded" },
+    { ...requested, compaction: "required" },
+    { code: "context_length_exceeded", type: "arena_compaction_required" },
     "not json",
     undefined,
   ])
-    expect(SessionCompaction.overflowReason(failure(body, "context-overflow"))).toBe("overflow")
-  expect(SessionCompaction.overflowReason(failure(savings))).toBe("overflow")
-  expect(SessionCompaction.overflowReason(new Error("too long"))).toBe("overflow")
+    expect(SessionCompactionRequest.overflowReason(failure(body, "context-overflow"))).toBe("overflow")
+  // Only a context overflow can be one: other refusals never reach compaction.
+  expect(SessionCompactionRequest.overflowReason(failure(requested))).toBe("overflow")
+  expect(SessionCompactionRequest.overflowReason(new Error("too long"))).toBe("overflow")
 })
 
 it.effect("summary compaction past the ceiling keeps the conversation unchanged while the window fits", () =>

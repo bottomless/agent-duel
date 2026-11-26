@@ -3715,6 +3715,7 @@ describe("SessionRunnerLLM", () => {
         message: "This request is too large to process. Reduce the message or attachments and try again.",
         code: "context_length_exceeded",
         type: "arena_compaction_required",
+        compaction: "requested",
       },
     })
     yield* s.llm.push(

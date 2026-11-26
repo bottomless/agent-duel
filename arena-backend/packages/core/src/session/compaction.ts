@@ -64,7 +64,7 @@ export type Trigger =
   /**
    * `overflow`: the provider just rejected this context as too long. `requested`: the provider asked for a summary
    * although the context still fits, so it compacts as `auto` does without checking the ceiling (Agent Duel vendor
-   * patch, see `overflowReason`). `estimate` is `estimatePrompt(context)`.
+   * patch, see `SessionCompactionRequest.overflowReason`). `estimate` is `estimatePrompt(context)`.
    */
   | {
       readonly reason: "auto" | "overflow" | "requested"
@@ -1062,30 +1062,6 @@ export const node = makeLocationNode({
 const heldIndex = (held: Precomputed, context: SessionContext.Loaded) => {
   if (held.firstID !== context.messages[0]?.id) return -1
   return context.messages.findIndex((message) => message.id === held.keepID)
-}
-
-/**
- * Agent Duel vendor patch: how to compact after a context-overflow failure. Arena's control plane asks for a summary
- * at its savings threshold with a neutral context-overflow error, since the threshold is kept from the engine
- * (`opencode/src/arena/engine-runtime/request.ts`). That request still fits the window, so it is summarized as it is
- * and keeps its prompt cache. A refusal the provider made itself carries `overflow` and, like any other overflow, is
- * cut down as text.
- */
-export const overflowReason = (failure: unknown): "overflow" | "requested" => {
-  if (!(failure instanceof AIError) || !isContextOverflowFailure(failure) || failure.reason._tag !== "InvalidRequest")
-    return "overflow"
-  const body = failure.reason.body
-  if (!body) return "overflow"
-  try {
-    const error = (JSON.parse(body) as { error?: { type?: unknown; code?: unknown; overflow?: unknown } } | null)?.error
-    return error?.type === "arena_compaction_required" &&
-      error.code === "context_length_exceeded" &&
-      error.overflow !== true
-      ? "requested"
-      : "overflow"
-  } catch {
-    return "overflow"
-  }
 }
 
 /** Estimated text a swapped-in summary keeps verbatim: every message from `index` on. */

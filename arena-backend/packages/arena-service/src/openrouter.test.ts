@@ -146,7 +146,7 @@ describe("OpenRouter proxy", () => {
     const narrow = await invoke()
     expect(narrow.status).toBe(413)
     expect(await narrow.json()).toEqual({
-      error: { message: "Arena request needs compaction", type: "arena_compaction_required" },
+      error: { message: "Arena request needs compaction", type: "arena_compaction_required", overflow: true },
     })
     expect(contacted).toBe(0)
 
@@ -203,7 +203,7 @@ describe("OpenRouter proxy", () => {
     )
     expect(response.status).toBe(413)
     expect(await response.json()).toEqual({
-      error: { message: "Arena request needs compaction", type: "arena_compaction_required" },
+      error: { message: "Arena request needs compaction", type: "arena_compaction_required", overflow: true },
     })
     expect(contacted).toBe(false)
   })
@@ -231,7 +231,8 @@ describe("OpenRouter proxy", () => {
         return Response.json({ choices: [] })
       },
     })
-    const invoke = (compaction?: string) =>
+    // 80,000 characters is about 20k estimated tokens: above the level, far below the endpoint.
+    const invoke = (compaction?: string, chars = 80_000) =>
       proxy(
         new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
           method: "POST",
@@ -241,8 +242,7 @@ describe("OpenRouter proxy", () => {
             "X-Arena-Scope-ID": "level",
             ...(compaction ? { "X-Arena-Compaction": compaction } : {}),
           },
-          // About 20k estimated tokens: above the level, far below the endpoint.
-          body: JSON.stringify({ model: "contestant", messages: [{ role: "user", content: "x".repeat(80_000) }] }),
+          body: JSON.stringify({ model: "contestant", messages: [{ role: "user", content: "x".repeat(chars) }] }),
         }),
       )
 
@@ -250,6 +250,12 @@ describe("OpenRouter proxy", () => {
     expect(auto.status).toBe(413)
     expect(await auto.json()).toEqual({
       error: { message: "Arena request needs compaction", type: "arena_compaction_required" },
+    })
+    // Past the endpoint too, so the engine must not resend it unchanged as its summary request.
+    const past = await invoke("auto", 420_000)
+    expect(past.status).toBe(413)
+    expect(await past.json()).toEqual({
+      error: { message: "Arena request needs compaction", type: "arena_compaction_required", overflow: true },
     })
     expect(contacted).toBe(0)
     // A summary, a request the engine cannot shrink, and an engine that predates the level all go through.
