@@ -2,10 +2,12 @@ export * as OpencodeArtifacts from "./opencode-artifacts.js"
 
 import { createHash } from "node:crypto"
 import type { Context } from "@opencode/plugin/effect/plugin"
+import { Session } from "@opencode/schema/session"
 import { Effect, Option, Schema } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http"
 import { ConsoleAccess } from "../../console-access.js"
 import { IntegrationConnection } from "../../integration/connection.js"
+import { OpencodeWatches } from "./opencode-watches.js"
 
 /** The `GET /api/v2/config` response header Console sends while the caller may share artifacts. */
 export const header = "x-opencode-artifacts"
@@ -15,11 +17,18 @@ type Connection = NonNullable<Effect.Success<ReturnType<Context["integration"]["
 
 const Prepared = Schema.Struct({ missing: Schema.Array(Schema.String) })
 const Published = Schema.Struct({ url: Schema.String })
+const Files = Schema.Struct({
+  revision: Schema.Number,
+  files: Schema.Array(
+    Schema.Struct({ path: Schema.String, sha256: Schema.String, text: Schema.optional(Schema.String) }),
+  ),
+})
 const Problem = Schema.Struct({ message: Schema.optional(Schema.String), owner: Schema.optional(Schema.String) })
 
 /**
  * The `console` artifact provider for one Location, the default while `sync` is given the Console connection that may
- * share. While event watches run (`wakes`), publishing makes the session watch the artifact's comments.
+ * share. While event watches run (`wakes`), publishing makes the session watch the artifact's comments: a subagent's
+ * root session, the one a person talks to.
  */
 export const make = Effect.fnUntraced(function* (ctx: Context, http: HttpClient.HttpClient) {
   let current: { readonly connection: Connection; readonly wakes: boolean } | undefined
@@ -51,6 +60,8 @@ export const make = Effect.fnUntraced(function* (ctx: Context, http: HttpClient.
         files: files.map((file) => ({ path: file.path, sha256: file.sha256, bytes: file.bytes.length })),
         ...(replace ? { replace } : {}),
       }).pipe(Effect.flatMap(HttpClientResponse.schemaBodyJson(Prepared)))
+      const sessionID =
+        wakes && input.sessionID ? yield* OpencodeWatches.rootSession(ctx, Session.ID.make(input.sessionID)) : undefined
       const missing = new Set(prepared.missing)
       // Files with the same bytes upload once.
       yield* Effect.forEach(
@@ -62,7 +73,7 @@ export const make = Effect.fnUntraced(function* (ctx: Context, http: HttpClient.
         title: input.title.slice(0, 200).trim(),
         files: files.map((file) => ({ path: file.path, sha256: file.sha256 })),
         ...(replace ? { replace } : {}),
-        ...(wakes && input.sessionID ? { sessionID: input.sessionID } : {}),
+        ...(sessionID ? { sessionID } : {}),
       }).pipe(Effect.flatMap(HttpClientResponse.schemaBodyJson(Published)))
     }, Effect.scoped)
     const slugOf = (id: string) =>
@@ -97,8 +108,27 @@ export const make = Effect.fnUntraced(function* (ctx: Context, http: HttpClient.
           Effect.flatMap((slug) => publish(slug, input, true)),
           Effect.map((published) => ({ url: published.url })),
         ),
-      // Console has no API that returns an artifact's files.
-      read: () => Effect.fail(new Error("OpenCode Console can't return an artifact's files yet")),
+      // Console inlines UTF-8 text files up to a limit; the rest download as blobs of the same revision.
+      read: (id) =>
+        Effect.gen(function* () {
+          const slug = yield* slugOf(id)
+          const send = yield* sender(ctx, http, connection, slug)
+          const listing = yield* send("GET", `/api/artifacts/${slug}/files`).pipe(
+            Effect.flatMap(HttpClientResponse.schemaBodyJson(Files)),
+          )
+          const files = yield* Effect.forEach(
+            listing.files,
+            (file) =>
+              file.text !== undefined
+                ? Effect.succeed([file.path, new TextEncoder().encode(file.text)] as const)
+                : send("GET", `/api/artifacts/${slug}/blobs/${file.sha256}?revision=${listing.revision}`).pipe(
+                    Effect.flatMap((response) => response.arrayBuffer),
+                    Effect.map((bytes) => [file.path, new Uint8Array(bytes)] as const),
+                  ),
+            { concurrency: 4 },
+          )
+          return Object.fromEntries(files)
+        }).pipe(Effect.scoped),
       delete: (id) =>
         Effect.gen(function* () {
           const slug = yield* slugOf(id)
@@ -151,7 +181,7 @@ const sender = Effect.fnUntraced(function* (
   const credential = yield* ctx.integration.connection.resolve(connection)
   if (!credential || credential.type === "external")
     return yield* Effect.fail(new Error("OpenCode Console is not connected"))
-  return (method: "POST" | "PUT" | "DELETE", path: string, body?: Uint8Array | object) => {
+  return (method: "GET" | "POST" | "PUT" | "DELETE", path: string, body?: Uint8Array | object) => {
     const request = HttpClientRequest.make(method)(`${ConsoleAccess.server(credential)}${path}`).pipe(
       HttpClientRequest.acceptJson,
       HttpClientRequest.setHeaders(ConsoleAccess.headers(credential)),
@@ -177,7 +207,9 @@ const sender = Effect.fnUntraced(function* (
                       problem?.owner !== undefined
                         ? `${problem.owner} already shared an OpenCode Console artifact named ${slug}; give this one another title`
                         : response.status === 404
-                          ? "Artifacts are off for this OpenCode Console workspace"
+                          ? method === "GET"
+                            ? `OpenCode Console has no artifact named ${slug}`
+                            : "Artifacts are off for this OpenCode Console workspace"
                           : (problem?.message ?? `OpenCode Console answered ${response.status}`),
                     ),
                   ),

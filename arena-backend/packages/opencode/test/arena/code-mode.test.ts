@@ -34,6 +34,9 @@ const it = testEffect(
   ),
 )
 const blocked = ["session_rename", "session_move", "worktree_create", "worktree_list", "worktree_remove", "models"]
+// Since OpenCode 2.4 the session tools live in `opencode.session`; their tool IDs keep the old names.
+const codeModePath = (tool: string) =>
+  tool.startsWith("session_") ? `tools.opencode.session.${tool.slice("session_".length)}` : `tools.opencode.${tool}`
 const retained = ["read", "write", "edit", "patch", "shell", "grep", "glob", "subagent"]
 const opencodeRetained = ["list_mcp_resources", "read_mcp_resource", "resource"]
 const roots = ["a", "b", "off"]
@@ -150,8 +153,8 @@ describe("Arena Code Mode policy", () => {
         const snapshot = yield* h.registry.snapshot()
         const catalog = snapshot.codeModeCatalog!
         const prompt = CodeModeInstructions.render(CodeModeCatalog.summarize(catalog))
-        expect(codeModeListings(catalog).map((item) => item.path)).not.toContain(`tools.opencode.${tool}`)
-        expect(prompt).not.toContain(`tools.opencode.${tool}`)
+        expect(codeModeListings(catalog).map((item) => item.path)).not.toContain(codeModePath(tool))
+        expect(prompt).not.toContain(codeModePath(tool))
         expect(prompt).not.toContain("working with sessions and worktrees")
         expect(prompt).not.toContain("searching the available models")
         for (const name of cases) {
@@ -165,8 +168,8 @@ describe("Arena Code Mode policy", () => {
             files: [],
           })
           expect(search.metadata?.error).toBeUndefined()
-          expect(JSON.stringify(search.output)).not.toContain(`tools.opencode.${tool}`)
-          const result = yield* h.run(name, `return await tools.opencode.${tool}({})`)
+          expect(JSON.stringify(search.output)).not.toContain(codeModePath(tool))
+          const result = yield* h.run(name, `return await ${codeModePath(tool)}({})`)
           expect(result.output).toMatchObject({ error: true, toolCalls: [] })
         }
       }),
@@ -189,7 +192,7 @@ describe("Arena Code Mode policy", () => {
           })
           const text = event.system.map((part) => part.text).join("\n")
           expect(text).toContain("Keep the user's project instructions.")
-          for (const tool of blocked) expect(text).not.toContain(`tools.opencode.${tool}`)
+          for (const tool of blocked) expect(text).not.toContain(codeModePath(tool))
         }
       }),
     )

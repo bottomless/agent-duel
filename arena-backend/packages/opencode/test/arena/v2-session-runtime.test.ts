@@ -11,7 +11,12 @@ import { SessionExecution } from "@opencode/core/session/execution"
 import { InstructionEntry } from "@opencode/core/session/instruction-entry"
 import { SessionProjector } from "@opencode/core/session/projector"
 import { SessionStore } from "@opencode/core/session/store"
-import { InstructionEntryTable, SessionInboxTable, SessionMessageTable } from "@opencode/core/session/sql"
+import {
+  InstructionEntryTable,
+  SessionInboxTable,
+  SessionMessageTable,
+  SessionPartTable,
+} from "@opencode/core/session/sql"
 import { Location } from "@opencode/core/location"
 import { AbsolutePath } from "@opencode/core/schema"
 import { Provider } from "@opencode/core/provider"
@@ -623,6 +628,80 @@ describe("Arena V2 native session storage", () => {
         throw new Error("native tool copy missing")
       expect(nativeTool.native).toEqual({ provider: "tool-state" })
       expect(nativeTool.state.content).toEqual([{ type: "text", text: "[Old tool result content cleared]" }])
+    }),
+  )
+
+  // OpenCode 2.4 stores an assistant's content in session_part rows and appends inline content after them on read.
+  it.effect("rewrites and copies an assistant whose content is in part rows without repeating it", () =>
+    Effect.gen(function* () {
+      const sessions = yield* CoreSession.Service
+      const location = Location.Ref.make({ directory: AbsolutePath.make("/arena-runtime-test") })
+      const source = yield* sessions.create({ location })
+      const target = yield* sessions.create({ location })
+      const messageID = SessionMessage.ID.make("msg_part_rows_source")
+      const created = DateTime.makeUnsafe(1_700_000_000_001)
+      const content: SessionMessage.AssistantContent[] = [
+        { type: "reasoning", text: "Thinking" },
+        { type: "text", text: "Answer" },
+      ]
+      const assistant: SessionMessage.Assistant = {
+        id: messageID,
+        type: "assistant",
+        agent: Agent.ID.make("build"),
+        model: { providerID: Provider.ID.make("arena"), id: Model.ID.make("opaque") },
+        content,
+        time: { created, streamed: created, completed: created },
+      }
+      const { id, type, ...data } = Schema.encodeSync(SessionMessage.Info)(assistant)
+      const database = yield* Database.Service
+      const time = DateTime.toEpochMillis(created)
+      yield* database.db
+        .insert(SessionMessageTable)
+        .values({
+          id,
+          session_id: source.id,
+          type,
+          seq: 0,
+          time_created: time,
+          time_updated: time,
+          data: { ...data, content: [] },
+        })
+        .run()
+      yield* database.db
+        .insert(SessionPartTable)
+        .values(
+          content.map((part, ordinal) => ({
+            message_id: messageID,
+            session_id: source.id,
+            ordinal,
+            type: part.type,
+            call_id: null,
+            time_created: time,
+            time_updated: time,
+            data: SessionHistory.encodePart(part),
+          })),
+        )
+        .run()
+
+      const arena = yield* ArenaSession
+      const texts = (messages: ReadonlyArray<SessionMessage.Info>) =>
+        messages.flatMap((message) =>
+          message.type === "assistant" ? message.content.map((part) => ("text" in part ? part.text : part.type)) : [],
+        )
+      expect(texts(yield* arena.canonicalMessages(source.id))).toEqual(["Thinking", "Answer"])
+
+      const [stored] = yield* arena.canonicalMessages(source.id)
+      if (!stored) throw new Error("assistant missing")
+      yield* arena.updateCanonicalMessage({ sessionID: source.id, message: stored })
+      expect(texts(yield* arena.canonicalMessages(source.id))).toEqual(["Thinking", "Answer"])
+
+      yield* arena.copyMessage({
+        sourceSessionID: source.id,
+        sourceMessageID: messageID,
+        targetSessionID: target.id,
+        targetMessageID: SessionMessage.ID.make("msg_part_rows_target"),
+      })
+      expect(texts(yield* arena.canonicalMessages(target.id))).toEqual(["Thinking", "Answer"])
     }),
   )
 

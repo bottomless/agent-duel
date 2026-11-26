@@ -73,6 +73,7 @@ async function runner(
       service: SessionRunnerModel.Service,
       deps: [],
       layer: Layer.succeed(SessionRunnerModel.Service, {
+        select: () => Effect.succeed({ info: contestantModel, variant: undefined }),
         resolve: () =>
           Effect.succeed(
             SessionRunnerModel.resolved(model, {

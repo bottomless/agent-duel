@@ -37,14 +37,14 @@ KEEP_RE+=')$'
 # Files inside kept paths that we removed on purpose.
 DROP_RE='^arena-backend/packages/plugin/src/effect/PLAN\.md$'
 
-# Upstream paths we already decided not to ship (through v2.3.2). A removed path outside this list
+# Upstream paths we already decided not to ship (through v2.4.2). A removed path outside this list
 # is new upstream and gets reported.
 KNOWN_REMOVED_RE='^arena-backend/('
 KNOWN_REMOVED_RE+='\.dockerignore|\.github/.*|\.gitleaksignore|\.husky/.*|\.opencode/.*|\.vscode/.*|\.zed/.*|'
 KNOWN_REMOVED_RE+='CHANGELOG\.md|CONTRIBUTING\.md|README\.[a-z]+\.md|SECURITY\.md|STATS\.md|V2_HTTP_API_AUDIT\.md|'
 KNOWN_REMOVED_RE+='flake\.lock|flake\.nix|github/.*|infra/.*|install|nix/.*|perf/.*|salesforce/.*|screenshot-uk\.png|'
 KNOWN_REMOVED_RE+='sdks/.*|services/.*|specs/.*|sst-env\.d\.ts|sst\.config\.ts|'
-KNOWN_REMOVED_RE+='packages/(app|cli|console|containers|data|desktop|function|gui-extensions|gui-plugins|identity|latex|merman|nav-menus|patchmark|plugins|posts|process-daemon|session-ui|stats|stories|storybook|theme|tui|ui|web)/.*|'
+KNOWN_REMOVED_RE+='packages/(app|cli|cli-rs|console|containers|data|desktop|function|gui-extensions|gui-plugins|identity|latex|merman|nav-menus|patchmark|plugins|posts|process-daemon|session-ui|stats|stories|storybook|theme|tui|ui|web)/.*|'
 KNOWN_REMOVED_RE+='packages/sdk/(README\.md|package\.json|script/.*|src/.*|sst-env\.d\.ts|test/.*|tsconfig\.build\.json|tsconfig\.json)'
 KNOWN_REMOVED_RE+=')$'
 

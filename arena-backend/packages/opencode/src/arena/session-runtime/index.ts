@@ -13,7 +13,7 @@ import { Session as CoreSession } from "@opencode/core/session"
 import { InstructionEntry } from "@opencode/core/session/instruction-entry"
 import { SessionMove } from "@opencode/core/session/move"
 import { SessionInbox } from "@opencode/core/session/inbox"
-import { SessionMessageTable } from "@opencode/core/session/sql"
+import { SessionMessageTable, SessionPartTable } from "@opencode/core/session/sql"
 import { StepFailedError } from "@opencode/core/session/error"
 import { SubagentHold } from "@opencode/core/session/subagent-hold"
 import { toSessionError } from "@opencode/core/session/to-session-error"
@@ -412,6 +412,15 @@ const updateRow = Effect.fnUntraced(function* (
 ) {
   const encoded = encodeCanonical(message)
   const { id, type, ...data } = encoded
+  // Since OpenCode 2.4 an assistant's content lives in `session_part` rows, and a read appends any inline content
+  // after them. The row below carries the whole content inline, so drop the parts first or it reads twice; Core
+  // reads inline content as before and moves it back into parts on the next content event.
+  if (message.type === "assistant")
+    yield* database.db
+      .delete(SessionPartTable)
+      .where(and(eq(SessionPartTable.message_id, message.id), eq(SessionPartTable.session_id, sessionID)))
+      .run()
+      .pipe(Effect.orDie)
   yield* database.db
     .update(SessionMessageTable)
     .set({ type, time_created: DateTime.toEpochMillis(message.time.created), data })
@@ -437,13 +446,16 @@ const directoryLayer: Layer.Layer<Directory, never, LocationServiceMap.Service> 
   }),
 )
 
-const layer: Layer.Layer<Session, never, CoreSession.Service | Database.Service | Bus.Service | Directory> =
+type SessionDeps = CoreSession.Service | Database.Service | Bus.Service | SessionInbox.Service | Directory
+
+const layer: Layer.Layer<Session, never, SessionDeps> =
   Layer.effect(
     Session,
     Effect.gen(function* () {
       const sessions = yield* CoreSession.Service
       const database = yield* Database.Service
       const bus = yield* Bus.Service
+      const inbox = yield* SessionInbox.Service
       const directory = yield* Directory
 
       const messages = Effect.fn("ArenaSession.messages")(function* (input: { readonly sessionID: SessionSchema.ID }) {
@@ -470,7 +482,7 @@ const layer: Layer.Layer<Session, never, CoreSession.Service | Database.Service 
         readonly messageIDs: readonly SessionV1.MessageID[]
       }) {
         const ids = input.messageIDs.map(currentMessageID)
-        yield* SessionInbox.serialized(
+        yield* inbox.serialized(
           input.sessionID,
           Effect.gen(function* () {
             const pending = new Set(
@@ -493,7 +505,7 @@ const layer: Layer.Layer<Session, never, CoreSession.Service | Database.Service 
       // writes the message under the inbox ID. Serialized with the runner's promotion, so an item
       // it delivered first is skipped rather than written twice.
       const deliverPending = Effect.fn("ArenaSession.deliverPending")(function* (sessionID: SessionSchema.ID) {
-        return yield* SessionInbox.serialized(
+        return yield* inbox.serialized(
           sessionID,
           Effect.gen(function* () {
             const items = (yield* sessions.inbox(sessionID)).filter((item) => pendingMessage(item) !== undefined)
@@ -765,7 +777,7 @@ export const directoryNode = makeGlobalNode({
 export const sessionNode = makeGlobalNode({
   service: Session,
   layer,
-  deps: [CoreSession.node, Database.node, Bus.node, directoryNode],
+  deps: [CoreSession.node, Database.node, Bus.node, SessionInbox.node, directoryNode],
 })
 export const node = sessionNode
 

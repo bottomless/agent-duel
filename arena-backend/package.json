@@ -59,9 +59,9 @@
       "ulid": "3.0.1",
       "zod": "4.6.7",
       "@effect/platform-node-shared": "4.1.0",
-      "@opentui/core": "0.8.4",
-      "@opentui/keymap": "0.8.4",
-      "@opentui/solid": "0.8.4",
+      "@opentui/core": "0.9.9",
+      "@opentui/keymap": "0.9.9",
+      "@opentui/solid": "0.9.9",
       "@tanstack/solid-virtual": "3.13.37",
       "@standard-schema/spec": "1.1.0",
       "@kobalte/core": "0.13.13",
@@ -98,7 +98,7 @@
       "solid-sonner": "0.3.1",
       "vite-plugin-solid": "2.11.10",
       "@effect/sql-sqlite-node": "4.1.0",
-      "@hona/strobe": "0.42.0",
+      "@hona/strobe": "0.44.1",
       "@typescript/native": "npm:typescript@7.1.0-beta"
     }
   },

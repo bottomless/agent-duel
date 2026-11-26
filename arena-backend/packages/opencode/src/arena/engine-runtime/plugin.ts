@@ -208,21 +208,28 @@ export function registerArenaEnginePlugin(
   return registry.register(createArenaEnginePlugin(options))
 }
 
+// Core's advice to move the session into a new worktree, in its Code Mode and direct-tool forms.
+const WORKTREE_ADVICE = new Set([
+  "When you create a worktree outside the current working directory and intend to use it as your primary working directory, consider using `execute` to call `tools.opencode.session.move` and make the worktree the session's working directory.",
+  "When you create a worktree outside the current working directory and intend to use it as your primary working directory, consider calling `opencode_session_move` to make the worktree the session's working directory.",
+])
+
 function install(context: Context, options: InstalledOptions) {
   return Effect.gen(function* () {
     // Arena owns session locations and worktree lifecycle, including with Battle off.
     yield* context.tool.transform((editor) => {
       editor.namespace({ name: "opencode", description: "Tools for reading MCP resources." })
-      const blocked = [
-        "session_rename",
-        "session_move",
-        "worktree_create",
-        "worktree_list",
-        "worktree_remove",
-        "models",
-      ]
+      // Keyed by namespace and name. OpenCode 2.4 moved the session tools into `opencode.session`.
+      const blocked = new Set([
+        "opencode.session/rename",
+        "opencode.session/move",
+        "opencode/worktree_create",
+        "opencode/worktree_list",
+        "opencode/worktree_remove",
+        "opencode/models",
+      ])
       for (const tool of editor.list()) {
-        if (tool.options?.namespace === "opencode" && blocked.includes(tool.name)) editor.remove(tool.id)
+        if (blocked.has(`${tool.options?.namespace}/${tool.name}`)) editor.remove(tool.id)
       }
     })
     // Core's OpenCodeTools hooks run first. Remove only their worktree advice; tool removal
@@ -230,11 +237,7 @@ function install(context: Context, options: InstalledOptions) {
     for (const name of ["context", "compaction", "generate"] as const) {
       yield* context.session.hook(name, (event) =>
         Effect.sync(() => {
-          event.system = event.system.filter(
-            (part) =>
-              part.text !==
-              "When you create a worktree outside the current working directory and intend to use it as your primary working directory, consider using `execute` to call `tools.opencode.session_move` and make the worktree the session's working directory.",
-          )
+          event.system = event.system.filter((part) => !WORKTREE_ADVICE.has(part.text))
         }),
       )
     }

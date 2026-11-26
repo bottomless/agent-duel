@@ -14,6 +14,7 @@ import { ProjectTable } from "@opencode/core/project/sql"
 import { AbsolutePath } from "@opencode/core/schema"
 import { Session } from "@opencode/core/session"
 import { SessionMessage } from "@opencode/core/session/message"
+import { SessionHistory } from "@opencode/core/session/history"
 import { SessionProjector } from "@opencode/core/session/projector"
 import { createLLMEventPublisher } from "@opencode/core/session/runner/publish-llm-event"
 import { SessionMessageTable, SessionTable } from "@opencode/core/session/sql"
@@ -144,11 +145,13 @@ for (const [id, late] of [
         tokens: SessionUsage.record(finish.usage, []).tokens,
         cost: Money.USD.zero,
       })
-      const message = yield* db
+      // The assistant's content is in session_part rows since OpenCode 2.4; read it back the way history does.
+      const row = yield* db
         .select()
         .from(SessionMessageTable)
         .where(eq(SessionMessageTable.id, assistantMessageID))
         .get()
+      const [message] = row ? yield* SessionHistory.withParts(db, [row]) : []
       expect(message?.data).toMatchObject({
         finish: "stop",
         content: [

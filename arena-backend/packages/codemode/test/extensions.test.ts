@@ -630,7 +630,13 @@ describe("imports", () => {
   test("a module that isn't provided, or a missing export, fails at the import", async () => {
     const target = CodeMode.make({ extensions: [files] })
     expect((await failure(`import yaml from "yaml"`, target)).message).toStartWith(
-      `Error: Cannot import "yaml": it isn't available here, where packages and files can't be loaded.`,
+      `Error: Cannot import "yaml": packages can't be installed here.`,
+    )
+    expect((await failure(`import ws from "ws"`, target)).message).toStartWith(
+      `Error: Cannot import "ws": packages can't be installed here.`,
+    )
+    expect((await failure(`import x from "./local.js"`, target)).message).toStartWith(
+      `Error: Cannot import "./local.js": local files can't be imported.`,
     )
     expect(await value(`try { await import("child_process") } catch (e) { return e.message }`, target)).toStartWith(
       `Cannot import "child_process"`,
@@ -638,7 +644,9 @@ describe("imports", () => {
     expect((await failure(`import { writeFile } from "fs"`, target)).message).toStartWith(
       `SyntaxError: "fs" has no export named "writeFile".`,
     )
-    expect((await failure(`require("fs")`)).message).toStartWith(`Error: Cannot import "fs"`)
+    expect((await failure(`require("fs")`)).message).toStartWith(
+      `Error: Cannot import "fs": this runtime doesn't provide it.`,
+    )
   })
 })
 
@@ -688,7 +696,7 @@ describe("host errors", () => {
       await value(
         `try { open() } catch (e) {
           const c = e.cause
-          return [e.message, Object.keys(e), c instanceof Error, c.code, c.errno, c.path, c.detail, Object.keys(c), "stack" in c]
+          return [e.message, Object.keys(e), c instanceof Error, c.code, c.errno, c.path, c.detail, Object.keys(c), c.stack, e.stack]
         }`,
         target,
       ),
@@ -701,7 +709,8 @@ describe("host errors", () => {
       "x",
       { retried: true },
       ["code", "errno", "path", "detail"],
-      false,
+      "Error: ENOENT: no such file or directory, open 'x'",
+      "Error: open failed",
     ])
   })
 
