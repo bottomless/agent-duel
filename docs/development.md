@@ -54,7 +54,7 @@ packages.
 
 - Install the runtime packages the [Linux release](desktop-releases.md#in-app-updates) needs; the
   daemon and engine shell out to `git`, `lsof` and `ps`. Battles need Git 2.39, and Ubuntu 22.04
-  ships 2.34: use the `ppa:git-core/ppa` PPA there.
+  ships 2.34: use the `ppa:git-core/ppa` PPA there (PPAs work only on Ubuntu).
 - Build the AppImage and deb with `npm run build:desktop -- --publish never --linux --x64`. The
   packages land in `packages/desktop/release/`. Only x64 is packaged, for the same reason as on
   Windows. Control-plane and BYOK settings are the same as for the
