@@ -1113,12 +1113,17 @@ reply takes the same attachments as a chat message, and both contestants get ide
   and its cache do not change.
   The control plane ships the route and its store before a desktop release relies on them. A
   control plane without the route or without a store answers 404; the engine then sends the media
-  inline and does not ask that control plane again. When a PUT fails, the route answers 5xx or
-  without a file's URL, or a file is still missing right after it was uploaded again, the media goes
-  inline if the body fits, and the engine sends media inline for the next 5 minutes. A PUT to a host
-  that drops packets waits up to 30 seconds plus the file's time at 1 Mbit/s, so a failing store
-  holds one step, not every step. Until an upload has succeeded in the engine process, and during
-  that pause, the size check counts media in full, so an inline body still fits. Desktops
+  inline and does not ask that control plane again. When a PUT fails, the route answers 5xx, 429 or
+  without a file's URL, a file is still missing right after it was uploaded again, or the proxy
+  answers 503 `arena_media_unavailable`, the media goes inline if the body fits, and the engine sends
+  media inline for the next 5 minutes. A PUT to a host that drops packets waits up to 30 seconds plus
+  the file's time at 1 Mbit/s, and the proxy gives a call's store reads 30 seconds before it answers
+  503, so a failing store holds one step, not every step and not until the function's time runs
+  out. Until an upload has succeeded in the engine process, and during that pause, the size check
+  counts media in full, so an inline body still fits. A file another request of the same process is
+  uploading is waited for, not sent again: both sides of a battle send the user's images at the
+  same moment. Each account may upload 2 GB and 20,000 files a day (arena-service `media-limit.ts`);
+  past that both routes answer 429 until the day ends (UTC). Desktops
   released before the route POST each file's bytes to `/api/openrouter/api/v1/arena/media`, one
   function request per file; the control plane keeps that route and writes those files to the same
   store. BYOK runs in process, sends media inline, and meets only the provider's limits.

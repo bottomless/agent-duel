@@ -24,8 +24,11 @@ export type MediaStore = {
     readonly contentType: string
     readonly data: Uint8Array
   }) => Promise<void>
-  /** The file's size and expiry, with its body still unread; undefined when the pathname holds no file. */
-  readonly read: (pathname: string) => Promise<StoredMedia | undefined>
+  /**
+   * The file's size and expiry, with its body still unread; undefined when the pathname holds no file.
+   * Gives up, body included, when `signal` aborts.
+   */
+  readonly read: (pathname: string, options?: { readonly signal?: AbortSignal }) => Promise<StoredMedia | undefined>
 }
 
 export type StoredMedia = {

@@ -103,6 +103,26 @@ export function mediaMissingError(missing: ReadonlyArray<string>) {
   return { error: { message: "Arena media is missing", type: MEDIA_MISSING_TYPE, missing: [...missing] } }
 }
 
+const MEDIA_UNAVAILABLE_TYPE = "arena_media_unavailable"
+
+/**
+ * The store failed or did not give the media back in time. The engine sends it inline when the body
+ * fits, and otherwise tries the request again.
+ */
+export function mediaUnavailableError() {
+  return { error: { message: "Arena media store is unavailable", type: MEDIA_UNAVAILABLE_TYPE } }
+}
+
+/** Whether a body is a `mediaUnavailableError`. */
+export function readMediaUnavailable(body: string | undefined) {
+  if (!body) return false
+  try {
+    return (JSON.parse(body) as { error?: { type?: unknown } } | null)?.error?.type === MEDIA_UNAVAILABLE_TYPE
+  } catch {
+    return false
+  }
+}
+
 /** The request names more media than any provider takes. Refused before it is built, not retried. */
 export function mediaTooLargeError() {
   return { error: { message: "Arena request carries too much media", type: "arena_media_too_large" } }

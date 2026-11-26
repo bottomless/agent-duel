@@ -105,13 +105,7 @@ const uploadTimeout = (bytes: number) => UPLOAD_SETUP_MS + Math.ceil(bytes / UPL
 const uploadFailed = () =>
   Response.json({ error: { message: "Arena media upload failed", type: "arena_media_upload_failed" } }, { status: 502 })
 
-/**
- * Uploads the media the control plane may not have yet: one request for an upload URL per file, then
- * each file's bytes to its URL. Returns undefined when every upload succeeded, "unsupported" when
- * the control plane has no upload route, or the refusal, which the caller answers as it would the
- * request's own.
- */
-export async function uploadMedia(input: {
+type UploadInput = {
   readonly execute: (input: string | URL | Request, init?: RequestInit) => Promise<Response>
   /**
    * Sends a file to its upload URL. Not `execute`: that adds the account's credential, and the
@@ -122,12 +116,71 @@ export async function uploadMedia(input: {
   readonly routing: Readonly<Record<string, string>>
   readonly media: Iterable<Media>
   readonly signal: AbortSignal
-}): Promise<Response | "unsupported" | undefined> {
-  const pending = [...input.media].filter((item) => !uploaded.has(key(input.upstream, item.digest)))
-  if (pending.length === 0) return undefined
+}
+
+type UploadResult = Response | "unsupported" | undefined
+
+// Uploads under way, per upstream and digest. Both sides of a battle send the user's images at the
+// same moment, and often read the same files: the second request waits for the first one's upload
+// instead of sending the bytes again.
+const inflight = new Map<string, Promise<void>>()
+
+/** Settles when every promise has, or rejects with the signal's reason once it aborts. */
+function waitFor(promises: Iterable<Promise<void>>, signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    const stop = () => reject(signal.reason)
+    if (signal.aborted) return stop()
+    signal.addEventListener("abort", stop, { once: true })
+    void Promise.all(promises).then(() => {
+      signal.removeEventListener("abort", stop)
+      resolve()
+    })
+  })
+}
+
+/**
+ * Uploads the media the control plane may not have yet: one request for an upload URL per file, then
+ * each file's bytes to its URL. Returns undefined when every upload succeeded, "unsupported" when
+ * the control plane has no upload route, or the refusal, which the caller answers as it would the
+ * request's own.
+ */
+export async function uploadMedia(input: UploadInput): Promise<UploadResult> {
+  const wanted = [...input.media].filter((item) => !uploaded.has(key(input.upstream, item.digest)))
+  if (wanted.length === 0) return undefined
   // Another request found the route missing or the store failing after this one chose references.
   if (unsupported.has(input.upstream)) return "unsupported"
   if (sendsInline(input.upstream)) return uploadFailed()
+  const others = new Set<Promise<void>>()
+  const pending: Media[] = []
+  for (const item of wanted) {
+    const running = inflight.get(key(input.upstream, item.digest))
+    if (running) others.add(running)
+    else pending.push(item)
+  }
+  if (pending.length > 0) {
+    const done = Promise.withResolvers<void>()
+    for (const item of pending) inflight.set(key(input.upstream, item.digest), done.promise)
+    try {
+      const refused = await storeMedia(input, pending)
+      if (refused !== undefined) return refused
+    } finally {
+      for (const item of pending) {
+        if (inflight.get(key(input.upstream, item.digest)) === done.promise) {
+          inflight.delete(key(input.upstream, item.digest))
+        }
+      }
+      done.resolve()
+    }
+  }
+  if (others.size === 0) return undefined
+  await waitFor(others, input.signal)
+  // The request that had them failed, which paused the store, or was stopped: this one sends what
+  // is still missing itself.
+  const left = wanted.filter((item) => !uploaded.has(key(input.upstream, item.digest)))
+  return left.length === 0 ? undefined : uploadMedia({ ...input, media: left })
+}
+
+async function storeMedia(input: UploadInput, pending: Media[]): Promise<UploadResult> {
   const response = await input.execute(`${input.upstream}${MEDIA_UPLOAD_PATH}`, {
     method: "POST",
     headers: { ...input.routing, "Content-Type": "application/json", Accept: "application/json" },
@@ -143,9 +196,9 @@ export async function uploadMedia(input: {
     return "unsupported"
   }
   if (!response.ok) {
-    // The control plane's own failure, or its store's. A refused account or assignment is the
-    // request's to answer, and pauses nothing.
-    if (response.status >= 500) pauseReferences(input.upstream)
+    // The control plane's own failure, its store's, or the account's upload limit. A refused
+    // account or assignment is the request's to answer, and pauses nothing.
+    if (response.status >= 500 || response.status === 429) pauseReferences(input.upstream)
     return response
   }
   const urls = readMediaUploadAnswer(await response.text())
@@ -154,9 +207,10 @@ export async function uploadMedia(input: {
     return uploadFailed()
   }
   const put = input.put ?? fetch
+  const queue = [...pending]
   let failed = false
   const next = async (): Promise<void> => {
-    const item = pending.shift()
+    const item = queue.shift()
     if (!item || failed) return
     const stored = await put(urls.get(item.digest)!, {
       method: "PUT",
@@ -176,7 +230,7 @@ export async function uploadMedia(input: {
     if (!sendsInline(input.upstream)) confirmed.add(input.upstream)
     return next()
   }
-  await Promise.all(Array.from({ length: Math.min(PARALLEL_UPLOADS, pending.length) }, next))
+  await Promise.all(Array.from({ length: Math.min(PARALLEL_UPLOADS, queue.length) }, next))
   if (!failed) return undefined
   pauseReferences(input.upstream)
   return uploadFailed()

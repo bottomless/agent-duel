@@ -263,16 +263,46 @@ const MAX_RESOLVED_MEDIA_BYTES = 32_000_000
 // Store reads run a few at a time, so a body that names many files does not open each at once on a
 // cold function. A guess.
 const PARALLEL_READS = 8
+/**
+ * The longest a call waits on the store for its media, bodies included. A guess: a request's 32 MB
+ * reads in seconds from the store's region, and a store that stops answering must not hold the call
+ * until its function's time runs out.
+ */
+export const MEDIA_LOAD_MS = 30_000
+
+/** The promise's value, or the signal's reason once it aborts; a value that comes later goes to `late`. */
+function abortable<T>(promise: Promise<T>, signal: AbortSignal | undefined, late?: (value: T) => void) {
+  if (!signal) return promise
+  return new Promise<T>((resolve, reject) => {
+    const stop = () => reject(signal.reason)
+    if (signal.aborted) stop()
+    else signal.addEventListener("abort", stop, { once: true })
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", stop)
+        if (signal.aborted) late?.(value)
+        else resolve(value)
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", stop)
+        reject(error)
+      },
+    )
+  })
+}
 
 const encodedBytes = (bytes: number) => Math.ceil(bytes / 3) * 4
 
 /** A stored file's bytes, or undefined when they are not the file the digest names. */
-async function readMedia(file: StoredMedia, digest: string) {
+async function readMedia(file: StoredMedia, digest: string, signal: AbortSignal | undefined) {
   const chunks: Uint8Array[] = []
   let bytes = 0
   const reader = file.body.getReader()
   for (;;) {
-    const { done, value } = await reader.read()
+    const { done, value } = await abortable(reader.read(), signal).catch(async (error: unknown) => {
+      await reader.cancel().catch(() => undefined)
+      throw error
+    })
     if (done) break
     bytes += value.byteLength
     // The size was what counted against the limit, so a longer body stops here.
@@ -308,6 +338,7 @@ async function loadMedia(
   counts: ReadonlyMap<string, number>,
   now: Date,
   reads: MediaReads,
+  signal: AbortSignal | undefined,
 ): Promise<LoadedMedia> {
   let named = 0
   for (const count of counts.values()) named += count
@@ -337,8 +368,15 @@ async function loadMedia(
   const next = async (): Promise<void> => {
     const digest = unknown.shift()
     if (digest === undefined || tooLarge || failure) return
+    if (signal?.aborted) {
+      failure = { reason: signal.reason }
+      return
+    }
     const pathname = mediaPathname(userId, digest)
-    const file = await store.read(pathname).catch((reason: unknown) => {
+    // A store that ignores the signal still lets the call go; a file it opens too late is let go too.
+    const file = await abortable(store.read(pathname, { signal }), signal, (late) => {
+      void late?.body.cancel().catch(() => undefined)
+    }).catch((reason: unknown) => {
       failure ??= { reason }
       return null
     })
@@ -357,7 +395,7 @@ async function loadMedia(
       await file.body.cancel().catch(() => undefined)
       return
     }
-    const data = await readMedia(file, digest).catch((reason: unknown) => {
+    const data = await readMedia(file, digest, signal).catch((reason: unknown) => {
       failure ??= { reason }
       return null
     })
@@ -385,18 +423,20 @@ async function loadMedia(
 
 /**
  * Puts the account's stored media back in place of its references. An expired file is missing, and so
- * is every file when the service has no store.
+ * is every file when the service has no store. Throws when the store fails, or when `signal` aborts
+ * before the media is read.
  */
 export async function resolveMedia(
   store: MediaStore | undefined,
   userId: string,
   body: unknown,
   now: Date,
+  signal?: AbortSignal,
 ): Promise<ResolvedMedia> {
   const counts = mediaReferences(body)
   if (counts.size === 0) return { body, missing: [], tooLarge: false }
   const reads: MediaReads = { cached: 0, stored: 0, storeMs: 0 }
-  const loaded = await loadMedia(store, userId, counts, now, reads)
+  const loaded = await loadMedia(store, userId, counts, now, reads, signal)
   const missing = "missing" in loaded ? loaded.missing : []
   // Counts and a duration only: no content, digest or account.
   console.info("[arena-service] Arena media", JSON.stringify({ files: counts.size, ...reads, missing: missing.length }))

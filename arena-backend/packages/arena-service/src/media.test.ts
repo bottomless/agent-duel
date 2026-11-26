@@ -10,9 +10,12 @@ import {
   mediaReference,
   mediaUploadRequest,
   readMediaMissing,
+  readMediaUnavailable,
   readMediaUploadAnswer,
   type MediaUpload,
 } from "./media"
+import { resolveMedia } from "./generation-capture"
+import type { MediaUploadLimit } from "./media-limit"
 import { mediaPathname, type MediaStore } from "./media-store"
 import { memoryMediaStore } from "./memory-media-store"
 import { createArenaService } from "./service"
@@ -25,10 +28,34 @@ const model = {
   routing: { sort: "throughput" },
 }
 
+type LimitRecord = { _id: string; userId: string; window: number; bytes: number; files: number }
+
+/** The upload limit's documents, in memory: one per account, as `media-limit.ts` keeps them. */
+function memoryLimits(records = new Map<string, LimitRecord>()) {
+  return {
+    records,
+    findOneAndUpdate: async (
+      filter: { _id: string; window: number },
+      update: { $inc: { bytes: number; files: number } },
+    ) => {
+      const record = records.get(filter._id)
+      if (!record || record.window !== filter.window) return null
+      record.bytes += update.$inc.bytes
+      record.files += update.$inc.files
+      return { ...record }
+    },
+    replaceOne: async (filter: { _id: string }, replacement: LimitRecord) => {
+      records.set(filter._id, { ...replacement })
+      return { acknowledged: true, matchedCount: 1, modifiedCount: 1 }
+    },
+  }
+}
+
 /** Every account owns both sides of the same battle, so only the media differs between accounts. */
-function memoryDb(assigned = model) {
+function memoryDb(assigned = model, limits = memoryLimits()) {
   return {
     collection: (name: string) => {
+      if (name === "arenaMediaUploadLimits") return limits
       if (name !== "arenaAssignmentSets") throw new Error(`Unexpected Arena collection: ${name}`)
       return {
         find: (filter: { userId: string; scopeID: string }) => ({
@@ -58,12 +85,15 @@ function service(
     readonly upstream?: (body: string) => void
     readonly now?: () => Date
     readonly assigned?: typeof model
+    readonly mediaUploadLimit?: MediaUploadLimit
   } = {},
 ) {
+  const limits = memoryLimits()
   return createArenaService({
     now: options.now,
     resolveCaller: async () => ({ id: options.user ?? "user-1" }),
-    db: async () => memoryDb(options.assigned),
+    db: async () => memoryDb(options.assigned, limits),
+    mediaUploadLimit: options.mediaUploadLimit,
     pool: [],
     openRouterApiKey: "server-secret",
     streamRecovery: false,
@@ -239,6 +269,34 @@ describe("media by reference", () => {
     expect((await proxy(legacyUpload(png, "image/png", "another-turn"))).status).toBe(403)
   })
 
+  test("an account past its upload limit is refused until the window ends, on both routes", async () => {
+    let time = Date.parse("2026-11-25T10:10:00Z")
+    const host = memoryMediaStore()
+    const proxy = service({
+      mediaStore: host.store,
+      user: "user-limited",
+      now: () => new Date(time),
+      mediaUploadLimit: { maxBytes: 100, maxFiles: 3, windowMs: 60 * 60 * 1000 },
+    })
+    const sized = (size: number, fill: number) => file(new Uint8Array(size).fill(fill))
+    expect((await proxy(uploadUrls(mediaUploadRequest([sized(40, 1), sized(40, 2)])))).status).toBe(200)
+    // 120 bytes would pass the limit: no URL is signed.
+    const refused = await proxy(uploadUrls(mediaUploadRequest([sized(40, 3)])))
+    expect(refused.status).toBe(429)
+    expect(await refused.json()).toEqual({
+      error: { message: "Arena media upload limit reached", type: "arena_media_upload_limit" },
+    })
+    expect(refused.headers.get("retry-after")).toBe(String(50 * 60))
+    // Released desktops upload through the other route, which counts the same way.
+    expect((await proxy(legacyUpload(new Uint8Array(10).fill(4)))).status).toBe(429)
+    expect(host.files.size).toBe(0)
+    time += 50 * 60 * 1000
+    expect((await proxy(uploadUrls(mediaUploadRequest([sized(40, 3)])))).status).toBe(200)
+    expect((await proxy(legacyUpload(new Uint8Array(10).fill(4)))).status).toBe(200)
+    // Files count as well as bytes.
+    expect((await proxy(uploadUrls(mediaUploadRequest([sized(1, 5), sized(1, 6)])))).status).toBe(429)
+  })
+
   test("without a store both routes answer 404, as a control plane from before them does", async () => {
     const proxy = service()
     expect((await proxy(uploadUrls(mediaUploadRequest([file(png)])))).status).toBe(404)
@@ -404,14 +462,56 @@ describe("media by reference", () => {
     let calls = 0
     const ping = { [KEEP_ALIVE_HEADER]: "1" }
     const unknown = mediaReference("0".repeat(64), "image/png")
+    const failing: MediaStore = { ...memoryMediaStore().store, read: () => Promise.reject(new Error("store down")) }
     for (const assigned of [model, claude]) {
-      for (const mediaStore of [memoryMediaStore().store, undefined]) {
+      for (const mediaStore of [memoryMediaStore().store, failing, undefined]) {
         const response = await service({ mediaStore, assigned, upstream: () => calls++ })(contestant(unknown, ping))
         expect(response.status).toBe(204)
         expect(response.headers.get(KEEP_ALIVE_HEADER)).toBe("1")
       }
     }
     expect(calls).toBe(0)
+  })
+
+  test("a store that fails answers a call the engine can send inline, without calling OpenRouter", async () => {
+    let calls = 0
+    const failing: MediaStore = { ...memoryMediaStore().store, read: () => Promise.reject(new Error("store down")) }
+    const response = await service({ mediaStore: failing, user: "user-down", upstream: () => calls++ })(
+      contestant(mediaReference(digest, "image/png")),
+    )
+    expect(response.status).toBe(503)
+    const body = await response.text()
+    expect(readMediaUnavailable(body)).toBe(true)
+    expect(body).not.toContain("store down")
+    expect(calls).toBe(0)
+  })
+
+  test("a store that stops answering lets the call go at its deadline, and lets go of what it opened", async () => {
+    const host = memoryMediaStore()
+    const other = new TextEncoder().encode("another screenshot")
+    await upload(service({ mediaStore: host.store, user: "user-stuck" }), host, png, other)
+    const body = { messages: [digest, sha256(other)].map((id) => mediaReference(id, "image/png")) }
+    let cancelled = 0
+    // It never opens one file, and the other's body never ends; neither looks at the signal.
+    const stuck: MediaStore = {
+      ...host.store,
+      read: async (pathname) => {
+        if (pathname.endsWith(digest)) return new Promise(() => {})
+        const file = await host.store.read(pathname)
+        return (
+          file && {
+            ...file,
+            body: new ReadableStream<Uint8Array>({ cancel: () => void cancelled++ }),
+          }
+        )
+      },
+    }
+    const startedAt = Date.now()
+    const resolving = resolveMedia(stuck, "user-stuck", body, new Date(), AbortSignal.timeout(50))
+    expect(resolving).rejects.toMatchObject({ name: "TimeoutError" })
+    await resolving.catch(() => undefined)
+    expect(Date.now() - startedAt).toBeLessThan(1_000)
+    expect(cancelled).toBe(1)
   })
 
   test("text that only looks like a reference is left alone", async () => {

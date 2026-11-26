@@ -2,10 +2,16 @@ import { afterEach, describe, expect, setSystemTime, test } from "bun:test"
 import { createHash } from "crypto"
 import { createArenaService } from "@agent-duel/arena-service"
 import type { ArenaDb } from "@agent-duel/arena-service/collection"
-import { MEDIA_FILE_BYTES, mediaMissingError, mediaUploadAnswer } from "@agent-duel/arena-service/media"
+import {
+  MEDIA_FILE_BYTES,
+  mediaMissingError,
+  mediaUnavailableError,
+  mediaUploadAnswer,
+} from "@agent-duel/arena-service/media"
+import { mediaUploadLimitError } from "@agent-duel/arena-service/media-limit"
 import { memoryMediaStore } from "@agent-duel/arena-service/memory-media-store"
 import { AssignmentRegistry, proxy } from "../../src/arena/proxy"
-import { referenceMedia, referencesConfirmed } from "../../src/arena/media-reference"
+import { referenceMedia, referencesConfirmed, uploadMedia } from "../../src/arena/media-reference"
 
 const assignment = {
   runID: "run-a",
@@ -91,6 +97,8 @@ function controlPlane(options: { readonly user: string; readonly store?: boolean
     openRouterApiKey: "server-secret",
     streamRecovery: false,
     mediaStore: options.store === false ? undefined : host.store,
+    // arena-service tests the upload limit; this database has no collection for it.
+    mediaUploadLimit: null,
     fetch: async (_url, init) => {
       toOpenRouter.push(new TextDecoder().decode(init?.body as ArrayBuffer))
       return answer()
@@ -255,6 +263,71 @@ describe("media by reference", () => {
     for (const url of urls) expect(plane.toOpenRouter[0]!.includes(url)).toBe(true)
   })
 
+  test("both sides sending the same file at once upload it once", async () => {
+    const upstream = "http://control-shared.invalid/api/openrouter"
+    const plane = controlPlane({ user: "shared" })
+    const options = {
+      upstream,
+      fetch: plane.execute,
+      // Slow enough that the second request asks while the first one's PUT is still under way.
+      mediaUpload: async (input: string, init: RequestInit) => {
+        await Bun.sleep(20)
+        return plane.mediaUpload(input, init)
+      },
+      mediaByReference: true,
+    }
+    const answers = await Promise.all([
+      proxy(contestantRequest(), registry(), options),
+      proxy(contestantRequest(), registry(), options),
+    ])
+    expect(answers.map((response) => response.status)).toEqual([200, 200])
+    expect(uploadRequests(plane.toControlPlane)).toHaveLength(1)
+    expect(plane.toStorage).toHaveLength(1)
+    for (const call of calls(plane.toControlPlane)) expect(call.body).not.toContain(screenshot)
+  })
+
+  test("a request waiting on another's upload sends the file itself when that one is stopped", async () => {
+    const upstream = "http://control-shared-stop.invalid/api/openrouter"
+    const { media } = referenceMedia({
+      messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: dataUrl } }] }],
+    })
+    const plane = scripted(storageUrls)
+    const stop = new AbortController()
+    const first = uploadMedia({
+      execute: plane.execute,
+      // Never answers: only the stop ends it.
+      put: (_url, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener("abort", () => reject(init.signal?.reason))
+        }),
+      upstream,
+      routing: {},
+      media: media.values(),
+      signal: stop.signal,
+    })
+    await Bun.sleep(5)
+    let puts = 0
+    const second = uploadMedia({
+      execute: plane.execute,
+      put: async () => {
+        puts++
+        return new Response(null, { status: 200 })
+      },
+      upstream,
+      routing: {},
+      media: media.values(),
+      signal: new AbortController().signal,
+    })
+    await Bun.sleep(5)
+    expect(plane.seen).toEqual(["media-upload"])
+    stop.abort(new Error("Side stopped"))
+    expect(first).rejects.toThrow("Side stopped")
+    expect(await second).toBeUndefined()
+    expect(puts).toBe(1)
+    expect(plane.seen).toEqual(["media-upload", "media-upload"])
+    expect(referencesConfirmed(upstream)).toBe(true)
+  })
+
   test("a file the store no longer has is uploaded again and the request sent again", async () => {
     const upstream = "http://control-lost.invalid/api/openrouter"
     let time = Date.parse("2026-11-20T00:00:00Z")
@@ -317,6 +390,33 @@ describe("media by reference", () => {
     setSystemTime(new Date(Date.now() + PAUSE_OVER_MS))
     expect((await proxy(contestantRequest(), registry(), options)).status).toBe(200)
     expect(seen.slice(6)).toEqual(["reference", "media-upload", "reference", "inline"])
+  })
+
+  test("a store that cannot give media back sends it inline, and the next calls skip the store for a while", async () => {
+    const upstream = "http://control-unreadable.invalid/api/openrouter"
+    const seen: string[] = []
+    const execute = async (input: string | URL | Request, init?: RequestInit) => {
+      const path = new URL(String(input instanceof Request ? input.url : input)).pathname
+      if (path.endsWith("/media-upload")) {
+        seen.push("media-upload")
+        return storageUrls((JSON.parse(String(init?.body)) as { files: { digest: string }[] }).files)
+      }
+      const inline = String(init?.body).includes(screenshot)
+      seen.push(inline ? "inline" : "reference")
+      return inline ? answer() : Response.json(mediaUnavailableError(), { status: 503 })
+    }
+    const options = {
+      upstream,
+      fetch: execute,
+      mediaUpload: async () => new Response(null, { status: 200 }),
+      mediaByReference: true,
+    }
+    expect((await proxy(contestantRequest(), registry(), options)).status).toBe(200)
+    // No upload again: the file is there, the store just did not give it back.
+    expect(seen).toEqual(["media-upload", "reference", "inline"])
+    expect(referencesConfirmed(upstream)).toBe(false)
+    expect((await proxy(contestantRequest(), registry(), options)).status).toBe(200)
+    expect(seen.slice(3)).toEqual(["inline"])
   })
 
   test("a control plane without the upload route gets the media inline, and is not asked again", async () => {
@@ -408,6 +508,8 @@ describe("media by reference", () => {
       ["failing", () => new Response(new ReadableStream({ cancel: () => void closed++ }), { status: 503 }), true],
       ["empty", () => Response.json(mediaUploadAnswer([])), true],
       ["garbled", () => new Response("<html>"), true],
+      // The account's upload limit: no reference until the pause ends.
+      ["limited", () => Response.json(mediaUploadLimitError(), { status: 429 }), true],
       // A refused assignment is the request's own problem, not the store's.
       ["refusing", () => Response.json({ error: { message: "No" } }, { status: 403 }), false],
     ] as const) {

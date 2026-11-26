@@ -17,7 +17,7 @@ import {
 import { COMPACTION_HEADER, COMPACTION_OFFER } from "@agent-duel/arena-service/request-budget"
 import { HEARTBEAT_HEADER, REPLAY_PATH, REPLAY_UNAVAILABLE_LINE } from "@agent-duel/arena-service/stream-recovery"
 import { KEEP_ALIVE_HEADER } from "@agent-duel/arena-service/keep-alive"
-import { readMediaMissing } from "@agent-duel/arena-service/media"
+import { readMediaMissing, readMediaUnavailable } from "@agent-duel/arena-service/media"
 import type { KeepAlive, Ping, PingResult } from "./keep-alive"
 import { forgetUploads, pauseReferences, referenceMedia, sendsInline, uploadMedia, type Media } from "./media-reference"
 import { REQUEST_BYTES_LIMIT } from "./engine-runtime/request-size"
@@ -839,22 +839,31 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
           : resize
             ? Response.json(MEDIA_RESIZE_ERROR, { status: 503 })
             : await send()
-      const missing =
-        referenced && outgoing !== rewritten && response.status === 409
-          ? readMediaMissing(await response.clone().text())
-          : undefined
-      if (missing) {
-        await response.body?.cancel().catch(() => undefined)
-        forgetUploads(upstream, missing)
-        const again = await upload(missing.flatMap((digest) => referenced?.media.get(digest) ?? []))
-        response = again === undefined ? await send() : await sendInline(again)
-        // The store took the files again and still cannot read them back, so references to it fail
-        // for now: this request and the next ones go inline.
-        if (again === undefined && response.status === 409 && readMediaMissing(await response.clone().text())) {
-          await response.body?.cancel().catch(() => undefined)
-          pauseReferences(upstream)
-          response = await sendInline("unsupported")
+      // How the control plane answered media it could not put back, while the body names references.
+      const mediaAnswer = async () => {
+        if (!referenced || outgoing === rewritten || (response.status !== 409 && response.status !== 503)) return {}
+        const text = await response.clone().text()
+        return {
+          missing: response.status === 409 ? readMediaMissing(text) : undefined,
+          unavailable: response.status === 503 && readMediaUnavailable(text),
         }
+      }
+      // The store cannot give media back for now: this request and the next ones go inline.
+      const goInline = async () => {
+        await response.body?.cancel().catch(() => undefined)
+        pauseReferences(upstream)
+        return sendInline("unsupported")
+      }
+      const first = await mediaAnswer()
+      if (first.unavailable) response = await goInline()
+      else if (first.missing) {
+        await response.body?.cancel().catch(() => undefined)
+        forgetUploads(upstream, first.missing)
+        const again = await upload(first.missing.flatMap((digest) => referenced?.media.get(digest) ?? []))
+        response = again === undefined ? await send() : await sendInline(again)
+        // The store took the files again and still cannot read them back.
+        const second = again === undefined ? await mediaAnswer() : {}
+        if (second.missing || second.unavailable) response = await goInline()
       }
     } catch (error) {
       preHeaderTransportFailure = !request.signal.aborted && retryableTransport(error)

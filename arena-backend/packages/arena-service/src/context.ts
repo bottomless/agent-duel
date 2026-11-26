@@ -3,6 +3,7 @@ import type { EndpointLabelReader } from "./endpoint-label"
 import type { MediaStore } from "./media-store"
 import type { MetadataRateLimit } from "./metadata"
 import type { ModelPool } from "./pool"
+import type { MediaUploadLimit } from "./media-limit"
 import type { WebSearchRateLimit } from "./websearch"
 
 /** The only facts the battle routes read about whoever is calling. */
@@ -35,6 +36,8 @@ export type ArenaContext = {
   readonly readEndpointLabel?: EndpointLabelReader
   /** Holds the media contestant requests name by reference (`media-store.ts`). */
   readonly mediaStore?: MediaStore
+  /** How much each account may upload to `mediaStore` per window (`media-limit.ts`). */
+  readonly mediaUploadLimit?: MediaUploadLimit
 }
 
 type Failure = (message: string, status: number) => Response
