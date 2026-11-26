@@ -699,7 +699,12 @@ describe("OpenRouter proxy", () => {
             id: "upstream-1",
             provider: "Alibaba",
             choices: [{ message: { content: "partial answer" }, finish_reason: "content_filter" }],
-            usage: { prompt_tokens: 12, completion_tokens: 4 },
+            usage: {
+              prompt_tokens: 12,
+              completion_tokens: 4,
+              cost: 0.01,
+              cost_details: { upstream_inference_cost: 1 },
+            },
           }),
       })(
         new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
@@ -714,8 +719,10 @@ describe("OpenRouter proxy", () => {
         }),
       )
       expect(response.status).toBe(400)
+      // The engine records the refused call's tokens from this body; the answer, provider and cost stay behind.
       expect(await response.json()).toEqual({
         error: { type: "content_filter", message: "A content filter blocked this response." },
+        usage: { prompt_tokens: 12, completion_tokens: 4 },
       })
       expect(written).toHaveLength(1)
       expect(written[0]).toMatchObject({

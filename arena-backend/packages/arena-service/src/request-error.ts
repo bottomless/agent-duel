@@ -98,6 +98,17 @@ export function contentFilterRefusal(value: unknown) {
   )
 }
 
+/**
+ * The usage a refused complete response reported. A chat completion and the service's own neutral
+ * refusal keep it at the top level; a nested `/responses` or `data` payload keeps it one level down.
+ */
+export function refusalUsage(value: unknown) {
+  if (!isRecord(value)) return undefined
+  return [value, value.response, value.data]
+    .map((holder) => (isRecord(holder) ? holder.usage : undefined))
+    .find(isRecord)
+}
+
 export const compactionRequiredType = "arena_compaction_required"
 
 export function compactionRequiredError() {

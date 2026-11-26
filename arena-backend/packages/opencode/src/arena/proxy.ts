@@ -4,6 +4,7 @@ import type { GenerationFailureKind, GenerationFailurePhase, GenerationMetrics }
 import {
   compactionRequiredError,
   contentFilterError,
+  contentFilterFinish,
   contentFilterMessage,
   contentFilterRefusal,
   filteredStreamChunk,
@@ -15,6 +16,7 @@ import {
   readPaymentError,
   readSessionRejected,
   readSingleAgentAllowance,
+  refusalUsage,
   retryableStreamError,
   sessionRejectedError,
   singleAgentAllowanceError,
@@ -332,6 +334,9 @@ export function sanitizePayload(value: unknown, generationID: string, stream = f
       if (["length", "max_tokens", "max_output_tokens"].includes(String(native_finish_reason))) {
         safe.finish_reason = "length"
       }
+      // A refusal is caught before this runs for the model call, so this is only its stored record:
+      // keep the reason once the native field goes.
+      if (native_finish_reason === "content_filter") safe.finish_reason = "content_filter"
       return safe
     })
   }
@@ -352,6 +357,21 @@ export function sanitizePayload(value: unknown, generationID: string, stream = f
     sanitized.data = data
   }
   return sanitized
+}
+
+/**
+ * What the records keep of a refused complete response: its answer and usage under the
+ * `content_filter` finish a filtered stream leaves. The model call still gets the neutral error.
+ * `raw` is the provider's response, or the service's refusal with the usage it kept.
+ */
+function filteredResponseRecord(raw: unknown, generationID: string) {
+  if (record(raw) && raw.error === undefined && contentFilterFinish(raw)) return sanitizePayload(raw, generationID)
+  const usage = refusalUsage(raw)
+  return {
+    id: generationID,
+    choices: [{ index: 0, message: {}, finish_reason: "content_filter" }],
+    ...(usage ? { usage } : {}),
+  }
 }
 
 // Some routes report tool_calls for truncated JSON even in native_finish_reason. Usage can
@@ -980,7 +1000,11 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
       if (body === undefined) await response.body?.cancel().catch(() => undefined)
       if (filtered) await blocked()
       endWait?.()
-      telemetry?.rawChunk?.(metadata, JSON.stringify(payload))
+      // A filtered complete response arrives as this refusal with the usage the service kept.
+      telemetry?.rawChunk?.(
+        metadata,
+        JSON.stringify(filtered && body ? filteredResponseRecord(JSON.parse(body), generationID) : payload),
+      )
       // A refused attempt is a failed generation, not a completed one. A wait for the user's network
       // or sign-in is not the provider failing, and telemetry keeps the two apart.
       const networkWait = readNetworkUnavailable(body)
@@ -1044,8 +1068,8 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
     if (contentFilterRefusal(raw)) {
       await blocked()
       endWait?.()
-      // Keep the partial answer and usage the response carried before the neutral error replaces it.
-      telemetry?.rawChunk?.(metadata, JSON.stringify(sanitizePayload(raw, generationID)))
+      // The neutral error replaces the response, so the record keeps its partial answer and usage.
+      telemetry?.rawChunk?.(metadata, JSON.stringify(filteredResponseRecord(raw, generationID)))
       await telemetry?.error?.(metadata, new Error(contentFilterMessage), new Date(), {
         phase: "http",
         kind: "content_filter",

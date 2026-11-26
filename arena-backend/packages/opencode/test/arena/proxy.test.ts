@@ -355,14 +355,43 @@ describe("ArenaProxy", () => {
     expect(raw).not.toContain("Alibaba")
   })
 
-  test("records a non-streamed content_filter error as a failed generation", async () => {
+  test("records a refusal named only by the native finish reason under the content_filter finish", async () => {
+    const registry = new AssignmentRegistry()
+    registry.assign("session-root", assignment)
+    const chunks: string[] = []
+    const response = await proxy(request(), registry, {
+      upstream: "https://unit.invalid",
+      fetch: async () =>
+        Response.json({
+          choices: [{ message: { content: "partial" }, finish_reason: "stop", native_finish_reason: "content_filter" }],
+          usage: { prompt_tokens: 3, completion_tokens: 1 },
+        }),
+      telemetry: { rawChunk: (_metadata, chunk) => void chunks.push(chunk) },
+    })
+    expect(response.status).toBe(400)
+    expect(chunks.map((chunk) => JSON.parse(chunk))).toEqual([
+      {
+        choices: [{ message: { content: "partial" }, finish_reason: "content_filter" }],
+        usage: { prompt_tokens: 3, completion_tokens: 1 },
+      },
+    ])
+  })
+
+  test("records a non-streamed content_filter error as a failed generation and keeps its usage", async () => {
     const registry = new AssignmentRegistry()
     registry.assign("session-root", assignment)
     const calls: string[] = []
+    const chunks: string[] = []
     const response = await proxy(request(), registry, {
       upstream: "https://unit.invalid",
-      fetch: async () => Response.json({ error: { type: "content_filter", message: "private policy detail" } }),
+      fetch: async () =>
+        Response.json({
+          provider: "Alibaba",
+          error: { type: "content_filter", message: "private policy detail" },
+          usage: { prompt_tokens: 12, completion_tokens: 4 },
+        }),
       telemetry: {
+        rawChunk: (_metadata, chunk) => void chunks.push(chunk),
         complete: () => void calls.push("complete"),
         error: () => void calls.push("error"),
       },
@@ -372,6 +401,49 @@ describe("ArenaProxy", () => {
       error: { type: "content_filter", message: "A content filter blocked this response." },
     })
     expect(calls).toEqual(["error"])
+    expect(chunks.map((chunk) => JSON.parse(chunk))).toEqual([
+      {
+        id: expect.stringMatching(/^gen_/),
+        choices: [{ index: 0, message: {}, finish_reason: "content_filter" }],
+        usage: { prompt_tokens: 12, completion_tokens: 4 },
+      },
+    ])
+  })
+
+  test("keeps the usage the service sends with a filtered complete response, and none of it reaches the model call", async () => {
+    const registry = new AssignmentRegistry()
+    registry.assign("session-root", assignment)
+    const chunks: string[] = []
+    const failures: unknown[] = []
+    const response = await proxy(request(), registry, {
+      upstream: "https://unit.invalid",
+      fetch: async () =>
+        Response.json(
+          {
+            error: { type: "content_filter", message: "A content filter blocked this response." },
+            usage: { prompt_tokens: 12, completion_tokens: 4 },
+            choices: [{ message: { content: "must not be recorded" }, finish_reason: "content_filter" }],
+          },
+          { status: 400 },
+        ),
+      telemetry: {
+        rawChunk: (_metadata, chunk) => void chunks.push(chunk),
+        error: (_metadata, _error, _at, failure) => void failures.push(failure),
+      },
+    })
+    expect(response.status).toBe(400)
+    // Byte-for-byte the refusal Core treats as permanent: nothing for a retry or a pending tool to act on.
+    expect(await response.json()).toEqual({
+      error: { type: "content_filter", message: "A content filter blocked this response." },
+    })
+    expect(failures).toEqual([{ phase: "http", kind: "content_filter" }])
+    expect(chunks.map((chunk) => JSON.parse(chunk))).toEqual([
+      {
+        id: expect.stringMatching(/^gen_/),
+        choices: [{ index: 0, message: {}, finish_reason: "content_filter" }],
+        usage: { prompt_tokens: 12, completion_tokens: 4 },
+      },
+    ])
   })
 
   test("keeps usage arriving with or after a filtered stream's finish for the failed generation", async () => {

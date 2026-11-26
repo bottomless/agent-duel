@@ -1850,7 +1850,11 @@ A content filter ends the contestant's run. Keep its partial answer and saved fi
 different host. A filtered stream and a filtered complete response are detected and handled alike, and
 both show the same neutral reason; the provider's explanation can identify the contestant or quote the
 prompt, so only the service logs it. Record a filtered call as an error, not a completion, but keep its
-usage: the response ended, so its tokens are final.
+usage: the response ended, so its tokens are final. The reveal returns only complete calls, so the
+engine's generation record is the one that keeps a refused call's tokens. A filtered stream carries its
+usage on the finish; a filtered complete response becomes an HTTP 400, so the service sends the usage
+beside the neutral error and the engine proxy takes it for the record before the model call sees the
+error alone.
 
 A steer queued behind the refused step starts no step; it is delivered unanswered, as for any step
 that fails without a retry (see the steer rules above). The engine proxy runs the side's failure

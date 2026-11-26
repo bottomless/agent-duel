@@ -13,6 +13,7 @@ import {
   inspectionFailedError,
   isContextOverflow,
   networkUnavailableError,
+  refusalUsage,
   retryableStreamError,
 } from "./request-error"
 import { modelLimits, type ModelLimits, type ModelPool, type ModelProfile } from "./pool"
@@ -702,7 +703,13 @@ async function sanitizeAssignedResponse(
   if (contentFilterRefusal(raw)) {
     logRefusal(refusal, response.status, text)
     await Promise.all([recordCall(metrics.value("error")), capture?.finish("failed")])
-    return Response.json(contentFilterError(), { status: 400, headers })
+    // The reveal returns only complete calls, so the engine's own record is the one that keeps this
+    // call's tokens. Send the usage (cost scrubbed) beside the neutral error, as a filtered stream does.
+    const reported = refusalUsage(raw)
+    return Response.json(
+      { ...contentFilterError(), ...(reported ? { usage: sanitizeUsage(reported) } : {}) },
+      { status: 400, headers },
+    )
   }
   await Promise.all([recordCall(metrics.value()), capture?.finish("complete")])
   const payload = reasoning.redact(sanitizePayload(raw, generationID))
