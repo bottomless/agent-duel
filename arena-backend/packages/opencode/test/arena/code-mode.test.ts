@@ -38,6 +38,16 @@ const blocked = ["session_rename", "session_move", "worktree_create", "worktree_
 const codeModePath = (tool: string) =>
   tool.startsWith("session_") ? `tools.opencode.session.${tool.slice("session_".length)}` : `tools.opencode.${tool}`
 const retained = ["read", "write", "edit", "patch", "shell", "grep", "glob", "subagent"]
+// Upstream tools Arena removes by namespace and name: image and video generation (no namespace), MCP events, and every
+// `opencode.session` tool, including the flag-gated search, read and interrupt.
+const removed = [
+  { name: "generate_image", path: "tools.generate_image" },
+  { name: "generate_video", path: "tools.generate_video" },
+  { name: "list_mcp_events", namespace: "opencode", path: "tools.opencode.list_mcp_events" },
+  { name: "search", namespace: "opencode.session", path: "tools.opencode.session.search" },
+  { name: "read", namespace: "opencode.session", path: "tools.opencode.session.read" },
+  { name: "interrupt", namespace: "opencode.session", path: "tools.opencode.session.interrupt" },
+]
 const opencodeRetained = ["list_mcp_resources", "read_mcp_resource", "resource"]
 const roots = ["a", "b", "off"]
 const cases = roots.flatMap((side) => [side, `${side}_child`, `${side}_grandchild`])
@@ -119,6 +129,15 @@ const setup = Effect.gen(function* () {
         execute: () => Effect.succeed({ content: `mcp.${name}` }),
       })
     }
+    for (const tool of removed) {
+      editor.add({
+        name: tool.name,
+        description: `Removed ${tool.path}`,
+        options: { ...(tool.namespace ? { namespace: tool.namespace } : {}), codemode: true },
+        input: Schema.Struct({}),
+        execute: () => Effect.succeed({ content: tool.path }),
+      })
+    }
     for (const name of opencodeRetained) {
       editor.add({
         name,
@@ -145,6 +164,21 @@ const setup = Effect.gen(function* () {
 })
 
 describe("Arena Code Mode policy", () => {
+  it.live("removes image and video generation, MCP events and every opencode.session tool", () =>
+    Effect.gen(function* () {
+      const h = yield* setup
+      const catalog = (yield* h.registry.snapshot()).codeModeCatalog!
+      const paths = codeModeListings(catalog).map((item) => item.path)
+      const prompt = CodeModeInstructions.render(CodeModeCatalog.summarize(catalog))
+      for (const tool of removed) {
+        expect(paths).not.toContain(tool.path)
+        expect(prompt).not.toContain(tool.path)
+        const result = yield* h.run("a", `return await ${tool.path}({})`)
+        expect(result.output).toMatchObject({ error: true, toolCalls: [] })
+      }
+    }),
+  )
+
   for (const tool of blocked) {
     it.live(`hides and blocks opencode.${tool} for both sides, Battle off and descendants`, () =>
       Effect.gen(function* () {

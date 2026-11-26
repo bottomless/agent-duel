@@ -484,7 +484,8 @@ function normalizeExperimental(
         diagnostics.push({
           kind: "removed",
           path: ["experimental", key],
-          message: "Use the top-level automations setting. Automations are enabled by default.",
+          // Agent Duel vendor patch: automations default to off (`automation.ts`), so the hint says how to turn them on.
+          message: "Use the top-level automations setting. Automations are off unless it is true.",
         })
       }
       // `policies` merges into top-level `policies` in normalizePolicies.

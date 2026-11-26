@@ -416,18 +416,23 @@ const updateRow = Effect.fnUntraced(function* (
   const { id, type, ...data } = encoded
   // Since OpenCode 2.4 an assistant's content lives in `session_part` rows, and a read appends any inline content
   // after them. The row below carries the whole content inline, so drop the parts first or it reads twice; Core
-  // reads inline content as before and moves it back into parts on the next content event.
-  if (message.type === "assistant")
-    yield* database.db
-      .delete(SessionPartTable)
-      .where(and(eq(SessionPartTable.message_id, message.id), eq(SessionPartTable.session_id, sessionID)))
-      .run()
-      .pipe(Effect.orDie)
+  // reads inline content as before and moves it back into parts on the next content event. One transaction, so
+  // a stop between the two writes cannot leave the message with neither.
   yield* database.db
-    .update(SessionMessageTable)
-    .set({ type, time_created: DateTime.toEpochMillis(message.time.created), data })
-    .where(and(eq(SessionMessageTable.id, message.id), eq(SessionMessageTable.session_id, sessionID)))
-    .run()
+    .transaction((tx) =>
+      Effect.gen(function* () {
+        if (message.type === "assistant")
+          yield* tx
+            .delete(SessionPartTable)
+            .where(and(eq(SessionPartTable.message_id, message.id), eq(SessionPartTable.session_id, sessionID)))
+            .run()
+        yield* tx
+          .update(SessionMessageTable)
+          .set({ type, time_created: DateTime.toEpochMillis(message.time.created), data })
+          .where(and(eq(SessionMessageTable.id, message.id), eq(SessionMessageTable.session_id, sessionID)))
+          .run()
+      }),
+    )
     .pipe(Effect.orDie)
 })
 

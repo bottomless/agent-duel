@@ -48,6 +48,7 @@ const enabledDirectory = "/enabled"
 const disabledDirectory = "/disabled"
 const toggleDirectory = "/toggle"
 const missingDirectory = "/missing"
+const unsetDirectory = "/unset"
 
 const wakes: Session.ID[] = []
 /** Runs inside the next wake, which happens while an automation is running. */
@@ -198,10 +199,12 @@ const locations = makeGlobalNode({
       // Resolve our virtual directories before the scheduler starts: real filesystem I/O during a TestClock step
       // can outlive the step while a tick is still acquiring the Location.
       const places = new Map(
-        yield* Effect.forEach([enabledDirectory, disabledDirectory, toggleDirectory, missingDirectory], (dir) =>
-          projects
-            .resolve(AbsolutePath.make(dir), { persist: false })
-            .pipe(Effect.map((project) => [dir, project] as const)),
+        yield* Effect.forEach(
+          [enabledDirectory, disabledDirectory, toggleDirectory, missingDirectory, unsetDirectory],
+          (dir) =>
+            projects
+              .resolve(AbsolutePath.make(dir), { persist: false })
+              .pipe(Effect.map((project) => [dir, project] as const)),
         ),
       )
       return yield* LayerMap.make(
@@ -240,7 +243,9 @@ const locations = makeGlobalNode({
                           ? enabled
                           : ref.directory === toggleDirectory
                             ? toggled
-                            : disabled,
+                            : ref.directory === unsetDirectory
+                              ? Config.testLayer([])
+                              : disabled,
                       ),
                       SessionStore.node.replace(Layer.succeed(SessionStore.Service, store)),
                       PermissionSaved.node.replace(Layer.succeed(PermissionSaved.Service, saved)),
@@ -904,6 +909,18 @@ describe("Automation", () => {
       ).toMatchObject({ _tag: "Automation.DisabledError" })
 
       expect(yield* automations.list()).toEqual([])
+    }),
+  )
+
+  // Agent Duel vendor patch: automations stay off unless config sets them to true.
+  it.effect("rejects creation when config leaves automations unset", () =>
+    Effect.gen(function* () {
+      const automations = yield* setup(unsetDirectory)
+      expect(
+        yield* Effect.flip(
+          automations.create({ sessionID, name: "x", trigger: { type: "at", at: "in 1 minute" }, action: prompt("x") }),
+        ),
+      ).toMatchObject({ _tag: "Automation.DisabledError" })
     }),
   )
 

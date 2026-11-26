@@ -219,17 +219,22 @@ function install(context: Context, options: InstalledOptions) {
     // Arena owns session locations and worktree lifecycle, including with Battle off.
     yield* context.tool.transform((editor) => {
       editor.namespace({ name: "opencode", description: "Tools for reading MCP resources." })
-      // Keyed by namespace and name. OpenCode 2.4 moved the session tools into `opencode.session`.
+      // Keyed by namespace and name. Every `opencode.session` tool goes: since OpenCode 2.4 it holds rename and move,
+      // and behind flags search, read and interrupt, which could reach the other side's session. MCP events only
+      // feed automations, which Agent Duel leaves off. Image and video generation run on whatever image or video
+      // model the user's own OpenCode sign-ins offer, billed to them, so neither is a contestant tool.
       const blocked = new Set([
-        "opencode.session/rename",
-        "opencode.session/move",
         "opencode/worktree_create",
         "opencode/worktree_list",
         "opencode/worktree_remove",
         "opencode/models",
+        "opencode/list_mcp_events",
+        "/generate_image",
+        "/generate_video",
       ])
       for (const tool of editor.list()) {
-        if (blocked.has(`${tool.options?.namespace}/${tool.name}`)) editor.remove(tool.id)
+        const namespace = tool.options?.namespace
+        if (namespace === "opencode.session" || blocked.has(`${namespace ?? ""}/${tool.name}`)) editor.remove(tool.id)
       }
     })
     // Core's OpenCodeTools hooks run first. Remove only their worktree advice; tool removal
