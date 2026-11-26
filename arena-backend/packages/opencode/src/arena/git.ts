@@ -3984,18 +3984,11 @@ export const applyPromotionState = Effect.fn("ArenaGit.applyPromotionState")(fun
     // replayed. Git's normal cherry-pick machinery is intentionally used so conflicts remain
     // visible in the index and worktree for the caller to resolve.
     yield* run(git, root, "reset_before_agent_replay", ["reset", "--hard", head])
-    // The replay keeps each commit's author and makes the developer the committer. With no Git
-    // identity and an empty full name in passwd, common on Linux, cherry-pick refuses ("Committer
-    // identity unknown"), so it falls back to the identity Add Project uses for its first commit.
-    const committer = yield* git.run(["var", "GIT_COMMITTER_IDENT"], { cwd: root })
-    const replayEnv =
-      committer.exitCode === 0
-        ? undefined
-        : { GIT_COMMITTER_NAME: "Agent Duel", GIT_COMMITTER_EMAIL: "agent-duel@localhost" }
+    const replayEnv = yield* replayCommitterEnv(git, root)
     for (const commit of commits) {
       const replayed = yield* git.run(
         ["cherry-pick", "--allow-empty", "--keep-redundant-commits", commit],
-        { cwd: root, ...(replayEnv ? { env: replayEnv } : {}) },
+        { cwd: root, ...(Object.keys(replayEnv).length > 0 ? { env: replayEnv } : {}) },
       )
       if (replayed.exitCode !== 0) {
         const replayConflicts = yield* conflictPaths(git, root)
@@ -4413,6 +4406,18 @@ const arenaCommitterEnv = {
 }
 
 /**
+ * Replaying the winner's commits makes the developer their committer. With no Git identity and an
+ * empty full name in passwd, common on Linux, Git refuses ("Committer identity unknown"), so the
+ * replay falls back to the identity Add Project uses for its first commit. Empty when Git has one.
+ */
+const replayCommitterEnv = Effect.fn("ArenaGit.replayCommitterEnv")(function* (git: Git.Interface, root: string) {
+  const committer = yield* git.run(["var", "GIT_COMMITTER_IDENT"], { cwd: root })
+  const env: Record<string, string> =
+    committer.exitCode === 0 ? {} : { GIT_COMMITTER_NAME: "Agent Duel", GIT_COMMITTER_EMAIL: "agent-duel@localhost" }
+  return env
+})
+
+/**
  * Wrap a tree in a commit so merge-tree and friends can name it. Wrapping both sides of a merge
  * as children of its base makes that base their only merge base, which is how the merge picks
  * its base without `merge-tree --merge-base` (see MIN_BATTLE_GIT).
@@ -4535,6 +4540,7 @@ const replayCommits = Effect.fn("ArenaGit.replayCommits")(function* (
 ) {
   let head = onto
   let lastOriginal: string | undefined
+  const committerEnv = yield* replayCommitterEnv(git, root)
   for (const commit of commits) {
     const parents = (yield* read(git, root, "read_replay_parents", ["rev-list", "--parents", "-n", "1", commit]))
       .split(/\s+/)
@@ -4560,6 +4566,7 @@ const replayCommits = Effect.fn("ArenaGit.replayCommits")(function* (
         GIT_AUTHOR_NAME: name ?? "OpenCode Arena",
         GIT_AUTHOR_EMAIL: email ?? "arena@localhost",
         GIT_AUTHOR_DATE: date ?? wrapperDate,
+        ...committerEnv,
       },
     })
     lastOriginal = commit
