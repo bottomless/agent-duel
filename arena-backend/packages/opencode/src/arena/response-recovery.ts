@@ -27,6 +27,10 @@ export const EXHAUSTED =
   "Response limit reached after three recovery attempts. Completed work has been preserved. Continue with a smaller request."
 export const TOOL_INTERRUPTED =
   "Your tool arguments exceeded the response limit. This call was not executed. Split the operation into smaller writes or patches. Do not repeat tools that already completed."
+// Core's own note after an output-limit cut asks for the work in smaller pieces, which does not fit a
+// response that spent the whole limit reasoning and wrote nothing.
+export const REASONING_LIMIT =
+  "Your last response spent its whole output limit on reasoning and produced no answer or tool call. Do not plan the whole task again. Take the next step now: call a tool or write the answer, and keep reasoning short."
 export const CONTINUE =
   "The previous response reached its output limit. Continue from the partial response without repeating it. Any unfinished tool call was not executed: replace it with smaller, complete writes or patches. Preserve completed work and do not repeat successful tool calls. Keep reasoning concise and make progress in smaller steps."
 

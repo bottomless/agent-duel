@@ -1949,6 +1949,8 @@ Core keeps interrupted replies and completed tool results so recovery does not r
 effects (`core/src/session/runner/llm.ts`). An Arena idle timeout with no text or tool call uses
 `IDLE_RESTART`: there is no partial reply to continue. Keep its stored row for recovery accounting.
 A partial reply uses `IDLE_CONTINUE`; other broken streams use Core's continuation prompt.
+A response cut at its output limit gets Core's note to split the work, unless it only reasoned:
+then `REASONING_LIMIT` tells the model to act instead of planning again (`outputLimitNote`).
 A declined or interrupted tool prevents this automatic continuation
 (`core/src/session/runner/step.ts`).
 

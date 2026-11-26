@@ -75,6 +75,18 @@ export function idleRecoveryNote(message: SessionMessage.Info | undefined) {
   return continues ? ArenaResponseRecovery.IDLE_CONTINUE : ArenaResponseRecovery.IDLE_RESTART
 }
 
+/**
+ * The note for a response cut at its output limit, when it did nothing but reason. Undefined keeps Core's own
+ * note, which fits a long answer or an unfinished write.
+ */
+export function outputLimitNote(message: SessionMessage.Info | undefined) {
+  const reasoningOnly =
+    message?.type === "assistant" &&
+    message.content.length > 0 &&
+    message.content.every((part) => part.type === "reasoning")
+  return reasoningOnly ? ArenaResponseRecovery.REASONING_LIMIT : undefined
+}
+
 /** True for the failure that ends a turn whose mid-stream timeout budget is spent. */
 export function idleExhausted(error: { readonly message: string }) {
   return error.message === ArenaResponseRecovery.IDLE_EXHAUSTED

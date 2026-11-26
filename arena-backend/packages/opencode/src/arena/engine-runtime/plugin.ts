@@ -51,6 +51,7 @@ import {
   idleExhausted,
   idleRecoveryNote,
   idleTimeout,
+  outputLimitNote,
   resetIdleBudget,
 } from "./idle"
 import { ARENA_OFFLINE_MESSAGE } from "../../session/retry"
@@ -484,8 +485,9 @@ function install(context: Context, options: InstalledOptions) {
       "continuation",
       (event) =>
         Effect.sync(() => {
-          if (!arenaSession(options, String(event.sessionID)) || !idleTimeout(event.error)) return
-          event.text = idleRecoveryNote(event.message)
+          if (!arenaSession(options, String(event.sessionID))) return
+          if (idleTimeout(event.error)) event.text = idleRecoveryNote(event.message)
+          else if (event.error.type === "output-limit") event.text = outputLimitNote(event.message) ?? event.text
         }),
       { providerID: String(PROVIDER_ID) },
     )

@@ -420,7 +420,18 @@ const layer = Layer.effect(
                 },
               })
             if (outcome.needsContinuation) return true
-            yield* bus.publish(SessionEvent.Synthetic, { sessionID, text: CONTINUE_AFTER_OUTPUT_LIMIT })
+            // Agent Duel vendor patch: the provider policy can word the note for how the response was cut, as for
+            // a model that stopped sending output.
+            const continuation = yield* hooks.trigger("session", "continuation", {
+              sessionID,
+              model: loaded.model.ref,
+              error: { type: "output-limit", message: "The response reached its output token limit" },
+              message: (yield* store.message(assistantMessageID))?.message,
+            })
+            yield* bus.publish(SessionEvent.Synthetic, {
+              sessionID,
+              text: continuation.text ?? CONTINUE_AFTER_OUTPUT_LIMIT,
+            })
             assistantMessageID = SessionMessage.ID.create()
           }),
           Compacted: Effect.fnUntraced(function* () {

@@ -6517,6 +6517,37 @@ describe("SessionRunnerLLM", () => {
     })
   }
 
+  scenario("lets a continuation hook replace the output token limit note", function* (s) {
+    const hooks = yield* PluginHooks.Service
+    const seen: { readonly type: string; readonly parts: readonly string[] }[] = []
+    yield* hooks.register("session", "continuation", (event) =>
+      Effect.sync(() => {
+        seen.push({
+          type: event.error.type,
+          parts: event.message?.type === "assistant" ? event.message.content.map((part) => part.type) : [],
+        })
+        event.text = "Act on the plan now"
+      }),
+    )
+    yield* s.llm.push(
+      TestLLM.complete(
+        { reason: { normalized: "length" } },
+        LLMEvent.reasoningStart({ id: "thinking" }),
+        LLMEvent.reasoningDelta({ id: "thinking", text: "Thinking" }),
+        LLMEvent.reasoningEnd({ id: "thinking" }),
+      ),
+      TestLLM.text("Finished", "finished"),
+    )
+
+    yield* s.runPrompt("Complete the response")
+
+    expect(seen).toEqual([{ type: "output-limit", parts: ["reasoning"] }])
+    expect(s.requests[1]?.messages.at(-1)).toMatchObject({
+      role: "user",
+      content: [{ type: "text", text: "Act on the plan now" }],
+    })
+  })
+
   scenario("compacts when the provider cuts an oversized prompt to its window and replies with nothing", function* (s) {
     // Xiaomi MiMo answers an oversized prompt with HTTP 200, finish "length", no output, and a prompt count that fills
     // the window instead of rejecting it.

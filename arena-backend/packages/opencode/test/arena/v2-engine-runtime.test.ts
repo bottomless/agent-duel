@@ -9,6 +9,7 @@ import { HttpServer } from "effect/http"
 import { createRoutes } from "@opencode/server/routes"
 import { SdkPlugins } from "@opencode/core/plugin/sdk"
 import { Session as CoreSession } from "@opencode/core/session"
+import type { SessionMessage } from "@opencode/core/session/message"
 import { ReadTool } from "@opencode/core/tool/plugin/read"
 import { AssignmentRegistry } from "@/arena/proxy"
 import { clearToolExecutionEnvironment, gateToolExecution } from "@/session/tool-execution-gate"
@@ -691,6 +692,21 @@ describe("Arena v2 engine runtime", () => {
       }
       yield* runHooks("continuation", headerContinuation)
       expect(headerContinuation.text).toBeUndefined()
+
+      // A response cut at its output limit while it only reasoned gets a note to act, not to split its work.
+      const outputLimit = (content: readonly unknown[]) => ({
+        sessionID,
+        model: contestantModel.ref,
+        error: { type: "output-limit", message: "The response reached its output token limit" },
+        message: { type: "assistant", content } as unknown as SessionMessage.Info,
+        text: undefined as string | undefined,
+      })
+      const thoughtOnly = outputLimit([{ type: "reasoning", text: "Planning" }])
+      yield* runHooks("continuation", thoughtOnly)
+      expect(thoughtOnly.text).toBe(ArenaResponseRecovery.REASONING_LIMIT)
+      const partialAnswer = outputLimit([{ type: "text", text: "A long answer" }])
+      yield* runHooks("continuation", partialAnswer)
+      expect(partialAnswer.text).toBeUndefined()
 
       // Mid-stream SSE timeouts keep their own 3-recovery budget; the 4th in a row ends the run.
       expect((yield* failure("heartbeat")).message).toContain("SSE read timed out")

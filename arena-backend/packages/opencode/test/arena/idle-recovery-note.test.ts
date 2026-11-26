@@ -4,7 +4,7 @@ import { Model } from "@opencode/schema"
 import { Provider } from "@opencode/schema/provider"
 import { SessionMessage } from "@opencode/core/session/message"
 import { ArenaResponseRecovery } from "@/arena/response-recovery"
-import { idleRecoveryNote } from "@/arena/engine-runtime/idle"
+import { idleRecoveryNote, outputLimitNote } from "@/arena/engine-runtime/idle"
 
 const created = 1
 // Only the content's shape matters here, so the rows skip schema construction.
@@ -39,4 +39,16 @@ test("an idle stall continues only from a local call that ran; anything else sta
   expect(idleRecoveryNote(assistant([tool("call_cut", false)]))).toBe(ArenaResponseRecovery.IDLE_RESTART)
   expect(idleRecoveryNote(assistant([tool("hosted", true, true)]))).toBe(ArenaResponseRecovery.IDLE_RESTART)
   expect(idleRecoveryNote(undefined)).toBe(ArenaResponseRecovery.IDLE_RESTART)
+})
+
+// A response that spent its whole output limit reasoning has no answer to continue or write to split.
+test("an output-limit cut gets its own note only when the response did nothing but reason", () => {
+  const reasoning = { type: "reasoning", text: "Planning the level" }
+  expect(outputLimitNote(assistant([reasoning]))).toBe(ArenaResponseRecovery.REASONING_LIMIT)
+  expect(outputLimitNote(assistant([reasoning, reasoning]))).toBe(ArenaResponseRecovery.REASONING_LIMIT)
+  // Core's own note fits a long answer or an unfinished write.
+  expect(outputLimitNote(assistant([reasoning, { type: "text", text: "A partial answer" }]))).toBeUndefined()
+  expect(outputLimitNote(assistant([reasoning, tool("call_cut", false)]))).toBeUndefined()
+  expect(outputLimitNote(assistant([]))).toBeUndefined()
+  expect(outputLimitNote(undefined)).toBeUndefined()
 })
