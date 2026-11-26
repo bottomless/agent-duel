@@ -17,10 +17,11 @@ import { MEDIA_FILE_BYTES } from "@agent-duel/arena-service/media"
  * Two limits apply. The hosted control plane takes at most about 4.5 MB per request (Vercel refuses
  * more before Arena's code runs, and the side fails on a bare 413), but a hosted request names each
  * image or PDF instead of including it (`media-reference.ts`): the file goes straight to the control
- * plane's object store, so it counts only its reference there, whatever its size. That holds only
- * once the store has taken an upload: until then, and for a control plane without the upload route,
- * media counts in full (`MediaCarriage`). The provider takes `UPSTREAM_IMAGES` images and
- * `UPSTREAM_MEDIA_BYTES` of media in one request, whatever the mode.
+ * plane's object store, so it counts only its reference there, whatever its size. Only for a control
+ * plane without the upload route does media count in full (`MediaCarriage`). A store that fails for
+ * a while changes nothing here: a request that then cannot go inline is tried again, never trimmed
+ * to fit (`proxy.ts`). The provider takes `UPSTREAM_IMAGES` images and `UPSTREAM_MEDIA_BYTES` of
+ * media in one request, whatever the mode.
  *
  * Past a limit, a request leaves out its oldest tool images until it is `IMAGE_ROOM_KEPT` of the way
  * to each one. Each removal rewrites the prompt prefix, and Claude, which caches only from one
@@ -66,10 +67,9 @@ export const UPSTREAM_IMAGE_BYTES = 5_000_000
 export const IMAGE_ROOM_KEPT = 0.7
 
 /**
- * How a request's images and PDFs travel. `reference`: to a hosted control plane whose store has
- * taken an upload, by reference (`media-reference.ts`). `inline`: to a hosted control plane in the body,
- * because it has no upload route or this process has not seen one succeed yet. `local`: in process
- * (BYOK), where the hosted body limit does not apply.
+ * How a request's images and PDFs travel. `reference`: to a hosted control plane, by reference
+ * (`media-reference.ts`). `inline`: to a hosted control plane in the body, because it answered the
+ * upload route with 404. `local`: in process (BYOK), where the hosted body limit does not apply.
  */
 export type MediaCarriage = "reference" | "inline" | "local"
 

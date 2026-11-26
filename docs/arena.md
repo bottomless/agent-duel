@@ -1134,22 +1134,37 @@ reply takes the same attachments as a chat message, and both contestants get ide
   and its cache do not change.
   The control plane ships the route and its store before a desktop release relies on them. A
   control plane without the route or without a store answers 404; the engine then sends the media
-  inline and does not ask that control plane again. When a PUT fails, the route answers 5xx, 429 or
-  without a file's URL, a file is still missing right after it was uploaded again, or the proxy
-  answers 503 `arena_media_unavailable`, the media goes inline if the body fits, and the engine sends
-  media inline for the next 5 minutes. A PUT to a host that drops packets waits up to 30 seconds plus
-  the file's time at 1 Mbit/s, and the proxy gives a call's store reads 30 seconds before it answers
-  503, so a failing store holds one step, not every step and not until the function's time runs
-  out. Until an upload has succeeded in the engine process, and during that pause, the size check
-  counts media in full, so an inline body still fits. A file another request of the same process is
-  uploading is waited for, not sent again: both sides of a battle send the user's images at the
-  same moment. Each account may upload 2 GB and 20,000 files a day (arena-service `media-limit.ts`);
-  past that both routes answer 429 until the day ends (UTC). Desktops
-  released before the route POST each file's bytes to `/api/openrouter/api/v1/arena/media`, one
-  function request per file; the control plane keeps that route and writes those files to the same
-  store. BYOK runs in process, sends media inline, and meets only the provider's limits.
-  The provider still takes only so many images per request. Past the body limit or the provider's
-  (`engine-runtime/request-size.ts`), the engine leaves the oldest tool images out, well below the
+  inline and sizes its requests for that, and asks that control plane again after 30 minutes: a
+  deploy can lose its store and get it back. Every other hosted request is sized for references
+  from its first call, so the first request after a start leaves nothing out.
+  A file the storage host does not take goes through the control plane instead: a network can
+  block the storage host and not the control plane. That is the route released desktops use
+  (`/api/openrouter/api/v1/arena/media`), one function request per file, so it takes only a file
+  under the body limit. For the next 30 minutes files go that way first. The store is paused for 5
+  minutes when neither takes a file, the upload route answers 5xx, 429 or without a file's URL, a
+  file is still missing right after it was uploaded again, or the proxy answers 503
+  `arena_media_unavailable`. While it is paused, a request whose body fits sends its media inline
+  without asking the store, so a failing store holds such a request once. A request whose body
+  does not fit still asks, one file at most every 15 seconds, because each ask uploads again and
+  counts against the account's upload limit. When the store fails again the step is retried and
+  then fails. The engine does not leave images out to make such a request fit: that rewrites the
+  prompt prefix (below), and a store that fails for an hour would break the cache of every large
+  chat. An offline machine's answer (503 `arena_network_unavailable`) pauses nothing and is passed
+  on, so the run waits for the network. A PUT to a host that drops packets waits up to 30 seconds
+  plus the file's time at 1 Mbit/s, and the proxy gives a call's store reads 30 seconds before it
+  answers 503, so no step waits until the function's time runs out. A file another request of the
+  same process is uploading is waited for, not sent again: both sides of a battle send the user's
+  images at the same moment. Each account may upload 2 GB and 20,000 files a day (arena-service
+  `media-limit.ts`); past that both routes answer 429 until the day ends (UTC). The 429 has no
+  `Retry-After`, and the engine never passes it on: a session takes a 429 for a provider's rate
+  limit and waits on its hint, so the engine treats it like a store failure. Desktops
+  released before the upload route POST every file to the older route; the control plane keeps it
+  and writes those files to the same store. BYOK runs in process, sends media inline, and meets
+  only the provider's limits.
+  The provider still takes only so many images per request. Past the provider's limit or the body
+  limit (`engine-runtime/request-size.ts`), the engine leaves the oldest tool images out. By
+  reference an image counts about 160 bytes against the body limit, so in practice only a control
+  plane without the upload route reaches it. The engine trims well below the
   limit rather than just enough to fit, with a note in each one's place; the user's pasted images
   go only as far as it takes to fit. Each removal rewrites the prompt prefix, and Claude, cached
   from one breakpoint at the end, then writes the whole conversation again; trimming only to the

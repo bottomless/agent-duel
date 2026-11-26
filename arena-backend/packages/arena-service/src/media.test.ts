@@ -286,7 +286,8 @@ describe("media by reference", () => {
     expect(await refused.json()).toEqual({
       error: { message: "Arena media upload limit reached", type: "arena_media_upload_limit" },
     })
-    expect(refused.headers.get("retry-after")).toBe(String(50 * 60))
+    // A session that got a hint from a released desktop would wait on it instead of trying again.
+    expect(refused.headers.get("retry-after")).toBeNull()
     // Released desktops upload through the other route, which counts the same way.
     expect((await proxy(legacyUpload(new Uint8Array(10).fill(4)))).status).toBe(429)
     expect(host.files.size).toBe(0)
@@ -508,8 +509,7 @@ describe("media by reference", () => {
     }
     const startedAt = Date.now()
     const resolving = resolveMedia(stuck, "user-stuck", body, new Date(), AbortSignal.timeout(50))
-    expect(resolving).rejects.toMatchObject({ name: "TimeoutError" })
-    await resolving.catch(() => undefined)
+    await expect(resolving).rejects.toMatchObject({ name: "TimeoutError" })
     expect(Date.now() - startedAt).toBeLessThan(1_000)
     expect(cancelled).toBe(1)
   })

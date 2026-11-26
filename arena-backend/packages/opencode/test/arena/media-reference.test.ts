@@ -9,9 +9,11 @@ import {
   mediaUploadAnswer,
 } from "@agent-duel/arena-service/media"
 import { mediaUploadLimitError } from "@agent-duel/arena-service/media-limit"
+import { networkUnavailableError } from "@agent-duel/arena-service/request-error"
 import { memoryMediaStore } from "@agent-duel/arena-service/memory-media-store"
 import { AssignmentRegistry, proxy } from "../../src/arena/proxy"
-import { referenceMedia, referencesConfirmed, uploadMedia } from "../../src/arena/media-reference"
+import { referenceMedia, referencesSupported, uploadMedia } from "../../src/arena/media-reference"
+import { carriageOf } from "../../src/arena/runtime"
 
 const assignment = {
   runID: "run-a",
@@ -126,8 +128,13 @@ function controlPlane(options: { readonly user: string; readonly store?: boolean
 const uploadRequests = (seen: ReadonlyArray<Seen>) => seen.filter(({ path }) => path.endsWith("/arena/media-upload"))
 const calls = (seen: ReadonlyArray<Seen>) => seen.filter(({ path }) => path.endsWith("/chat/completions"))
 
-/** A control plane that only answers: upload URLs from `urls`, and `answer` to a contestant call. */
-function scripted(urls: (files: ReadonlyArray<{ digest: string }>) => Response) {
+const storeDown = () => Response.json({ error: { message: "Arena media store is unavailable" } }, { status: 502 })
+
+/**
+ * A control plane that only answers: upload URLs from `urls`, `answer` to a contestant call, and
+ * `relay` to a file sent to it instead of the storage host, which by default its store cannot take.
+ */
+function scripted(urls: (files: ReadonlyArray<{ digest: string }>) => Response, relay: () => Response = storeDown) {
   const seen: string[] = []
   const bodies: string[] = []
   return {
@@ -139,6 +146,7 @@ function scripted(urls: (files: ReadonlyArray<{ digest: string }>) => Response) 
       if (path.endsWith("/media-upload")) {
         return urls((JSON.parse(String(init?.body)) as { files: { digest: string }[] }).files)
       }
+      if (path.endsWith("/arena/media")) return relay()
       bodies.push(String(init?.body))
       return answer()
     },
@@ -164,8 +172,8 @@ describe("media by reference", () => {
   test("the file goes straight to the store, the control plane gets a reference, and OpenRouter the image", async () => {
     const upstream = "http://control-once.invalid/api/openrouter"
     const plane = controlPlane({ user: "direct" })
-    // The request size counts media in full until the store has taken an upload.
-    expect(referencesConfirmed(upstream)).toBe(false)
+    // Sized for references before any upload: nothing is left out of the first request after a start.
+    expect(referencesSupported(upstream)).toBe(true)
 
     for (let round = 0; round < 2; round++) {
       const response = await proxy(contestantRequest(), registry(), {
@@ -193,7 +201,6 @@ describe("media by reference", () => {
     ])
     expect(plane.toOpenRouter).toHaveLength(2)
     for (const body of plane.toOpenRouter) expect(body).toContain(dataUrl)
-    expect(referencesConfirmed(upstream)).toBe(true)
   })
 
   test("without an upload function the file goes out in a plain request, with no Arena credential", async () => {
@@ -325,7 +332,6 @@ describe("media by reference", () => {
     expect(await second).toBeUndefined()
     expect(puts).toBe(1)
     expect(plane.seen).toEqual(["media-upload", "media-upload"])
-    expect(referencesConfirmed(upstream)).toBe(true)
   })
 
   test("a file the store no longer has is uploaded again and the request sent again", async () => {
@@ -351,20 +357,16 @@ describe("media by reference", () => {
 
   test("a file the store still cannot read after its second upload goes inline, and so do the next calls for a while", async () => {
     const upstream = "http://control-losing.invalid/api/openrouter"
-    const { media } = referenceMedia({
-      messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: dataUrl } }] }],
-    })
-    const digest = [...media.keys()][0]!
     const seen: string[] = []
     const execute = async (input: string | URL | Request, init?: RequestInit) => {
       const path = new URL(String(input instanceof Request ? input.url : input)).pathname
       if (path.endsWith("/media-upload")) {
         seen.push("media-upload")
-        return storageUrls([{ digest }])
+        return storageUrls((JSON.parse(String(init?.body)) as { files: { digest: string }[] }).files)
       }
-      const inline = String(init?.body).includes(screenshot)
-      seen.push(inline ? "inline" : "reference")
-      return inline ? answer() : Response.json(mediaMissingError([digest]), { status: 409 })
+      const named = [...String(init?.body).matchAll(/arena-media:sha256:([0-9a-f]{64})/g)].map((match) => match[1]!)
+      seen.push(named.length === 0 ? "inline" : "reference")
+      return named.length === 0 ? answer() : Response.json(mediaMissingError(named), { status: 409 })
     }
     let puts = 0
     const options = {
@@ -379,17 +381,17 @@ describe("media by reference", () => {
     expect((await proxy(contestantRequest(), registry(), options)).status).toBe(200)
     expect(seen).toEqual(["media-upload", "reference", "media-upload", "reference", "inline"])
     expect(puts).toBe(2)
-    // The request size counts media in full again, so the next calls fit inline.
-    expect(referencesConfirmed(upstream)).toBe(false)
+    // The store is paused: a body that fits does not ask it.
     expect((await proxy(contestantRequest(), registry(), options)).status).toBe(200)
     expect(seen.slice(5)).toEqual(["inline"])
-    // A body that cannot go inline fails in a way the engine retries, and its retry is sized inline.
+    // A body that cannot go inline asks all the same, one file first, and fails in a way the engine
+    // retries: none of its images is left out to make it fit.
     expect((await proxy(largeRequest(), registry(), options)).status).toBe(503)
-    expect(seen).toHaveLength(6)
+    expect(seen.slice(6)).toEqual(["media-upload", "media-upload", "reference", "media-upload", "reference"])
     // After the pause the store gets another try.
     setSystemTime(new Date(Date.now() + PAUSE_OVER_MS))
     expect((await proxy(contestantRequest(), registry(), options)).status).toBe(200)
-    expect(seen.slice(6)).toEqual(["reference", "media-upload", "reference", "inline"])
+    expect(seen.slice(11)).toEqual(["reference", "media-upload", "reference", "inline"])
   })
 
   test("a store that cannot give media back sends it inline, and the next calls skip the store for a while", async () => {
@@ -414,12 +416,38 @@ describe("media by reference", () => {
     expect((await proxy(contestantRequest(), registry(), options)).status).toBe(200)
     // No upload again: the file is there, the store just did not give it back.
     expect(seen).toEqual(["media-upload", "reference", "inline"])
-    expect(referencesConfirmed(upstream)).toBe(false)
     expect((await proxy(contestantRequest(), registry(), options)).status).toBe(200)
     expect(seen.slice(3)).toEqual(["inline"])
   })
 
-  test("a control plane without the upload route gets the media inline, and is not asked again", async () => {
+  test("a hosted request is sized for references from its first call, and inline only after a 404", async () => {
+    const target = { url: "http://control-sizing.invalid", mediaByReference: true }
+    const upstream = `${target.url}/api/openrouter`
+    // Counting media in full until an upload had succeeded left images out of the first request
+    // after every start.
+    expect(carriageOf(target)).toBe("reference")
+    // A store that fails changes nothing: a body that then cannot go inline is tried again.
+    const failing = scripted(() => Response.json({ error: { message: "No" } }, { status: 500 }))
+    const sent = (plane: ReturnType<typeof scripted>) =>
+      proxy(contestantRequest(), registry(), {
+        upstream,
+        fetch: plane.execute,
+        mediaUpload: noStorage,
+        mediaByReference: true,
+      })
+    expect((await sent(failing)).status).toBe(200)
+    expect(carriageOf(target)).toBe("reference")
+    // Only a control plane that will never take a reference is sized inline, and not for good.
+    setSystemTime(new Date(Date.now() + PAUSE_OVER_MS))
+    expect((await sent(scripted(() => Response.json({ error: "Not found" }, { status: 404 })))).status).toBe(200)
+    expect(carriageOf(target)).toBe("inline")
+    setSystemTime(new Date(Date.now() + 30 * 60 * 1000 + 1))
+    expect(carriageOf(target)).toBe("reference")
+    expect(carriageOf({ url: target.url })).toBe("local")
+    expect(carriageOf(undefined)).toBe("inline")
+  })
+
+  test("a control plane without the upload route gets the media inline, and is not asked again for a while", async () => {
     const upstream = "http://control-old.invalid/api/openrouter"
     // No store: arena-service answers the route as a control plane from before it does.
     const plane = controlPlane({ user: "old", store: false })
@@ -436,10 +464,23 @@ describe("media by reference", () => {
     expect(plane.toStorage).toHaveLength(0)
     expect(calls(plane.toControlPlane)).toHaveLength(2)
     for (const call of calls(plane.toControlPlane)) expect(call.body).toContain(dataUrl)
-    expect(referencesConfirmed(upstream)).toBe(false)
+    expect(referencesSupported(upstream)).toBe(false)
+    // A deploy can lose its store and get it back: the route is asked again later.
+    setSystemTime(new Date(Date.now() + 30 * 60 * 1000 + 1))
+    expect(
+      (
+        await proxy(contestantRequest(), registry(), {
+          upstream,
+          fetch: plane.execute,
+          mediaUpload: plane.mediaUpload,
+          mediaByReference: true,
+        })
+      ).status,
+    ).toBe(200)
+    expect(uploadRequests(plane.toControlPlane)).toHaveLength(2)
   })
 
-  test("an upload the storage host does not take sends the media inline, and the next calls skip the store for a while", async () => {
+  test("an upload neither the storage host nor the control plane takes sends the media inline, and the next calls skip the store for a while", async () => {
     for (const [name, put] of [
       ["refusing", async () => new Response("signature expired", { status: 403 })],
       [
@@ -463,29 +504,26 @@ describe("media by reference", () => {
         mediaByReference: true,
       }
       expect((await proxy(contestantRequest(), registry(), options)).status).toBe(200)
-      expect(referencesConfirmed(upstream)).toBe(true)
       failing = true
       for (let round = 0; round < 2; round++) {
         expect((await proxy(contestantRequest([dataUrl, large[0]!]), registry(), options)).status).toBe(200)
       }
-      // One failed PUT pauses the store: the second call neither asks for a URL nor waits on a PUT,
-      // and the request size counts media in full until an upload succeeds again.
-      expect(plane.seen).toEqual(["media-upload", "completions", "media-upload", "completions", "completions"])
+      // The control plane is offered the file the storage host did not take. One failed upload
+      // pauses the store: the second call neither asks for a URL nor waits on a PUT.
+      expect(plane.seen).toEqual(["media-upload", "completions", "media-upload", "media", "completions", "completions"])
       expect(puts).toBe(2)
       expect(plane.bodies[1]).toContain(dataUrl)
       expect(plane.bodies[2]).toContain(dataUrl)
-      expect(referencesConfirmed(upstream)).toBe(false)
       setSystemTime(new Date(Date.now() + PAUSE_OVER_MS))
       failing = false
       expect((await proxy(contestantRequest([dataUrl, large[0]!]), registry(), options)).status).toBe(200)
-      expect(plane.seen.slice(5)).toEqual(["media-upload", "completions"])
+      expect(plane.seen.slice(6)).toEqual(["media-upload", "completions"])
       expect(plane.bodies[3]).not.toContain(screenshot)
-      expect(referencesConfirmed(upstream)).toBe(true)
       setSystemTime()
     }
   })
 
-  test("a file the storage host does not take fails a body that cannot go inline in a way the engine retries", async () => {
+  test("a file neither the storage host nor the control plane takes fails a body that cannot go inline in a way the engine retries", async () => {
     const upstream = "http://storage-down.invalid/api/openrouter"
     const plane = scripted(storageUrls)
     const response = await proxy(largeRequest(), registry(), {
@@ -499,7 +537,158 @@ describe("media by reference", () => {
     expect(await response.json()).toEqual({
       error: { message: "Arena contestant request failed", type: "arena_upstream_error" },
     })
-    expect(plane.seen).toEqual(["media-upload"])
+    expect(plane.seen).toEqual(["media-upload", "media", "media"])
+  })
+
+  test("a control plane that answers 404 to a file's bytes fails the upload, and references stay on", async () => {
+    const upstream = "http://control-norelay.invalid/api/openrouter"
+    const plane = scripted(storageUrls, () => Response.json({ error: "Not found" }, { status: 404 }))
+    const response = await proxy(largeRequest(), registry(), {
+      upstream,
+      fetch: plane.execute,
+      mediaUpload: async () => new Response(null, { status: 503 }),
+      mediaByReference: true,
+    })
+    // Tried again at the same size: only the upload route says a control plane has no store.
+    expect(response.status).toBe(502)
+    expect(referencesSupported(upstream)).toBe(true)
+  })
+
+  test("the control plane's answer to a file's bytes: its limit is a store failure, a refusal is the request's", async () => {
+    for (const [status, expected] of [
+      [429, 502],
+      [403, 403],
+    ] as const) {
+      const upstream = `http://control-relay-${status}.invalid/api/openrouter`
+      const plane = scripted(storageUrls, () =>
+        Response.json({ error: { message: "No" } }, { status, headers: { "Retry-After": "36000" } }),
+      )
+      const response = await proxy(largeRequest(), registry(), {
+        upstream,
+        fetch: plane.execute,
+        mediaUpload: async () => new Response(null, { status: 503 }),
+        mediaByReference: true,
+      })
+      expect(response.status).toBe(expected)
+      if (status === 429) expect(response.headers.get("retry-after")).toBeNull()
+      expect(plane.bodies).toHaveLength(0)
+    }
+  })
+
+  test("an offline machine's answer is passed on from both upload routes, and pauses and throttles nothing", async () => {
+    const offline = () => Response.json(networkUnavailableError(), { status: 503 })
+    for (const [name, urls, relay, put] of [
+      ["route", offline, undefined, noStorage],
+      [
+        "relay",
+        storageUrls,
+        offline,
+        async (): Promise<Response> => {
+          throw new Error("getaddrinfo ENOTFOUND")
+        },
+      ],
+    ] as const) {
+      const upstream = `http://control-offline-${name}.invalid/api/openrouter`
+      let online = false
+      const plane = scripted(
+        (files) => (online ? storageUrls(files) : urls(files)),
+        () => (online ? Response.json({ sha256: "digest" }) : (relay ?? storeDown)()),
+      )
+      const options = {
+        upstream,
+        fetch: plane.execute,
+        mediaUpload: (input: string, init: RequestInit) =>
+          online ? Promise.resolve(new Response(null, { status: 200 })) : put(input, init),
+        mediaByReference: true,
+      }
+      // The session waits for the network on this answer without spending a retry, so every retry
+      // has to get it: none may meet a store that looks paused.
+      for (let retry = 0; retry < 3; retry++) {
+        const response = await proxy(largeRequest(), registry(), options)
+        expect(response.status).toBe(503)
+        expect(await response.json()).toEqual(networkUnavailableError())
+      }
+      online = true
+      expect((await proxy(largeRequest(), registry(), options)).status).toBe(200)
+      expect(Buffer.byteLength(plane.bodies[0]!)).toBeLessThan(10_000)
+    }
+  })
+
+  test("a storage host this machine cannot reach: files go through the control plane, and skip the storage host for a while", async () => {
+    const upstream = "http://control-relay.invalid/api/openrouter"
+    const plane = controlPlane({ user: "relayed" })
+    let puts = 0
+    const options = {
+      upstream,
+      fetch: plane.execute,
+      mediaUpload: async (): Promise<Response> => {
+        puts++
+        throw new Error("connect ETIMEDOUT")
+      },
+      mediaByReference: true,
+    }
+    const relays = () => plane.toControlPlane.filter(({ path }) => path.endsWith("/arena/media"))
+    expect((await proxy(contestantRequest(), registry(), options)).status).toBe(200)
+    expect(puts).toBe(1)
+    expect(relays()).toHaveLength(1)
+    // By reference all the same: the control plane wrote the file to the store itself.
+    expect(calls(plane.toControlPlane)[0]!.body).toContain("arena-media:sha256:")
+    expect(plane.host.files.size).toBe(1)
+    expect(plane.toOpenRouter[0]).toContain(dataUrl)
+    // The next file neither waits on the storage host nor asks for a URL it would not use.
+    expect((await proxy(contestantRequest([dataUrl, large[0]!]), registry(), options)).status).toBe(200)
+    expect(puts).toBe(1)
+    expect(uploadRequests(plane.toControlPlane)).toHaveLength(1)
+    expect(relays()).toHaveLength(2)
+    expect(calls(plane.toControlPlane)[1]!.body).not.toContain(screenshot)
+    // After a while the storage host gets another try.
+    setSystemTime(new Date(Date.now() + 30 * 60 * 1000 + 1))
+    expect((await proxy(largeRequest(), registry(), options)).status).toBe(200)
+    expect(puts).toBe(2)
+    expect(uploadRequests(plane.toControlPlane)).toHaveLength(2)
+    expect(relays()).toHaveLength(3)
+    expect(plane.host.files.size).toBe(3)
+    // A file over what one hosted request carries has no other way in.
+    const poster = `data:image/png;base64,${Buffer.alloc(6_000_000, 3).toString("base64")}`
+    expect((await proxy(contestantRequest(poster), registry(), options)).status).toBe(502)
+    expect(puts).toBe(3)
+    expect(relays()).toHaveLength(3)
+  })
+
+  test("a body that cannot go inline asks a paused store for one file, not on every retry, and goes by reference once it is back", async () => {
+    const upstream = "http://control-recovering.invalid/api/openrouter"
+    const plane = scripted(storageUrls)
+    let failing = true
+    let puts = 0
+    const options = {
+      upstream,
+      fetch: plane.execute,
+      mediaUpload: async () => {
+        puts++
+        return new Response(null, { status: failing ? 500 : 200 })
+      },
+      mediaByReference: true,
+    }
+    // The store fails: this body fits, so it goes inline, and the store is paused.
+    expect((await proxy(contestantRequest(), registry(), options)).status).toBe(200)
+    expect(plane.bodies[0]).toContain(dataUrl)
+    expect(puts).toBe(1)
+    // Nothing is left out of a body that does not fit: the engine tries the step again. The paused
+    // store is asked for one of its two files, and the retries that follow at once do not ask.
+    for (let retry = 0; retry < 3; retry++) {
+      expect((await proxy(largeRequest(), registry(), options)).status).toBe(502)
+    }
+    expect(puts).toBe(2)
+    expect(plane.seen).toEqual(["media-upload", "media", "completions", "media-upload", "media"])
+    expect(plane.bodies).toHaveLength(1)
+    failing = false
+    setSystemTime(new Date(Date.now() + 15_001))
+    expect((await proxy(largeRequest(), registry(), options)).status).toBe(200)
+    expect(puts).toBe(4)
+    expect(Buffer.byteLength(plane.bodies[1]!)).toBeLessThan(10_000)
+    // The store took a file, so a body that fits goes by reference again too.
+    expect((await proxy(contestantRequest(), registry(), options)).status).toBe(200)
+    expect(plane.bodies[2]).not.toContain(screenshot)
   })
 
   test("an upload route that refuses, or answers without a file's URL, sends the media inline when the body fits", async () => {
@@ -530,7 +719,6 @@ describe("media by reference", () => {
           : ["media-upload", "completions", "media-upload", "completions"],
       )
       for (const body of plane.bodies) expect(body).toContain(dataUrl)
-      expect(referencesConfirmed(upstream)).toBe(false)
     }
     expect(closed).toBe(1)
   })
@@ -539,12 +727,17 @@ describe("media by reference", () => {
     for (const [status, expected] of [
       [404, 503],
       [500, 500],
+      // The account's upload limit: tried again like a store failure, with no hint to wait on.
+      [429, 502],
     ] as const) {
       const upstream = `http://control-${status}.invalid/api/openrouter`
       let completions = 0
       const execute = async (input: string | URL | Request) => {
         const path = new URL(String(input instanceof Request ? input.url : input)).pathname
-        if (path.endsWith("/media-upload")) return Response.json({ error: { message: "No" } }, { status })
+        if (path.endsWith("/media-upload")) {
+          const headers = status === 429 ? { "Retry-After": "36000" } : undefined
+          return Response.json({ error: { message: "No" } }, { status, headers })
+        }
         completions++
         return answer()
       }
@@ -555,6 +748,7 @@ describe("media by reference", () => {
         mediaByReference: true,
       })
       expect(response.status).toBe(expected)
+      if (status === 429) expect(response.headers.get("retry-after")).toBeNull()
       expect(completions).toBe(0)
     }
   })

@@ -765,7 +765,10 @@ function mediaStoreFailed() {
   return Response.json({ error: { message: "Arena media store is unavailable" } }, { status: 502 })
 }
 
-/** A refusal when the upload would take the account past its limit; the engine then sends inline. */
+/**
+ * A refusal when the upload would take the account past its limit. The engine then sends a body
+ * that fits inline, and tries a larger one again.
+ */
 async function overUploadLimit(
   context: ArenaContext,
   db: ArenaDb,
@@ -783,8 +786,9 @@ async function overUploadLimit(
     return Response.json({ error: { message: "Arena media upload is unavailable" } }, { status: 503 })
   }
   if (allowed) return undefined
-  const retryAfter = Math.ceil((limit.windowMs - (now.getTime() % limit.windowMs)) / 1000)
-  return Response.json(mediaUploadLimitError(), { status: 429, headers: { "Retry-After": String(retryAfter) } })
+  // No Retry-After: released desktops pass the refusal to the session, which would wait on the
+  // hint, fifteen minutes at a time, instead of trying the step again.
+  return Response.json(mediaUploadLimitError(), { status: 429 })
 }
 
 export async function handleOpenRouterRequest(request: Request, context: ArenaContext) {

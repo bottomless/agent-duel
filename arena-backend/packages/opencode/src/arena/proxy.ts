@@ -24,9 +24,17 @@ import {
 import { COMPACTION_HEADER, COMPACTION_OFFER } from "@agent-duel/arena-service/request-budget"
 import { HEARTBEAT_HEADER, REPLAY_PATH, REPLAY_UNAVAILABLE_LINE } from "@agent-duel/arena-service/stream-recovery"
 import { KEEP_ALIVE_HEADER } from "@agent-duel/arena-service/keep-alive"
-import { readMediaMissing, readMediaUnavailable } from "@agent-duel/arena-service/media"
+import { mediaUnavailableError, readMediaMissing, readMediaUnavailable } from "@agent-duel/arena-service/media"
 import type { KeepAlive, Ping, PingResult } from "./keep-alive"
-import { forgetUploads, pauseReferences, referenceMedia, sendsInline, uploadMedia, type Media } from "./media-reference"
+import {
+  forgetUploads,
+  pauseReferences,
+  referenceMedia,
+  referencesSupported,
+  storePaused,
+  uploadMedia,
+  type Media,
+} from "./media-reference"
 import { REQUEST_BYTES_LIMIT } from "./engine-runtime/request-size"
 
 // The control plane lost its upload route after this request was sized for references.
@@ -920,7 +928,11 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
     let inline: string | undefined
     const inlineText = () => (inline ??= JSON.stringify(rewritten))
     const fitsInline = () => Buffer.byteLength(inlineText()) <= REQUEST_BYTES_LIMIT
-    const referenced = options.mediaByReference && !sendsInline(upstream) ? referenceMedia(rewritten) : undefined
+    // While the store is paused, a body that fits goes inline without asking it.
+    const referenced =
+      options.mediaByReference && referencesSupported(upstream) && !(storePaused(upstream) && fitsInline())
+        ? referenceMedia(rewritten)
+        : undefined
     const upload = async (media: Iterable<Media>): Promise<UploadFailure | undefined> => {
       requestState.phase = "upload"
       try {
@@ -931,16 +943,17 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
           routing: { "X-Arena-Assignment-ID": assignment.assignmentID, "X-Arena-Scope-ID": assignment.scopeID },
           media,
           signal: dispatch.signal,
+          required: () => !fitsInline(),
         })
       } catch (error) {
         if (dispatch.signal.aborted) throw error
         return { thrown: error }
       }
     }
-    // When an upload fails, the media goes inline if the body still fits: the size check counts media
-    // in full until this process has seen an upload succeed. A body sized for references that does
-    // not fit answers the upload's own failure. After a 404 it answers a retryable failure instead.
-    // Either way the retry is sized inline: the route is missing, or the store is paused.
+    // When an upload fails, the media goes inline if the body fits. A body that does not fit answers
+    // the failure, and the engine tries the step again: its images are never left out to make it
+    // fit, which would rewrite the prompt prefix on a store's bad minute. Only after a 404 is the
+    // retry sized inline, because that control plane will never take references.
     const sendInline = async (failure: UploadFailure) => {
       if (fitsInline()) {
         if (failure instanceof Response) await failure.body?.cancel().catch(() => undefined)
@@ -974,11 +987,12 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
           unavailable: response.status === 503 && readMediaUnavailable(text),
         }
       }
-      // The store cannot give media back for now: this request and the next ones go inline.
+      // The store cannot give media back for now: this request and the next ones go inline when
+      // they fit, and are otherwise tried again.
       const goInline = async () => {
         await response.body?.cancel().catch(() => undefined)
         pauseReferences(upstream)
-        return sendInline("unsupported")
+        return sendInline(Response.json(mediaUnavailableError(), { status: 503 }))
       }
       const first = await mediaAnswer()
       if (first.unavailable) response = await goInline()
