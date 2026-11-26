@@ -390,6 +390,112 @@ describe("compaction tail across the vote graft", () => {
       expect(recentText(checkpoint)).toContain("TAILMARK-1 output")
     }),
   )
+
+  it.effect("keeps a verbatim tail that starts at a reply in the chat and in the next turn's fork", () =>
+    Effect.gen(function* () {
+      const sessions = yield* CoreSession.Service
+      const arena = yield* ArenaSession
+      const database = yield* Database.Service
+      const location = Location.Ref.make({ directory: AbsolutePath.make("/arena-compaction-reply-tail-test") })
+      const canonical = yield* sessions.create({ location })
+      const plain = yield* sessions.create({ location })
+      yield* seedGraftMessage({
+        sessionID: canonical.id,
+        seq: 0,
+        message: {
+          id: SessionMessage.ID.make("msg_rtail_0_earlier"),
+          type: "user",
+          text: "An earlier turn",
+          time: { created: at },
+        },
+      })
+      const winner = yield* arena.fork({ sessionID: canonical.id })
+      // Since OpenCode 2.4 the kept tail can start at any message, so the compaction names the tool step in
+      // `keepID`, not the prompt.
+      const promptID = SessionMessage.ID.make("msg_rtail_1_prompt")
+      yield* seedGraftMessage({
+        sessionID: winner.id,
+        seq: 1,
+        message: { id: promptID, type: "user", text: "Run the numbered logs.", time: { created: at } },
+      })
+      const stepID = SessionMessage.ID.make("msg_rtail_2_step")
+      yield* seedGraftMessage({
+        sessionID: winner.id,
+        seq: 2,
+        message: {
+          id: stepID,
+          type: "assistant",
+          agent: Agent.ID.make("build"),
+          model: { providerID: Provider.ID.make("arena"), id: Model.ID.make("contestant") },
+          content: [
+            {
+              type: "tool",
+              id: "call_tail",
+              name: "shell",
+              state: {
+                status: "completed",
+                input: { command: "printf RTAILMARK-1" },
+                content: [{ type: "text", text: "RTAILMARK-1 output" }],
+              },
+              time: { created: at, ran: at, completed: at },
+            },
+          ],
+          time: { created: at, completed: at },
+        },
+      })
+      yield* seedGraftMessage({
+        sessionID: winner.id,
+        seq: 3,
+        message: {
+          id: SessionMessage.ID.make("msg_rtail_3_compaction"),
+          type: "compaction",
+          status: "completed",
+          reason: "auto",
+          summary: "## Objective\nRun the numbered logs.",
+          metadata: { keepID: stepID },
+          time: { created: at },
+        },
+      })
+      const source = yield* arena.canonicalMessages(winner.id)
+      // History fills `metadata.recent` from the `keepID` reference; an unresolved reference leaves it unset.
+      const recentText = (message: SessionMessage.Info | undefined) =>
+        message?.type === "compaction" && typeof message.metadata?.recent === "string" ? message.metadata.recent : ""
+      const recentOf = (sessionID: Session.ID) =>
+        SessionHistory.load(database.db, sessionID, "latest").pipe(Effect.map((history) => recentText(history[0])))
+      // The winner itself still finds its tail.
+      expect(yield* recentOf(winner.id)).toContain("RTAILMARK-1 output")
+
+      // A copy under new IDs that leaves `keepID` alone loses the tail (OpenCode 2.1+ stores a reference).
+      for (const message of messagesToGraft(source, promptID))
+        yield* arena.copyMessage({
+          sourceSessionID: winner.id,
+          sourceMessageID: message.id,
+          targetSessionID: plain.id,
+          targetMessageID: SessionMessage.ID.make(`${message.id}_plain`.replace("msg_rtail", "msg_zz_rplain")),
+        })
+      expect(yield* recentOf(plain.id)).toBe("")
+
+      yield* copyKeepingReferences({
+        sessions: arena,
+        sourceSessionID: winner.id,
+        targetSessionID: canonical.id,
+        source,
+        messages: messagesToGraft(source, promptID),
+        boundary: promptID,
+      })
+      const chatTail = yield* recentOf(canonical.id)
+      expect(chatTail).toContain("RTAILMARK-1 output")
+
+      // Turn 2's contestants start from a Core fork of the chat, which remaps the reference again.
+      const next = yield* arena.fork({ sessionID: canonical.id })
+      const nextHistory = yield* SessionHistory.load(database.db, next.id, "latest")
+      const checkpoint = nextHistory[0]
+      expect(checkpoint?.type).toBe("compaction")
+      if (checkpoint?.type !== "compaction") return
+      expect(checkpoint.summary).toContain("Run the numbered logs.")
+      expect(recentText(checkpoint)).toContain("RTAILMARK-1 output")
+    }),
+  )
 })
 
 describe("Arena V2 native session storage", () => {
