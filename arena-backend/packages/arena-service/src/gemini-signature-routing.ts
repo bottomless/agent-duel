@@ -16,9 +16,14 @@ function routingSlug(provider: string | null) {
 /** Intersect the signing provider with the draw's policy. `only: []` is not a denial. */
 export function geminiSignatureRouting(policy: ModelProfile["routing"], signers: ReadonlySet<string | null>) {
   if (!signers.size) return policy
-  const slugs = new Set(Array.from(signers, routingSlug))
+  const slugs = new Set(Array.from(signers, routingSlug).filter((slug) => slug !== undefined))
   const [slug] = slugs
-  if (!slug || slugs.size !== 1) return undefined
+  if (!slug) {
+    const reason = signers.has(null) ? "missing signer" : "unknown signer"
+    console.warn(`[arena-service] Gemini signature pinning skipped: ${reason}`)
+    return policy
+  }
+  if (slugs.size !== 1) return undefined
   if (policy.only === undefined) return { ...policy, only: [slug] }
   if (!Array.isArray(policy.only)) return undefined
   // Keep tier/region restrictions (e.g. google-vertex/global); replacing them with the base

@@ -1369,7 +1369,8 @@ field. Each layer has its own file:
   reasoning, restrict it to the provider that issued the signature: Vertex rejects signatures from
   Google AI Studio. Seal the signer from the upstream response with the reasoning.
   A rate limit on the signer follows the usual retry path; it must not send that signature to the
-  other provider. Envelopes issued before signer tracking keep their original routing.
+  other provider. If no replayed signature has a recognized signer, keep the assignment's routing
+  policy. This also applies to envelopes issued before signer tracking.
   Gemini Carbon on Google AI Studio sometimes refuses a request that
   ends on plain-text tool results with a bare 400 `INVALID_ARGUMENT`, and accepts the same text in
   an object. On that exact refusal the proxy wraps each plain-text result in the pending tool batch

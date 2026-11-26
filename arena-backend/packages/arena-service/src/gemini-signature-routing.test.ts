@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test"
+import { expect, spyOn, test } from "bun:test"
 import type { ArenaDb } from "./collection"
 import { createArenaService } from "./service"
 
@@ -84,12 +84,36 @@ test("independent loops in one assignment follow their own signatures; a sibling
 })
 
 test.each([
-  { provider: "Google AI Studio", policy: { only: ["google-vertex/global"] } },
-  { provider: undefined, policy: {} },
-  { provider: "unrecognized host", policy: {} },
-])("does not guess the signer or widen the pool ($provider)", async ({ provider, policy }) => {
-  const { sent, replies, invoke } = harness(carbon, policy)
-  replies.push(chatResponse(provider))
+  { provider: undefined, reason: "missing signer" },
+  { provider: "unrecognized host", reason: "unknown signer" },
+])("keeps the assignment's routing and logs why pinning was skipped: $reason", async ({ provider, reason }) => {
+  const { sent, replies, invoke } = harness()
+  const warn = spyOn(console, "warn").mockImplementation(() => {})
+  try {
+    replies.push(chatResponse(provider))
+    const message = await assistant(await invoke({ messages: [] }))
+    expect((await invoke({ messages: [message, tool] })).status).toBe(200)
+    expect(sent[1]?.provider).toEqual(routing)
+    expect(sent[1]?.messages).toEqual([{ role: "assistant", reasoning_details: [signed] }, tool])
+    expect(warn.mock.calls).toEqual([[`[arena-service] Gemini signature pinning skipped: ${reason}`]])
+  } finally {
+    warn.mockRestore()
+  }
+})
+
+test("an unidentified signer does not override a known signer's pin", async () => {
+  const { sent, replies, invoke } = harness()
+  replies.push(chatResponse(undefined), chatResponse("Google"))
+  const unidentified = await assistant(await invoke({ messages: [] }))
+  const vertex = await assistant(await invoke({ messages: [] }))
+  const continuation = await invoke({ messages: [unidentified, vertex, tool] })
+  expect(continuation.status).toBe(200)
+  expect(sent[2]?.provider).toEqual({ ...routing, only: ["google-vertex/global"] })
+})
+
+test("does not widen the pool to admit a known signer", async () => {
+  const { sent, replies, invoke } = harness(carbon, { only: ["google-vertex/global"] })
+  replies.push(chatResponse("Google AI Studio"))
   const message = await assistant(await invoke({ messages: [] }))
   const refused = await invoke({ messages: [message, tool] })
   expect(refused.status).toBe(400)
@@ -143,8 +167,10 @@ test("a conflicting stream footer cannot relabel a buffered signature", async ()
     ]),
   )
   const details = streamedDetails(await (await invoke({ messages: [], stream: true })).text())
-  expect((await invoke({ messages: [{ role: "assistant", reasoning_details: details }, tool] })).status).toBe(400)
-  expect(sent).toHaveLength(1)
+  const continuation = await invoke({ messages: [{ role: "assistant", reasoning_details: details }, tool] })
+  expect(continuation.status).toBe(200)
+  expect(sent[1]?.provider).toEqual(routing)
+  expect(sent[1]?.messages).toEqual([{ role: "assistant", reasoning_details: [signed] }, tool])
 })
 
 test("a signed Carbon tool continuation stays on AI Studio through a 429 and retry", async () => {
