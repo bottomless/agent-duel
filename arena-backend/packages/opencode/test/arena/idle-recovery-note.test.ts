@@ -46,9 +46,13 @@ test("an output-limit cut gets its own note only when the response did nothing b
   const reasoning = { type: "reasoning", text: "Planning the level" }
   expect(outputLimitNote(assistant([reasoning]))).toBe(ArenaResponseRecovery.REASONING_LIMIT)
   expect(outputLimitNote(assistant([reasoning, reasoning]))).toBe(ArenaResponseRecovery.REASONING_LIMIT)
-  // Core's own note fits a long answer or an unfinished write.
+  // Blank text is no reply: Arena drops such a response from the next request (`reasoningContext`).
+  expect(outputLimitNote(assistant([{ type: "text", text: "\n" }, reasoning]))).toBe(
+    ArenaResponseRecovery.REASONING_LIMIT,
+  )
+  // Core's own note fits a long answer or work that already ran.
   expect(outputLimitNote(assistant([reasoning, { type: "text", text: "A partial answer" }]))).toBeUndefined()
-  expect(outputLimitNote(assistant([reasoning, tool("call_cut", false)]))).toBeUndefined()
+  expect(outputLimitNote(assistant([reasoning, tool("call_ran", true)]))).toBeUndefined()
   expect(outputLimitNote(assistant([]))).toBeUndefined()
   expect(outputLimitNote(undefined)).toBeUndefined()
 })

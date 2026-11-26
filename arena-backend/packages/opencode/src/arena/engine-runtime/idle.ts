@@ -76,14 +76,15 @@ export function idleRecoveryNote(message: SessionMessage.Info | undefined) {
 }
 
 /**
- * The note for a response cut at its output limit, when it did nothing but reason. Undefined keeps Core's own
- * note, which fits a long answer or an unfinished write.
+ * The note for a response cut at its output limit with no reply: reasoning and at most blank text, the same rule
+ * `reasoningContext` uses to leave such a response out of the next request. Undefined keeps Core's own note, which
+ * fits a long answer or work that already ran.
  */
 export function outputLimitNote(message: SessionMessage.Info | undefined) {
   const reasoningOnly =
     message?.type === "assistant" &&
-    message.content.length > 0 &&
-    message.content.every((part) => part.type === "reasoning")
+    message.content.some((part) => part.type === "reasoning") &&
+    !message.content.some((part) => part.type !== "reasoning" && (part.type !== "text" || part.text.trim() !== ""))
   return reasoningOnly ? ArenaResponseRecovery.REASONING_LIMIT : undefined
 }
 

@@ -323,6 +323,37 @@ test.each(["empty", "reasoning", "partial"] as const)(
   },
 )
 
+test("a response cut at its output limit while only reasoning is retried with the reasoning-limit note", async () => {
+  const requests: { messages: { role: string; content: unknown }[] }[] = []
+  await runner(
+    async (request) => {
+      if (request.headers.get("x-arena-generation-classification") !== "generation") return reply("Title")
+      requests.push((await request.json()) as (typeof requests)[number])
+      if (requests.length > 1) return reply("Done")
+      return new Response(
+        [
+          { id: "thinking", choices: [{ index: 0, delta: { reasoning: "Planning every step" }, finish_reason: null }] },
+          { id: "thinking", choices: [{ index: 0, delta: {}, finish_reason: "length" }] },
+        ]
+          .map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`)
+          .join("") + "data: [DONE]\n\n",
+        { headers: { "content-type": "text/event-stream" } },
+      )
+    },
+    async (sessions, id) => {
+      await prompt(sessions, id, "Build the level")
+      const messages = await Effect.runPromise(sessions.messages({ sessionID: id, order: "asc" }))
+      expect(messages.filter((message) => message.type === "synthetic")).toMatchObject([
+        { text: ArenaResponseRecovery.REASONING_LIMIT },
+      ])
+    },
+  )
+  expect(requests).toHaveLength(2)
+  // The cut response is left out, so the model reads the note right after the prompt it never answered.
+  expect(requests[1]?.messages.some((message) => message.role === "assistant")).toBe(false)
+  expect(JSON.stringify(requests[1]?.messages.at(-1))).toContain(ArenaResponseRecovery.REASONING_LIMIT)
+})
+
 test("only the exact neutral 413 is converted and history eligibility stops at a checkpoint", async () => {
   const request = new Request("http://test.invalid", { headers: { "x-arena-compaction": "auto" } })
   for (const response of [
