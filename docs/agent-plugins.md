@@ -57,7 +57,7 @@ skill names by scope. It carries no file text or absolute path, since runs mirro
 ## Decisions
 
 Global plugins wait for one review (the sidebar callout); after it, new global plugins import on
-their own and the app shows a toast; Settings → Plugins switches them later. Project plugins wait
+their own and the app shows a toast; Settings → Instructions, skills and MCP switches them later. Project plugins wait
 for a decision in that project (the line below the composer), and the project's settings page
 switches them later. Every undecided plugin starts checked. Decisions live in
 `$PASEO_HOME/agent-plugins/state.json`, never in the user's repository or OpenCode config.

@@ -152,6 +152,9 @@ function matchesSectionSearch(query: string, item: SidebarSectionItem, t: TFunct
       "settings.general.toolCallDetail",
     ];
   if (item.id === "terminal") keys = ["settings.general.terminalScrollback"];
+  // The tab is named for what it holds, so the sources stay findable by name.
+  if (item.id === "agent-plugins")
+    keys = ["agentPlugins.description", "agentPlugins.instructions", "agentPlugins.settings"];
   if (item.id === "browser") keys = ["settings.general.browserData"];
   if (item.id === "general")
     keys = [
@@ -170,12 +173,17 @@ interface HostSectionItem {
   id: HostSectionSlug;
   labelKey: string;
   icon: ComponentType<{ size: number; color: string; strokeWidth?: number }>;
+  /** Keeps its route and title, without a tab in the sidebar or a search result. */
+  hidden?: boolean;
 }
 
 const HOST_SECTION_ITEMS: HostSectionItem[] = [
   { id: "projects", labelKey: "settings.hostSections.projects", icon: FolderGit2 },
-  { id: "plugins", labelKey: "settings.hostSections.plugins", icon: Blocks },
+  // Agent Duel ships no app plugins and installed ones stay off, and the tab shared the name
+  // "Plugins" with the imported Claude Code and Codex plugins.
+  { id: "plugins", labelKey: "settings.hostSections.plugins", icon: Blocks, hidden: true },
 ];
+const LISTED_HOST_SECTION_ITEMS = HOST_SECTION_ITEMS.filter((item) => !item.hidden);
 
 function renderHostSettingsContent(view: Extract<SettingsView, { kind: "host" }>): ReactNode {
   switch (view.section) {
@@ -438,7 +446,7 @@ function SettingsSidebar({
       isSectionAvailable(item, isDesktopApp, hardwareKeyboardPresent) &&
       matchesSectionSearch(query, item, t),
   );
-  const hostItems = HOST_SECTION_ITEMS.filter((item) =>
+  const hostItems = LISTED_HOST_SECTION_ITEMS.filter((item) =>
     matchesSettingsSearch(query, t(item.labelKey)),
   );
   const insets = useSafeAreaInsets();
@@ -667,7 +675,7 @@ export default function SettingsScreen({ view }: SettingsScreenProps) {
       matchesSectionSearch(search, item, t),
   );
   const hostSearchResults = activeHostServerId
-    ? HOST_SECTION_ITEMS.filter((item) => matchesSettingsSearch(search, t(item.labelKey)))
+    ? LISTED_HOST_SECTION_ITEMS.filter((item) => matchesSettingsSearch(search, t(item.labelKey)))
     : [];
   const content: ReactNode = (() => {
     if (search.trim()) {

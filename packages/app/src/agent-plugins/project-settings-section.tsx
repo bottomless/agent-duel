@@ -14,9 +14,9 @@ import { SettingsPluginRow } from "./settings-section";
 import { useAgentPlugins } from "./use-agent-plugins";
 
 /**
- * Project settings → Claude Code and Codex: this project's instruction file and plugins, each
- * switched on or off on its own. An undecided plugin shows as off until the user decides, here or
- * in the line below the composer; an undecided instruction file shows as on, since it loads.
+ * Project settings → Instructions, skills and MCP: this project's instruction file and plugins,
+ * each switched on or off on its own. An undecided plugin shows as off until the user decides, here
+ * or in the line below the composer; an undecided instruction file shows as on, since it loads.
  */
 export function ProjectPluginsSettings({
   serverId,

@@ -12,9 +12,9 @@ import { PluginRow } from "./review-sheet";
 import { useAgentPlugins } from "./use-agent-plugins";
 
 /**
- * Settings → Claude Code and Codex: the user's own instruction files, switched any time, and the
- * global plugins, managed here after the first review. Project plugins are managed in each
- * project's settings.
+ * Settings → Instructions, skills and MCP: the user's own instruction files, switched any time,
+ * and the global plugins, managed here after the first review. Project plugins are managed in
+ * each project's settings.
  */
 export function AgentPluginsSection({ serverId }: { serverId: string }) {
   const { t } = useTranslation();
