@@ -52,8 +52,8 @@ export type ClaimedFlow = z.infer<typeof claimedFlowSchema>;
 // The open report waits on nothing the user sees, so a slow control plane only loses one count.
 const APP_OPENED_TIMEOUT_MS = 5_000;
 // The app claims one poll at a time, so a claim that never answers would hold sign-in up for good.
-// Long enough for a cold control plane. A claim cut off after the control plane handed the session
-// over loses it, and the next claim reads expired.
+// Long enough for a cold control plane. The control plane answers a repeated claim with the same
+// session for a minute after the first, so the app's next poll recovers a claim cut off here.
 const CLAIM_TIMEOUT_MS = 15_000;
 
 export interface AccountsBackendOptions {

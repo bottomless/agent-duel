@@ -70,8 +70,9 @@ the session. Electron opens the system browser, and an email link may be opened 
 1. The app opens a flow through the daemon and receives a `flowId` and secret from the control plane.
 2. The browser completes OAuth or opens the email link on the public control-plane origin.
 3. The control plane mints a session and attaches it to the flow.
-4. The app polls the daemon with the flow secret. The daemon claims the token once, verifies its
-   signature, and returns it to the app.
+4. The app polls the daemon with the flow secret. The daemon claims the token, verifies its
+   signature, and returns it to the app. The control plane answers the same claim with the same
+   token for a minute after the first, so a claim whose answer was lost or given up is asked again.
 
 Desktop flows include a temporary loopback return address owned by the initiating Electron window.
 The control-plane success page links to it as **Open Agent Duel**. Use a link, never a form: Safari

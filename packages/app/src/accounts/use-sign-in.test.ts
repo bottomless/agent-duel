@@ -106,7 +106,7 @@ describe("useSignIn claim polling", () => {
       inFlight.now += 1;
       inFlight.max = Math.max(inFlight.max, inFlight.now);
       const answer = answers.shift() ?? { status: "expired" };
-      // The control plane hands a session over once; a claim after it answers expired at once.
+      // Past the control plane's repeat window a finished flow is gone, and a claim reads expired at once.
       if (answer.status !== "expired") await new Promise((resolve) => setTimeout(resolve, delayMs));
       inFlight.now -= 1;
       return answer;
