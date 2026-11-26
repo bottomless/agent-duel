@@ -326,6 +326,19 @@ describe("ArenaPublic", () => {
     },
   )
 
+  test.each([false, true])(
+    "explains exhausted pre-header timeouts without exposing provider details, revealed=%s",
+    (revealed) => {
+      const input = snapshot(revealed)
+      input.runs[0]!.runState = "error"
+      input.runs[0]!.error = JSON.stringify({
+        name: "APIError",
+        data: { message: ArenaResponseRecovery.HEADER_TIMEOUT_EXHAUSTED, detail: "private-provider" },
+      })
+      expect(project(input).runs[0]?.error).toBe(ArenaResponseRecovery.HEADER_TIMEOUT_EXHAUSTED)
+    },
+  )
+
   test.each([false, true])("asks the voter to shorten a request no model call can take, revealed=%s", (revealed) => {
     const input = snapshot(revealed)
     input.runs[0]!.runState = "error"

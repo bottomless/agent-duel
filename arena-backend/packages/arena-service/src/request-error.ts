@@ -80,6 +80,24 @@ export function filteredStreamChunk(value: Record<string, unknown>, generationID
   }
 }
 
+/** Whether a complete (non-streamed) response's choice finished on a content filter. */
+export function contentFilterFinish(value: unknown) {
+  if (!isRecord(value) || !Array.isArray(value.choices)) return false
+  return value.choices.some(
+    (item) =>
+      isRecord(item) && (item.finish_reason === "content_filter" || item.native_finish_reason === "content_filter"),
+  )
+}
+
+/** Any refusal shape a streamed chunk or a complete response can carry. */
+export function contentFilterRefusal(value: unknown) {
+  return (
+    inspectionFailedError(value) ||
+    (isRecord(value) && isRecord(value.error) && value.error.type === "content_filter") ||
+    contentFilterFinish(value)
+  )
+}
+
 export const compactionRequiredType = "arena_compaction_required"
 
 export function compactionRequiredError() {

@@ -5,7 +5,7 @@ import { Provider as ProviderV2 } from "@opencode/schema/provider"
 import { SessionStatusEvent } from "@opencode/schema/session-status-event"
 import { ArenaResponseRecovery } from "./response-recovery"
 import { DateTime, Schema } from "effect"
-import { createHash } from "node:crypto"
+import { blindCallID, callMessageID } from "./tool-call-id"
 import { ArenaAttachments } from "./attachments"
 import { ArenaRuntime } from "./runtime"
 import {
@@ -22,7 +22,6 @@ const modelID = ModelV2.ID.make("contestant")
 const mediumModelID = ModelV2.ID.make("medium")
 const errorMessage = "Arena contestant request failed"
 const retryMessage = "Arena contestant is retrying"
-const callIDPrefix = "call_arena_"
 
 type ApiError = typeof SessionV1.APIError.Schema.Type
 type AssistantError = NonNullable<(typeof SessionV1.Assistant.Type)["error"]>
@@ -206,25 +205,20 @@ function omitUndefined(value: unknown): unknown {
   )
 }
 
-// Upstreams mint tool call IDs in their own shape — Alibaba and Z.AI use `call_<24 hex>`,
-// xAI uses `call-<uuid>-<counter>`, vLLM hosts use `chatcmpl-tool-<hex>` — so the raw ID
-// names the contestant to anyone who has sampled the public models once. The xAI counter
-// additionally counts tool calls the voter never saw. Hashing collapses every upstream onto
-// one shape while staying stable, so the streamed part, the replayed event, and the message
-// refetch all agree on the ID the UI correlates by. Nothing inbound keys on callID —
-// permission replies carry requestID — so rewriting it on the way out is safe.
-function syntheticCallID(value: string) {
-  if (value.startsWith(callIDPrefix)) return value
-  return callIDPrefix + createHash("sha256").update(value).digest("hex").slice(0, 32)
-}
-
-function callIDs(value: unknown, toolCall = false): unknown {
-  if (Array.isArray(value)) return value.map((item) => callIDs(item, toolCall))
+// Provider-shaped call IDs identify contestants. Positional IDs like `read_0` also restart at
+// each assistant step, so a part and all events referencing it must hash with the same owner.
+function callIDs(value: unknown, toolCall: boolean, scope?: string): unknown {
+  if (Array.isArray(value)) return value.map((item) => callIDs(item, toolCall, scope))
   if (!record(value)) return value
-  return callIDsRecord(value, toolCall)
+  return callIDsRecord(value, toolCall, scope)
 }
 
-function callIDsRecord(value: Record<string, unknown>, toolCall = false): Record<string, unknown> {
+function callIDsRecord(
+  value: Record<string, unknown>,
+  toolCall = false,
+  parentScope?: string,
+): Record<string, unknown> {
+  const scope = callMessageID(value) ?? parentScope
   const type = typeof value.type === "string" ? key(value.type) : ""
   const call = toolCall || ["functioncall", "toolcall", "tooluse"].includes(type)
   return Object.fromEntries(
@@ -234,15 +228,15 @@ function callIDsRecord(value: Record<string, unknown>, toolCall = false): Record
         typeof item === "string" &&
         (normalized === "callid" || normalized === "toolcallid" || (call && normalized === "id"))
       ) {
-        return [name, syntheticCallID(item)]
+        return [name, blindCallID(item, scope)]
       }
-      return [name, callIDs(item, normalized === "toolcalls")]
+      return [name, callIDs(item, normalized === "toolcalls", scope)]
     }),
   )
 }
 
-export function toolCallIDs(input: unknown): unknown {
-  return callIDs(input)
+export function toolCallIDs(input: unknown, generationID: string): unknown {
+  return callIDs(input, false, generationID)
 }
 
 function scrub(value: unknown, blocked: ReadonlySet<string>): unknown {
@@ -284,6 +278,7 @@ function contains(value: unknown, blocked: ReadonlySet<string>): boolean {
 // Messages the engine writes itself, which name no model and tell the voter what to do.
 const neutralMessages = new Set<unknown>([
   ArenaResponseRecovery.IDLE_EXHAUSTED,
+  ArenaResponseRecovery.HEADER_TIMEOUT_EXHAUSTED,
   requestTooLargeMessage,
   singleAgentAllowanceMessage,
 ])
@@ -522,7 +517,7 @@ export function part(input: MessagePart): MessagePart {
       "metadata" in input.state && input.state.metadata
         ? { ...input.state, metadata: scrubRecord(input.state.metadata, metadataKeys) }
         : input.state
-    return { ...input, metadata: undefined, state, callID: syntheticCallID(input.callID) }
+    return { ...input, metadata: undefined, state, callID: blindCallID(input.callID, input.messageID) }
   }
   if (input.type === "subtask" && input.model) {
     return { ...input, model: { providerID, modelID } }

@@ -9,34 +9,53 @@ export type MainSession = { readonly sessionID: string; readonly rootSessionID: 
 
 // Core's provider fetch (`AISDK.providerFetch`) fails a request with these messages when its
 // header or SSE chunk deadline passes. Heartbeat comments do not move either deadline.
-const TIMEOUT_MESSAGES = new Set(["SSE read timed out", "Response headers timed out"])
+const STREAM_TIMEOUT_MESSAGE = "SSE read timed out"
+const HEADER_TIMEOUT_MESSAGE = "Response headers timed out"
 
 // OpenAI-compatible finish reasons of a complete step: 1.x `stop` and `tool-calls`.
 const NORMAL_FINISH = new Set(["stop", "tool_calls"])
 // A non-null finish reason, in compact or spaced JSON.
 const FINISH_VALUE = /"finish_reason"\s*:\s*"/
 
-// Timed-out main model requests since the session's last normally finished one, as 1.x counted them
-// (`ArenaResponseRecovery.count`: a user message or a complete response ends the sequence). Kept in
-// memory: an engine restart marks the running turn interrupted, and nothing continues it without a
-// new prompt, which ends the sequence in 1.x too.
+// Timed-out mid-stream SSE reads since the session's last normally finished response, as 1.x
+// counted them (`ArenaResponseRecovery.count`: a user message or a complete response ends the
+// sequence). Kept in memory: an engine restart marks the running turn interrupted, and nothing
+// continues it without a new prompt, which ends the sequence in 1.x too.
 const timeouts = new Map<string, number>()
-// Sessions whose main request is a retry after a timeout, until that request's stream ends. After the
-// last timeout it keeps the session until the run settles, so the pane never shows the session as
-// working between the final timeout and the failure.
+// Consecutive pre-header timeouts since the session's last 2xx response (or prompt/run reset).
+// Kept separate from `timeouts` so slow/stalled request delivery never spends the model-idle
+// recovery budget, while still bounding how long a run can wait before failing.
+const headerTimeouts = new Map<string, number>()
+// Sessions whose main request is a retry after a mid-stream timeout, until that request's stream
+// ends. After the last timeout it keeps the session until the run settles, so the pane never shows
+// the session as working between the final timeout and the failure.
 const recovering = new Map<string, number>()
 // The run each counted session belongs to, so a settled run can drop all of its sessions.
 const roots = new Map<string, string>()
 
-function timeoutError(error: unknown, depth = 0): boolean {
+function hasErrorMessage(error: unknown, message: string, depth = 0): boolean {
   if (depth > 4 || !(error instanceof Error)) return false
-  return TIMEOUT_MESSAGES.has(error.message) || timeoutError(error.cause, depth + 1)
+  return error.message === message || hasErrorMessage(error.cause, message, depth + 1)
 }
 
-/** True for a model request that Core stopped at its header or chunk deadline. */
+function streamTimeoutError(error: unknown): boolean {
+  return hasErrorMessage(error, STREAM_TIMEOUT_MESSAGE)
+}
+
+function headerTimeoutError(error: unknown): boolean {
+  return hasErrorMessage(error, HEADER_TIMEOUT_MESSAGE)
+}
+
+/** True for a model request whose SSE stream went silent past the chunk deadline. */
 export function idleTimeout(error: { readonly type: string; readonly message: string }) {
   const message = error.message.replace(/^Connection lost while reading the response: /, "")
-  return error.type === "provider.transport" && TIMEOUT_MESSAGES.has(message)
+  return error.type === "provider.transport" && message === STREAM_TIMEOUT_MESSAGE
+}
+
+/** True for a model request that received no response headers before the header deadline. */
+export function headerTimeout(error: { readonly type: string; readonly message: string }) {
+  const message = error.message.replace(/^Connection lost while reading the response: /, "")
+  return error.type === "provider.transport" && message === HEADER_TIMEOUT_MESSAGE
 }
 
 /**
@@ -56,14 +75,20 @@ export function idleRecoveryNote(message: SessionMessage.Info | undefined) {
   return continues ? ArenaResponseRecovery.IDLE_CONTINUE : ArenaResponseRecovery.IDLE_RESTART
 }
 
-/** True for the failure that ends a turn whose timeout budget is spent. */
+/** True for the failure that ends a turn whose mid-stream timeout budget is spent. */
 export function idleExhausted(error: { readonly message: string }) {
   return error.message === ArenaResponseRecovery.IDLE_EXHAUSTED
 }
 
-/** Ends the session's timeout sequence: a new prompt, or a normally finished response. */
+/** True for the failure that ends a turn whose pre-header timeout budget is spent. */
+export function headerTimeoutExhausted(error: { readonly message: string }) {
+  return error.message === ArenaResponseRecovery.HEADER_TIMEOUT_EXHAUSTED
+}
+
+/** Ends the session's timeout sequences: a new prompt, or a normally finished response. */
 export function resetIdleBudget(sessionID: string) {
   timeouts.delete(sessionID)
+  headerTimeouts.delete(sessionID)
   recovering.delete(sessionID)
   roots.delete(sessionID)
 }
@@ -85,7 +110,7 @@ export function idleRecovery(sessionID: string) {
 }
 
 function timedOut(sessionID: string, error: unknown) {
-  if (!timeoutError(error)) return error
+  if (!streamTimeoutError(error)) return error
   const count = (timeouts.get(sessionID) ?? 0) + 1
   timeouts.set(sessionID, count)
   if (count <= ArenaResponseRecovery.MAX_RECOVERIES) {
@@ -96,6 +121,15 @@ function timedOut(sessionID: string, error: unknown) {
   // stays (see `recovering`) until the run settles or a new prompt starts.
   timeouts.delete(sessionID)
   return new Error(ArenaResponseRecovery.IDLE_EXHAUSTED)
+}
+
+function headerTimedOut(sessionID: string, error: unknown) {
+  if (!headerTimeoutError(error)) return timedOut(sessionID, error)
+  const count = (headerTimeouts.get(sessionID) ?? 0) + 1
+  headerTimeouts.set(sessionID, count)
+  if (count <= ArenaResponseRecovery.MAX_HEADER_TIMEOUT_RETRIES) return error
+  headerTimeouts.delete(sessionID)
+  return new Error(ArenaResponseRecovery.HEADER_TIMEOUT_EXHAUSTED)
 }
 
 /**
@@ -142,9 +176,10 @@ function finishReader() {
 
 /**
  * Bounds the wait for response headers and counts the timeouts of main model requests (the ones
- * `mainSession` returns a session for) against the recovery budget. Title and compaction requests
- * get the deadline but neither count nor end a recovery. The request that would exceed the budget
- * fails with `IDLE_EXHAUSTED`, which the retry hook does not retry.
+ * `mainSession` returns a session for) against separate pre-header and mid-stream recovery
+ * budgets. Title and compaction requests get the deadline but neither count nor end a recovery.
+ * Exhausting either budget fails with `HEADER_TIMEOUT_EXHAUSTED` or `IDLE_EXHAUSTED`, which the
+ * retry hook does not retry.
  *
  * The header deadline lives here, not in Core's provider fetch: Core aborts with "Response headers
  * timed out", but its HTTP hook middleware turns that abort into an interruption ("All fibers
@@ -160,12 +195,12 @@ export function idleBudgetFetch(
     )
     if (main) roots.set(main.sessionID, main.rootSessionID)
     const sessionID = main?.sessionID
-    const fail = (error: unknown) => (sessionID ? timedOut(sessionID, error) : error)
+    const failBeforeHeaders = (error: unknown) => (sessionID ? headerTimedOut(sessionID, error) : error)
     const headers = new AbortController()
     let timer: ReturnType<typeof setTimeout> | undefined
     const deadline = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
-        const error = new Error("Response headers timed out")
+        const error = new Error(HEADER_TIMEOUT_MESSAGE)
         headers.abort(error)
         reject(error)
       }, options.headerTimeoutMs)
@@ -173,11 +208,12 @@ export function idleBudgetFetch(
     const signal = init?.signal ? AbortSignal.any([init.signal, headers.signal]) : headers.signal
     const response = await Promise.race([send(input, { ...init, signal }), deadline])
       .catch((error: unknown) => {
-        throw fail(error)
+        throw failBeforeHeaders(error)
       })
       .finally(() => clearTimeout(timer))
-    // An error answer (offline, 5xx) neither counts nor ends the sequence.
+    // An error answer (offline, 5xx) neither counts nor ends either sequence.
     if (!sessionID || !response.ok) return response
+    headerTimeouts.delete(sessionID)
     if (!response.body) {
       recovering.delete(sessionID)
       return response

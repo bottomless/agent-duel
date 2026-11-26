@@ -281,6 +281,7 @@ function runErrorMessage(run: RunDocument, revealed: boolean, byok: boolean) {
   for (const safe of [
     ArenaResponseRecovery.EXHAUSTED,
     ArenaResponseRecovery.IDLE_EXHAUSTED,
+    ArenaResponseRecovery.HEADER_TIMEOUT_EXHAUSTED,
     requestTooLargeMessage,
     ArenaResponseRecovery.COMPACTION_EMPTY,
   ]) {

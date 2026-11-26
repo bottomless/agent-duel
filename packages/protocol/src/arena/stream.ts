@@ -31,7 +31,7 @@ export const ArenaStreamFrameSchema = z.discriminatedUnion("kind", [
     kind: z.literal("reset"),
     reason: z.string(),
     // These terminal answers need an explicit refresh or battle action before resubscribing.
-    code: z.enum(["chat_too_large", "not_battle_repository"]).optional(),
+    code: z.enum(["chat_too_large", "not_battle_repository", "loopback_required"]).optional(),
   }),
 ]);
 export const ArenaStreamTargetSchema = z.discriminatedUnion("kind", [

@@ -324,6 +324,93 @@ describe("ArenaProxy", () => {
     expect(calls).toEqual(["error"])
   })
 
+  test("records a non-streamed content-filter finish as a failed generation and keeps its partial answer", async () => {
+    const registry = new AssignmentRegistry()
+    registry.assign("session-root", assignment)
+    const calls: string[] = []
+    const chunks: string[] = []
+    const response = await proxy(request(), registry, {
+      upstream: "https://unit.invalid",
+      fetch: async () =>
+        Response.json({
+          id: "upstream-1",
+          provider: "Alibaba",
+          choices: [{ message: { content: "partial answer" }, finish_reason: "content_filter" }],
+          usage: { prompt_tokens: 12, completion_tokens: 4 },
+        }),
+      telemetry: {
+        rawChunk: (_metadata, chunk) => void chunks.push(chunk),
+        complete: () => void calls.push("complete"),
+        error: () => void calls.push("error"),
+      },
+    })
+    expect(response.status).toBe(400)
+    expect(await response.json()).toEqual({
+      error: { type: "content_filter", message: "A content filter blocked this response." },
+    })
+    expect(calls).toEqual(["error"])
+    const raw = chunks.join("")
+    expect(raw).toContain("partial answer")
+    expect(raw).toContain("prompt_tokens")
+    expect(raw).not.toContain("Alibaba")
+  })
+
+  test("records a non-streamed content_filter error as a failed generation", async () => {
+    const registry = new AssignmentRegistry()
+    registry.assign("session-root", assignment)
+    const calls: string[] = []
+    const response = await proxy(request(), registry, {
+      upstream: "https://unit.invalid",
+      fetch: async () => Response.json({ error: { type: "content_filter", message: "private policy detail" } }),
+      telemetry: {
+        complete: () => void calls.push("complete"),
+        error: () => void calls.push("error"),
+      },
+    })
+    expect(response.status).toBe(400)
+    expect(await response.json()).toEqual({
+      error: { type: "content_filter", message: "A content filter blocked this response." },
+    })
+    expect(calls).toEqual(["error"])
+  })
+
+  test("keeps usage arriving with or after a filtered stream's finish for the failed generation", async () => {
+    const registry = new AssignmentRegistry()
+    registry.assign("session-root", assignment)
+    const calls: string[] = []
+    const chunks: string[] = []
+    let settle: () => void = () => {}
+    const settled = new Promise<void>((resolve) => {
+      settle = resolve
+    })
+    const response = await proxy(request(), registry, {
+      upstream: "https://unit.invalid",
+      fetch: async () =>
+        new Response(
+          'data: {"id":"upstream-1","choices":[{"index":0,"delta":{},"finish_reason":"content_filter"}]}\n\n' +
+            'data: {"id":"upstream-1","choices":[],"usage":{"prompt_tokens":20,"completion_tokens":7}}\n\n' +
+            "data: [DONE]\n",
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+      telemetry: {
+        rawChunk: (_metadata, chunk) => void chunks.push(chunk),
+        complete: () => {
+          calls.push("complete")
+          settle()
+        },
+        error: () => {
+          calls.push("error")
+          settle()
+        },
+      },
+    })
+    expect(response.status).toBe(200)
+    await response.text()
+    await Promise.race([settled, Bun.sleep(6_000)])
+    expect(calls).toEqual(["error"])
+    expect(chunks.join("")).toContain("prompt_tokens")
+  })
+
   test("tells a wait on the user's network or sign-in apart from a refusing provider", async () => {
     const registry = new AssignmentRegistry()
     registry.assign("session-root", assignment)
@@ -1201,5 +1288,82 @@ describe("ArenaProxy", () => {
 
     expect(response.status).toBe(400)
     expect(requested).toBe(false)
+  })
+
+  test("records phase-split telemetry for dispatched bytes, header timeouts, HTTP refusals, and stream timeouts", async () => {
+    const registry = new AssignmentRegistry()
+    registry.assign("session-phase", { ...assignment, rootSessionID: "session-phase", telemetry: true })
+    const makeRequest = (signal?: AbortSignal) =>
+      new Request("http://arena.local/chat/completions", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-session-id": "session-phase",
+          "x-arena-request-id": requestID,
+        },
+        body: JSON.stringify({ model: "contestant", messages: [{ role: "user", content: "hello" }] }),
+        signal,
+      })
+
+    // 1. Pre-header timeout abort.
+    const headerAbort = new AbortController()
+    let headerDispatch: { dispatchedAt: Date; requestBytes: number } | undefined
+    let headerFailure: { phase: string; kind: string } | undefined
+    const headerResponse = await proxy(makeRequest(headerAbort.signal), registry, {
+      upstream: "https://unit.invalid",
+      fetch: async (_url, init) => {
+        headerAbort.abort(new Error("Response headers timed out"))
+        throw init?.signal?.reason ?? new Error("aborted")
+      },
+      telemetry: {
+        dispatched: ({ dispatchedAt, requestBytes }) => {
+          headerDispatch = { dispatchedAt, requestBytes }
+        },
+        error: (_metadata, _error, _at, failure) => {
+          headerFailure = failure
+        },
+      },
+    })
+    expect(headerResponse.status).toBe(400)
+    expect(headerDispatch?.dispatchedAt).toBeInstanceOf(Date)
+    expect(headerDispatch?.requestBytes).toBeGreaterThan(0)
+    expect(headerFailure).toEqual({ phase: "headers", kind: "header_timeout" })
+
+    // 2. Upstream HTTP 500 refusal.
+    let httpFailure: { phase: string; kind: string } | undefined
+    const httpResponse = await proxy(makeRequest(), registry, {
+      upstream: "https://unit.invalid",
+      fetch: async () => new Response("upstream failure", { status: 500 }),
+      telemetry: {
+        error: (_metadata, _error, _at, failure) => {
+          httpFailure = failure
+        },
+      },
+    })
+    expect(httpResponse.status).toBe(500)
+    expect(httpFailure).toEqual({ phase: "http", kind: "http_status" })
+
+    // 3. Mid-stream SSE read timeout cancel.
+    const streamAbort = new AbortController()
+    let streamFailure: { phase: string; kind: string } | undefined
+    const streamResponse = await proxy(makeRequest(streamAbort.signal), registry, {
+      upstream: "https://unit.invalid",
+      fetch: async () =>
+        new Response(
+          new ReadableStream({
+            start() {},
+          }),
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+      telemetry: {
+        error: (_metadata, _error, _at, failure) => {
+          streamFailure = failure
+        },
+      },
+    })
+    expect(streamResponse.status).toBe(200)
+    streamAbort.abort(new Error("SSE read timed out"))
+    await streamResponse.body?.cancel(new Error("SSE read timed out"))
+    expect(streamFailure).toEqual({ phase: "stream", kind: "stream_timeout" })
   })
 })

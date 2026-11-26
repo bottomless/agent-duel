@@ -85,14 +85,16 @@ Research readers use `resolveResearchDocument` from arena-service under the same
 Deploy the control plane's updated arena-service dependency before shipping this protocol: an old
 server refuses chunks, which the desktop retains for automatic recovery after the server upgrade.
 
-The desktop's per-call copies are scrubbed, so in hosted battles the control plane keeps each
-contestant call as OpenRouter received it, with the real model, routing, cache key and restored
-reasoning, and its raw response (`arena-service/src/generation-capture.ts`, `captureGenerations`).
-Messages, tools and images are stored once per account by content, because each call resends the
-whole history. Single-agent chats, keep-alive pings and the service's own comparison and metadata
-calls are not kept. A retried Carbon call (see [Request](#blinding)) keeps its refused attempt as a
-separate record under a new generation id, linked by `retriedByGenerationID`. BYOK leaves capture
-off: its store is on the voter's machine, and those fields name the model.
+The desktop's per-call copies are scrubbed, so the hosted control plane keeps each contestant call
+as OpenRouter received it, with the real model, routing, cache key and restored reasoning, and its
+raw response (`arena-service/src/generation-capture.ts`, `captureGenerations`). Messages, tools and
+images are stored once per account by content, because each call resends the whole history.
+Single-agent turns are kept the same way: their scope ID is the `singleAgentRatings` record's ID,
+so a capture joins to the rating it belongs to the way a battle's joins to its turn. Keep-alive
+pings and the service's own comparison and metadata calls are not kept. A retried Carbon call (see
+[Request](#blinding)) keeps its refused attempt as a separate record under a new generation id,
+linked by `retriedByGenerationID`. BYOK leaves capture off: its store is on the voter's machine,
+and those fields name the model.
 
 The control plane also adds the endpoint's quantization to each stored request row, from a catalog of
 OpenRouter's endpoint lists that it saves itself (`arena-service/src/endpoint-label.ts`, `recordEndpointLabels`).
@@ -1084,8 +1086,8 @@ reply takes the same attachments as a chat message, and both contestants get ide
   (`/api/openrouter/api/v1/arena/media`, `arena/media-reference.ts`), names it
   `arena-media:sha256:<digest>:<type>`, and the proxy puts the data back before OpenRouter sees the
   body (arena-service `media.ts`). Uploads are stored per account for 72 hours, apart from the
-  generation-capture parts, because single-agent chats are not kept; a battle's capture stores its
-  own copy of what the call sent. An expired file is missing, and the engine uploads it again under
+  generation-capture parts: a capture stores its own copy of what the call sent. An expired file is
+  missing, and the engine uploads it again under
   the same reference, so the prompt and its cache do not change.
   The route is its own Vercel function in the control-plane repository, which must ship it before a
   desktop release relies on it; a control plane without it answers 404, and the engine sends the
@@ -1423,16 +1425,18 @@ field. Each layer has its own file:
   provider-specific reasoning metadata, identity fields, and raw upstream errors from stored
   responses, and rewrites provider-shaped tool-call ids before saving response artifacts. The
   control plane holds generation usage, cost, and finish reason and returns them only with the
-  committed resolution. It also stores the provider that served each call, which no response or
-  reveal returns. Usage keeps OpenRouter's account charge in `cost` and, when supplied, the
-  provider's `cost_details.upstream_inference_cost` as `upstreamInferenceCost`; the desktop then
-  records both in the research metrics. Local-store startup
+  committed resolution. It also stores the provider that served each call and OpenRouter's own
+  generation id, neither of which a response or the reveal returns. Usage keeps OpenRouter's account
+  charge in `cost` and, when supplied, the provider's `cost_details.upstream_inference_cost` as
+  `upstreamInferenceCost`; the desktop then records both in the research metrics. Local-store startup
   removes those fields and request/response artifacts from legacy unresolved battles; resolved
   history already exposes the contestants by design.
 - **Session data** (`arena/privacy.ts`, `arena/v2-privacy.ts`) — keep each active assignment's
   canonical Core history intact for provider replay. Blind the native `/api` JSON and SSE boundary, the Arena recorder, and public
   transcript projections. Remove provider state and identity metadata, redact reasoning, zero usage
-  and cost, flatten provider errors, and rehash tool-call IDs to `call_arena_<hash>`. Never run the
+  and cost, flatten provider errors, and blind tool-call IDs by assistant message: some providers
+  start again at `read_0` on every step. On outbound replay, keep the first occurrence of each ID
+  and rename later collisions with their results, including in already-blinded history. Never run the
   native sanitizer over `/arena` responses: resolved battles deliberately reveal identities and
   costs. Stable streamed part IDs and UTF-16 delta offsets let clients assemble live updates;
   native exports do not define those stream IDs.
@@ -1843,8 +1847,10 @@ Never switch contestants or replay partial work to recover payment failures.
 
 A content filter ends the contestant's run. Keep its partial answer and saved files available through
 **Accept**, without a leaderboard vote. Do not run pending tools, retry the request or send it to a
-different host. Both a filtered stream and an HTTP moderation refusal show the same reason; the
-provider's explanation can identify the contestant or quote the prompt.
+different host. A filtered stream and a filtered complete response are detected and handled alike, and
+both show the same neutral reason; the provider's explanation can identify the contestant or quote the
+prompt, so only the service logs it. Record a filtered call as an error, not a completion, but keep its
+usage: the response ended, so its tokens are final.
 
 A steer queued behind the refused step starts no step; it is delivered unanswered, as for any step
 that fails without a retry (see the steer rules above). The engine proxy runs the side's failure
@@ -1930,16 +1936,25 @@ by the other side or a new prompt. Use `canRetryRun` in `arena/domain.ts` for bo
 refusal and the app's button.
 
 An Arena model request that gets no response headers, or no SSE event, for 150 seconds fails with
-`Response headers timed out` or `SSE read timed out`. Recovery uses the retry or continuation
-policy above. The pane shows **Continuing after model timeout** until the recovery stream ends. Three timeouts in a row
-are recovered; the fourth fails the run with only the neutral `IDLE_EXHAUSTED` text, and completed
-work stays. The label stays until the run settles, so the pane goes straight to Failed. Only the
-contestant's own model requests count; title and compaction requests neither count nor end a
-recovery. A new prompt, the end of the run, or a response whose SSE finish reason is `stop` or
-`tool_calls` starts the count again. A `length` cutoff or an error event inside the stream does not.
-A normally finished response resets the count even if its tool failed: the fetch layer cannot
-see tool results. The counter lives in memory and resets after an engine restart; continuing an
-interrupted battle still requires Resume.
+`Response headers timed out` or `SSE read timed out`. Pre-header and mid-stream timeouts keep
+separate budgets (`engine-runtime/idle.ts`).
+
+A mid-stream `SSE read timed out` uses the continuation policy above, shows **Continuing after
+model timeout** until the recovery stream ends, and recovers three timeouts in a row
+(`MAX_RECOVERIES`); the fourth fails the run with only the neutral `IDLE_EXHAUSTED` text, and
+completed work stays. The label stays until the run settles, so the pane goes straight to Failed.
+A new prompt, the end of the run, or a response whose SSE finish reason is `stop` or `tool_calls`
+starts the count again. A `length` cutoff or an error event inside the stream does not. A normally
+finished response resets the count even if its tool failed: the fetch layer cannot see tool results.
+
+A pre-header `Response headers timed out` never spends the mid-stream recovery budget, sets no
+continuation note, and shows **Waiting for network** during Core's normal retry backoff (not a
+persistent wait). Five consecutive pre-header timeouts are retried (`MAX_HEADER_TIMEOUT_RETRIES`);
+the sixth fails the run with the neutral `HEADER_TIMEOUT_EXHAUSTED` text and marks it retryable
+through **Retry**. Any 2xx response, a new prompt, or the end of the run resets that count. Only
+the contestant's own model requests count toward either budget; title and compaction requests
+neither count nor end a recovery. Both counters live in memory and reset after an engine restart;
+continuing an interrupted battle still requires Resume.
 
 The chunk deadline is Core's, inside `AISDK.providerFetch`. It moves on every parsed SSE event, so
 chunks that carry only OpenRouter `reasoning_details` keep a long thought alive, and keep-alive
@@ -2007,9 +2022,19 @@ Direct console warnings still go to the daemon log.
 Diagnose deadlines with these logs and the proxy's `streamProgress` timestamps
 (`arena/proxy.ts`). Compare chunk receipt, response end, artifact saving, and closure: a stream
 that ended but never closed stalled inside the engine. Correlate its `generationID` with the control
-plane's `arenaAssignmentGenerationMetrics`, whose `createdAt` marks the hosted function's response
-end. The legacy `arena model response idle` log is emitted by `session/llm.ts`; the V2 fetch adapter
-does not emit it.
+plane's `arenaAssignmentGenerationMetrics`, which keeps one row for every contestant call, with its
+`outcome`: `complete`, `cancelled` when the client stopped reading, `failed` when the upstream broke
+or the fetch was refused before an answer, or `error` for an OpenRouter HTTP refusal, which keeps the
+`status` and the `provider` the refusal names. Rows written before `outcome` existed are complete.
+Only complete rows reach the reveal. A complete row has usage; a content-filter refusal is an `error`
+row that also keeps its usage, since the response ended. A row keeps the `provider` and
+OpenRouter's `upstreamGenerationID` when the stream showed them; an early end also keeps `quietMs`,
+the silence since the last upstream data event, so a stall is measurable after the runtime logs
+expire. A Stop or a vote also ends open streams as `cancelled`, so count stalls by a `quietMs` near
+the 150-second idle deadline. The proxy's `stream ended early` log follows the same split: an error
+for those and for `failed`, info for any other cancel. A `complete` row without `finishReason` is a stream that closed before
+its finish, often a provider cutting it. The legacy `arena model response idle` log is emitted by `session/llm.ts`; the V2 fetch
+adapter does not emit it.
 
 A request OpenRouter refuses reaches the contestant as the same neutral error, and only the service
 sees why. It logs `[arena-service] OpenRouter refused a contestant request` with the battle ID

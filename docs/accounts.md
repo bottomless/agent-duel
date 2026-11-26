@@ -125,7 +125,10 @@ The daemon password and account session are separate credentials; a remote clien
   a SHA-256 verifier of the loopback OpenCode control token through the child's one-time stdin
   startup pipe, tagged `"mode": "hosted"`. The child consumes and closes the pipe before starting
   services. None of these credentials is installed in environment variables or command-line
-  arguments.
+  arguments. The runtime must reach the daemon over numeric loopback. Use the bound loopback
+  address or, for a wildcard bind, the loopback of the same address family. Looking up `localhost`
+  again can select the other family. A daemon bound only to a LAN address, socket or named pipe
+  cannot start hosted Arena. Browser previews keep their per-side `.localhost` hosts.
 - The daemon's Arena runtime proxy accepts that local capability only on an explicit allowlist:
   assignments, comparison, commit, pull request and branch name text, research upload, and assigned
   OpenRouter chat/responses. It exchanges the

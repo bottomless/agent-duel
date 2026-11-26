@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto"
+import { blindCallID, callMessageID } from "./tool-call-id"
 import {
   contentFilterMessage,
   requestTooLargeMessage,
@@ -7,6 +7,7 @@ import {
 } from "@agent-duel/arena-service/request-error"
 import { REDACTED_THINKING } from "@agent-duel/arena-service/reasoning"
 import { ARENA_OFFLINE_MESSAGE } from "@/session/retry"
+import { ArenaResponseRecovery } from "./response-recovery"
 
 const OPAQUE_PROVIDER = "arena"
 const OPAQUE_MODEL = "contestant"
@@ -30,11 +31,6 @@ function record(value: unknown): value is Record<string, unknown> {
 
 function keyName(key: string) {
   return key.replace(/[-_]/g, "").toLowerCase()
-}
-
-function opaqueCallID(value: unknown) {
-  const source = typeof value === "string" ? value : JSON.stringify(value)
-  return `call_arena_${createHash("sha256").update(source).digest("hex").slice(0, 20)}`
 }
 
 function opaqueModelID(value: unknown) {
@@ -65,10 +61,13 @@ function safeError(value: unknown) {
   if (record(value) && value.name === "ContentFilterError")
     return { name: value.name, data: { message: contentFilterMessage } }
   const message = (() => {
-    if (text === requestTooLargeMessage || data?.message === requestTooLargeMessage) return requestTooLargeMessage
-    // Rebuilt by the engine proxy from the control plane's code; it names no model.
-    if (text === singleAgentAllowanceMessage || data?.message === singleAgentAllowanceMessage) {
-      return singleAgentAllowanceMessage
+    for (const neutral of [
+      requestTooLargeMessage,
+      singleAgentAllowanceMessage,
+      ArenaResponseRecovery.IDLE_EXHAUSTED,
+      ArenaResponseRecovery.HEADER_TIMEOUT_EXHAUSTED,
+    ]) {
+      if (text === neutral || data?.message === neutral) return neutral
     }
     if (statusCode === 402) return paymentMessage(statusCode, responseBody) ?? "The agent could not complete this run."
     const lower = text.toLowerCase()
@@ -174,21 +173,23 @@ function isToolState(value: Record<string, unknown>) {
   )
 }
 
-function sanitize(value: unknown, parentKey = "", inTool = false): unknown {
+function sanitize(value: unknown, parentKey = "", inTool = false, owner?: string): unknown {
   if (typeof value === "string") {
     return keyName(parentKey) === "reasoning" || keyName(parentKey) === "thinking" ? REDACTED_THINKING : value
   }
   if (typeof value !== "object" || value === null) return value
-  if (Array.isArray(value)) return value.map((item) => sanitize(item, parentKey, inTool))
+  if (Array.isArray(value)) return value.map((item) => sanitize(item, parentKey, inTool, owner))
 
   const object = value as Record<string, unknown>
   if (isModelInfo(object)) return sanitizeModel(object)
   if (isProviderInfo(object)) return sanitizeProvider(object)
   const output: Record<string, unknown> = {}
+  const scope = callMessageID(object) ?? owner
   const objectType = typeof object.type === "string" ? keyName(object.type) : ""
   const nativeReasoningDelta = objectType === "session.reasoning.delta"
   const nativeReasoningEnded = objectType === "session.reasoning.ended"
   const nativeSessionError = objectType === "session.error"
+  const nativeToolEvent = objectType.startsWith("session.tool.")
   for (const [key, item] of Object.entries(object)) {
     const normalized = keyName(key)
     if (CATALOG_KEYS.has(normalized)) continue
@@ -198,7 +199,7 @@ function sanitize(value: unknown, parentKey = "", inTool = false): unknown {
       continue
     }
     if (normalized === "reasoning" || normalized === "thinking") {
-      output[key] = typeof item === "string" ? REDACTED_THINKING : sanitize(item, key, false)
+      output[key] = typeof item === "string" ? REDACTED_THINKING : sanitize(item, key, false, scope)
       continue
     }
     if (normalized === "text" && objectType === "reasoning") {
@@ -209,8 +210,13 @@ function sanitize(value: unknown, parentKey = "", inTool = false): unknown {
       output[key] = safeError(item)
       continue
     }
-    if (normalized === "data" && record(item) && (nativeReasoningDelta || nativeReasoningEnded || nativeSessionError)) {
-      const data = sanitize(item, key, inTool) as Record<string, unknown>
+    if (
+      normalized === "data" &&
+      record(item) &&
+      (nativeReasoningDelta || nativeReasoningEnded || nativeSessionError || nativeToolEvent)
+    ) {
+      const data = sanitize(item, key, inTool, scope) as Record<string, unknown>
+      if (nativeToolEvent && typeof item.id === "string") data.id = blindCallID(item.id, callMessageID(item) ?? scope)
       if (nativeReasoningDelta && "delta" in item) data.delta = REDACTED_THINKING
       if (nativeReasoningEnded && "text" in item) data.text = REDACTED_THINKING
       if (nativeSessionError && "error" in item) data.error = safeError(item.error)
@@ -229,17 +235,17 @@ function sanitize(value: unknown, parentKey = "", inTool = false): unknown {
       output[key] = OPAQUE_PROVIDER
       continue
     }
-    if (normalized === "callid" || normalized === "toolcallid") {
-      output[key] = opaqueCallID(item)
-      continue
-    }
-    if (normalized === "id" && (inTool || objectType === "tool")) {
-      output[key] = opaqueCallID(item)
+    if (
+      normalized === "callid" ||
+      normalized === "toolcallid" ||
+      (normalized === "id" && (inTool || objectType === "tool"))
+    ) {
+      output[key] = blindCallID(typeof item === "string" ? item : JSON.stringify(item), scope)
       continue
     }
     if (normalized === "state") {
       if (!record(item) || !isToolState(item)) continue
-      output[key] = sanitize(item, key, true)
+      output[key] = sanitize(item, key, true, scope)
       continue
     }
     if (normalized === "metadata" && record(item)) {
@@ -248,12 +254,12 @@ function sanitize(value: unknown, parentKey = "", inTool = false): unknown {
         const metadataName = keyName(metadataKey)
         if (PRIVATE_KEYS.has(metadataName) || metadataName.includes("provider") || metadataName.includes("identity"))
           continue
-        metadata[metadataKey] = sanitize(metadataValue, metadataKey, inTool)
+        metadata[metadataKey] = sanitize(metadataValue, metadataKey, inTool, scope)
       }
       output[key] = metadata
       continue
     }
-    output[key] = sanitize(item, key, inTool || normalized === "tool")
+    output[key] = sanitize(item, key, inTool || normalized === "tool", scope)
   }
   return output
 }

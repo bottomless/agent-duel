@@ -62,6 +62,8 @@ const projectError = (
   // This is a manual side retry, not an automatic retry of the failed summary request.
   if (value.type === "compaction.empty-summary")
     return { name: "APIError", data: { message: ArenaResponseRecovery.COMPACTION_EMPTY, isRetryable: true } }
+  if (value.message === ArenaResponseRecovery.HEADER_TIMEOUT_EXHAUSTED)
+    return { name: "APIError", data: { message: ArenaResponseRecovery.HEADER_TIMEOUT_EXHAUSTED, isRetryable: true } }
   const isRetryable = retryable || retryableError(value)
   if (isRetryable || value.status !== undefined || value.response !== undefined)
     return {

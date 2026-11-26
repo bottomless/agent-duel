@@ -1,12 +1,12 @@
 import { randomUUID } from "crypto"
 import { contestant } from "./model-profile"
-import type { GenerationMetrics } from "./records"
+import type { GenerationFailureKind, GenerationFailurePhase, GenerationMetrics } from "./records"
 import {
   compactionRequiredError,
   contentFilterError,
   contentFilterMessage,
+  contentFilterRefusal,
   filteredStreamChunk,
-  inspectionFailedError,
   networkUnavailableError,
   paymentError,
   readCompactionRequired,
@@ -74,8 +74,18 @@ function requestKind(value: string | null) {
   return value === "generation" || value === "compaction" || value === "utility" ? value : undefined
 }
 
+export type GenerationFailure = {
+  readonly phase: GenerationFailurePhase
+  readonly kind: GenerationFailureKind
+}
+
 export interface Telemetry {
   readonly start?: (metadata: RequestMetadata, body: Readonly<Record<string, unknown>>) => void | Promise<void>
+  readonly dispatched?: (input: {
+    readonly metadata: RequestMetadata
+    readonly dispatchedAt: Date
+    readonly requestBytes: number
+  }) => void | Promise<void>
   readonly response?: (input: {
     readonly metadata: RequestMetadata
     readonly status: number
@@ -84,7 +94,12 @@ export interface Telemetry {
   }) => void | Promise<void>
   readonly rawChunk?: (metadata: RequestMetadata, chunk: string) => void
   readonly complete?: (metadata: RequestMetadata, completedAt: Date) => void | Promise<void>
-  readonly error?: (metadata: RequestMetadata | undefined, error: unknown, at: Date) => void | Promise<void>
+  readonly error?: (
+    metadata: RequestMetadata | undefined,
+    error: unknown,
+    at: Date,
+    failure?: GenerationFailure,
+  ) => void | Promise<void>
   readonly reveal?: (input: {
     readonly runIDs: readonly string[]
     readonly metrics: readonly GenerationMetrics[]
@@ -238,6 +253,14 @@ function record(value: unknown): value is Record<string, unknown> {
 function retryableTransport(error: unknown) {
   if (!record(error) || error.name === "AbortError") return false
   return error.code === "ConnectionRefused" || error.code === "ECONNREFUSED" || error.code === "ECONNRESET"
+}
+
+function hasReasonMessage(value: unknown, expected: string, depth = 0): boolean {
+  if (depth > 4 || value === null || value === undefined) return false
+  if (value instanceof Error) return value.message === expected || hasReasonMessage(value.cause, expected, depth + 1)
+  if (typeof value === "string") return value === expected
+  if (record(value)) return value.message === expected || hasReasonMessage(value.cause, expected, depth + 1)
+  return false
 }
 
 function sessionHeaders(headers: Headers) {
@@ -427,7 +450,9 @@ function sanitizeLine(
     const blocked = record(value) && filteredStreamChunk(value, generationID)
     if (blocked) {
       filtered()
-      return `data: ${JSON.stringify(blocked)}`
+      // The filter finish can carry the call's usage; keep it so the failed generation records it.
+      const kept = record(value) && record(value.usage) ? { ...blocked, usage: value.usage } : blocked
+      return `data: ${JSON.stringify(kept)}`
     }
     return `data: ${JSON.stringify(normalize(sanitizePayload(value, generationID, true)))}`
   } catch {
@@ -503,7 +528,13 @@ function sanitizeStream(
     })
   // The SDK emits its finish on EOF. Once a filter has finished the choice, a later transport
   // failure must not replace it with a retryable error, or leave its prompt armed for cache pings.
-  const finishBlocked = async (controller: ReadableStreamDefaultController<Uint8Array>) => {
+  // `rest` and `initialPending` carry the part of the current read batch after the filter finish, so
+  // a usage chunk that arrived in the same batch is still recorded.
+  const finishBlocked = async (
+    controller: ReadableStreamDefaultController<Uint8Array>,
+    rest: readonly string[] = [],
+    initialPending = "",
+  ) => {
     settled = true
     onEnd?.(false)
     if (open) emit(controller, "")
@@ -512,11 +543,27 @@ function sanitizeStream(
     // Let the service finish recording usage and the response after its final choice. Only the
     // client stream is closed above; a server that never closes its tail must not hold the reader.
     const timeout = setTimeout(() => void reader.cancel().catch(() => undefined), 5_000)
+    const feed = (line: string) => {
+      if (isDataLine(line)) telemetry?.rawChunk?.(metadata, `${sanitize(line)}\n`)
+    }
     try {
-      await telemetry?.error?.(metadata, new Error(contentFilterMessage), new Date())
-      while (!(await reader.read()).done) {
-        /* discard the tail */
+      // Usage can arrive after the filter finish; keep it for the failed generation's metrics.
+      for (const line of rest) feed(line)
+      let tail = initialPending
+      while (true) {
+        const next = await reader.read()
+        if (next.done) break
+        tail += decoder.decode(next.value, { stream: true })
+        const lines = tail.split("\n")
+        tail = lines.pop() ?? ""
+        for (const line of lines) feed(line)
       }
+      tail += decoder.decode()
+      feed(tail)
+      await telemetry?.error?.(metadata, new Error(contentFilterMessage), new Date(), {
+        phase: "stream",
+        kind: "content_filter",
+      })
     } finally {
       clearTimeout(timeout)
       await reader.cancel().catch(() => undefined)
@@ -548,8 +595,16 @@ function sanitizeStream(
     onEnd?.(false)
     tracked.failedAt = Date.now()
     tracked.failure = failure
+    const kind: GenerationFailureKind =
+      failure === "stalled"
+        ? "stream_stalled"
+        : failure === "cut-off"
+          ? "stream_cut_off"
+          : failure === "replay-unavailable"
+            ? "replay_unavailable"
+            : "stream_read"
     try {
-      await telemetry?.error?.(metadata, new Error(message), new Date())
+      await telemetry?.error?.(metadata, new Error(message), new Date(), { phase: "stream", kind })
     } catch {
       controller.error(new Error("Arena telemetry persistence failed"))
       return
@@ -641,7 +696,8 @@ function sanitizeStream(
           pending = lines.pop() ?? ""
           if (!lines.length) continue
           let forwarded = false
-          for (const line of lines) {
+          for (let i = 0; i < lines.length; i++) {
+            const line = lines[i]
             if (replayed && line.trim() === REPLAY_UNAVAILABLE_LINE) {
               await failRetryable(controller, "replay-unavailable", "Arena contestant response could not be replayed")
               return
@@ -656,7 +712,7 @@ function sanitizeStream(
             if (blocked) await onBlocked?.()
             if (settled) return
             emit(controller, sanitized, blocked)
-            if (blocked) return finishBlocked(controller)
+            if (blocked) return finishBlocked(controller, lines.slice(i + 1), pending)
             forwarded = true
           }
           if (forwarded) return
@@ -673,8 +729,16 @@ function sanitizeStream(
           : tracked.savingAt !== undefined && tracked.savedAt === undefined
             ? "save"
             : "forward"
+        const kind: GenerationFailureKind = hasReasonMessage(signal?.reason, "SSE read timed out")
+          ? "stream_timeout"
+          : signal?.aborted
+            ? "aborted"
+            : "stream_read"
         try {
-          await telemetry?.error?.(metadata, new Error("Provider response stream failed"), new Date())
+          await telemetry?.error?.(metadata, new Error("Provider response stream failed"), new Date(), {
+            phase: "stream",
+            kind,
+          })
         } catch {
           controller.error(new Error("Arena telemetry persistence failed"))
           return
@@ -692,10 +756,17 @@ function sanitizeStream(
       settled = true
       onEnd?.(false)
       tracked.cancelledAt = Date.now()
+      const kind: GenerationFailureKind =
+        hasReasonMessage(reason, "SSE read timed out") || hasReasonMessage(signal?.reason, "SSE read timed out")
+          ? "stream_timeout"
+          : "stream_cancelled"
       try {
         await reader.cancel(reason)
       } finally {
-        await telemetry?.error?.(metadata, new Error("Arena contestant stream was cancelled"), new Date())
+        await telemetry?.error?.(metadata, new Error("Arena contestant stream was cancelled"), new Date(), {
+          phase: "stream",
+          kind,
+        })
       }
     },
   })
@@ -745,6 +816,7 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
   let metadata: RequestMetadata | undefined
   let telemetry: Telemetry | undefined
   let preHeaderTransportFailure = false
+  const requestState: { phase: GenerationFailurePhase; requestBytes?: number } = { phase: "prepare" }
   let endWait: ((ping?: Ping) => void) | undefined
   try {
     const { requestID, sessionID, parentSessionID } = sessionHeaders(request.headers)
@@ -795,8 +867,17 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
     const dispatch = new AbortController()
     if (request.signal.aborted) dispatch.abort(request.signal.reason)
     else request.signal.addEventListener("abort", () => dispatch.abort(request.signal.reason), { once: true })
-    const send = () =>
-      execute(url, {
+    const send = async () => {
+      const body = outgoing === rewritten ? inlineText() : JSON.stringify(outgoing)
+      const bytes = Buffer.byteLength(body)
+      requestState.requestBytes = bytes
+      await telemetry?.dispatched?.({
+        metadata: metadata!,
+        dispatchedAt: new Date(),
+        requestBytes: bytes,
+      })
+      requestState.phase = "headers"
+      return execute(url, {
         method: "POST",
         headers: {
           ...routing,
@@ -807,15 +888,17 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
             ? { [COMPACTION_HEADER]: COMPACTION_OFFER }
             : {}),
         },
-        body: outgoing === rewritten ? inlineText() : JSON.stringify(outgoing),
+        body,
         signal: dispatch.signal,
       })
+    }
     let inline: string | undefined
     const inlineText = () => (inline ??= JSON.stringify(rewritten))
     const fitsInline = () => Buffer.byteLength(inlineText()) <= REQUEST_BYTES_LIMIT
     const referenced =
       options.mediaByReference && !referencesUnsupported(upstream) ? referenceMedia(rewritten) : undefined
     const upload = async (media: Iterable<Media>): Promise<UploadFailure | undefined> => {
+      requestState.phase = "upload"
       try {
         return await uploadMedia({
           execute,
@@ -877,6 +960,7 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
       headers: researchHeaders(response.headers),
       receivedAt: new Date(),
     })
+    requestState.phase = response.ok ? "stream" : "http"
 
     const headers = responseHeaders(response.headers)
     const generationID = metadata.generationID
@@ -899,14 +983,26 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
       telemetry?.rawChunk?.(metadata, JSON.stringify(payload))
       // A refused attempt is a failed generation, not a completed one. A wait for the user's network
       // or sign-in is not the provider failing, and telemetry keeps the two apart.
+      const networkWait = readNetworkUnavailable(body)
+      const signInWait = response.status === 401 && readSessionRejected(body)
       await telemetry?.error?.(
         metadata,
-        readNetworkUnavailable(body)
+        networkWait
           ? new ArenaWaitError("network")
-          : response.status === 401 && readSessionRejected(body)
+          : signInWait
             ? new ArenaWaitError("sign-in")
             : new Error(`Arena upstream status ${response.status}`),
         new Date(),
+        {
+          phase: "http",
+          kind: networkWait
+            ? "network_wait"
+            : signInWait
+              ? "sign_in_wait"
+              : filtered
+                ? "content_filter"
+                : "http_status",
+        },
       )
       headers.set("content-type", "application/json")
       return Response.json(payload, { status: response.status, headers })
@@ -944,14 +1040,18 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
     }
 
     const raw = JSON.parse(await response.text()) as unknown
-    if (inspectionFailedError(raw) || (record(raw) && record(raw.error) && raw.error.type === "content_filter")) {
-      const payload = contentFilterError()
+    // A complete response carries the same refusal shapes a streamed chunk does; handle them alike.
+    if (contentFilterRefusal(raw)) {
       await blocked()
       endWait?.()
-      telemetry?.rawChunk?.(metadata, JSON.stringify(payload))
-      await telemetry?.error?.(metadata, new Error(contentFilterMessage), new Date())
+      // Keep the partial answer and usage the response carried before the neutral error replaces it.
+      telemetry?.rawChunk?.(metadata, JSON.stringify(sanitizePayload(raw, generationID)))
+      await telemetry?.error?.(metadata, new Error(contentFilterMessage), new Date(), {
+        phase: "http",
+        kind: "content_filter",
+      })
       headers.set("content-type", "application/json")
-      return Response.json(payload, { status: 400, headers })
+      return Response.json(contentFilterError(), { status: 400, headers })
     }
     const payload = sanitizePayload(raw, generationID)
     telemetry?.rawChunk?.(metadata, JSON.stringify(payload))
@@ -959,9 +1059,35 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
     endWait?.(ping)
     headers.set("content-type", "application/json")
     return Response.json(payload, { status: response.status, headers })
-  } catch {
+  } catch (error) {
     endWait?.()
-    await telemetry?.error?.(metadata, new Error("Arena contestant request could not be routed"), new Date())
+    const phase = requestState.phase
+    const headerTimedOut =
+      hasReasonMessage(request.signal.reason, "Response headers timed out") ||
+      hasReasonMessage(error, "Response headers timed out")
+    const failure: GenerationFailure = {
+      phase,
+      kind: headerTimedOut
+        ? "header_timeout"
+        : request.signal.aborted
+          ? "aborted"
+          : phase === "stream"
+            ? "stream_read"
+            : preHeaderTransportFailure || phase === "headers" || phase === "upload"
+              ? "transport"
+              : "routing",
+    }
+    if (metadata && (phase === "headers" || phase === "upload")) {
+      console.warn("[arena-proxy] Contestant request failed before response headers", {
+        generationID: metadata.generationID,
+        requestID: metadata.requestID,
+        phase: failure.phase,
+        kind: failure.kind,
+        ...(requestState.requestBytes !== undefined ? { requestBytes: requestState.requestBytes } : {}),
+        elapsedMs: Date.now() - metadata.startedAt.getTime(),
+      })
+    }
+    await telemetry?.error?.(metadata, new Error("Arena contestant request could not be routed"), new Date(), failure)
     return Response.json(
       {
         error: preHeaderTransportFailure

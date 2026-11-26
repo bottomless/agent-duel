@@ -1,6 +1,6 @@
 import { createHash } from "crypto"
 import type { Store } from "./mongo"
-import { ArenaWaitError, type RequestMetadata, type Telemetry } from "./proxy"
+import { ArenaWaitError, type GenerationFailure, type RequestMetadata, type Telemetry } from "./proxy"
 import type { GenerationMetrics, UsageTotals } from "./records"
 import { ArenaPrivacy } from "./privacy"
 
@@ -109,7 +109,7 @@ function sanitizeStoredValue(value: unknown): unknown {
  * Keep the response usable in memory while removing side-channel metadata from
  * the local research copy. Tool arguments remain strings and are not rewritten.
  */
-export function sanitizeStoredResponse(raw: string) {
+export function sanitizeStoredResponse(raw: string, generationID: string) {
   const lines = raw.split(/(\r?\n)/)
   if (lines.some((line) => line.startsWith("data:"))) {
     return lines
@@ -118,7 +118,7 @@ export function sanitizeStoredResponse(raw: string) {
         const text = line.slice(5).trim()
         if (!text || text === "[DONE]") return line
         try {
-          return `data: ${JSON.stringify(ArenaPrivacy.toolCallIDs(sanitizeStoredValue(JSON.parse(text))))}`
+          return `data: ${JSON.stringify(ArenaPrivacy.toolCallIDs(sanitizeStoredValue(JSON.parse(text)), generationID))}`
         } catch {
           return ""
         }
@@ -126,7 +126,7 @@ export function sanitizeStoredResponse(raw: string) {
       .join("")
   }
   try {
-    return JSON.stringify(ArenaPrivacy.toolCallIDs(sanitizeStoredValue(JSON.parse(raw))))
+    return JSON.stringify(ArenaPrivacy.toolCallIDs(sanitizeStoredValue(JSON.parse(raw)), generationID))
   } catch {
     return ""
   }
@@ -367,6 +367,14 @@ export function create(store: Store): Telemetry {
       }
       active.set(metadata, { id, callIndex, metadata, chunks: [] })
     },
+    async dispatched({ metadata, dispatchedAt, requestBytes }) {
+      const generation = active.get(metadata)
+      if (!generation) return
+      await store.updateGeneration(generation.id, {
+        upstreamDispatchedAt: dispatchedAt,
+        requestBytes,
+      })
+    },
     async response({ metadata, status, headers, receivedAt }) {
       const generation = active.get(metadata)
       if (!generation) return
@@ -389,7 +397,7 @@ export function create(store: Store): Telemetry {
       if (!generation) return
       active.delete(metadata)
       const raw = generation.chunks.join("")
-      const response = sanitizeStoredResponse(raw)
+      const response = sanitizeStoredResponse(raw, generation.id)
       const responseArtifactID = `${generation.id}|response`
       await store.storeArtifact({
         _id: responseArtifactID,
@@ -422,7 +430,7 @@ export function create(store: Store): Telemetry {
         })
       }
     },
-    async error(metadata, error, at) {
+    async error(metadata, error, at, failure?: GenerationFailure) {
       if (!metadata) return
       const generation = active.get(metadata)
       if (!generation) return
@@ -435,7 +443,7 @@ export function create(store: Store): Telemetry {
       // A refused attempt's only chunk is the error body Arena wrote, not a token from the model.
       const refused = generation.status !== undefined && generation.status >= 400
       const raw = generation.chunks.join("")
-      const response = sanitizeStoredResponse(raw)
+      const response = sanitizeStoredResponse(raw, generation.id)
       const hasResponse = generation.responseAt !== undefined || response.length > 0
       const responseArtifactID = `${generation.id}|response`
       if (hasResponse) {
@@ -458,6 +466,7 @@ export function create(store: Store): Telemetry {
         ...(hasResponse ? { payloadHashes: { response: hash(response) } } : {}),
         error: "Arena contestant request failed",
         ...(wait ? { wait } : {}),
+        ...(failure ? { failurePhase: failure.phase, failureKind: failure.kind } : {}),
       })
       const measured = usageFromPayload(terminalPayload(raw), Math.max(0, at.getTime() - metadata.startedAt.getTime()))
       const finished = finishReason(raw)

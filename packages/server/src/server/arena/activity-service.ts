@@ -2,6 +2,11 @@ import type { Logger } from "pino";
 import type { ArenaActivity, ArenaNotification } from "@getpaseo/protocol/arena/activity";
 import { buildNotificationPreview } from "@getpaseo/protocol/agent-attention-notification";
 import type { ArenaActivitySource } from "../agent/agent-sdk-types.js";
+import { findArenaLoopbackRequired } from "./loopback-required.js";
+
+// The engine cannot start while the daemon listens off loopback, and only a restart on loopback or
+// a switch to an OpenRouter key changes that, so polls slow down and the refusal is logged once.
+const LOOPBACK_REFUSED_POLL_MS = 60_000;
 
 export interface ArenaActivityOwner {
   agentId: string;
@@ -165,6 +170,7 @@ export class ArenaActivityService {
   private mutations = new Map<string, number>();
   private refreshRequested = false;
   private notifications = new Map<string, { cycle: string; sent: Set<string> }>();
+  private loopbackRefused = false;
 
   constructor(private readonly deps: ActivityServiceDeps) {}
 
@@ -207,6 +213,7 @@ export class ArenaActivityService {
           activity.state !== "discarded",
       );
       let delay = active ? 1_000 : 5_000;
+      if (this.loopbackRefused) delay = LOOPBACK_REFUSED_POLL_MS;
       if (this.refreshRequested) delay = 0;
       this.refreshRequested = false;
       this.timer = setTimeout(() => {
@@ -255,10 +262,14 @@ export class ArenaActivityService {
           stale: false,
         });
       }
+      this.loopbackRefused = false;
       this.publish(next);
     } catch (err) {
       if (this.disposed) return;
-      this.deps.logger.warn({ err }, "Arena activity unavailable");
+      const loopbackRefused = Boolean(findArenaLoopbackRequired(err));
+      if (!loopbackRefused || !this.loopbackRefused)
+        this.deps.logger.warn({ err }, "Arena activity unavailable");
+      this.loopbackRefused = loopbackRefused;
       this.publish(
         new Map(
           this.snapshot().map((activity) => [activity.agentId, { ...activity, stale: true }]),

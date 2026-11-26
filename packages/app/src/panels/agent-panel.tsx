@@ -10,6 +10,7 @@ import { AgentPluginsBanner } from "@/agent-plugins/project-plugins";
 import { SingleAgentRatingDialog, SingleAgentComposerTooltip } from "@/arena/single-agent-rating";
 import { usePendingArenaPrompt } from "@/arena/use-pending-arena-prompt";
 import { ArenaStreamStatus } from "@/arena/stream-status";
+import { useArenaLoopbackHidesHistoryError } from "@/arena/use-loopback-history";
 import { ArenaPartSourceContext } from "@/arena/full-tool-part";
 import { Button } from "@/components/ui/button";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
@@ -1443,9 +1444,14 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
     <View style={styles.contentContainer}>
       {streamContent}
 
-      {showHistorySyncError ? (
-        <TimelineSyncErrorCallout isRetrying={isRetryingHistorySync} onRetry={retryTimelineSync} />
-      ) : null}
+      <ChatHistorySyncError
+        serverId={serverId}
+        agentId={agentId}
+        isDraft={draft !== null}
+        failed={showHistorySyncError}
+        isRetrying={isRetryingHistorySync}
+        onRetry={retryTimelineSync}
+      />
     </View>
   );
 
@@ -1540,6 +1546,32 @@ function ChatSurface({
       </FileDropZone>
     </OverlayDismissalScope>
   );
+}
+
+/** The history banner, unless the battle stream already shows the loopback refusal behind it. */
+function ChatHistorySyncError({
+  serverId,
+  agentId,
+  isDraft,
+  failed,
+  isRetrying,
+  onRetry,
+}: {
+  serverId: string;
+  agentId: string;
+  isDraft: boolean;
+  failed: boolean;
+  isRetrying: boolean;
+  onRetry: () => void;
+}) {
+  const loopbackHidesError = useArenaLoopbackHidesHistoryError({
+    serverId,
+    agentId: isDraft ? undefined : agentId,
+    historyFailed: failed,
+    retryHistory: onRetry,
+  });
+  if (!failed || loopbackHidesError) return null;
+  return <TimelineSyncErrorCallout isRetrying={isRetrying} onRetry={onRetry} />;
 }
 
 function TimelineSyncErrorCallout({

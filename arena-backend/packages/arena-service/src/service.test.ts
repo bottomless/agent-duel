@@ -146,7 +146,7 @@ function comparisonRequest(scopeID: string, userId: string | undefined = "user-1
 }
 
 function contestantRequest(
-  input: { readonly assignmentID: string; readonly scopeID: string },
+  input: { readonly assignmentID: string; readonly scopeID: string; readonly model?: string },
   userId: string | undefined = "user-1",
 ) {
   return new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
@@ -159,7 +159,7 @@ function contestantRequest(
       "X-Arena-Generation-ID": generationID,
     },
     body: JSON.stringify({
-      model: "contestant",
+      model: input.model ?? "contestant",
       messages: [{ role: "user", content: "hello" }],
       stream: false,
     }),
@@ -353,6 +353,45 @@ describe("Arena service", () => {
     expect(loaded!.capture.response?.body).toContain("hidden-provider")
     const media = await db.collection("arenaGenerationParts").findOne({ userId: "user-1", kind: "media" })
     expect(media).not.toBeNull()
+  })
+
+  test("captures single-agent turns linked to their ratings", async () => {
+    const { service, upstream } = createService({ captureGenerations: true })
+    const sessionID = "ses_single"
+    const scope = (message: string) => `single-agent|${sessionID.length}:${sessionID}|${message.length}:${message}`
+    const frontier = scope("msg_frontier")
+    const medium = scope("msg_medium")
+    await send(
+      service,
+      assignmentsRequest({ action: "create", kind: "single", scopeID: frontier, modelSize: "frontier" }),
+    )
+    await send(service, assignmentsRequest({ action: "create", kind: "single", scopeID: medium, modelSize: "medium" }))
+    expect((await send(service, contestantRequest({ assignmentID: "assignment-a", scopeID: frontier }))).status).toBe(
+      200,
+    )
+    const mediumGenerationID = "gen_00000000000000000000000000000002"
+    const mediumRequest = new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer user-1",
+        "Content-Type": "application/json",
+        "X-Arena-Assignment-ID": "assignment-b",
+        "X-Arena-Scope-ID": medium,
+        "X-Arena-Generation-ID": mediumGenerationID,
+      },
+      body: JSON.stringify({ model: "medium", messages: [{ role: "user", content: "hello" }], stream: false }),
+    })
+    expect((await send(service, mediumRequest)).status).toBe(200)
+
+    const loadedFrontier = await loadGenerationCapture(db, "user-1", generationID)
+    expect(loadedFrontier?.verified).toBe(true)
+    expect(loadedFrontier!.body).toEqual(upstream[0]!.body)
+    expect(loadedFrontier!.capture.scopeID).toBe(frontier)
+    expect(loadedFrontier!.capture.response).toMatchObject({ state: "complete", status: 200 })
+    const loadedMedium = await loadGenerationCapture(db, "user-1", mediumGenerationID)
+    expect(loadedMedium?.verified).toBe(true)
+    expect(loadedMedium!.capture.scopeID).toBe(medium)
+    expect(loadedMedium!.capture.response).toMatchObject({ state: "complete", status: 200 })
   })
 
   test("a battle call that names an upload keeps its own copy, apart from the expiring upload", async () => {

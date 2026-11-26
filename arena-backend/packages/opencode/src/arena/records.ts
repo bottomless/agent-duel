@@ -626,6 +626,24 @@ export type GenerationRetry = {
   readonly observedAt: Date
 }
 
+export type GenerationFailurePhase = "prepare" | "upload" | "headers" | "http" | "stream"
+
+export type GenerationFailureKind =
+  | "header_timeout"
+  | "stream_timeout"
+  | "aborted"
+  | "transport"
+  | "http_status"
+  | "network_wait"
+  | "sign_in_wait"
+  | "stream_stalled"
+  | "stream_cut_off"
+  | "stream_read"
+  | "stream_cancelled"
+  | "replay_unavailable"
+  | "content_filter"
+  | "routing"
+
 export type GenerationDocument = {
   readonly _id: Identifier
   readonly runID: Identifier
@@ -644,12 +662,20 @@ export type GenerationDocument = {
   /** The engine's request: a contestant step, a compaction, or a utility call such as the title. */
   readonly requestKind?: "generation" | "compaction" | "utility"
   readonly startedAt: Date
+  /** UTF-8 byte length of the serialized upstream request body when dispatched. */
+  requestBytes?: number
+  /** When the proxy dispatched the upstream HTTP request (after rewrite and any media upload). */
+  upstreamDispatchedAt?: Date
   responseHeadersAt?: Date
   firstTokenAt?: Date
   completedAt?: Date
   usage?: UsageTotals
   finishReason?: string
   error?: string
+  /** Where a failed attempt stopped (prepare, media upload, waiting for headers, HTTP refusal, or stream). */
+  failurePhase?: GenerationFailurePhase
+  /** Model-neutral classification of why a failed attempt stopped. */
+  failureKind?: GenerationFailureKind
   /**
    * The attempt failed on the user's side, and the engine waited instead of retrying: no network, or
    * a session the control plane rejected. Not a provider error, and its resend is not a retry.
