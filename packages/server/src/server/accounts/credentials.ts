@@ -1,4 +1,5 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
+import { ArenaLoopbackRequiredError } from "../arena/loopback-required.js";
 
 /** A signed-in account's session, forwarded to the control plane through the daemon. */
 export interface HostedArenaCredentials {
@@ -126,14 +127,14 @@ export function readArenaCredentials(): ArenaCredentialsSnapshot | null {
 /**
  * What one Arena launch receives on its stdin. A hosted launch gets a revocable loopback
  * capability for the daemon's runtime proxy instead of the account session, so it needs the
- * daemon's TCP origin. A BYOK launch calls OpenRouter itself and gets the key.
+ * daemon's loopback TCP origin. A BYOK launch calls OpenRouter itself and gets the key.
  */
 export function issueArenaLaunchCredentials(
   daemonBaseUrl: string | null,
 ): ArenaCredentialsSnapshot | null {
   if (!current) return null;
   if (current.mode === "byok") return { credentials: current, version };
-  if (!daemonBaseUrl) return null;
+  if (!daemonBaseUrl) throw new ArenaLoopbackRequiredError();
   const token = randomBytes(32).toString("base64url");
   runtimeCredentials.set(token, version);
   return {

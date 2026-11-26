@@ -6,6 +6,7 @@ import {
 } from "@getpaseo/protocol/arena/stream";
 import type { ArenaSnapshot } from "@getpaseo/protocol/arena/rpc-schemas";
 import { ARENA_PAYLOAD_LIMIT_BYTES } from "./arena/payload-limit.js";
+import { findArenaLoopbackRequired } from "./arena/loopback-required.js";
 
 type ResetFrame = Extract<ArenaStreamFrame, { kind: "reset" }>;
 
@@ -191,8 +192,11 @@ export class ArenaStreamHub {
         const packet = { generation: entry.generation, sequence: ++entry.sequence, frame };
         for (const subscriber of entry.subscribers) this.enqueue(key, entry, subscriber, packet);
       }
-    } catch {
-      // Recovery always starts from a new authoritative baseline; no durable-log replay.
+    } catch (error) {
+      // Recovery always starts from a new authoritative baseline; no durable-log replay. An engine
+      // that cannot start on this listener answers the same way on every resubscribe.
+      const loopback = findArenaLoopbackRequired(error);
+      if (loopback) ended = { kind: "reset", reason: loopback.message, code: "loopback_required" };
     } finally {
       if (!entry.abort.signal.aborted)
         for (const subscriber of entry.subscribers)

@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { z } from "zod"
 import { createReasoningRedactor, REDACTED_THINKING } from "./reasoning"
 
 const binding = { userId: "user", scopeID: "turn", assignmentID: "assignment" }
@@ -47,7 +48,6 @@ test("batches tiny reasoning fragments into a compact, lossless continuation", (
       {
         role: "assistant",
         content: "",
-        reasoning: "abcd".repeat(16_384),
         reasoning_details: [
           {
             type: "reasoning.text",
@@ -117,7 +117,6 @@ test("keeps interleaved choices separate, flushes at content, and preserves late
       messages: [
         {
           role: "assistant",
-          reasoning: `private-${index}`,
           reasoning_details: [
             {
               type: "reasoning.text",
@@ -165,8 +164,9 @@ test("redacts JSON reasoning and restores the exact continuation without changin
   expect(JSON.stringify(response)).not.toContain("openai")
   expect(response.choices[0].message.reasoning).toBe(REDACTED_THINKING)
   const input = { messages: [response.choices[0].message], reasoning: { effort: "high" } }
+  const { reasoning: _reasoning, reasoning_content: _reasoningContent, ...deduplicated } = message
   expect(createReasoningRedactor("server-key", binding).restore(input)).toEqual({
-    messages: [message],
+    messages: [deduplicated],
     reasoning: { effort: "high" },
   })
 })
@@ -196,7 +196,6 @@ test("preserves every streamed packet and late signature for the next tool step"
     messages: [
       {
         role: "assistant",
-        reasoning: "First second",
         reasoning_details: [
           {
             type: "reasoning.text",
@@ -270,12 +269,99 @@ test("a single-agent follow-up keeps current reasoning and drops the previous me
   }
   expect(restored.messages[0]).toEqual({ role: "assistant", content: "" })
   expect(restored.messages[2]).toMatchObject({
-    reasoning: "New plan",
     reasoning_details: [{ type: "reasoning.text", text: "New plan", signature: "sig" }],
   })
+  expect(restored.messages[2]).not.toHaveProperty("reasoning")
   expect(JSON.stringify(restored)).not.toContain(REDACTED_THINKING)
   expect(JSON.stringify(restored)).not.toContain("Old plan")
 })
+
+test("omits duplicate plaintext reasoning when reasoning_details is present, but preserves plaintext-only reasoning", () => {
+  const redactor = createReasoningRedactor("server-key", binding)
+  const both = redactor.redact({
+    choices: [
+      {
+        message: {
+          role: "assistant",
+          content: "Done",
+          reasoning: "DeepSeek thought",
+          reasoning_details: [{ type: "reasoning.text", text: "DeepSeek thought", format: "unknown", index: 0 }],
+        },
+      },
+    ],
+  }) as { choices: [{ message: Record<string, unknown> }] }
+  const restoredBoth = redactor.restore({ messages: [both.choices[0].message] }) as {
+    messages: Record<string, unknown>[]
+  }
+  expect(restoredBoth.messages[0]).toEqual({
+    role: "assistant",
+    content: "Done",
+    reasoning_details: [{ type: "reasoning.text", text: "DeepSeek thought", format: "unknown", index: 0 }],
+  })
+  expect(restoredBoth.messages[0]).not.toHaveProperty("reasoning")
+  expect(restoredBoth.messages[0]).not.toHaveProperty("reasoning_content")
+
+  const plainOnly = redactor.redact({
+    choices: [
+      {
+        message: {
+          role: "assistant",
+          content: "Plain",
+          reasoning: "Only string reasoning",
+        },
+      },
+    ],
+  }) as { choices: [{ message: Record<string, unknown> }] }
+  const restoredPlain = redactor.restore({ messages: [plainOnly.choices[0].message] }) as {
+    messages: Record<string, unknown>[]
+  }
+  expect(restoredPlain.messages[0]).toEqual({
+    role: "assistant",
+    content: "Plain",
+    reasoning: "Only string reasoning",
+  })
+})
+
+test.each(["reasoning", "reasoning_content"])(
+  "preserves plaintext-only stream fragments in %s beside structured details",
+  (field) => {
+    const redactor = createReasoningRedactor("server-key", binding)
+    const first = { type: "reasoning.text", text: "Structured thought", format: "anthropic-claude-v1", index: 0 }
+    const signature = { type: "reasoning.text", text: "", signature: "late-signature", index: 0 }
+    const opaque = { type: "reasoning.encrypted", data: "provider-ciphertext", format: "openai-responses-v1", index: 1 }
+    const chunks = [
+      { delta: { [field]: "Plain start. " } },
+      { delta: { [field]: first.text, reasoning_details: [first] } },
+      { delta: { [field]: "Plain end.", reasoning_details: [] } },
+      { delta: { reasoning_details: [signature, opaque] }, finish_reason: "tool_calls" },
+    ]
+    const redactedStream = z.object({
+      choices: z.tuple([
+        z.object({ delta: z.object({ reasoning_details: z.array(z.looseObject({ type: z.string() })) }) }),
+      ]),
+    })
+    const details = chunks.flatMap((choice) => {
+      const redacted = redactedStream.parse(redactor.redact({ choices: [choice] }, true))
+      return redacted.choices[0].delta.reasoning_details
+    })
+    // Plain and structured fragments can share one continuation envelope.
+    expect(details.filter((detail) => detail.type === "reasoning.encrypted")).toHaveLength(1)
+    expect(JSON.stringify(details)).not.toContain("Plain start")
+    expect(
+      createReasoningRedactor("server-key", binding).restore({
+        messages: [{ role: "assistant", reasoning: REDACTED_THINKING, reasoning_details: details }],
+      }),
+    ).toEqual({
+      messages: [
+        {
+          role: "assistant",
+          [field]: "Plain start. Plain end.",
+          reasoning_details: [{ ...first, signature: signature.signature }, opaque],
+        },
+      ],
+    })
+  },
+)
 
 test("redacts Responses items and progress events and restores their original continuation", () => {
   const redactor = createReasoningRedactor("server-key", binding)

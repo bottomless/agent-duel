@@ -11,6 +11,7 @@ import {
   canTransition,
   canVote,
   chatSlug,
+  completedBeforeHalt,
   discardStage,
   earlyResolution,
   generationName,
@@ -257,17 +258,17 @@ describe("canReopenInterruptedBattle", () => {
 
   test("leaves a battle the voter stopped, or one still in setup, to the stopped recovery", () => {
     expect(
-      canReopenInterruptedBattle(
-        { state: "interrupted_recovery", transitionTimestamps: { stopping: new Date() } },
-        [settled, working],
-      ),
+      canReopenInterruptedBattle({ state: "interrupted_recovery", transitionTimestamps: { stopping: new Date() } }, [
+        settled,
+        working,
+      ]),
     ).toBe(false)
     expect(canReopenInterruptedBattle({ state: "stopping" }, [settled, working])).toBe(false)
     expect(canReopenInterruptedBattle({ state: "creating" }, [working, working])).toBe(false)
     expect(canReopenInterruptedBattle({ state: "running" }, [settled, {}])).toBe(false)
-    expect(canReopenInterruptedBattle({ state: "running" }, [settled, { ...working, worktreeRemovedAt: new Date() }])).toBe(
-      false,
-    )
+    expect(
+      canReopenInterruptedBattle({ state: "running" }, [settled, { ...working, worktreeRemovedAt: new Date() }]),
+    ).toBe(false)
     expect(canReopenInterruptedBattle({ state: "running" }, [working])).toBe(false)
   })
 })
@@ -410,9 +411,25 @@ describe("canTie and canDiscardBattle", () => {
     expect(voteDiscardedReason(undefined, [settled("a", false), settled("b", true)])).toBeUndefined()
   })
 
-  test("discards a stopped battle whatever its results", () => {
+  test("discards a stopped or stuck-stopping battle whatever its results", () => {
+    expect(canTransition("stopping", "discarding")).toBe(true)
     expect(canDiscardBattle({ state: "awaiting_stop_resolution" }, both)).toBe(true)
     expect(canDiscardBattle({ state: "awaiting_stop_resolution" }, neither)).toBe(true)
+    expect(canDiscardBattle({ state: "stopping" }, both)).toBe(true)
+    expect(canDiscardBattle({ state: "stopping" }, neither)).toBe(true)
+    expect(canDiscardBattle({ state: "stopping", resolution: stoppedResolution("discard") }, neither)).toBe(false)
+    expect(discardStage({ state: "stopping" }, [])).toBe("stop")
+  })
+
+  test("preserves sides that completed cleanly before a halt", () => {
+    const before = new Date("2026-09-01T10:00:00.000Z")
+    const halt = new Date("2026-09-01T10:00:05.000Z")
+    const after = new Date("2026-09-01T10:00:06.000Z")
+    expect(completedBeforeHalt({ completed: true, haltedAt: halt, endedAt: before })).toBe(true)
+    expect(completedBeforeHalt({ completed: true, haltedAt: halt, endedAt: halt })).toBe(false)
+    expect(completedBeforeHalt({ completed: true, haltedAt: halt, endedAt: after })).toBe(false)
+    expect(completedBeforeHalt({ completed: false, haltedAt: halt, endedAt: before })).toBe(false)
+    expect(completedBeforeHalt({ completed: true, haltedAt: undefined, endedAt: before })).toBe(false)
   })
 
   test("refuses both once the battle is decided or not waiting on the voter", () => {

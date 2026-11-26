@@ -567,18 +567,57 @@ function RetryResolutionDecision({
   );
 }
 
+/**
+ * How long a battle must remain in `stopping` before offering Discard beside the status, so a
+ * normal sub-second stop never flashes the button while a stuck stop gives the voter an exit.
+ */
+export const STUCK_STOPPING_DISCARD_DELAY_MS = 10_000;
+
+function remainingStoppingDiscardDelayMs(stoppingAt: string | undefined, now: number): number {
+  if (!stoppingAt) return 0;
+  const startedAt = Date.parse(stoppingAt);
+  if (!Number.isFinite(startedAt)) return 0;
+  return Math.max(0, startedAt + STUCK_STOPPING_DISCARD_DELAY_MS - now);
+}
+
 function TransitionalDecision({
   phase,
+  actions,
 }: {
   phase: Extract<ArenaDecisionPhase, { kind: "transitional" }>;
+  actions: ArenaBattleActions;
 }) {
+  const canDiscard = phase.canDiscard === true;
+  const [discardReady, setDiscardReady] = useState(
+    () => canDiscard && remainingStoppingDiscardDelayMs(phase.stoppingAt, Date.now()) === 0,
+  );
+  useEffect(() => {
+    if (!canDiscard) {
+      setDiscardReady(false);
+      return;
+    }
+    const remaining = remainingStoppingDiscardDelayMs(phase.stoppingAt, Date.now());
+    if (remaining === 0) {
+      setDiscardReady(true);
+      return;
+    }
+    setDiscardReady(false);
+    const timer = setTimeout(() => setDiscardReady(true), remaining);
+    return () => clearTimeout(timer);
+  }, [canDiscard, phase.stoppingAt]);
+
+  const showDiscard = canDiscard && discardReady;
   return (
-    <View style={styles.transitional} testID="arena-decision-transitional">
+    <View
+      style={[styles.transitional, showDiscard && styles.transitionalWithAction]}
+      testID="arena-decision-transitional"
+    >
       {phase.busy ? (
         <ArenaTransitionStatus label={phase.label} />
       ) : (
         <Text style={styles.status}>{phase.label}</Text>
       )}
+      {showDiscard ? <DiscardDecision actions={actions} placement="hint" /> : null}
     </View>
   );
 }
@@ -628,7 +667,7 @@ function DecisionContent({
     case "retry_resolution":
       return <RetryResolutionDecision phase={phase} actions={actions} />;
     case "transitional":
-      return <TransitionalDecision phase={phase} />;
+      return <TransitionalDecision phase={phase} actions={actions} />;
   }
 }
 
@@ -918,6 +957,10 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: "row",
     alignItems: "center",
     gap: theme.spacing[2],
+  },
+  transitionalWithAction: {
+    justifyContent: "space-between",
+    flexWrap: "wrap",
   },
   error: {
     flex: 1,

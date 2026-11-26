@@ -3,23 +3,41 @@ import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes }
 export const REDACTED_THINKING = "[Thinking redacted]"
 const prefix = "arena_reasoning_v1."
 const markerID = "arena_redacted_thinking"
-const fields = new Set(["reasoning", "reasoning_content", "reasoning_details"])
+const plaintextFields = ["reasoning", "reasoning_content"]
+const fields = new Set([...plaintextFields, "reasoning_details"])
 // Count incoming serialized bytes, including metadata, rather than retaining an entire step.
 // A single upstream chunk can exceed this limit; it is sealed immediately.
 const batchBytes = 64 * 1024
 
 type Binding = { readonly userId: string; readonly scopeID: string; readonly assignmentID: string }
-type Packet = { kind: "chat" | "responses"; value: Record<string, unknown>; stream: boolean; rendered: string }
+type Packet = {
+  kind: "chat" | "responses"
+  value: Record<string, unknown>
+  stream: boolean
+  rendered: string
+  plaintextDeduplicated?: boolean
+}
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
-function renderedReasoning(value: Record<string, unknown>) {
-  if (!Array.isArray(value.reasoning_details) || value.reasoning_details.length === 0) {
-    return typeof value.reasoning === "string" ? value.reasoning : ""
+function reasoningDetails(value: Record<string, unknown>): unknown[] {
+  return Array.isArray(value.reasoning_details) ? value.reasoning_details : []
+}
+
+function appendPlaintext(target: Record<string, unknown>, value: Record<string, unknown>) {
+  for (const field of plaintextFields) {
+    const text = value[field]
+    if (typeof text !== "string") continue
+    const previous = target[field]
+    target[field] = typeof previous === "string" ? previous + text : text
   }
-  return value.reasoning_details
+}
+
+function renderedReasoning(value: Record<string, unknown>, details: unknown[]) {
+  if (details.length === 0) return typeof value.reasoning === "string" ? value.reasoning : ""
+  return details
     .map((detail: unknown) => {
       if (!record(detail)) return ""
       if (detail.type === "reasoning.text" && typeof detail.text === "string") return detail.text
@@ -73,7 +91,13 @@ export function createReasoningRedactor(apiKey: string, binding: Binding) {
         (decoded.kind !== "chat" && decoded.kind !== "responses")
       )
         return undefined
-      return { kind: decoded.kind, value: decoded.value, stream: decoded.stream, rendered: decoded.rendered }
+      return {
+        kind: decoded.kind,
+        value: decoded.value,
+        stream: decoded.stream,
+        rendered: decoded.rendered,
+        plaintextDeduplicated: decoded.plaintextDeduplicated === true,
+      }
     } catch {
       return undefined
     }
@@ -89,20 +113,19 @@ export function createReasoningRedactor(apiKey: string, binding: Binding) {
     const hasReasoning = Object.values(reasoning).some((value) =>
       Array.isArray(value) ? value.length > 0 : typeof value === "string" && value.length > 0,
     )
-    const rendered = afterText ? "" : renderedReasoning(reasoning)
+    const chunkDetails = reasoningDetails(reasoning)
+    const rendered = afterText ? "" : renderedReasoning(reasoning, chunkDetails)
     let packet: Packet | undefined
     if (stream) {
       if (hasReasoning) {
         const pending = buffered.get(choice) ?? { value: {}, rendered: "", bytes: 0 }
-        for (const field of ["reasoning", "reasoning_content"]) {
-          if (typeof reasoning[field] === "string")
-            pending.value[field] = String(pending.value[field] ?? "") + reasoning[field]
-        }
-        if (Array.isArray(reasoning.reasoning_details)) {
-          const details = Array.isArray(pending.value.reasoning_details) ? pending.value.reasoning_details : []
-          mergeDetails(details, reasoning.reasoning_details, true)
+        // Prefer provider details only for the chunk that supplied them. A batch can also
+        // contain plaintext-only chunks, which cannot be recovered from its merged details.
+        if (chunkDetails.length > 0) {
+          const details = reasoningDetails(pending.value)
+          mergeDetails(details, chunkDetails, true)
           pending.value.reasoning_details = details
-        }
+        } else appendPlaintext(pending.value, reasoning)
         pending.rendered += rendered
         pending.bytes += Buffer.byteLength(JSON.stringify(reasoning))
         buffered.set(choice, pending)
@@ -115,7 +138,13 @@ export function createReasoningRedactor(apiKey: string, binding: Binding) {
           (typeof message.content === "string" && message.content.length > 0) ||
           (Array.isArray(message.tool_calls) && message.tool_calls.length > 0))
       ) {
-        packet = { kind: "chat", value: pending.value, rendered: pending.rendered, stream: true }
+        packet = {
+          kind: "chat",
+          value: pending.value,
+          rendered: pending.rendered,
+          stream: true,
+          plaintextDeduplicated: true,
+        }
         buffered.delete(choice)
       }
     } else if (hasReasoning) packet = { kind: "chat", value: reasoning, stream: false, rendered }
@@ -239,17 +268,16 @@ export function createReasoningRedactor(apiKey: string, binding: Binding) {
       const packet = open(detail.data)
       if (packet?.kind !== "chat") continue
       rendered += packet.rendered
-      for (const field of ["reasoning", "reasoning_content"]) {
-        if (typeof packet.value[field] === "string")
-          restored[field] = String(restored[field] ?? "") + packet.value[field]
-      }
-      if (Array.isArray(packet.value.reasoning_details))
-        mergeDetails(details, packet.value.reasoning_details, packet.stream)
+      const packetDetails = reasoningDetails(packet.value)
+      // Older envelopes and JSON replies did not filter plaintext before sealing. Prefer
+      // their original provider details when present; never synthesize structured blocks.
+      if (packet.plaintextDeduplicated || packetDetails.length === 0) appendPlaintext(restored, packet.value)
+      mergeDetails(details, packetDetails, packet.stream)
     }
     // Markers never go upstream, even when no envelope opened.
     if (!redacted) return message
-    if (restored.reasoning === undefined && rendered) restored.reasoning = rendered
     if (details.length > 0) restored.reasoning_details = details
+    else if (restored.reasoning === undefined && rendered) restored.reasoning = rendered
     return restored
   }
 

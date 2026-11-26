@@ -3,6 +3,7 @@ import { Text, View } from "react-native";
 import { StyleSheet } from "react-native-unistyles";
 import { Button } from "@/components/ui/button";
 import { ArenaChatTooLargeError } from "./chat-too-large";
+import { ArenaLoopbackRequiredError } from "./loopback-required";
 
 export function ArenaStreamStatus({ error, retry }: { error: Error | null; retry: () => unknown }) {
   const { t } = useTranslation();
@@ -10,7 +11,9 @@ export function ArenaStreamStatus({ error, retry }: { error: Error | null; retry
   return (
     <View style={styles.row} accessibilityRole="alert">
       <Text style={styles.text}>
-        {error instanceof ArenaChatTooLargeError ? error.message : t("arena.streamDisconnected")}
+        {error instanceof ArenaChatTooLargeError || error instanceof ArenaLoopbackRequiredError
+          ? error.message
+          : t("arena.streamDisconnected")}
       </Text>
       <Button size="sm" variant="outline" onPress={retry}>
         {t("arena.retry")}

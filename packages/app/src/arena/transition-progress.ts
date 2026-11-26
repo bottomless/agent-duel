@@ -6,6 +6,17 @@ type Turn = NonNullable<ArenaSnapshot["turn"]>;
 export type ArenaOperation = NonNullable<Turn["activeOperations"]>[number];
 type ProgressTurn = Pick<Turn, "state" | "activeOperations" | "resolution">;
 
+function stopLabels(running: string, completed: string) {
+  return {
+    get running() {
+      return i18n.t(`arena.${running}`);
+    },
+    get completed() {
+      return i18n.t(`arena.${completed}`);
+    },
+  };
+}
+
 /**
  * What each engine step is called while it runs and once it is done. The status line and the
  * timeline both read it, and the status line keeps this order so overlapping work does not move.
@@ -46,6 +57,12 @@ export const ARENA_OPERATION_LABELS: Record<
       return i18n.t("arena.releasedPrevious");
     },
   },
+  stopping_agents: stopLabels("stopAgents", "stoppedAgents"),
+  pausing_services: stopLabels("pauseServices", "pausedServices"),
+  snapshotting_changes: stopLabels("snapshotChanges", "snapshottedChanges"),
+  resuming_services: stopLabels("resumeServices", "resumedServices"),
+  importing_results: stopLabels("importResults", "importedResults"),
+  archiving_transcripts: stopLabels("archiveTranscripts", "archivedTranscripts"),
   preserving_results: {
     get running() {
       return i18n.t("arena.saveResults");
@@ -87,7 +104,7 @@ export const ARENA_SETUP_OPERATIONS: ReadonlySet<ArenaOperation> = new Set<Arena
   "releasing_environment",
 ]);
 
-function operationStatus(operations: readonly ArenaOperation[]): string | null {
+export function operationStatus(operations: readonly ArenaOperation[]): string | null {
   if (operations.length === 0) return null;
   return Object.entries(ARENA_OPERATION_LABELS)
     .filter(([operation]) => operations.some((active) => active === operation))

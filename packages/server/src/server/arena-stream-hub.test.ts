@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ArenaStreamHub } from "./arena-stream-hub.js";
+import { ArenaLoopbackRequiredError } from "./arena/loopback-required.js";
 import { ArenaSnapshotSchema } from "@getpaseo/protocol/arena/rpc-schemas";
 import type { ArenaStreamFrame, ArenaStreamPacket } from "@getpaseo/protocol/arena/stream";
 
@@ -181,6 +182,23 @@ describe("shared Arena upstream", () => {
       { kind: "reset", reason: "This battle is too large to load", code: "chat_too_large" },
     ]);
     expect(hub.counts().streams).toBe(0);
+  });
+  it("tells a window the engine cannot start off loopback, so it stops reconnecting", async () => {
+    const hub = new ArenaStreamHub();
+    const packets: ArenaStreamPacket[] = [];
+    // oxlint-disable-next-line require-yield -- the engine fails before its first frame.
+    async function* refused(): AsyncGenerator<ArenaStreamFrame> {
+      throw new Error("start failed", { cause: new ArenaLoopbackRequiredError() });
+    }
+    hub.subscribe({ key: "current", open: refused, deliver: (packet) => packets.push(packet) });
+    await settle();
+    expect(packets.map((packet) => packet.frame)).toEqual([
+      {
+        kind: "reset",
+        reason: new ArenaLoopbackRequiredError().message,
+        code: "loopback_required",
+      },
+    ]);
   });
   it("keeps the initial snapshot outside the 4 MiB pending-change limit", async () => {
     const hub = new ArenaStreamHub();

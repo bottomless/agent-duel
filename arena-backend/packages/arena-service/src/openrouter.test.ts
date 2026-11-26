@@ -386,7 +386,7 @@ describe("OpenRouter proxy", () => {
       expect(details.filter((detail) => (detail as { type: string }).type === "reasoning.encrypted")).toHaveLength(1)
       if (ending === "done") expect(events.at(-1)).toBe("data: [DONE]")
       await (await invoke([{ role: "assistant", reasoning_details: details }])).text()
-      expect(body?.messages).toEqual([{ role: "assistant", reasoning: "Private thought", ...delta }])
+      expect(body?.messages).toEqual([{ role: "assistant", ...delta }])
     },
   )
 
@@ -948,6 +948,123 @@ describe("OpenRouter proxy", () => {
       await invoke("chat/completions", fields)
       expect(upstreamBodies.at(-1)).not.toHaveProperty("cache_control")
     }
+  })
+
+  test("records a stream the client's abort broke as cancelled, not failed", async () => {
+    const recorded: Record<string, unknown>[] = []
+    const db = fakeDb({
+      assignmentSets: () => [
+        { userId: "user-1", scopeID: "turn-1", assignments: [{ assignmentID: "opaque-id", model: pool[0] }] },
+      ],
+      recordMetrics: (document) => recorded.push(document),
+    })
+    const client = new AbortController()
+    const error = spyOn(console, "error").mockImplementation(() => {})
+    try {
+      const response = await openrouter({
+        db: async () => db,
+        streamRecovery: false,
+        // The upstream fetch shares the client's signal: its abort breaks the read first.
+        fetch: async (_input, init) => {
+          let sent = false
+          return new Response(
+            new ReadableStream<Uint8Array>({
+              pull(controller) {
+                if (!sent) {
+                  sent = true
+                  controller.enqueue(
+                    new TextEncoder().encode(
+                      `data: ${JSON.stringify({ id: "upstream-1", provider: "Private Provider", choices: [] })}\n\n`,
+                    ),
+                  )
+                  return
+                }
+                return new Promise<void>((resolve) => {
+                  init?.signal?.addEventListener("abort", () => {
+                    controller.error(new Error("aborted"))
+                    resolve()
+                  })
+                })
+              },
+            }),
+            { headers: { "content-type": "text/event-stream" } },
+          )
+        },
+      })(
+        new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+          method: "POST",
+          signal: client.signal,
+          headers: {
+            "Content-Type": "application/json",
+            "X-Arena-Assignment-ID": "opaque-id",
+            "X-Arena-Scope-ID": "turn-1",
+            "X-Arena-Generation-ID": "gen_00000000000000000000000000000010",
+          },
+          body: JSON.stringify({ model: "contestant", messages: [], stream: true }),
+        }),
+      )
+      const reader = response.body!.getReader()
+      await reader.read()
+      const rest = reader.read()
+      client.abort()
+      await rest.catch(() => undefined)
+      while (!(await reader.read().catch(() => ({ done: true }))).done) {
+        // Drain whatever the stream still writes.
+      }
+
+      expect(recorded).toHaveLength(1)
+      expect(recorded[0]).toMatchObject({
+        generationID: "gen_00000000000000000000000000000010",
+        outcome: "cancelled",
+        provider: "Private Provider",
+      })
+    } finally {
+      error.mockRestore()
+    }
+  })
+
+  test("records a stream that closed before its finish, without a finish reason", async () => {
+    const recorded: Record<string, unknown>[] = []
+    const db = fakeDb({
+      assignmentSets: () => [
+        { userId: "user-1", scopeID: "turn-1", assignments: [{ assignmentID: "opaque-id", model: pool[0] }] },
+      ],
+      recordMetrics: (document) => recorded.push(document),
+    })
+    const response = await openrouter({
+      db: async () => db,
+      fetch: async () =>
+        new Response(
+          `data: ${JSON.stringify({
+            id: "upstream-cut",
+            provider: "Private Provider",
+            choices: [{ delta: { content: "partial" }, finish_reason: null }],
+          })}\n\n`,
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+    })(
+      new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Arena-Assignment-ID": "opaque-id",
+          "X-Arena-Scope-ID": "turn-1",
+          "X-Arena-Generation-ID": "gen_00000000000000000000000000000009",
+        },
+        body: JSON.stringify({ model: "contestant", messages: [], stream: true }),
+      }),
+    )
+
+    expect(await response.text()).not.toContain("Private Provider")
+    expect(recorded).toHaveLength(1)
+    expect(recorded[0]).toMatchObject({
+      generationID: "gen_00000000000000000000000000000009",
+      outcome: "complete",
+      provider: "Private Provider",
+      upstreamGenerationID: "upstream-cut",
+    })
+    expect(recorded[0]).not.toHaveProperty("finishReason")
+    expect(recorded[0]).not.toHaveProperty("usage")
   })
 
   test("keeps each side of a turn on one provider and its cache, and records that provider privately", async () => {
@@ -1664,6 +1781,544 @@ describe("OpenRouter proxy", () => {
     expect(body).toContain('"content":"partial"')
     expect(body).toContain('"type":"arena_retryable_stream_error"')
     expect(body).not.toContain("private")
+  })
+
+  test.each(["cancelled", "failed"] as const)(
+    "logs the provider and upstream generation id when a contestant stream ends early (%s)",
+    async (ending) => {
+      const assignmentSet = {
+        userId: "user-1",
+        scopeID: "turn-1",
+        assignments: [
+          {
+            assignmentID: "opaque-id",
+            model: {
+              displayName: "Hidden Model",
+              slug: "provider/hidden-model",
+              canonicalSlug: "provider/hidden-model-version",
+              contextWindow: 1_000_000,
+              routing: { sort: "throughput" },
+            },
+          },
+        ],
+      }
+      const db = fakeDb({ assignmentSets: () => [assignmentSet] })
+      let clock = 1_000_000
+      const now = spyOn(Date, "now").mockImplementation(() => clock)
+      const logged: Array<{ readonly level: string; readonly message: unknown; readonly detail: unknown }> = []
+      const error = spyOn(console, "error").mockImplementation((message: unknown, detail: unknown) => {
+        logged.push({ level: "error", message, detail })
+      })
+      const info = spyOn(console, "info").mockImplementation((message: unknown, detail: unknown) => {
+        logged.push({ level: "info", message, detail })
+      })
+      const payload = {
+        id: "private-upstream-id",
+        provider: "Private Provider",
+        choices: [{ delta: { content: "secret output", reasoning: "secret thought" } }],
+      }
+      let pulls = 0
+      let secondPullStarted: (() => void) | undefined
+      const secondPull = new Promise<void>((resolve) => {
+        secondPullStarted = resolve
+      })
+      let failUpstream: (() => void) | undefined
+      let release: (() => void) | undefined
+      try {
+        const response = await openrouter({
+          db: async () => db,
+          streamRecovery: false,
+          fetch: async () =>
+            new Response(
+              new ReadableStream<Uint8Array>({
+                pull(controller) {
+                  pulls++
+                  if (pulls === 1) {
+                    controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(payload)}\n\n`))
+                    return
+                  }
+                  secondPullStarted?.()
+                  if (ending === "failed") {
+                    return new Promise<void>((resolve) => {
+                      failUpstream = () => {
+                        controller.error(new Error("private transport failure"))
+                        resolve()
+                      }
+                    })
+                  }
+                  // The client cuts a stalled stream before the next upstream event arrives.
+                  return new Promise<void>((resolve) => {
+                    release = resolve
+                  })
+                },
+                cancel() {
+                  release?.()
+                },
+              }),
+              { headers: { "content-type": "text/event-stream" } },
+            ),
+        })(
+          new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Arena-Assignment-ID": "opaque-id",
+              "X-Arena-Scope-ID": "turn-1",
+              "X-Arena-Generation-ID": "gen_00000000000000000000000000000007",
+            },
+            body: JSON.stringify({ model: "contestant", messages: [], stream: true }),
+          }),
+        )
+        const reader = response.body!.getReader()
+        const first = await reader.read()
+        expect(new TextDecoder().decode(first.value)).toContain("secret output")
+        await secondPull
+        if (ending === "cancelled") {
+          clock += 750
+          await reader.cancel()
+        } else {
+          clock += 640
+          failUpstream?.()
+          while (!(await reader.read()).done) {
+            // Drain the safe retryable event the client still receives.
+          }
+        }
+
+        expect(logged).toHaveLength(1)
+        // A cancel this soon is a Stop or a vote; a broken connection is the provider's.
+        expect(logged[0]?.level).toBe(ending === "cancelled" ? "info" : "error")
+        expect(logged[0]?.message).toBe("[arena-service] OpenRouter contestant stream ended early")
+        const detail = String(logged[0]?.detail)
+        expect(JSON.parse(detail)).toEqual({
+          generationID: "gen_00000000000000000000000000000007",
+          upstreamGenerationID: "private-upstream-id",
+          provider: "Private Provider",
+          outcome: ending,
+          quietMs: ending === "cancelled" ? 750 : 640,
+        })
+        expect(detail).not.toContain("secret output")
+        expect(detail).not.toContain("secret thought")
+      } finally {
+        error.mockRestore()
+        info.mockRestore()
+        now.mockRestore()
+      }
+    },
+  )
+
+  test("measures quiet time across OpenRouter processing comments and logs the idle cut as an error", async () => {
+    const db = fakeDb({
+      assignmentSets: () => [
+        { userId: "user-1", scopeID: "turn-1", assignments: [{ assignmentID: "opaque-id", model: pool[0] }] },
+      ],
+    })
+    const upstream = new TransformStream<Uint8Array, Uint8Array>()
+    const writer = upstream.writable.getWriter()
+    const encoder = new TextEncoder()
+    let clock = 1_000_000
+    const now = spyOn(Date, "now").mockImplementation(() => clock)
+    const error = spyOn(console, "error").mockImplementation(() => {})
+    try {
+      const response = await openrouter({
+        db: async () => db,
+        streamRecovery: false,
+        fetch: async () => new Response(upstream.readable, { headers: { "content-type": "text/event-stream" } }),
+      })(
+        new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Arena-Assignment-ID": "opaque-id",
+            "X-Arena-Scope-ID": "turn-1",
+          },
+          body: JSON.stringify({ model: "contestant", messages: [], stream: true }),
+        }),
+      )
+      const reader = response.body!.getReader()
+
+      clock += 1_000
+      await writer.write(encoder.encode('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'))
+      expect(new TextDecoder().decode((await reader.read()).value)).toContain('"content":"partial"')
+      await reader.read() // Event separator.
+      for (let index = 0; index < 2; index++) {
+        clock += 50_000
+        await writer.write(encoder.encode(": OPENROUTER PROCESSING\n\n"))
+        await reader.read()
+        await reader.read()
+      }
+      clock += 25_000
+      await writer.write(new Uint8Array())
+      clock += 25_000
+      await reader.cancel()
+
+      expect(error).toHaveBeenCalledTimes(1)
+      expect(JSON.parse(String(error.mock.calls[0]?.[1]))).toMatchObject({ outcome: "cancelled", quietMs: 150_000 })
+    } finally {
+      error.mockRestore()
+      now.mockRestore()
+    }
+  })
+
+  test("records a complete answer with its usage, provider and OpenRouter generation id", async () => {
+    const written: Record<string, unknown>[] = []
+    const db = fakeDb({
+      assignmentSets: () => [
+        { userId: "user-1", scopeID: "turn-1", assignments: [{ assignmentID: "opaque-id", model: pool[0] }] },
+      ],
+      recordMetrics: (document) => {
+        written.push(document)
+      },
+    })
+    const response = await openrouter({
+      db: async () => db,
+      fetch: async () =>
+        Response.json({
+          id: "upstream-generation",
+          provider: "Private Provider",
+          usage: { prompt_tokens: 10, completion_tokens: 5 },
+          choices: [{ message: { content: "done" }, finish_reason: "stop" }],
+        }),
+    })(
+      new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Arena-Assignment-ID": "opaque-id",
+          "X-Arena-Scope-ID": "turn-1",
+          "X-Arena-Generation-ID": "gen_0000000000000000000000000000000a",
+        },
+        body: JSON.stringify({ model: "contestant", messages: [], stream: false }),
+      }),
+    )
+
+    const body = await response.text()
+    expect(body).not.toContain("upstream-generation")
+    expect(body).not.toContain("Private Provider")
+    expect(written).toHaveLength(1)
+    expect(written[0]).toMatchObject({
+      generationID: "gen_0000000000000000000000000000000a",
+      outcome: "complete",
+      upstreamGenerationID: "upstream-generation",
+      provider: "Private Provider",
+      usage: { promptTokens: 10, completionTokens: 5 },
+      finishReason: "stop",
+    })
+  })
+
+  test("records a cancelled stream with the silence it waited through and no usage", async () => {
+    const written: Record<string, unknown>[] = []
+    const db = fakeDb({
+      assignmentSets: () => [
+        { userId: "user-1", scopeID: "turn-1", assignments: [{ assignmentID: "opaque-id", model: pool[0] }] },
+      ],
+      recordMetrics: (document) => {
+        written.push(document)
+      },
+    })
+    const upstream = new TransformStream<Uint8Array, Uint8Array>()
+    const writer = upstream.writable.getWriter()
+    const encoder = new TextEncoder()
+    let clock = 1_000_000
+    const now = spyOn(Date, "now").mockImplementation(() => clock)
+    const error = spyOn(console, "error").mockImplementation(() => {})
+    try {
+      const response = await openrouter({
+        db: async () => db,
+        streamRecovery: false,
+        fetch: async () => new Response(upstream.readable, { headers: { "content-type": "text/event-stream" } }),
+      })(
+        new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Arena-Assignment-ID": "opaque-id",
+            "X-Arena-Scope-ID": "turn-1",
+            "X-Arena-Generation-ID": "gen_0000000000000000000000000000000b",
+          },
+          body: JSON.stringify({ model: "contestant", messages: [], stream: true }),
+        }),
+      )
+      const reader = response.body!.getReader()
+      await writer.write(
+        encoder.encode(
+          'data: {"id":"upstream-generation","provider":"Private Provider","choices":[{"delta":{"content":"partial"}}]}\n\n',
+        ),
+      )
+      expect(new TextDecoder().decode((await reader.read()).value)).toContain('"content":"partial"')
+      await reader.read() // Event separator.
+      clock += 150_000
+      await reader.cancel()
+
+      expect(error).toHaveBeenCalledTimes(1)
+      expect(written).toHaveLength(1)
+      expect(written[0]).toMatchObject({
+        generationID: "gen_0000000000000000000000000000000b",
+        outcome: "cancelled",
+        quietMs: 150_000,
+        upstreamGenerationID: "upstream-generation",
+        provider: "Private Provider",
+      })
+      expect(written[0]).not.toHaveProperty("usage")
+    } finally {
+      error.mockRestore()
+      now.mockRestore()
+    }
+  })
+
+  test("records a broken stream as failed with the silence before the break and no usage", async () => {
+    const written: Record<string, unknown>[] = []
+    const db = fakeDb({
+      assignmentSets: () => [
+        { userId: "user-1", scopeID: "turn-1", assignments: [{ assignmentID: "opaque-id", model: pool[0] }] },
+      ],
+      recordMetrics: (document) => {
+        written.push(document)
+      },
+    })
+    const encoder = new TextEncoder()
+    let pulls = 0
+    let secondPullStarted: (() => void) | undefined
+    const secondPull = new Promise<void>((resolve) => {
+      secondPullStarted = resolve
+    })
+    let failUpstream: (() => void) | undefined
+    let clock = 1_000_000
+    const now = spyOn(Date, "now").mockImplementation(() => clock)
+    const error = spyOn(console, "error").mockImplementation(() => {})
+    try {
+      const response = await openrouter({
+        db: async () => db,
+        streamRecovery: false,
+        fetch: async () =>
+          new Response(
+            new ReadableStream<Uint8Array>({
+              pull(controller) {
+                pulls++
+                if (pulls === 1) {
+                  controller.enqueue(
+                    encoder.encode(
+                      'data: {"id":"upstream-generation","provider":"Private Provider","choices":[{"delta":{"content":"partial"}}]}\n\n',
+                    ),
+                  )
+                  return
+                }
+                secondPullStarted?.()
+                return new Promise<void>((resolve) => {
+                  failUpstream = () => {
+                    controller.error(new Error("private transport failure"))
+                    resolve()
+                  }
+                })
+              },
+            }),
+            { headers: { "content-type": "text/event-stream" } },
+          ),
+      })(
+        new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Arena-Assignment-ID": "opaque-id",
+            "X-Arena-Scope-ID": "turn-1",
+            "X-Arena-Generation-ID": "gen_0000000000000000000000000000000c",
+          },
+          body: JSON.stringify({ model: "contestant", messages: [], stream: true }),
+        }),
+      )
+      const text = response.text()
+      await secondPull
+      clock += 640
+      failUpstream?.()
+      expect(await text).toContain('"type":"arena_retryable_stream_error"')
+
+      expect(error).toHaveBeenCalledTimes(1)
+      expect(written).toHaveLength(1)
+      expect(written[0]).toMatchObject({
+        generationID: "gen_0000000000000000000000000000000c",
+        outcome: "failed",
+        quietMs: 640,
+        upstreamGenerationID: "upstream-generation",
+        provider: "Private Provider",
+      })
+      expect(written[0]).not.toHaveProperty("usage")
+    } finally {
+      error.mockRestore()
+      now.mockRestore()
+    }
+  })
+
+  test("records an OpenRouter refusal as an error with its status and the provider it names", async () => {
+    const written: Record<string, unknown>[] = []
+    const db = fakeDb({
+      assignmentSets: () => [
+        { userId: "user-1", scopeID: "turn-1", assignments: [{ assignmentID: "opaque-id", model: pool[0] }] },
+      ],
+      recordMetrics: (document) => {
+        written.push(document)
+      },
+    })
+    const error = spyOn(console, "error").mockImplementation(() => {})
+    try {
+      const response = await openrouter({
+        db: async () => db,
+        fetch: async () =>
+          Response.json(
+            { error: { code: 400, message: "Provider returned error", metadata: { provider: "xAI" } } },
+            { status: 400 },
+          ),
+      })(
+        new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Arena-Assignment-ID": "opaque-id",
+            "X-Arena-Scope-ID": "turn-1",
+            "X-Arena-Generation-ID": "gen_0000000000000000000000000000000d",
+          },
+          body: JSON.stringify({ model: "contestant", messages: [], stream: true }),
+        }),
+      )
+
+      expect(response.status).toBe(400)
+      expect(await response.text()).toContain("arena_upstream_error")
+      expect(written).toHaveLength(1)
+      expect(written[0]).toMatchObject({
+        generationID: "gen_0000000000000000000000000000000d",
+        outcome: "error",
+        status: 400,
+        provider: "xAI",
+      })
+      expect(written[0]).not.toHaveProperty("usage")
+    } finally {
+      error.mockRestore()
+    }
+  })
+
+  test("records a fetch rejected before any answer as failed", async () => {
+    const written: Record<string, unknown>[] = []
+    const db = fakeDb({
+      assignmentSets: () => [
+        { userId: "user-1", scopeID: "turn-1", assignments: [{ assignmentID: "opaque-id", model: pool[0] }] },
+      ],
+      recordMetrics: (document) => {
+        written.push(document)
+      },
+    })
+    const error = spyOn(console, "error").mockImplementation(() => {})
+    try {
+      const response = await openrouter({
+        db: async () => db,
+        fetch: async () => {
+          throw new Error("private transport failure")
+        },
+      })(
+        new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Arena-Assignment-ID": "opaque-id",
+            "X-Arena-Scope-ID": "turn-1",
+            "X-Arena-Generation-ID": "gen_0000000000000000000000000000000e",
+          },
+          body: JSON.stringify({ model: "contestant", messages: [], stream: true }),
+        }),
+      )
+
+      expect(response.status).toBe(502)
+      expect(written).toHaveLength(1)
+      expect(written[0]).toMatchObject({
+        generationID: "gen_0000000000000000000000000000000e",
+        outcome: "failed",
+      })
+      expect(written[0]).not.toHaveProperty("usage")
+      expect(written[0]).not.toHaveProperty("quietMs")
+    } finally {
+      error.mockRestore()
+    }
+  })
+
+  test("records only the final call of the Gemini tool-result retry", async () => {
+    const written: Record<string, unknown>[] = []
+    const db = fakeDb({
+      assignmentSets: () => [
+        {
+          userId: "user-1",
+          scopeID: "turn-1",
+          assignments: [
+            {
+              assignmentID: "opaque-id",
+              model: { ...pool[0], slug: "google/gemini-4-carbon", canonicalSlug: "google/gemini-4-carbon" },
+            },
+          ],
+        },
+      ],
+      recordMetrics: (document) => {
+        written.push(document)
+      },
+    })
+    let calls = 0
+    const error = spyOn(console, "error").mockImplementation(() => {})
+    try {
+      const response = await openrouter({
+        db: async () => db,
+        fetch: async () => {
+          calls++
+          if (calls === 1) {
+            return Response.json(
+              {
+                error: {
+                  code: 400,
+                  metadata: {
+                    provider_name: "Google AI Studio",
+                    raw: JSON.stringify({
+                      error: {
+                        code: 400,
+                        status: "INVALID_ARGUMENT",
+                        message: "Request contains an invalid argument.",
+                      },
+                    }),
+                  },
+                },
+              },
+              { status: 400 },
+            )
+          }
+          return Response.json({
+            id: "retried-generation",
+            provider: "Google AI Studio",
+            usage: { prompt_tokens: 7, completion_tokens: 3 },
+            choices: [{ message: { content: "done" }, finish_reason: "stop" }],
+          })
+        },
+      })(
+        new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Arena-Assignment-ID": "opaque-id",
+            "X-Arena-Scope-ID": "turn-1",
+            "X-Arena-Generation-ID": "gen_0000000000000000000000000000000f",
+          },
+          body: JSON.stringify({
+            model: "contestant",
+            messages: [{ role: "tool", content: "plain result" }],
+            stream: false,
+          }),
+        }),
+      )
+
+      expect(response.status).toBe(200)
+      expect(calls).toBe(2)
+      expect(written).toHaveLength(1)
+      expect(written[0]).toMatchObject({
+        generationID: "gen_0000000000000000000000000000000f",
+        outcome: "complete",
+        upstreamGenerationID: "retried-generation",
+        usage: { promptTokens: 7, completionTokens: 3 },
+      })
+    } finally {
+      error.mockRestore()
+    }
   })
 
   test("ends every stream that stops early on an event boundary, so the client can read its error", async () => {

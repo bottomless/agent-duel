@@ -85,6 +85,14 @@ interface CreateRequestContext {
   text: string;
   images?: UserMessageImageAttachment[];
   attachments?: AgentAttachment[];
+  /** The attachments as the composer held them, which a failed create puts back in the draft. */
+  composerAttachments: ComposerAttachment[];
+  cwd: string;
+}
+
+interface CreateAttemptRun {
+  attempt: CreateAttempt;
+  composerAttachments: ComposerAttachment[];
   cwd: string;
 }
 
@@ -99,7 +107,8 @@ interface UseDraftAgentCreateFlowOptions<TDraftAgent, TCreateResult> {
   createRequest: (ctx: CreateRequestContext) => Promise<CreateRequestResult<TCreateResult>>;
   buildDraftAgent: (attempt: CreateAttempt) => TDraftAgent;
   onCreateSuccess: (ctx: { result: TCreateResult; attempt: CreateAttempt }) => Promise<void> | void;
-  onCreateError?: (error: Error) => void;
+  /** True if the failed first send was returned to New chat instead of the draft tab. */
+  onCreateError?: (error: Error) => Promise<boolean>;
 }
 
 export function useDraftAgentCreateFlow<TDraftAgent, TCreateResult>({
@@ -162,7 +171,7 @@ export function useDraftAgentCreateFlow<TDraftAgent, TCreateResult>({
   );
 
   const runCreateAttempt = useCallback(
-    async ({ attempt, cwd }: { attempt: CreateAttempt; cwd: string }) => {
+    async ({ attempt, composerAttachments, cwd }: CreateAttemptRun) => {
       const pendingServerId = getPendingServerId();
       if (!pendingServerId) {
         const error = new Error(t("composer.errors.noHostSelected"));
@@ -176,6 +185,7 @@ export function useDraftAgentCreateFlow<TDraftAgent, TCreateResult>({
           text: attempt.text,
           images: attempt.images,
           attachments: attempt.attachments,
+          composerAttachments,
           cwd,
         });
         const createResult = await createRequest({
@@ -183,6 +193,7 @@ export function useDraftAgentCreateFlow<TDraftAgent, TCreateResult>({
           text: attempt.text,
           images: attempt.images,
           attachments: attempt.attachments,
+          composerAttachments,
           cwd,
         });
 
@@ -212,14 +223,15 @@ export function useDraftAgentCreateFlow<TDraftAgent, TCreateResult>({
       } catch (error) {
         const resolved =
           error instanceof Error ? error : new Error(t("composer.errors.failedToCreateAgent"));
+        // Keep the composer pending while the host decides whether the draft may be archived.
+        const handled = await onCreateError?.(resolved);
         dispatch({ type: "CREATE_FAILED", message: resolved.message });
         markPendingCreateLifecycle({
           draftId,
           lifecycle: "abandoned",
           errorMessage: resolved.message,
         });
-        onCreateError?.(resolved);
-        throw error;
+        if (!handled) throw error;
       }
     },
     [
@@ -305,7 +317,7 @@ export function useDraftAgentCreateFlow<TDraftAgent, TCreateResult>({
       });
 
       onCreateStart?.();
-      await runCreateAttempt({ attempt, cwd });
+      await runCreateAttempt({ attempt, composerAttachments: attachments, cwd });
     },
     [
       allowEmptyText,
@@ -322,11 +334,11 @@ export function useDraftAgentCreateFlow<TDraftAgent, TCreateResult>({
   );
 
   const continueCreateFromAttempt = useCallback(
-    async ({ attempt, cwd }: { attempt: CreateAttempt; cwd: string }) => {
+    async (run: CreateAttemptRun) => {
       if (!isSubmitting) {
-        startCreateAttempt(attempt);
+        startCreateAttempt(run.attempt);
       }
-      await runCreateAttempt({ attempt, cwd });
+      await runCreateAttempt(run);
     },
     [isSubmitting, runCreateAttempt, startCreateAttempt],
   );
