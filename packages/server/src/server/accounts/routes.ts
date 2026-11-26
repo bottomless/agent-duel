@@ -53,9 +53,10 @@ export function createAccountsRouter(service: AccountsService): Router {
     }),
   );
 
-  // The app sends this in the background and nothing waits on the answer. It is 204 only once the
-  // control plane took the count, so a first launch whose count was lost stays owed to the next
-  // window load instead of being marked as reported.
+  // The app sends this in the background and nothing waits on the answer. The control plane
+  // answers a first launch only once it is counted, so one whose count was lost stays owed to the
+  // next window load instead of being marked as reported. Any other open is answered at once,
+  // counted or not.
   router.post(
     "/opened",
     route(async (req, res) => {
@@ -68,7 +69,7 @@ export function createAccountsRouter(service: AccountsService): Router {
         res.status(204).end();
         return;
       }
-      res.status(502).json({ error: "The app open was not counted" });
+      res.status(502).json({ error: "The control plane did not take the app open" });
     }),
   );
 

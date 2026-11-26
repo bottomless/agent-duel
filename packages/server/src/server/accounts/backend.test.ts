@@ -2,7 +2,7 @@ import { createServer, type IncomingHttpHeaders, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import pino from "pino";
-import { AccountsBackend } from "./backend.js";
+import { AccountsBackend, AccountsBackendUnavailableError } from "./backend.js";
 
 interface Received {
   readonly path: string | undefined;
@@ -152,6 +152,18 @@ describe("AccountsBackend", () => {
         returning: true,
       }),
     ).resolves.toBe(false);
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  it("gives up on a claim the control plane does not answer, so the app can claim again", async () => {
+    const { url } = await controlPlane("hang");
+    const started = Date.now();
+    await expect(
+      new AccountsBackend(url, logger, "0.4.0-beta.27", { claimTimeoutMs: 100 }).claimFlow({
+        flowId: "flow-1",
+        secret: "secret-1",
+      }),
+    ).rejects.toBeInstanceOf(AccountsBackendUnavailableError);
     expect(Date.now() - started).toBeLessThan(2000);
   });
 

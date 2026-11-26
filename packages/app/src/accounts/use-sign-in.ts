@@ -108,7 +108,8 @@ export function useSignIn(
 
     // One claim at a time, the next one 2 s after the last settles. The control plane hands the
     // session over once and answers any later claim with expired, so a poll that overlapped a slow
-    // successful claim could fail a sign-in that had already succeeded.
+    // successful claim could fail a sign-in that had already succeeded. A claim that gets no answer
+    // is given up after `CLAIM_TIMEOUT_MS` and rejects, so it cannot stop the polling.
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const poll = async () => {

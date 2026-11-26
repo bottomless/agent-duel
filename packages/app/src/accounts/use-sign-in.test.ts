@@ -149,6 +149,25 @@ describe("useSignIn claim polling", () => {
     expect(mocks.claimSignInFlow).toHaveBeenCalledTimes(1);
   });
 
+  it("claims again 2 s after a claim that failed or was given up", async () => {
+    // What a claim cut off by its timeout does: it rejects.
+    mocks.claimSignInFlow.mockRejectedValueOnce(new Error("The operation was aborted"));
+    mocks.claimSignInFlow.mockResolvedValueOnce({
+      status: "signed-in",
+      sessionToken: "token-2",
+      method: "email",
+      user,
+    });
+    const { result } = await waitingForEmail();
+
+    await advance(2_000);
+    expect(mocks.claimSignInFlow).toHaveBeenCalledTimes(1);
+    expect(result.current.state.kind).toBe("awaiting-email");
+    await advance(2_000);
+    expect(mocks.claimSignInFlow).toHaveBeenCalledTimes(2);
+    expect(useAccountSessionStore.getState().session?.token).toBe("token-2");
+  });
+
   it("claims again 2 s after a pending answer settles", async () => {
     const inFlight = slowClaims([{ status: "pending" }, { status: "pending" }], 3_000);
     await waitingForEmail();

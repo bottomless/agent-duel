@@ -181,9 +181,10 @@ The daemon password and account session are separate credentials; a remote clien
   build ran: the desktop checks at startup whether `desktop-settings.json` exists, before its own
   first settings read creates it. `returning` starts with the build that sets the mark, so an
   install that held a session only under an older build and was signed out when it upgraded reads
-  false. The daemon answers 204 only once the control plane counted the report, so a first launch
-  whose count was lost is sent again on a later window load. A count that lands after the daemon's
-  5 s timeout is sent again too, so a slow control plane can count one first launch twice. A flow request names
+  false. The control plane answers a first launch only once it is counted, and the daemon passes a
+  refusal on, so a first launch whose count was lost is sent again on a later window load. Any
+  other open is answered at once, counted or not. A count that lands after the daemon's 5 s
+  timeout is sent again too, so a slow control plane can count one first launch twice. A flow request names
   the button that opened it (`method`) and whether the install has held a session. Both requests
   carry the usual client headers (`clientHeaders` in `packages/server/src/server/accounts/config.ts`);
   the counts keep only OS, version and build. A source build sends
