@@ -395,7 +395,7 @@ test("v2 executes discovered skills and accepts image attachments", async () => 
         type: "image",
         mimeType: "image/png",
         data: (
-          await readFile(new URL("../../../../../desktop/assets/32x32.png", import.meta.url))
+          await readFile(new URL("../../../../../desktop/assets/icon.png", import.meta.url))
         ).toString("base64"),
       },
     ]);

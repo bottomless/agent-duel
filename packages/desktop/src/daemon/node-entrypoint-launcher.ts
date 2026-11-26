@@ -23,12 +23,28 @@ interface CreateNodeEntrypointInvocationInput {
   baseEnv: NodeJS.ProcessEnv;
 }
 
+/**
+ * The AppImage's AppRun prepends `$APPDIR/usr/lib` to LD_LIBRARY_PATH for Electron's tray and
+ * notification libraries. Electron-as-Node needs none of them, and everything the daemon starts
+ * (supervisor, terminals, contestants' commands) would load them too. Empty entries mean the
+ * current directory, so they go as well.
+ */
+function withoutAppImageLibraries(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const appDir = env.APPDIR;
+  if (!appDir || env.LD_LIBRARY_PATH === undefined) return env;
+  const kept = env.LD_LIBRARY_PATH.split(":").filter(
+    (entry) => entry !== "" && entry !== appDir && !entry.startsWith(`${appDir}/`),
+  );
+  const { LD_LIBRARY_PATH: _dropped, ...rest } = env;
+  return kept.length > 0 ? { ...rest, LD_LIBRARY_PATH: kept.join(":") } : rest;
+}
+
 export function createElectronNodeEnv(
   baseEnv: NodeJS.ProcessEnv,
   options?: { isPackaged?: boolean },
 ): NodeJS.ProcessEnv {
   return {
-    ...baseEnv,
+    ...withoutAppImageLibraries(baseEnv),
     ELECTRON_RUN_AS_NODE: "1",
     [PASEO_NODE_ENV]: options?.isPackaged === true ? "production" : "development",
   };
