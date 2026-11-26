@@ -60,11 +60,18 @@ describe("Arena v2 battle integration", () => {
       readonly response: string
     }> = []
     const responseBySession = new Map<string, string>()
+    // The next turn receives one refusal of each kind. Keep the calls per assignment to catch retries.
+    const blockedCalls: string[] = []
+    let blockNextTurn = false
     originalFetch = globalThis.fetch
     globalThis.fetch = (async (input, init) => {
       const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url)
       if (url.origin === "https://control.test") {
         const request = new Request(input, init)
+        if (url.pathname === "/api/research") {
+          const batch = (await request.json()) as { records: unknown[] }
+          return Response.json({ received: batch.records.length, stored: batch.records.length })
+        }
         if (url.pathname === "/api/arena/assignments") {
           const body = (await request.json()) as { action: string; kind: string; scopeID: string; decision?: string }
           if (body.action === "create") {
@@ -102,12 +109,39 @@ describe("Arena v2 battle integration", () => {
           const completion = new Request(input, init)
           const arenaSessionID = completion.headers.get("x-arena-session-id") ?? completion.headers.get("x-session-id")
           const sessionID = arenaSessionID ?? `request-${completionRequests.length}`
-          const body = (await completion.json()) as { messages?: readonly unknown[] }
+          const body = (await completion.json()) as { messages?: readonly unknown[]; tools?: readonly unknown[] }
           // Native root sessions may also request a title. Keep each session's
           // response stable without assuming those auxiliary calls arrive last.
           const response = responseBySession.get(sessionID) ?? `response for ${sessionID}`
           responseBySession.set(sessionID, response)
           completionRequests.push({ sessionID, messages: body.messages ?? [], response })
+          if (blockNextTurn && body.tools?.length) {
+            const assignment = completion.headers.get("X-Arena-Assignment-ID")!
+            blockedCalls.push(assignment)
+            if (assignment !== blockedCalls[0]) {
+              return Response.json(
+                { error: { type: "content_filter", message: "private policy detail" } },
+                { status: 400 },
+              )
+            }
+            return new Response(
+              ": OPENROUTER PROCESSING\n\n" +
+                'data: {"id":"gen-1","choices":[{"index":0,"delta":{"content":"Saved partial reply"}}]}\n\n' +
+                `data: ${JSON.stringify({
+                  id: "gen-1",
+                  object: "chat.completion.chunk",
+                  model: "qwen/qwen4-max",
+                  provider: "Alibaba",
+                  choices: [],
+                  error: {
+                    code: 400,
+                    message: "private policy detail",
+                    metadata: { error_type: "invalid_request", provider_code: "data_inspection_failed" },
+                  },
+                })}\n\n`,
+              { headers: { "content-type": "text/event-stream" } },
+            )
+          }
           return new Response(
             `data: {"id":"r","choices":[{"index":0,"delta":{"role":"assistant","content":"${response}"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n`,
             { headers: { "content-type": "text/event-stream" } },
@@ -151,6 +185,7 @@ describe("Arena v2 battle integration", () => {
     const attached = await request(`/arena/sessions/${source.id}`, {
       headers: { "x-opencode-directory": directory },
     })
+    if (!attached.ok) throw new Error(await attached.text())
     expect(attached.status).toBe(200)
     const attachedBody = (await attached.json()) as { chat: { id: string } }
     // The chat counter was restored, but the checkout still holds the earlier turn 0's results.
@@ -280,6 +315,7 @@ describe("Arena v2 battle integration", () => {
     expect(canonicalHistory).not.toContain(loserText)
 
     const requestsBeforeNextTurn = completionRequests.length
+    blockNextTurn = true
     const next = await request(`/arena/chats/${current.chat.id}/turns`, {
       method: "POST",
       headers: { "x-opencode-directory": directory },
@@ -306,25 +342,237 @@ describe("Arena v2 battle integration", () => {
 
     const nextTurnID = afterNext.turn?.id
     if (!nextTurnID) throw new Error("Arena did not publish the replay turn ID")
-    const cleaned = await request(`/arena/turns/${nextTurnID}/vote`, {
+    expect(blockedCalls).toHaveLength(2)
+    expect(new Set(blockedCalls).size).toBe(2)
+    expect(afterNext.turn).toMatchObject({ canTie: false })
+    for (const run of afterNext.runs ?? []) {
+      expect(run).toMatchObject({
+        runState: "error",
+        error: "A content filter blocked this response.",
+        selectable: false,
+        canRetry: false,
+        canAcceptFailed: true,
+      })
+    }
+    expect(JSON.stringify(afterNext)).not.toContain("private policy detail")
+    expect(JSON.stringify(afterNext)).not.toContain("Alibaba")
+    expect(JSON.stringify(afterNext)).not.toContain("data_inspection_failed")
+    const filteredSessions = await Promise.all(
+      (afterNext.runs ?? []).map(async (run) => {
+        const history = await request(`/api/experimental/session/${run.sessionID}/export`, {
+          headers: { "x-opencode-directory": directory! },
+        })
+        expect(history.status).toBe(200)
+        const text = await history.text()
+        expect(text).not.toContain("private policy detail")
+        expect(text).not.toContain("Alibaba")
+        expect(text).not.toContain("data_inspection_failed")
+        return { side: run.side, partial: text.includes("Saved partial reply") }
+      }),
+    )
+    const partial = filteredSessions.find((session) => session.partial)
+    if (!partial) throw new Error("Missing partial response from the filtered side")
+    const accepted = await request(`/arena/turns/${nextTurnID}/vote`, {
       method: "POST",
       headers: { "x-opencode-directory": directory },
-      body: JSON.stringify({ vote: "a" }),
+      body: JSON.stringify({ vote: partial.side, acceptFailed: true }),
     })
-    expect(cleaned.status).toBe(200)
-    await cleaned.text()
+    expect(accepted.status).toBe(200)
+    expect((await accepted.json()).turn).toMatchObject({
+      acceptedFailedSide: partial.side,
+      voteDiscardedReason: "contestant_failed",
+    })
+    const appliedDeadline = Date.now() + 20_000
+    while (Date.now() < appliedDeadline && afterNext.chat.activeTurnID) {
+      await Bun.sleep(100)
+      afterNext = await snapshot()
+    }
+    expect(afterNext.chat.activeTurnID).toBeUndefined()
+    const kept = await request(`/api/experimental/session/${afterNext.chat.canonicalSessionID}/export`, {
+      headers: { "x-opencode-directory": directory },
+    })
+    expect(kept.status).toBe(200)
+    expect(await kept.text()).toContain("Saved partial reply")
     if (answersDecided) expect(replayProbes).toEqual([])
   }
 
   test(
-    "runs two contestants, votes, grafts, and admits the next native prompt",
+    "grafts a voted winner, then accepts a filtered partial reply without counting a vote",
     () => runsVotesGraftsAndAdmits(true),
     45_000,
   )
 
   test(
-    "runs two contestants, votes, grafts, and admits the next native prompt on a control plane without the decided answer",
+    "grafts a voted winner, then accepts a filtered partial reply without counting a vote on a control plane without the decided answer",
     () => runsVotesGraftsAndAdmits(false),
     45_000,
   )
+
+  /**
+   * Each contestant's first step waits until a steer is queued for side A, then fails with
+   * `failure` and no retry. Side A must not run another step for the steer.
+   */
+  async function steerBehindFailure(name: string, failure: () => Response, error?: string) {
+    const [{ Server }, credentials] = await Promise.all([import("@/server/server"), import("@/arena/credentials")])
+    home = await mkdtemp(path.join(os.tmpdir(), `agent-duel-v2-${name}-steer-home-`))
+    directory = await mkdtemp(path.join(home, "workspace-"))
+    await $`git init`.cwd(directory).quiet()
+    await $`git config user.email test@example.com`.cwd(directory).quiet()
+    await $`git config user.name test`.cwd(directory).quiet()
+    await writeFile(path.join(directory, "README.md"), "arena\n")
+    await writeFile(path.join(directory, "opencode.json"), "{}\n")
+    await $`git add README.md opencode.json`.cwd(directory).quiet()
+    await $`git commit -m initial`.cwd(directory).quiet()
+
+    const steerText = `Steer queued behind the ${name}.`
+    let releaseFailure = () => {}
+    const failureGate = new Promise<void>((resolve) => {
+      releaseFailure = resolve
+    })
+    const failedCalls: string[] = []
+    let steeredCalls = 0
+    originalFetch = globalThis.fetch
+    globalThis.fetch = (async (input, init) => {
+      const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url)
+      if (url.origin === "https://control.test") {
+        const request = new Request(input, init)
+        if (url.pathname === "/api/research") {
+          const batch = (await request.json()) as { records: unknown[] }
+          return Response.json({ received: batch.records.length, stored: batch.records.length })
+        }
+        if (url.pathname === "/api/arena/assignments") {
+          const body = (await request.json()) as { action: string; kind: string; decision?: string }
+          if (body.action === "create")
+            return Response.json({
+              assignments: body.kind === "battle" ? [{ assignmentID: "a-1" }, { assignmentID: "b-1" }] : [],
+            })
+          return Response.json({
+            decision: body.decision,
+            assignments: [
+              { assignmentID: "a-1", model: "model-a" },
+              { assignmentID: "b-1", model: "model-b" },
+            ],
+          })
+        }
+        if (url.pathname === "/api/arena/comparison")
+          return Response.json({ provider: "test", choices: [{ message: { content: "comparison" } }] })
+        if (url.pathname === "/api/openrouter/api/v1/chat/completions") {
+          const body = (await request.json()) as { messages?: readonly unknown[]; tools?: readonly unknown[] }
+          const steered = JSON.stringify(body.messages ?? []).includes(steerText)
+          if (body.tools?.length && !steered) {
+            failedCalls.push(request.headers.get("X-Arena-Assignment-ID") ?? "")
+            await failureGate
+            return failure()
+          }
+          if (steered) steeredCalls++
+          const content = steered ? "Steered reply." : "Filtered steer title"
+          return new Response(
+            `data: {"id":"r","choices":[{"index":0,"delta":{"role":"assistant","content":"${content}"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n`,
+            { headers: { "content-type": "text/event-stream" } },
+          )
+        }
+      }
+      return originalFetch!(input, init)
+    }) as typeof globalThis.fetch
+    const controlToken = `v2-${name}-steer-token`
+    credentials.setArenaCredentials({
+      mode: "hosted",
+      token: "test-token",
+      controlPlaneUrl: "https://control.test",
+      researchAccountID: "test-account",
+      researchPartition: "test-partition",
+      controlTokenHash: credentials.hashArenaControlToken(controlToken),
+    })
+    process.env.PASEO_HOME = home
+    process.env.OPENCODE_ARENA = "1"
+    const app = Server.Default().app
+    const request = (route: string, init?: RequestInit) =>
+      app.request(route, {
+        ...init,
+        headers: {
+          "content-type": "application/json",
+          "x-paseo-control-token": controlToken,
+          "x-opencode-directory": directory!,
+          ...(init?.headers ?? {}),
+        },
+      })
+
+    try {
+      const created = await request("/api/session", {
+        method: "POST",
+        body: JSON.stringify({ location: { directory }, model: { providerID: "arena", id: "medium" } }),
+      })
+      expect(created.status).toBe(200)
+      const source = (await created.json()).data as { id: string }
+      const attached = await request(`/arena/sessions/${source.id}`)
+      if (!attached.ok) throw new Error(await attached.text())
+      const chat = ((await attached.json()) as { chat: { id: string } }).chat
+      const started = await request(`/arena/chats/${chat.id}/turns`, {
+        method: "POST",
+        body: JSON.stringify({ prompt: "Answer after one step." }),
+      })
+      expect(started.status).toBe(200)
+      await started.text()
+
+      type Snapshot = {
+        turn?: { id: string; state: string }
+        runs?: readonly { side: "a" | "b"; sessionID: string; runState: string; error?: string }[]
+      }
+      const snapshot = async () => (await (await request(`/arena/sessions/${source.id}`)).json()) as Snapshot
+      const deadline = Date.now() + 30_000
+      while (Date.now() < deadline && failedCalls.length < 2) await Bun.sleep(20)
+      expect(failedCalls).toHaveLength(2)
+      const turnID = (await snapshot()).turn?.id
+      if (!turnID) throw new Error("Arena did not publish the turn ID")
+
+      // Admission is durable once the reply returns, so the steer waits in side A's inbox.
+      const replied = await request(`/arena/turns/${turnID}/reply`, {
+        method: "POST",
+        body: JSON.stringify({ prompt: steerText, target: "a" }),
+      })
+      expect(replied.status).toBe(200)
+      await replied.text()
+      releaseFailure()
+
+      let current = await snapshot()
+      while (Date.now() < deadline && (current.runs ?? []).some((run) => run.runState === "pending")) {
+        await Bun.sleep(100)
+        current = await snapshot()
+      }
+      // Core starts a queued steer's step as soon as the failed call ends; give a late one time to show.
+      await Bun.sleep(500)
+      expect(steeredCalls).toBe(0)
+      expect(failedCalls).toHaveLength(2)
+      const sideA = current.runs?.find((run) => run.side === "a")
+      expect(sideA).toMatchObject({ runState: "error", ...(error ? { error } : {}) })
+      // The steer stays in side A's thread as an unanswered message, as Stop leaves one.
+      const exported = await request(`/api/experimental/session/${sideA!.sessionID}/export`)
+      expect(exported.status).toBe(200)
+      const history = await exported.text()
+      expect(history).toContain(steerText)
+      expect(history).not.toContain("Steered reply.")
+    } finally {
+      releaseFailure()
+    }
+  }
+
+  test("delivers a steer queued behind a content filter without starting another step", async () => {
+    await steerBehindFailure(
+      "filter",
+      () =>
+        new Response(
+          'data: {"id":"f","choices":[{"index":0,"delta":{"role":"assistant","content":"Partial before the filter."},"finish_reason":null}]}\n\n' +
+            'data: {"id":"f","choices":[{"index":0,"delta":{},"finish_reason":"content_filter"}]}\n\n' +
+            "data: [DONE]\n\n",
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+      "A content filter blocked this response.",
+    )
+  }, 45_000)
+
+  test("delivers a steer queued behind a failure the retry policy refuses without starting another step", async () => {
+    await steerBehindFailure("refused-retry", () =>
+      Response.json({ error: { code: 400, message: "Provider returned error" } }, { status: 400 }),
+    )
+  }, 45_000)
 })

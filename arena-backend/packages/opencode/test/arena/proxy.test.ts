@@ -324,6 +324,165 @@ describe("ArenaProxy", () => {
     expect(calls).toEqual(["error"])
   })
 
+  test("records a non-streamed content-filter finish as a failed generation and keeps its partial answer", async () => {
+    const registry = new AssignmentRegistry()
+    registry.assign("session-root", assignment)
+    const calls: string[] = []
+    const chunks: string[] = []
+    const response = await proxy(request(), registry, {
+      upstream: "https://unit.invalid",
+      fetch: async () =>
+        Response.json({
+          id: "upstream-1",
+          provider: "Alibaba",
+          choices: [{ message: { content: "partial answer" }, finish_reason: "content_filter" }],
+          usage: { prompt_tokens: 12, completion_tokens: 4 },
+        }),
+      telemetry: {
+        rawChunk: (_metadata, chunk) => void chunks.push(chunk),
+        complete: () => void calls.push("complete"),
+        error: () => void calls.push("error"),
+      },
+    })
+    expect(response.status).toBe(400)
+    expect(await response.json()).toEqual({
+      error: { type: "content_filter", message: "A content filter blocked this response." },
+    })
+    expect(calls).toEqual(["error"])
+    const raw = chunks.join("")
+    expect(raw).toContain("partial answer")
+    expect(raw).toContain("prompt_tokens")
+    expect(raw).not.toContain("Alibaba")
+  })
+
+  test("records a refusal named only by the native finish reason under the content_filter finish", async () => {
+    const registry = new AssignmentRegistry()
+    registry.assign("session-root", assignment)
+    const chunks: string[] = []
+    const response = await proxy(request(), registry, {
+      upstream: "https://unit.invalid",
+      fetch: async () =>
+        Response.json({
+          choices: [{ message: { content: "partial" }, finish_reason: "stop", native_finish_reason: "content_filter" }],
+          usage: { prompt_tokens: 3, completion_tokens: 1 },
+        }),
+      telemetry: { rawChunk: (_metadata, chunk) => void chunks.push(chunk) },
+    })
+    expect(response.status).toBe(400)
+    expect(chunks.map((chunk) => JSON.parse(chunk))).toEqual([
+      {
+        choices: [{ message: { content: "partial" }, finish_reason: "content_filter" }],
+        usage: { prompt_tokens: 3, completion_tokens: 1 },
+      },
+    ])
+  })
+
+  test("records a non-streamed content_filter error as a failed generation and keeps its usage", async () => {
+    const registry = new AssignmentRegistry()
+    registry.assign("session-root", assignment)
+    const calls: string[] = []
+    const chunks: string[] = []
+    const response = await proxy(request(), registry, {
+      upstream: "https://unit.invalid",
+      fetch: async () =>
+        Response.json({
+          provider: "Alibaba",
+          error: { type: "content_filter", message: "private policy detail" },
+          usage: { prompt_tokens: 12, completion_tokens: 4 },
+        }),
+      telemetry: {
+        rawChunk: (_metadata, chunk) => void chunks.push(chunk),
+        complete: () => void calls.push("complete"),
+        error: () => void calls.push("error"),
+      },
+    })
+    expect(response.status).toBe(400)
+    expect(await response.json()).toEqual({
+      error: { type: "content_filter", message: "A content filter blocked this response." },
+    })
+    expect(calls).toEqual(["error"])
+    expect(chunks.map((chunk) => JSON.parse(chunk))).toEqual([
+      {
+        id: expect.stringMatching(/^gen_/),
+        choices: [{ index: 0, message: {}, finish_reason: "content_filter" }],
+        usage: { prompt_tokens: 12, completion_tokens: 4 },
+      },
+    ])
+  })
+
+  test("keeps the usage the service sends with a filtered complete response, and none of it reaches the model call", async () => {
+    const registry = new AssignmentRegistry()
+    registry.assign("session-root", assignment)
+    const chunks: string[] = []
+    const failures: unknown[] = []
+    const response = await proxy(request(), registry, {
+      upstream: "https://unit.invalid",
+      fetch: async () =>
+        Response.json(
+          {
+            error: { type: "content_filter", message: "A content filter blocked this response." },
+            usage: { prompt_tokens: 12, completion_tokens: 4 },
+            choices: [{ message: { content: "must not be recorded" }, finish_reason: "content_filter" }],
+          },
+          { status: 400 },
+        ),
+      telemetry: {
+        rawChunk: (_metadata, chunk) => void chunks.push(chunk),
+        error: (_metadata, _error, _at, failure) => void failures.push(failure),
+      },
+    })
+    expect(response.status).toBe(400)
+    // Byte-for-byte the refusal Core treats as permanent: nothing for a retry or a pending tool to act on.
+    expect(await response.json()).toEqual({
+      error: { type: "content_filter", message: "A content filter blocked this response." },
+    })
+    expect(failures).toEqual([{ phase: "http", kind: "content_filter" }])
+    expect(chunks.map((chunk) => JSON.parse(chunk))).toEqual([
+      {
+        id: expect.stringMatching(/^gen_/),
+        choices: [{ index: 0, message: {}, finish_reason: "content_filter" }],
+        usage: { prompt_tokens: 12, completion_tokens: 4 },
+      },
+    ])
+  })
+
+  test("keeps usage arriving with or after a filtered stream's finish for the failed generation", async () => {
+    const registry = new AssignmentRegistry()
+    registry.assign("session-root", assignment)
+    const calls: string[] = []
+    const chunks: string[] = []
+    let settle: () => void = () => {}
+    const settled = new Promise<void>((resolve) => {
+      settle = resolve
+    })
+    const response = await proxy(request(), registry, {
+      upstream: "https://unit.invalid",
+      fetch: async () =>
+        new Response(
+          'data: {"id":"upstream-1","choices":[{"index":0,"delta":{},"finish_reason":"content_filter"}]}\n\n' +
+            'data: {"id":"upstream-1","choices":[],"usage":{"prompt_tokens":20,"completion_tokens":7}}\n\n' +
+            "data: [DONE]\n",
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+      telemetry: {
+        rawChunk: (_metadata, chunk) => void chunks.push(chunk),
+        complete: () => {
+          calls.push("complete")
+          settle()
+        },
+        error: () => {
+          calls.push("error")
+          settle()
+        },
+      },
+    })
+    expect(response.status).toBe(200)
+    await response.text()
+    await Promise.race([settled, Bun.sleep(6_000)])
+    expect(calls).toEqual(["error"])
+    expect(chunks.join("")).toContain("prompt_tokens")
+  })
+
   test("tells a wait on the user's network or sign-in apart from a refusing provider", async () => {
     const registry = new AssignmentRegistry()
     registry.assign("session-root", assignment)

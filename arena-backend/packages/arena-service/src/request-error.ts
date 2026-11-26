@@ -2,6 +2,113 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value)
 }
 
+export const contentFilterMessage = "A content filter blocked this response."
+
+// Core recognizes this OpenAI error type as a permanent content-policy failure.
+export function contentFilterError() {
+  return { error: { type: "content_filter", message: contentFilterMessage } }
+}
+
+function json(value: string): unknown {
+  try {
+    return JSON.parse(value)
+  } catch {
+    return undefined
+  }
+}
+
+const INSPECTION_FAILED_CODE = /^(data_inspection_failed|DataInspectionFailed)$/i
+
+function hasInspectionFailedCode(part: unknown) {
+  return (
+    isRecord(part) &&
+    [part.code, part.type, part.error_type, part.provider_code, part.provider_error_code].some(
+      (code) => typeof code === "string" && INSPECTION_FAILED_CODE.test(code),
+    )
+  )
+}
+
+function isInspectionFailedError(error: unknown) {
+  if (!isRecord(error)) return false
+  const metadata = isRecord(error.metadata) ? error.metadata : undefined
+  const raw = typeof metadata?.raw === "string" ? json(metadata.raw) : metadata?.raw
+  const nested = isRecord(raw) && isRecord(raw.error) ? raw.error : raw
+  return [error, metadata, nested].some(hasInspectionFailedCode)
+}
+
+/** Only the service inspects the provider's structured error, never text that may quote the prompt. */
+export function inspectionFailed(status: number, body: string) {
+  if (status !== 400) return false
+  const payload = json(body)
+  if (!isRecord(payload)) return false
+  return isInspectionFailedError(isRecord(payload.error) ? payload.error : payload)
+}
+
+/** Structured `data_inspection_failed` error carried inside an HTTP 200 payload or SSE chunk. */
+export function inspectionFailedError(value: unknown) {
+  if (!isRecord(value)) return false
+  return (
+    isInspectionFailedError(value.error) || (isRecord(value.response) && isInspectionFailedError(value.response.error))
+  )
+}
+
+export function readContentFilter(body: string | undefined) {
+  const value = body && json(body)
+  return isRecord(value) && isRecord(value.error) && value.error.type === "content_filter"
+}
+
+/** Keep answer text sent with the finish, but no policy report, tool call or native reason. */
+export function filteredStreamChunk(value: Record<string, unknown>, generationID: string) {
+  if (Array.isArray(value.choices)) {
+    const choice = value.choices.find(
+      (item) =>
+        isRecord(item) && (item.finish_reason === "content_filter" || item.native_finish_reason === "content_filter"),
+    )
+    if (isRecord(choice)) {
+      const content = isRecord(choice.delta) ? choice.delta.content : undefined
+      return {
+        id: generationID,
+        choices: [{ index: 0, delta: typeof content === "string" ? { content } : {}, finish_reason: "content_filter" }],
+      }
+    }
+  }
+  if (inspectionFailedError(value) || (isRecord(value.error) && value.error.type === "content_filter")) {
+    return {
+      id: generationID,
+      choices: [{ index: 0, delta: {}, finish_reason: "content_filter" }],
+    }
+  }
+}
+
+/** Whether a complete (non-streamed) response's choice finished on a content filter. */
+export function contentFilterFinish(value: unknown) {
+  if (!isRecord(value) || !Array.isArray(value.choices)) return false
+  return value.choices.some(
+    (item) =>
+      isRecord(item) && (item.finish_reason === "content_filter" || item.native_finish_reason === "content_filter"),
+  )
+}
+
+/** Any refusal shape a streamed chunk or a complete response can carry. */
+export function contentFilterRefusal(value: unknown) {
+  return (
+    inspectionFailedError(value) ||
+    (isRecord(value) && isRecord(value.error) && value.error.type === "content_filter") ||
+    contentFilterFinish(value)
+  )
+}
+
+/**
+ * The usage a refused complete response reported. A chat completion and the service's own neutral
+ * refusal keep it at the top level; a nested `/responses` or `data` payload keeps it one level down.
+ */
+export function refusalUsage(value: unknown) {
+  if (!isRecord(value)) return undefined
+  return [value, value.response, value.data]
+    .map((holder) => (isRecord(holder) ? holder.usage : undefined))
+    .find(isRecord)
+}
+
 export const compactionRequiredType = "arena_compaction_required"
 
 export function compactionRequiredError() {

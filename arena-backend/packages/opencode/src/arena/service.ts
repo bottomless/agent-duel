@@ -9,6 +9,7 @@ import {
   messagesToGraft,
   type CancelOptions,
 } from "./session-runtime"
+import { contentFilterMessage } from "@agent-duel/arena-service/request-error"
 import { ARENA_SENT_AT } from "./session-runtime/projection"
 import { copyKeepingReferences } from "./compaction-reference"
 import { KeyedMutex } from "@opencode/core/effect/keyed-mutex"
@@ -222,7 +223,15 @@ import type {
   WarmWorktreeRecord,
 } from "./records"
 import { battleMetricsSchemaVersion, reviewFlushLimit, runTelemetryVersion } from "./records"
-import { enabled, recoverOnce, registry, setTelemetry, shellLedgerDirectory, store as runtimeStore } from "./runtime"
+import {
+  enabled,
+  onRunFailure,
+  recoverOnce,
+  registry,
+  setTelemetry,
+  shellLedgerDirectory,
+  store as runtimeStore,
+} from "./runtime"
 import { stopOrphanShells } from "./engine-runtime/shell-ledger"
 import { recordStoppedShells } from "./shell-restart"
 import { create as createTelemetry } from "./telemetry"
@@ -1524,6 +1533,11 @@ export function normalTurnReservations() {
       return (counts.get(sessionID) ?? 0) > 0
     },
   }
+}
+
+function promptBlocked(result: Exit.Exit<SessionV1.WithParts | void, unknown>) {
+  const answer = Exit.isSuccess(result) ? result.value?.info : undefined
+  return answer?.role === "assistant" && answer.error?.name === "ContentFilterError"
 }
 
 /** Whether a contestant prompt ended in a failure of its own: an error or defect, or an errored answer. */
@@ -4927,7 +4941,9 @@ export const layer: Layer.Layer<
           unsettled.push(
             assistant.error.name === "MessageOutputLengthError"
               ? ArenaResponseRecovery.EXHAUSTED
-              : `Contestant assistant error: ${JSON.stringify(assistant.error)}`,
+              : assistant.error.name === "ContentFilterError"
+                ? contentFilterMessage
+                : `Contestant assistant error: ${JSON.stringify(assistant.error)}`,
           )
         }
         // On 2.0 a Stop interrupts the prompt instead of returning an aborted assistant, and a stream
@@ -4938,7 +4954,10 @@ export const layer: Layer.Layer<
           unsettled.push(Cause.pretty(promptExit.cause))
         // A spent timeout budget explains the whole failure. The other lines only echo it, and the
         // session can still read as active for a moment after the failed request settles.
-        for (const exhausted of [ArenaResponseRecovery.IDLE_EXHAUSTED, ArenaResponseRecovery.HEADER_TIMEOUT_EXHAUSTED]) {
+        for (const exhausted of [
+          ArenaResponseRecovery.IDLE_EXHAUSTED,
+          ArenaResponseRecovery.HEADER_TIMEOUT_EXHAUSTED,
+        ]) {
           if (!settled && unsettled.some((line) => line.includes(exhausted))) {
             unsettled.splice(0, unsettled.length, exhausted)
             break
@@ -5251,7 +5270,7 @@ export const layer: Layer.Layer<
     const closeTurn = Effect.fnUntraced(function* (
       store: Store,
       run: SideRuntime,
-      result: Exit.Exit<unknown, unknown>,
+      canAnswer: boolean,
       tried: Set<string>,
     ) {
       return yield* closeShellTurn(
@@ -5259,7 +5278,7 @@ export const layer: Layer.Layer<
         steerGates.withLock(run.runID)(
           Effect.gen(function* () {
             const current = yield* promise(() => store.turn(run.turnID))
-            if (Exit.isSuccess(result) && current?.state === "running" && !haltingRuns.has(run.runID)) {
+            if (canAnswer && current?.state === "running" && !haltingRuns.has(run.runID)) {
               const status = yield* inDirectory(run.worktree.directory, statuses.get(run.sessionID)).pipe(
                 Effect.catchCause(() => Effect.succeed({ type: "idle" as const })),
               )
@@ -5419,7 +5438,7 @@ export const layer: Layer.Layer<
       const triedSteers = new Set<string>()
       while (true) {
         const steer = interruptingSteers.get(run.runID)
-        if (!steer) {
+        if (!steer || promptBlocked(result)) {
           // A read that fails here leaves the turn to close, and finalization checks every session.
           const answered = result
           result = yield* withChildWaitLimit(awaitChildren(store, run, answered), {
@@ -5432,12 +5451,15 @@ export const layer: Layer.Layer<
               ),
             ),
           )
-          if (interruptingSteers.has(run.runID)) continue
+          // Neither a queued steer nor Send now may start another step after a content filter.
+          const blocked = promptBlocked(result)
+          if (blocked) interruptingSteers.delete(run.runID)
+          else if (interruptingSteers.has(run.runID)) continue
           // The runner's last boundary check and its idle transition are not one step, so a steer can
           // arrive just as the answer ends. Close the turn only when no steer waits and no runner
           // works; otherwise answer the steer here, in the fiber that owns finalization, as 1.x's
           // loop answered a user message written before it ended.
-          const late = yield* closeTurn(store, run, result, triedSteers)
+          const late = yield* closeTurn(store, run, Exit.isSuccess(result) && !blocked, triedSteers)
           if (!late) break
           result = yield* Effect.exit(inDirectory(run.worktree.directory, prompts.loop({ sessionID: run.sessionID })))
           continue
@@ -5475,6 +5497,39 @@ export const layer: Layer.Layer<
       return result
     })
 
+    /**
+     * A step that fails without a retry ends the run: a content filter, or any failure the retry
+     * policy gives up on. A steer queued behind that step must not start another step, but Core's
+     * runner starts a new execution for it as soon as the failed drain ends, which is before this
+     * run's prompt returns. So before Core settles the failure (the proxy for a filter, the final
+     * retry decision for the rest), close the run to new steers and deliver the queued ones as
+     * unanswered messages, as Stop leaves them. A drain with nothing in the inbox ends without a
+     * model request, and a Retry answers the delivered steer from the thread.
+     */
+    const keepFailedSteers = (run: SideRuntime) =>
+      steerGates
+        .withLock(run.runID)(
+          Effect.gen(function* () {
+            closingRuns.add(run.runID)
+            yield* inDirectory(run.worktree.directory, sessions.deliverPending(run.sessionID))
+          }),
+        )
+        .pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("Arena could not hold a failed contestant's queued steers", {
+              runID: run.runID,
+              cause,
+            }),
+          ),
+        )
+
+    const watchRunFailure = <A, E, R>(run: SideRuntime, effect: Effect.Effect<A, E, R>) =>
+      Effect.gen(function* () {
+        const runPromise = Effect.runPromiseWith(yield* Effect.context<never>())
+        const release = onRunFailure(run.sessionID, () => runPromise(keepFailedSteers(run)))
+        return yield* effect.pipe(Effect.ensuring(Effect.sync(release)))
+      })
+
     const settleSide = Effect.fn("Arena.settleSide")(function* (
       store: Store,
       turn: TurnDocument,
@@ -5487,7 +5542,7 @@ export const layer: Layer.Layer<
     ) {
       const settled = Deferred.makeUnsafe<void>()
       activePrompts.set(run.runID, settled)
-      const promptExit = yield* runPrompt(store, run, prompt, agent, preservePromptBoundary).pipe(
+      const promptExit = yield* watchRunFailure(run, runPrompt(store, run, prompt, agent, preservePromptBoundary)).pipe(
         Effect.ensuring(closeShellTurn(run.sessionID, Effect.succeed(false))),
         Effect.ensuring(
           Effect.sync(() => {
@@ -5544,9 +5599,10 @@ export const layer: Layer.Layer<
       // as in 1.x, and goes with this side's history if it is kept. Left in Core's inbox it would
       // vanish from the thread, and the next resume of this session would deliver it. A finished
       // run closed its turn with none waiting, so for it this only keeps the thread and the kept
-      // history in step. A failed run keeps its queue for Retry, unless the battle halted: it then
-      // has no Retry, also when it failed before the stop. A declined run finishes like the
-      // finished run, so its queue goes with its history too.
+      // history in step. A step that failed without a retry delivered its queue when it failed
+      // (`keepFailedSteers`). A failure that never reached the retry decision keeps its queue for
+      // Retry, unless the battle halted: it then has no Retry, also when it failed before the stop.
+      // A declined run finishes like a successful run, so its queue goes with its history too.
       if (stopped || halted || declined || Exit.isSuccess(promptExit)) {
         yield* inDirectory(run.worktree.directory, sessions.deliverPending(run.sessionID)).pipe(
           Effect.catchCause((cause) =>

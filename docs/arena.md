@@ -433,7 +433,13 @@ prompt fiber closes its turn under a per-run gate only when no steer waits and n
 otherwise answers it first; a steer is admitted under the same gate and refused once the side is
 closing. The refusal carries the code `arena_side_closing` through the daemon, and the app words it
 (`arena/steer-refusal.ts`) and keeps the draft. A steer still queued when Stop or an early choice cuts the run off
-is delivered as an unanswered message so the thread and a kept side's history agree.
+is delivered as an unanswered message so the thread and a kept side's history agree. So is one
+queued behind a step that fails without a retry: Core starts a new execution for queued input as
+soon as the failed drain ends, before the side's prompt returns, so the side's failure handler
+(`runtime.ts` `onRunFailure`) closes the side and delivers the queue first. The final retry decision
+in `engine-runtime/plugin.ts` runs it; Retry then answers the steer from the thread. A failure that
+never reaches the retry decision (an exhausted retry schedule, a failed compaction) leaves the queue
+for Retry.
 An engine restart leaves it in the inbox: the interrupted run's archive shows it, and Resume delivers it.
 The toolbar stays on one row.
 When its own available width is narrow, shorten the target labels, show tool permissions as a
@@ -1870,6 +1876,21 @@ credit-limit, and unknown payment failures, but Core classifies HTTP 402 as nonr
 failure (`ai/src/provider-error.ts`). There is no automatic temporary-budget retry in the V2 path.
 Never switch contestants or replay partial work to recover payment failures.
 
+A content filter ends the contestant's run. Keep its partial answer and saved files available through
+**Accept**, without a leaderboard vote. Do not run pending tools, retry the request or send it to a
+different host. A filtered stream and a filtered complete response are detected and handled alike, and
+both show the same neutral reason; the provider's explanation can identify the contestant or quote the
+prompt, so only the service logs it. Record a filtered call as an error, not a completion, but keep its
+usage: the response ended, so its tokens are final. The reveal returns only complete calls, so the
+engine's generation record is the one that keeps a refused call's tokens. A filtered stream carries its
+usage on the finish; a filtered complete response becomes an HTTP 400, so the service sends the usage
+beside the neutral error and the engine proxy takes it for the record before the model call sees the
+error alone.
+
+A steer queued behind the refused step starts no step; it is delivered unanswered, as for any step
+that fails without a retry (see the steer rules above). The engine proxy runs the side's failure
+handler before it hands the refusal to the model call.
+
 An output-token cap continues from saved output and tool results under the same assignment. Never
 replay completed tools. Leave unfinished calls unexecuted and request smaller writes or patches.
 Core allows two continuations, then fails on the third consecutive `length` response while
@@ -2040,7 +2061,8 @@ plane's `arenaAssignmentGenerationMetrics`, which keeps one row for every contes
 `outcome`: `complete`, `cancelled` when the client stopped reading, `failed` when the upstream broke
 or the fetch was refused before an answer, or `error` for an OpenRouter HTTP refusal, which keeps the
 `status` and the `provider` the refusal names. Rows written before `outcome` existed are complete.
-Only a complete row has usage and only complete rows reach the reveal. A row keeps the `provider` and
+Only complete rows reach the reveal. A complete row has usage; a content-filter refusal is an `error`
+row that also keeps its usage, since the response ended. A row keeps the `provider` and
 OpenRouter's `upstreamGenerationID` when the stream showed them; an early end also keeps `quietMs`,
 the silence since the last upstream data event, so a stall is measurable after the runtime logs
 expire. A Stop or a vote also ends open streams as `cancelled`, so count stalls by a `quietMs` near

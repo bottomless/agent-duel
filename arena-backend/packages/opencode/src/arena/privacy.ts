@@ -9,6 +9,7 @@ import { blindCallID, callMessageID } from "./tool-call-id"
 import { ArenaAttachments } from "./attachments"
 import { ArenaRuntime } from "./runtime"
 import {
+  contentFilterMessage,
   paymentMessage,
   requestTooLargeMessage,
   SESSION_REJECTED_RETRY_MESSAGE,
@@ -307,13 +308,15 @@ function assistantError(input: AssistantError): AssistantError {
     return { name: input.name, data: { message: errorMessage, retries: input.data.retries } }
   }
   if (input.name === "ContextOverflowError") return { name: input.name, data: { message: errorMessage } }
-  if (input.name === "ContentFilterError") return { name: input.name, data: { message: errorMessage } }
+  if (input.name === "ContentFilterError") return { name: input.name, data: { message: contentFilterMessage } }
   if (input.name === "APIError") return apiError(input)
   return input
 }
 
 function unknownError(input: unknown) {
   if (!record(input)) return input
+  if (input.name === "ContentFilterError") return { name: input.name, data: { message: contentFilterMessage } }
+  if (input.type === "provider.content-filter") return { type: input.type, message: contentFilterMessage }
   if (input.type === "unknown") return { type: "unknown", message: errorMessage }
   if (typeof input.name !== "string" || !record(input.data)) return scrubRecord(input, errorKeys)
   if (input.name === "APIError") {

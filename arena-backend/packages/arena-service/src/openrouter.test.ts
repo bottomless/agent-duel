@@ -311,6 +311,466 @@ describe("OpenRouter proxy", () => {
     expect((await invoke(36_000)).status).toBe(200)
   })
 
+  test.each([
+    [{ code: "data_inspection_failed", message: "private detail" }, true],
+    [
+      {
+        code: 400,
+        metadata: {
+          raw: JSON.stringify({ error: { type: "data_inspection_failed", message: "private context length detail" } }),
+        },
+      },
+      true,
+    ],
+    [
+      {
+        code: 400,
+        metadata: {
+          error_type: "data_inspection_failed",
+          provider_name: "Google AI Studio",
+          raw: JSON.stringify({
+            error: { code: 400, status: "INVALID_ARGUMENT", message: "Request contains an invalid argument." },
+          }),
+        },
+      },
+      true,
+    ],
+    [
+      {
+        code: 400,
+        metadata: {
+          error_type: "invalid_request",
+          provider_code: "data_inspection_failed",
+        },
+      },
+      true,
+    ],
+    [
+      {
+        code: 400,
+        metadata: {
+          provider_name: "Alibaba",
+          provider_error_code: "data_inspection_failed",
+        },
+      },
+      true,
+    ],
+    [{ code: 400, message: "Invalid tool argument: data_inspection_failed", metadata: { raw: "not JSON" } }, false],
+  ] as const)(
+    "returns a blinded terminal error only for a structured inspection refusal: %j",
+    async (error, blocked) => {
+      const db = fakeDb({
+        assignmentSets: () => [
+          {
+            userId: "user-1",
+            scopeID: "turn",
+            assignments: [{ assignmentID: "opaque-id", model: { ...pool[0], slug: "google/gemini-4-carbon" } }],
+          },
+        ],
+      })
+      let calls = 0
+      const proxy = openrouter({
+        db: async () => db,
+        fetch: async () => {
+          calls++
+          return Response.json({ error }, { status: 400 })
+        },
+      })
+      const response = await proxy(
+        new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+          method: "POST",
+          headers: { "X-Arena-Assignment-ID": "opaque-id", "X-Arena-Scope-ID": "turn" },
+          body: JSON.stringify({
+            model: "contestant",
+            messages: [{ role: "tool", tool_call_id: "call-1", content: "Plain text" }],
+          }),
+        }),
+      )
+      expect(response.status).toBe(400)
+      expect(await response.json()).toEqual({
+        error: blocked
+          ? { type: "content_filter", message: "A content filter blocked this response." }
+          : { type: "arena_upstream_error", message: "Arena contestant request failed" },
+      })
+      expect(calls).toBe(1)
+    },
+  )
+
+  test.each([
+    [
+      {
+        code: 400,
+        message: "Input text data may contain inappropriate content.",
+        metadata: { error_type: "invalid_request", provider_code: "data_inspection_failed" },
+      },
+      true,
+    ],
+    [
+      {
+        code: 400,
+        message: "Provider returned error",
+        metadata: { provider_name: "Alibaba", provider_error_code: "data_inspection_failed" },
+      },
+      true,
+    ],
+    [
+      {
+        code: 400,
+        message: "Provider returned error",
+        metadata: {
+          raw: JSON.stringify({ error: { code: "DataInspectionFailed", message: "private detail" } }),
+        },
+      },
+      true,
+    ],
+    [{ code: 400, message: "Invalid tool argument: data_inspection_failed", metadata: { raw: "not JSON" } }, false],
+  ] as const)(
+    "rewrites an HTTP 200 SSE structured inspection refusal into a content_filter finish: %j",
+    async (error, blocked) => {
+      const recorded: Record<string, unknown>[] = []
+      const db = fakeDb({
+        assignmentSets: () => [
+          {
+            userId: "user-1",
+            scopeID: "turn",
+            assignments: [{ assignmentID: "opaque-id", model: pool[0] }],
+          },
+        ],
+        recordMetrics: (document) => recorded.push(document),
+      })
+      const generationID = "gen_00000000000000000000000000000042"
+      const proxy = openrouter({
+        db: async () => db,
+        fetch: async () =>
+          new Response(
+            ": OPENROUTER PROCESSING\n\n" +
+              `data: ${JSON.stringify({
+                id: "gen-upstream-1",
+                object: "chat.completion.chunk",
+                model: "qwen/qwen4-max",
+                provider: "Alibaba",
+                choices: [],
+                error,
+              })}\n\n`,
+            { headers: { "content-type": "text/event-stream" } },
+          ),
+      })
+      const response = await proxy(
+        new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "X-Arena-Assignment-ID": "opaque-id",
+            "X-Arena-Scope-ID": "turn",
+            "X-Arena-Generation-ID": generationID,
+          },
+          body: JSON.stringify({ model: "contestant", stream: true, messages: [] }),
+        }),
+      )
+      expect(response.status).toBe(200)
+      const body = await response.text()
+      expect(body).not.toContain("Alibaba")
+      expect(body).not.toContain("inappropriate content")
+      expect(body).not.toContain("data_inspection_failed")
+      const events = body
+        .split("\n")
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => JSON.parse(line.slice("data:".length).trim()) as unknown)
+      expect(events).toEqual(
+        blocked
+          ? [
+              {
+                id: generationID,
+                choices: [{ index: 0, delta: {}, finish_reason: "content_filter" }],
+              },
+            ]
+          : [{ error: { message: "Arena contestant request failed", type: "arena_upstream_error" } }],
+      )
+      if (blocked) expect(recorded[0]).toMatchObject({ provider: "Alibaba", finishReason: "content_filter" })
+    },
+  )
+
+  test("does not append a retryable stream error when the upstream drops after an SSE inspection refusal", async () => {
+    const db = fakeDb({
+      assignmentSets: () => [
+        {
+          userId: "user-1",
+          scopeID: "turn",
+          assignments: [{ assignmentID: "opaque-id", model: pool[0] }],
+        },
+      ],
+    })
+    const generationID = "gen_00000000000000000000000000000043"
+    const proxy = openrouter({
+      db: async () => db,
+      fetch: async () => {
+        const encoder = new TextEncoder()
+        let step = 0
+        const body = new ReadableStream<Uint8Array>({
+          pull(controller) {
+            if (step++ === 0) {
+              controller.enqueue(
+                encoder.encode(
+                  `data: ${JSON.stringify({
+                    id: "gen-upstream-2",
+                    object: "chat.completion.chunk",
+                    provider: "Alibaba",
+                    choices: [],
+                    error: {
+                      code: 400,
+                      message: "Input text data may contain inappropriate content.",
+                      metadata: { error_type: "invalid_request", provider_code: "data_inspection_failed" },
+                    },
+                  })}\n\n`,
+                ),
+              )
+              return
+            }
+            controller.error(new Error("connection reset"))
+          },
+        })
+        return new Response(body, { headers: { "content-type": "text/event-stream" } })
+      },
+    })
+    const response = await proxy(
+      new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "X-Arena-Assignment-ID": "opaque-id",
+          "X-Arena-Scope-ID": "turn",
+          "X-Arena-Generation-ID": generationID,
+        },
+        body: JSON.stringify({ model: "contestant", stream: true, messages: [] }),
+      }),
+    )
+    const body = await response.text()
+    expect(body).not.toContain("arena_retryable_stream_error")
+    const events = body
+      .split("\n")
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => JSON.parse(line.slice("data:".length).trim()) as unknown)
+    expect(events).toEqual([
+      {
+        id: generationID,
+        choices: [{ index: 0, delta: {}, finish_reason: "content_filter" }],
+      },
+    ])
+  })
+
+  test("turns an HTTP 200 JSON structured inspection refusal into a blinded HTTP 400 content filter", async () => {
+    const db = fakeDb({
+      assignmentSets: () => [
+        {
+          userId: "user-1",
+          scopeID: "turn",
+          assignments: [{ assignmentID: "opaque-id", model: pool[0] }],
+        },
+      ],
+    })
+    const proxy = openrouter({
+      db: async () => db,
+      fetch: async () =>
+        Response.json({
+          error: {
+            code: 400,
+            message: "Input text data may contain inappropriate content.",
+            metadata: { error_type: "invalid_request", provider_code: "data_inspection_failed" },
+          },
+        }),
+    })
+    const response = await proxy(
+      new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+        method: "POST",
+        headers: { "X-Arena-Assignment-ID": "opaque-id", "X-Arena-Scope-ID": "turn" },
+        body: JSON.stringify({ model: "contestant", messages: [] }),
+      }),
+    )
+    expect(response.status).toBe(400)
+    expect(await response.json()).toEqual({
+      error: { type: "content_filter", message: "A content filter blocked this response." },
+    })
+  })
+
+  test("records a filtered stream as an error and keeps the usage it carried", async () => {
+    const written: Record<string, unknown>[] = []
+    const db = fakeDb({
+      assignmentSets: () => [
+        { userId: "user-1", scopeID: "turn-1", assignments: [{ assignmentID: "opaque-id", model: pool[0] }] },
+      ],
+      recordMetrics: (document) => written.push(document),
+    })
+    const error = spyOn(console, "error").mockImplementation(() => {})
+    try {
+      const response = await openrouter({
+        db: async () => db,
+        fetch: async () =>
+          new Response(
+            'data: {"id":"upstream-1","provider":"Alibaba","choices":[{"index":0,"delta":{"content":"partial"},"finish_reason":"content_filter"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"cost":0.01}}\n\n' +
+              "data: [DONE]\n",
+            { headers: { "content-type": "text/event-stream" } },
+          ),
+      })(
+        new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Arena-Assignment-ID": "opaque-id",
+            "X-Arena-Scope-ID": "turn-1",
+            "X-Arena-Generation-ID": "gen_00000000000000000000000000000044",
+          },
+          body: JSON.stringify({ model: "contestant", messages: [], stream: true }),
+        }),
+      )
+      expect(response.status).toBe(200)
+      const body = await response.text()
+      expect(body).not.toContain("Alibaba")
+      expect(body).not.toContain("cost")
+      expect(body).toContain("content_filter")
+      expect(body).toContain("partial")
+      expect(written).toHaveLength(1)
+      expect(written[0]).toMatchObject({
+        outcome: "error",
+        finishReason: "content_filter",
+        provider: "Alibaba",
+        usage: { promptTokens: 10, completionTokens: 5 },
+      })
+    } finally {
+      error.mockRestore()
+    }
+  })
+
+  test("keeps usage that arrives after a filtered stream's finish", async () => {
+    const written: Record<string, unknown>[] = []
+    const db = fakeDb({
+      assignmentSets: () => [
+        { userId: "user-1", scopeID: "turn-1", assignments: [{ assignmentID: "opaque-id", model: pool[0] }] },
+      ],
+      recordMetrics: (document) => written.push(document),
+    })
+    const error = spyOn(console, "error").mockImplementation(() => {})
+    try {
+      const response = await openrouter({
+        db: async () => db,
+        fetch: async () =>
+          new Response(
+            'data: {"id":"upstream-1","provider":"Alibaba","choices":[{"index":0,"delta":{},"finish_reason":"content_filter"}]}\n\n' +
+              'data: {"id":"upstream-1","choices":[],"usage":{"prompt_tokens":20,"completion_tokens":7}}\n\n' +
+              "data: [DONE]\n",
+            { headers: { "content-type": "text/event-stream" } },
+          ),
+      })(
+        new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Arena-Assignment-ID": "opaque-id",
+            "X-Arena-Scope-ID": "turn-1",
+            "X-Arena-Generation-ID": "gen_00000000000000000000000000000045",
+          },
+          body: JSON.stringify({ model: "contestant", messages: [], stream: true }),
+        }),
+      )
+      expect(response.status).toBe(200)
+      await response.text()
+      expect(written).toHaveLength(1)
+      expect(written[0]).toMatchObject({
+        outcome: "error",
+        finishReason: "content_filter",
+        usage: { promptTokens: 20, completionTokens: 7 },
+      })
+    } finally {
+      error.mockRestore()
+    }
+  })
+
+  test("blinds a complete response whose choice finished on a content filter and records it as an error", async () => {
+    const written: Record<string, unknown>[] = []
+    const db = fakeDb({
+      assignmentSets: () => [
+        { userId: "user-1", scopeID: "turn-1", assignments: [{ assignmentID: "opaque-id", model: pool[0] }] },
+      ],
+      recordMetrics: (document) => written.push(document),
+    })
+    const error = spyOn(console, "error").mockImplementation(() => {})
+    try {
+      const response = await openrouter({
+        db: async () => db,
+        fetch: async () =>
+          Response.json({
+            id: "upstream-1",
+            provider: "Alibaba",
+            choices: [{ message: { content: "partial answer" }, finish_reason: "content_filter" }],
+            usage: {
+              prompt_tokens: 12,
+              completion_tokens: 4,
+              cost: 0.01,
+              cost_details: { upstream_inference_cost: 1 },
+            },
+          }),
+      })(
+        new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Arena-Assignment-ID": "opaque-id",
+            "X-Arena-Scope-ID": "turn-1",
+            "X-Arena-Generation-ID": "gen_00000000000000000000000000000046",
+          },
+          body: JSON.stringify({ model: "contestant", messages: [], stream: false }),
+        }),
+      )
+      expect(response.status).toBe(400)
+      // The engine records the refused call's tokens from this body; the answer, provider and cost stay behind.
+      expect(await response.json()).toEqual({
+        error: { type: "content_filter", message: "A content filter blocked this response." },
+        usage: { prompt_tokens: 12, completion_tokens: 4 },
+      })
+      expect(written).toHaveLength(1)
+      expect(written[0]).toMatchObject({
+        outcome: "error",
+        finishReason: "content_filter",
+        usage: { promptTokens: 12, completionTokens: 4 },
+      })
+    } finally {
+      error.mockRestore()
+    }
+  })
+
+  test("blinds a complete response carrying a content_filter error and records it as an error", async () => {
+    const written: Record<string, unknown>[] = []
+    const db = fakeDb({
+      assignmentSets: () => [
+        { userId: "user-1", scopeID: "turn-1", assignments: [{ assignmentID: "opaque-id", model: pool[0] }] },
+      ],
+      recordMetrics: (document) => written.push(document),
+    })
+    const error = spyOn(console, "error").mockImplementation(() => {})
+    try {
+      const response = await openrouter({
+        db: async () => db,
+        fetch: async () => Response.json({ error: { type: "content_filter", message: "private policy detail" } }),
+      })(
+        new Request("https://control.test/api/openrouter/api/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Arena-Assignment-ID": "opaque-id",
+            "X-Arena-Scope-ID": "turn-1",
+            "X-Arena-Generation-ID": "gen_00000000000000000000000000000047",
+          },
+          body: JSON.stringify({ model: "contestant", messages: [], stream: false }),
+        }),
+      )
+      expect(response.status).toBe(400)
+      expect(await response.json()).toEqual({
+        error: { type: "content_filter", message: "A content filter blocked this response." },
+      })
+      expect(written).toHaveLength(1)
+      expect(written[0]).toMatchObject({ outcome: "error", finishReason: "content_filter" })
+    } finally {
+      error.mockRestore()
+    }
+  })
+
   test("sanitizes recognized provider context overflow refusals", async () => {
     const db = fakeDb({
       assignmentSets: () => [

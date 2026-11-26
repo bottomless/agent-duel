@@ -1,3 +1,4 @@
+import { contentFilterMessage } from "@agent-duel/arena-service/request-error"
 import * as Prompt from "@opencode/schema/prompt"
 import { Session } from "@opencode/schema/session"
 import type { SessionMessage } from "@opencode/schema/session-message"
@@ -55,6 +56,8 @@ const projectError = (
   retryable = false,
 ): NonNullable<SessionV1.Assistant["error"]> => {
   if (!value) return { name: "UnknownError", data: { message: "Unknown assistant error" } }
+  if (value.type === "provider.content-filter")
+    return { name: "ContentFilterError", data: { message: contentFilterMessage } }
   if (value.type === "aborted") return { name: "MessageAbortedError", data: { message: value.message } }
   // This is a manual side retry, not an automatic retry of the failed summary request.
   if (value.type === "compaction.empty-summary")
@@ -121,7 +124,7 @@ const state = (
   return {
     status: "error",
     input: value.input,
-    error: value.error.message,
+    error: value.error.type === "provider.content-filter" ? contentFilterMessage : value.error.message,
     ...(value.metadata ? { metadata: value.metadata } : {}),
     time: {
       start: ran ?? created,

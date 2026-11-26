@@ -643,6 +643,7 @@ export type GenerationFailureKind =
   | "stream_read"
   | "stream_cancelled"
   | "replay_unavailable"
+  | "content_filter"
   | "routing"
 
 export type GenerationDocument = {
