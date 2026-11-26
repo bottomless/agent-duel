@@ -201,6 +201,80 @@ describe("Arena assignment control plane", () => {
     })
   })
 
+  test("reveals only calls that completed", async () => {
+    await service().assignments(request({ action: "create", kind: "battle", scopeID: "turn-outcomes" }))
+    await recordAssignmentGenerationMetrics(mongo.db, {
+      userId: "user-1",
+      scopeID: "turn-outcomes",
+      assignmentID: "assignment-a",
+      metrics: {
+        generationID: "gen_00000000000000000000000000000001",
+        outcome: "complete",
+        usage: {
+          promptTokens: 10,
+          completionTokens: 5,
+          reasoningTokens: 0,
+          totalTokens: 15,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          cost: 0.123,
+          attempts: 1,
+          latencyMs: 250,
+        },
+        finishReason: "tool_calls",
+        provider: "hidden-provider",
+      },
+    })
+    await recordAssignmentGenerationMetrics(mongo.db, {
+      userId: "user-1",
+      scopeID: "turn-outcomes",
+      assignmentID: "assignment-a",
+      metrics: {
+        generationID: "gen_00000000000000000000000000000002",
+        outcome: "cancelled",
+        quietMs: 150_000,
+        provider: "hidden-provider",
+        upstreamGenerationID: "upstream-generation",
+      },
+    })
+    // A row written before outcomes existed is complete.
+    await recordAssignmentGenerationMetrics(mongo.db, {
+      userId: "user-1",
+      scopeID: "turn-outcomes",
+      assignmentID: "assignment-b",
+      metrics: { generationID: "gen_00000000000000000000000000000003", finishReason: "stop" },
+    })
+
+    const resolved = await service().assignments(
+      request({ action: "resolve", kind: "battle", scopeID: "turn-outcomes", decision: "select:a" }),
+    )
+    const revealed = await resolved.json()
+    expect(JSON.stringify(revealed)).not.toContain("hidden-provider")
+    expect(JSON.stringify(revealed)).not.toContain("quietMs")
+    expect(JSON.stringify(revealed)).not.toContain("upstream-generation")
+    expect(revealed).toMatchObject({
+      decision: "select:a",
+      assignments: [
+        {
+          assignmentID: "assignment-a",
+          model: "GLM 5.3 FlashX",
+          metrics: [
+            {
+              generationID: "gen_00000000000000000000000000000001",
+              usage: { promptTokens: 10, completionTokens: 5, cost: 0.123 },
+              finishReason: "tool_calls",
+            },
+          ],
+        },
+        {
+          assignmentID: "assignment-b",
+          model: "Grok 4.6",
+          metrics: [{ generationID: "gen_00000000000000000000000000000003", finishReason: "stop" }],
+        },
+      ],
+    })
+  })
+
   test("rejects the removed reveal action", async () => {
     const response = await service().assignments(
       request({ action: "reveal", kind: "battle", scopeID: "turn-removed", decision: "select:a" }),

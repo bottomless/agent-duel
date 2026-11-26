@@ -96,6 +96,22 @@ pings and the service's own comparison and metadata calls are not kept. A retrie
 linked by `retriedByGenerationID`. BYOK leaves capture off: its store is on the voter's machine,
 and those fields name the model.
 
+A profile with `topLogprobs` also asks each chat call for token logprobs, which only the capture's raw
+response keeps. The proxy strips `logprobs` from every choice before the engine sees it, because the
+tokens show the tokenizer and their presence shows the model. It also drops any logprob fields the
+engine sent. Under `require_parameters` the setting also limits the model to the endpoints that
+return them, and catalog validation refuses it for a model that lists none. The catalog can still
+list them for a provider that sends `null` (Grok), so run `probeRouting` before the pool change
+ships: it fails a profile that gets none back. OpenRouter keeps no logprobs after a call, so this is
+the only way to get them.
+
+Read them with `visibleLogprobs` (`arena-service/src/logprobs.ts`), not from the raw chunks. A step
+that answers with only reasoning and tool calls has none, but the raw list is not only the visible
+text either. Qwen and DeepSeek start it with the last reasoning tokens up to `</think>` and end it with
+special tokens or the opening of a tool call, and a chunk's logprobs belong to other tokens than its
+`delta.content`. Providers also skip them on some calls that have text: Qwen sent none for one final
+answer after tool calls. `visibleLogprobs` returns nothing then, so count those calls as missing.
+
 The control plane also adds the endpoint's quantization to each stored request row, from a catalog of
 OpenRouter's endpoint lists that it saves itself (`arena-service/src/endpoint-label.ts`, `recordEndpointLabels`).
 OpenRouter never reports quantization for a call, so the label is what the catalog listed for that
@@ -1437,10 +1453,10 @@ field. Each layer has its own file:
   provider-specific reasoning metadata, identity fields, and raw upstream errors from stored
   responses, and rewrites provider-shaped tool-call ids before saving response artifacts. The
   control plane holds generation usage, cost, and finish reason and returns them only with the
-  committed resolution. It also stores the provider that served each call, which no response or
-  reveal returns. Usage keeps OpenRouter's account charge in `cost` and, when supplied, the
-  provider's `cost_details.upstream_inference_cost` as `upstreamInferenceCost`; the desktop then
-  records both in the research metrics. Local-store startup
+  committed resolution. It also stores the provider that served each call and OpenRouter's own
+  generation id, neither of which a response or the reveal returns. Usage keeps OpenRouter's account
+  charge in `cost` and, when supplied, the provider's `cost_details.upstream_inference_cost` as
+  `upstreamInferenceCost`; the desktop then records both in the research metrics. Local-store startup
   removes those fields and request/response artifacts from legacy unresolved battles; resolved
   history already exposes the contestants by design.
 - **Session data** (`arena/privacy.ts`, `arena/v2-privacy.ts`) — keep each active assignment's
@@ -2023,9 +2039,18 @@ Direct console warnings still go to the daemon log.
 Diagnose deadlines with these logs and the proxy's `streamProgress` timestamps
 (`arena/proxy.ts`). Compare chunk receipt, response end, artifact saving, and closure: a stream
 that ended but never closed stalled inside the engine. Correlate its `generationID` with the control
-plane's `arenaAssignmentGenerationMetrics`, whose `createdAt` marks the hosted function's response
-end. The legacy `arena model response idle` log is emitted by `session/llm.ts`; the V2 fetch adapter
-does not emit it.
+plane's `arenaAssignmentGenerationMetrics`, which keeps one row for every contestant call, with its
+`outcome`: `complete`, `cancelled` when the client stopped reading, `failed` when the upstream broke
+or the fetch was refused before an answer, or `error` for an OpenRouter HTTP refusal, which keeps the
+`status` and the `provider` the refusal names. Rows written before `outcome` existed are complete.
+Only a complete row has usage and only complete rows reach the reveal. A row keeps the `provider` and
+OpenRouter's `upstreamGenerationID` when the stream showed them; an early end also keeps `quietMs`,
+the silence since the last upstream data event, so a stall is measurable after the runtime logs
+expire. A Stop or a vote also ends open streams as `cancelled`, so count stalls by a `quietMs` near
+the 150-second idle deadline. The proxy's `stream ended early` log follows the same split: an error
+for those and for `failed`, info for any other cancel. A `complete` row without `finishReason` is a stream that closed before
+its finish, often a provider cutting it. The legacy `arena model response idle` log is emitted by `session/llm.ts`; the V2 fetch
+adapter does not emit it.
 
 A request OpenRouter refuses reaches the contestant as the same neutral error, and only the service
 sees why. It logs `[arena-service] OpenRouter refused a contestant request` with the battle ID
