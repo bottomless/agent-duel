@@ -712,7 +712,7 @@ async function sanitizeAssignedResponse(
     ])
     if (filtered) return Response.json(contentFilterError(), { status: 400, headers })
     if (isContextOverflow(response.status, upstream)) {
-      return Response.json(compactionRequiredError(), { status: 413, headers })
+      return Response.json(compactionRequiredError(true), { status: 413, headers })
     }
     if (response.status === 402) {
       let payload: unknown = null

@@ -61,8 +61,16 @@ export type Editor = {
 export type Estimate = { readonly measured: number; readonly estimated: number }
 
 export type Trigger =
-  /** `overflow`: the provider just rejected this context as too long. `estimate` is `estimatePrompt(context)`. */
-  | { readonly reason: "auto" | "overflow"; readonly context: SessionContext.Loaded; readonly estimate?: Estimate }
+  /**
+   * `overflow`: the provider just rejected this context as too long. `requested`: the provider asked for a summary
+   * although the context still fits, so it compacts as `auto` does without checking the ceiling (Agent Duel vendor
+   * patch, see `overflowReason`). `estimate` is `estimatePrompt(context)`.
+   */
+  | {
+      readonly reason: "auto" | "overflow" | "requested"
+      readonly context: SessionContext.Loaded
+      readonly estimate?: Estimate
+    }
   /** `inputID` is the `/compact` inbox item, whose message shows the outcome. */
   | { readonly reason: "manual"; readonly context: SessionContext.Loaded; readonly inputID: SessionMessage.ID }
 
@@ -1056,6 +1064,30 @@ const heldIndex = (held: Precomputed, context: SessionContext.Loaded) => {
   return context.messages.findIndex((message) => message.id === held.keepID)
 }
 
+/**
+ * Agent Duel vendor patch: how to compact after a context-overflow failure. Arena's control plane asks for a summary
+ * at its savings threshold with a neutral context-overflow error, since the threshold is kept from the engine
+ * (`opencode/src/arena/engine-runtime/request.ts`). That request still fits the window, so it is summarized as it is
+ * and keeps its prompt cache. A refusal the provider made itself carries `overflow` and, like any other overflow, is
+ * cut down as text.
+ */
+export const overflowReason = (failure: unknown): "overflow" | "requested" => {
+  if (!(failure instanceof AIError) || !isContextOverflowFailure(failure) || failure.reason._tag !== "InvalidRequest")
+    return "overflow"
+  const body = failure.reason.body
+  if (!body) return "overflow"
+  try {
+    const error = (JSON.parse(body) as { error?: { type?: unknown; code?: unknown; overflow?: unknown } } | null)?.error
+    return error?.type === "arena_compaction_required" &&
+      error.code === "context_length_exceeded" &&
+      error.overflow !== true
+      ? "requested"
+      : "overflow"
+  } catch {
+    return "overflow"
+  }
+}
+
 /** Estimated text a swapped-in summary keeps verbatim: every message from `index` on. */
 const tailTokens = (context: SessionContext.Loaded, index: number) =>
   Token.estimate(context.messages.slice(index).map(SessionRecentText.messageToText).filter(Boolean).join("\n\n"))
@@ -1117,15 +1149,23 @@ const recentStart = (
   keep: number,
   previous: SessionMessage.CompactionCompleted | undefined,
 ) => {
+  // Agent Duel vendor patch: a session moved before its first prompt, as every Arena contestant is, opens with a
+  // location line. Lines like it belong to the first exchange, so a tail starting at the first prompt would leave the
+  // summary only them and keep the whole conversation as truncated text beside it.
+  const opening = Math.max(
+    0,
+    entries.findIndex((entry) => entry.message.type === "user" || entry.message.type === "assistant"),
+  )
+
   // The tail is sent as text and each message carries its own tool calls and results, so it can start at any
   // message. One token more per message covers the separator between them and rounding, so the joined text stays
   // within `keep`. A newest message larger than `keep` on its own is summarized with the rest.
   const start = oldestToDrop(entries, (entry) => Token.estimate(entry.text) + 1, keep)
-  if (start > 0) return start
+  if (start > opening) return start
 
   // Everything fits. Keep only the latest exchange rather than duplicating the whole conversation beside the summary.
   const latestUser = entries.findLastIndex((entry) => entry.message.type === "user")
-  if (latestUser > 0) return latestUser
+  if (latestUser > opening) return latestUser
 
   // One exchange, nothing older. Summarize it all and keep nothing, unless a previous summary already
   // kept recent text, in which case keep everything and summarize only the summary before it.

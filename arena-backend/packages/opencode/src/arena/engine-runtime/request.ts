@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto"
 import { COMPACTION_HEADER, COMPACTION_OFFER } from "@agent-duel/arena-service/request-budget"
-import { readCompactionRequired, requestTooLargeMessage } from "@agent-duel/arena-service/request-error"
+import {
+  readCompactionOverflow,
+  readCompactionRequired,
+  requestTooLargeMessage,
+} from "@agent-duel/arena-service/request-error"
 
 export type RequestClassification = "generation" | "compaction" | "utility"
 
@@ -176,7 +180,8 @@ export async function compactionResponse(
   request: Request,
   kind: "primary" | "compaction" | "title" | "generate",
 ) {
-  if (response.status !== 413 || !readCompactionRequired(await response.clone().text())) return response
+  const body = response.status === 413 ? await response.clone().text() : undefined
+  if (!readCompactionRequired(body)) return response
   const compact =
     kind === "compaction" || (kind === "primary" && request.headers.get(COMPACTION_HEADER) === COMPACTION_OFFER)
   return Response.json(
@@ -187,6 +192,9 @@ export async function compactionResponse(
         // request keeps a payload refusal, so it cannot start another paid summary.
         code: compact ? "context_length_exceeded" : "arena_irreducible_input",
         type: "arena_compaction_required",
+        // A savings refusal still fits, so Core summarizes it unchanged; a provider's own refusal is
+        // summarized as an overflow (`SessionCompaction.overflowReason`).
+        ...(readCompactionOverflow(body) ? { overflow: true } : {}),
       },
     },
     { status: 413 },

@@ -353,13 +353,16 @@ const layer = Layer.effect(
                 retry: proposed,
               }),
             recoverContinuation,
-            recoverOverflow: Effect.suspend(() =>
-              recoverOverflow
-                ? compaction
-                    .compact({ reason: "overflow", context: loaded, estimate })
-                    .pipe(Effect.map((result) => result.status === "completed"))
-                : Effect.succeed(false),
-            ),
+            // Agent Duel vendor patch: an Arena savings refusal still fits, so it compacts unchanged rather than as an
+            // overflow (`SessionCompaction.overflowReason`).
+            recoverOverflow: (failure) =>
+              Effect.suspend(() =>
+                recoverOverflow
+                  ? compaction
+                      .compact({ reason: SessionCompaction.overflowReason(failure), context: loaded, estimate })
+                      .pipe(Effect.map((result) => result.status === "completed"))
+                  : Effect.succeed(false),
+              ),
           })
           .pipe(Effect.provideService(Environment.CurrentWorkingDirectory, activeCwd))
         retryAttempt = undefined

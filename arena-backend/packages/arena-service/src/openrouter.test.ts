@@ -794,6 +794,10 @@ describe("OpenRouter proxy", () => {
       }),
     )
     expect(response.status).toBe(413)
+    // Marked as the provider's own refusal, with none of its text or numbers.
+    expect(await response.json()).toEqual({
+      error: { message: "Arena request needs compaction", type: "arena_compaction_required", overflow: true },
+    })
   })
 
   test.each(["done", "eof", "unterminated-eof"])(
