@@ -16,6 +16,8 @@ type Packet = {
   stream: boolean
   rendered: string
   plaintextDeduplicated?: boolean
+  /** Absent on legacy or unsigned packets. Null means the upstream did not identify the signer. */
+  signatureProvider?: string | null
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -24,6 +26,19 @@ function record(value: unknown): value is Record<string, unknown> {
 
 function reasoningDetails(value: Record<string, unknown>): unknown[] {
   return Array.isArray(value.reasoning_details) ? value.reasoning_details : []
+}
+
+function signed(packet: Packet) {
+  if (packet.kind === "responses") {
+    const content = packet.value.encrypted_content
+    return typeof content === "string" && content.length > 0
+  }
+  return reasoningDetails(packet.value).some(
+    (detail) =>
+      record(detail) &&
+      ((typeof detail.signature === "string" && detail.signature.length > 0) ||
+        (detail.type === "reasoning.encrypted" && typeof detail.data === "string" && detail.data.length > 0)),
+  )
 }
 
 function appendPlaintext(target: Record<string, unknown>, value: Record<string, unknown>) {
@@ -52,7 +67,9 @@ function renderedReasoning(value: Record<string, unknown>, details: unknown[]) {
  * Seal it at the cloud boundary instead of disabling thinking or forwarding provider-shaped blocks.
  * Authenticated envelopes need no per-token database writes and survive cloud function restarts.
  */
-export function createReasoningRedactor(apiKey: string, binding: Binding) {
+export function createReasoningRedactor(apiKey: string, binding: Binding, modelSlug?: string) {
+  const gemini = modelSlug?.startsWith("google/gemini-")
+  let responseProvider: string | null | undefined
   const key = createHash("sha256").update("arena-reasoning-v1\0").update(apiKey).digest()
   const aad = Buffer.from(JSON.stringify([binding.userId, binding.scopeID, binding.assignmentID]))
   const marked = new Set<number>()
@@ -64,6 +81,7 @@ export function createReasoningRedactor(apiKey: string, binding: Binding) {
   }
 
   function seal(packet: Packet) {
+    if (gemini && signed(packet)) packet.signatureProvider = responseProvider ?? null
     const nonce = randomBytes(12)
     const cipher = createCipheriv("aes-256-gcm", key, nonce)
     cipher.setAAD(aad)
@@ -74,7 +92,7 @@ export function createReasoningRedactor(apiKey: string, binding: Binding) {
   // An envelope sealed for another scope (an earlier single-agent message), assignment, account, or
   // server key does not open. Callers drop it: it reveals nothing, and only the current tool loop
   // needs its reasoning back.
-  function open(token: string): Packet | undefined {
+  function open(token: string, kind: Packet["kind"], signers?: Set<string | null>): Packet | undefined {
     try {
       const bytes = Buffer.from(token.slice(prefix.length), "base64url")
       const decipher = createDecipheriv("aes-256-gcm", key, bytes.subarray(0, 12))
@@ -88,11 +106,14 @@ export function createReasoningRedactor(apiKey: string, binding: Binding) {
         !record(decoded.value) ||
         typeof decoded.stream !== "boolean" ||
         typeof decoded.rendered !== "string" ||
-        (decoded.kind !== "chat" && decoded.kind !== "responses")
+        decoded.kind !== kind
       )
         return undefined
+      if (gemini && (typeof decoded.signatureProvider === "string" || decoded.signatureProvider === null)) {
+        signers?.add(decoded.signatureProvider)
+      }
       return {
-        kind: decoded.kind,
+        kind,
         value: decoded.value,
         stream: decoded.stream,
         rendered: decoded.rendered,
@@ -175,6 +196,7 @@ export function createReasoningRedactor(apiKey: string, binding: Binding) {
   }
 
   function clear() {
+    responseProvider = undefined
     buffered.clear()
     marked.clear()
     textStarted.clear()
@@ -190,7 +212,13 @@ export function createReasoningRedactor(apiKey: string, binding: Binding) {
     }
   }
 
-  function redact(value: unknown, stream = false): unknown {
+  function redact(value: unknown, stream = false, provider?: string): unknown {
+    if (provider) {
+      // A signature can sit in a batch until a later SSE event. A conflicting label on the
+      // flush event cannot identify which endpoint signed that batch.
+      if (responseProvider === undefined) responseProvider = provider
+      else if (responseProvider !== provider) responseProvider = null
+    }
     if (Array.isArray(value)) return value.map((item) => redact(item, stream))
     if (!record(value)) return value
     if (value.type === "reasoning") return redactItem(value, stream)
@@ -248,7 +276,7 @@ export function createReasoningRedactor(apiKey: string, binding: Binding) {
     }
   }
 
-  function restoreMessage(message: Record<string, unknown>) {
+  function restoreMessage(message: Record<string, unknown>, signers?: Set<string | null>) {
     if (message.role !== "assistant" || !Array.isArray(message.reasoning_details)) return message
     const details: unknown[] = []
     const restored: Record<string, unknown> = { ...message }
@@ -265,8 +293,8 @@ export function createReasoningRedactor(apiKey: string, binding: Binding) {
         continue
       }
       redacted = true
-      const packet = open(detail.data)
-      if (packet?.kind !== "chat") continue
+      const packet = open(detail.data, "chat", signers)
+      if (!packet) continue
       rendered += packet.rendered
       const packetDetails = reasoningDetails(packet.value)
       // Older envelopes and JSON replies did not filter plaintext before sealing. Prefer
@@ -281,10 +309,12 @@ export function createReasoningRedactor(apiKey: string, binding: Binding) {
     return restored
   }
 
-  function restore(input: Record<string, unknown>): Record<string, unknown> {
+  function restore(input: Record<string, unknown>, signers?: Set<string | null>): Record<string, unknown> {
     const restored = { ...input }
     if (Array.isArray(input.messages))
-      restored.messages = input.messages.map((message) => (record(message) ? restoreMessage(message) : message))
+      restored.messages = input.messages.map((message) =>
+        record(message) ? restoreMessage(message, signers) : message,
+      )
     if (Array.isArray(input.input)) {
       restored.input = input.input.flatMap((item) => {
         if (
@@ -294,8 +324,8 @@ export function createReasoningRedactor(apiKey: string, binding: Binding) {
           !item.encrypted_content.startsWith(prefix)
         )
           return [item]
-        const packet = open(item.encrypted_content)
-        return packet?.kind === "responses" ? [packet.value] : []
+        const packet = open(item.encrypted_content, "responses", signers)
+        return packet ? [packet.value] : []
       })
     }
     return restored
