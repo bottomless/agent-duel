@@ -1295,15 +1295,45 @@ describe("OpenRouter proxy", () => {
     120_000,
   )
 
-  test("probes a profile that collects logprobs with the logprob fields", async () => {
+  const answered = (logprobs: unknown) =>
+    Response.json({ choices: [{ index: 0, message: { content: "OK" }, logprobs }] })
+  const okLogprobs = { content: [{ token: "OK", logprob: -0.01, top_logprobs: [{ token: "OK", logprob: -0.01 }] }] }
+
+  test("probes a profile that collects logprobs with the logprob fields, and checks they come back", async () => {
     const bodies: Record<string, unknown>[] = []
     await probeRouting([{ ...pool[1]!, topLogprobs: 5 }, pool[0]!], "key", async (_input, init) => {
       bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
-      return Response.json({ choices: [] })
+      return answered(okLogprobs)
     })
-    expect(bodies[0]).toMatchObject({ logprobs: true, top_logprobs: 5 })
-    expect(bodies[1]).not.toHaveProperty("logprobs")
-    expect(bodies[1]).not.toHaveProperty("top_logprobs")
+    expect(bodies).toHaveLength(3)
+    expect(bodies[0]).toMatchObject({ logprobs: true, top_logprobs: 5, tools: expect.any(Array) })
+    // The logprob check asks without tools, so the model answers in text.
+    expect(bodies[1]).toMatchObject({ model: pool[1]!.slug, logprobs: true, top_logprobs: 5 })
+    expect(bodies[1]).not.toHaveProperty("tools")
+    expect(bodies[2]).not.toHaveProperty("logprobs")
+    expect(bodies[2]).not.toHaveProperty("top_logprobs")
+  })
+
+  test("fails a profile whose provider accepts logprobs but sends none, as xAI does", async () => {
+    let calls = 0
+    const failure = await probeRouting([{ ...pool[1]!, topLogprobs: 5 }], "key", async () => {
+      calls++
+      return answered(null)
+    }).then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+    expect(failure instanceof Error && failure.message).toBe("Arena contestant returned no logprobs: Qwen 3.8 Max")
+    expect(calls).toBe(3)
+  })
+
+  test("passes a profile whose provider skips logprobs on one call only", async () => {
+    let calls = 0
+    await probeRouting([{ ...pool[1]!, topLogprobs: 5 }], "key", async () => {
+      calls++
+      return answered(calls === 3 ? okLogprobs : null)
+    })
+    expect(calls).toBe(3)
   })
 
   test.each([

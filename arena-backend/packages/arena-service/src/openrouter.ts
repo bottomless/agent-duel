@@ -29,6 +29,7 @@ import {
 } from "./generation-capture"
 import { geminiToolResultRetry } from "./gemini-tool-results"
 import { MEDIA_PATH, MEDIA_TYPE_HEADER, mediaMissingError, mediaTooLargeError, sendsByReference } from "./media"
+import { visibleLogprobs } from "./logprobs"
 import { createReasoningRedactor } from "./reasoning"
 import {
   HEARTBEAT_HEADER,
@@ -845,7 +846,8 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
  * Sends one small tool-carrying request per profile with the fields `assignedRouting` adds. Under
  * `require_parameters` OpenRouter refuses a field a model's providers lack for that model's draws
  * only, and the refusal tells the voter which model it is. The catalog check cannot show that, so
- * run this before a pool change ships. It pays for one call per profile.
+ * run this before a pool change ships. It pays for one call per profile, and one or two more for a
+ * profile that collects logprobs.
  */
 export async function probeRouting(pool: ModelPool, apiKey: string, execute: Fetch = fetch) {
   for (const profile of pool) {
@@ -866,5 +868,29 @@ export async function probeRouting(pool: ModelPool, apiKey: string, execute: Fet
         `Arena contestant refused the proxy's routing fields: ${profile.displayName} (${response.status}) ${detail.slice(0, MAX_LOGGED_REFUSAL)}`,
       )
     }
+    if (profile.topLogprobs !== undefined) await probeLogprobs(profile, apiKey, execute)
   }
+}
+
+/**
+ * Whether a profile that collects logprobs gets them back. The catalog can list them for a model
+ * whose provider sends `null` (Grok), which validation cannot see. The call has no tools, so the
+ * model answers in text, and it runs twice because a provider can skip them on a single call.
+ */
+async function probeLogprobs(profile: ModelProfile, apiKey: string, execute: Fetch) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const response = await execute("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...assignedRouting(profile, undefined, randomUUID()),
+        ...logprobRequest(profile, "chat"),
+        messages: [{ role: "user", content: "Reply with OK." }],
+        stream: false,
+      }),
+    })
+    const body = await response.text().catch(() => "")
+    if (response.ok && visibleLogprobs(body)) return
+  }
+  throw new Error(`Arena contestant returned no logprobs: ${profile.displayName}`)
 }
