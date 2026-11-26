@@ -1,6 +1,7 @@
 import { describe, expect, spyOn, test } from "bun:test"
 import type { ArenaDb } from "./collection"
 import { loadGenerationCapture, splitRequest } from "./generation-capture"
+import type { ModelProfile } from "./pool"
 import { createArenaService, type ArenaServiceOptions } from "./service"
 
 const generationID = "gen_0123456789abcdef0123456789abcdef"
@@ -45,7 +46,7 @@ function memoryDb(
     readonly modelSize?: "medium" | "frontier"
     readonly scopeID?: string
     readonly failCaptures?: boolean
-    readonly model?: typeof model
+    readonly model?: ModelProfile
   } = {},
 ) {
   const collections = new Map<string, Map<string, Row>>()
@@ -364,6 +365,28 @@ describe("generation capture", () => {
     // Params differ by nothing but the new message, so only that message is new.
     expect(store.rows("arenaGenerationParts")).toHaveLength(firstParts + 1)
     expect(await loadGenerationCapture(store.db, "user-2", second)).toBeUndefined()
+  })
+
+  test("keeps the logprobs the voter's copy leaves out", async () => {
+    const store = memoryDb({ model: { ...model, topLogprobs: 5 } })
+    const logprobs = { content: [{ token: "hi", logprob: -0.25, top_logprobs: [{ token: "hi", logprob: -0.25 }] }] }
+    const raw = [
+      `data: ${JSON.stringify({ id: "gen-real", choices: [{ index: 0, delta: { content: "hi" }, logprobs }] })}\n\n`,
+      "data: [DONE]\n\n",
+    ].join("")
+    const sent: string[] = []
+    const send = proxy(store.db, async (_input, init) => {
+      sent.push(new TextDecoder().decode(init!.body as ArrayBuffer))
+      return new Response(raw, { headers: { "content-type": "text/event-stream" } })
+    })
+
+    const delivered = await (await send(contestantRequest([{ role: "user", content: "Say hi" }]))).text()
+    expect(delivered).toContain('"content":"hi"')
+    expect(delivered).not.toContain("logprob")
+
+    const loaded = await loadGenerationCapture(store.db, "user-1", generationID)
+    expect(loaded!.body).toMatchObject({ logprobs: true, top_logprobs: 5 })
+    expect(loaded!.capture.response).toMatchObject({ state: "complete", body: raw })
   })
 
   test("keeps a refusal's status and text", async () => {

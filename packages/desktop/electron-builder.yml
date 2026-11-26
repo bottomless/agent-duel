@@ -65,6 +65,17 @@ mac:
     - zip
 linux:
   category: Development
+  # The desktop entry's Comment and the deb's Description. package.json's description is internal.
+  description: "A desktop app for head-to-head coding agent battles, with single-agent mode and free inference."
+  # electron-builder renders every hicolor size from this one 512 px PNG, the same artwork as
+  # icon.icns and icon.ico.
+  icon: assets/icon.png
+  # update-alternatives refuses a name with a space, so the deb's install fell back to a plain link
+  # that removal left dangling.
+  executableName: agent-duel
+  # Name the installed desktop entry after desktopName ("Agent Duel.desktop"), as before the rename,
+  # not the executable: pinned launchers and the paseo:// handler registration point at that file.
+  syncDesktopName: true
   artifactName: "Agent-Duel-${version}-${arch}.${ext}"
   maintainer: "Bottomless"
   vendor: "Bottomless"
@@ -73,15 +84,44 @@ linux:
       to: bin/paseo
     - from: assets/icon.png
       to: icon.png
+  # The two formats the release workflow publishes. rpm and tar.gz still build on request.
   target:
-    - AppImage
-    - deb
-    - rpm
-    - tar.gz
+    - target: AppImage
+      arch:
+        - x64
+    - target: deb
+      arch:
+        - x64
 deb:
   afterInstall: scripts/linux-sandbox/after-install.tpl
+  packageCategory: devel
+  # Setting depends replaces electron-builder's default list, so it is written out in full. The
+  # default leaves out libgbm1 and libasound2, so the app would not start on a minimal install
+  # (Ubuntu 22.04 does not pull libgbm1 in through GTK). Battles need git, and capturing contestant
+  # services needs lsof and ps. desktop-file-utils provides update-desktop-database, which the
+  # install script runs so GTK and xdg-open find the paseo:// handler.
+  depends:
+    - libgtk-3-0
+    - libnotify4
+    - libnss3
+    - libxss1
+    - libxtst6
+    - xdg-utils
+    - libatspi2.0-0
+    - libuuid1
+    - libsecret-1-0
+    - libgbm1
+    - libasound2t64 | libasound2
+    - git
+    - lsof
+    - procps
+    - desktop-file-utils
 rpm:
   afterInstall: scripts/linux-sandbox/after-install.tpl
+# The static type-2 runtime runs without libfuse2, which Ubuntu 24.04 does not install. The default
+# (legacy) toolset needs it, so the AppImage would not start there.
+toolsets:
+  appimage: "1.0.3"
 appImage:
   # A nonempty argument list replaces builder's hardcoded --no-sandbox default.
   executableArgs: ['"--class=Agent Duel"']

@@ -35,6 +35,7 @@ import {
 } from "./generation-capture"
 import { geminiToolResultRetry } from "./gemini-tool-results"
 import { MEDIA_PATH, MEDIA_TYPE_HEADER, mediaMissingError, mediaTooLargeError, sendsByReference } from "./media"
+import { visibleLogprobs } from "./logprobs"
 import { createReasoningRedactor } from "./reasoning"
 import {
   HEARTBEAT_HEADER,
@@ -201,6 +202,15 @@ function sanitizePayload(value: unknown, generationID: string, stream = false): 
     delete sanitized[key]
   }
   if ("usage" in sanitized) sanitized.usage = sanitizeUsage(sanitized.usage)
+  // Logprobs are research data from the capture. Their tokens show the tokenizer, and their presence
+  // shows which models return them, so either would tell the voter which model answered.
+  if (Array.isArray(sanitized.choices)) {
+    sanitized.choices = sanitized.choices.map((choice) => {
+      if (!record(choice) || !("logprobs" in choice)) return choice
+      const { logprobs: _logprobs, ...rest } = choice
+      return rest
+    })
+  }
   if (record(sanitized.data)) sanitized.data = sanitizePayload(sanitized.data, generationID)
   if (record(sanitized.response)) sanitized.response = sanitizePayload(sanitized.response, generationID)
   return sanitized
@@ -475,7 +485,9 @@ function promptCache(slug: string, input: Record<string, unknown>) {
 // model in particular (the title agent asks for a temperature of 0.5). Claude and OpenAI's reasoning
 // models take none of these, and under the pool's `require_parameters` OpenRouter then finds no
 // endpoint, so only those draws would fail. Every contestant runs on its provider's defaults.
-const samplingParameters = new Set(["temperature", "top_p", "top_k"])
+// Logprobs are the profile's choice too (`logprobRequest`): one the engine asked for would fail
+// every draw whose model has none under `require_parameters`.
+const samplingParameters = new Set(["temperature", "top_p", "top_k", "logprobs", "top_logprobs"])
 
 function withoutSampling(input: Record<string, unknown>) {
   return Object.fromEntries(Object.entries(input).filter(([key]) => !samplingParameters.has(key)))
@@ -537,6 +549,15 @@ function assignedRouting(model: ModelProfile, modelSize: SingleAgentModelSize | 
     session_id: key,
     prompt_cache_key: key,
   }
+}
+
+/**
+ * The logprob fields of a profile that collects them (`ModelProfile.topLogprobs`). Only chat calls
+ * ask: `/responses` names them differently, and the models that return them are called over chat.
+ */
+function logprobRequest(model: ModelProfile, endpoint: "chat" | "responses") {
+  if (model.topLogprobs === undefined || endpoint !== "chat") return {}
+  return { logprobs: true, top_logprobs: model.topLogprobs }
 }
 
 function assignmentHeaders(request: Request) {
@@ -847,6 +868,7 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
         cacheKey(apiKey, caller.id, assignment.scopeID, routeAssignment),
       ),
       ...promptCache(routeAssignment.model.slug, input),
+      ...logprobRequest(routeAssignment.model, endpoint),
       stream_options: record(input.stream_options)
         ? { ...input.stream_options, include_usage: true }
         : { include_usage: true },
@@ -1004,7 +1026,8 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
  * Sends one small tool-carrying request per profile with the fields `assignedRouting` adds. Under
  * `require_parameters` OpenRouter refuses a field a model's providers lack for that model's draws
  * only, and the refusal tells the voter which model it is. The catalog check cannot show that, so
- * run this before a pool change ships. It pays for one call per profile.
+ * run this before a pool change ships. It pays for one call per profile, and one or two more for a
+ * profile that collects logprobs.
  */
 export async function probeRouting(pool: ModelPool, apiKey: string, execute: Fetch = fetch) {
   for (const profile of pool) {
@@ -1013,6 +1036,7 @@ export async function probeRouting(pool: ModelPool, apiKey: string, execute: Fet
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         ...assignedRouting(profile, undefined, randomUUID()),
+        ...logprobRequest(profile, "chat"),
         messages: [{ role: "user", content: "Reply with OK." }],
         tools: [{ type: "function", function: { name: "noop", parameters: { type: "object", properties: {} } } }],
         stream: false,
@@ -1024,5 +1048,29 @@ export async function probeRouting(pool: ModelPool, apiKey: string, execute: Fet
         `Arena contestant refused the proxy's routing fields: ${profile.displayName} (${response.status}) ${detail.slice(0, MAX_LOGGED_REFUSAL)}`,
       )
     }
+    if (profile.topLogprobs !== undefined) await probeLogprobs(profile, apiKey, execute)
   }
+}
+
+/**
+ * Whether a profile that collects logprobs gets them back. The catalog can list them for a model
+ * whose provider sends `null` (Grok), which validation cannot see. The call has no tools, so the
+ * model answers in text, and it runs twice because a provider can skip them on a single call.
+ */
+async function probeLogprobs(profile: ModelProfile, apiKey: string, execute: Fetch) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const response = await execute("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...assignedRouting(profile, undefined, randomUUID()),
+        ...logprobRequest(profile, "chat"),
+        messages: [{ role: "user", content: "Reply with OK." }],
+        stream: false,
+      }),
+    })
+    const body = await response.text().catch(() => "")
+    if (response.ok && visibleLogprobs(body)) return
+  }
+  throw new Error(`Arena contestant returned no logprobs: ${profile.displayName}`)
 }

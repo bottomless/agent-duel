@@ -14,6 +14,7 @@ import {
   resumeProcessGroups,
   sessionShellPids,
   persistedProxyRoutes,
+  reportMissingTool,
   serviceOwnerID,
   stopOwnedServices,
   terminalOpenUnder,
@@ -593,4 +594,15 @@ test.skipIf(process.platform === "win32")("a paused dev server cannot change the
     defaultServiceAdapter.stopProcessGroup?.(churner.pid!, "SIGKILL")
     await rm(dir.path, { recursive: true, force: true })
   }
+})
+
+test("warns once per missing tool and stays quiet about other spawn failures", () => {
+  const warnings: string[] = []
+  const warn = (message: string) => warnings.push(message)
+  const missing = Object.assign(new Error("spawn missing"), { code: "ENOENT" })
+  reportMissingTool("arena-test-missing-tool", missing, warn)
+  reportMissingTool("arena-test-missing-tool", missing, warn)
+  reportMissingTool("arena-test-denied-tool", Object.assign(new Error("spawn denied"), { code: "EACCES" }), warn)
+  expect(warnings).toHaveLength(1)
+  expect(warnings[0]).toContain("`arena-test-missing-tool` is not on PATH")
 })

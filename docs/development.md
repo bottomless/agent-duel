@@ -50,6 +50,25 @@ packages.
 - Build the installer with `npm run build:desktop -- --win --x64`. Only x64 is packaged: the engine
   and its watcher binding are compiled for the host architecture.
 
+### Linux
+
+- Install the runtime packages the [Linux release](desktop-releases.md#in-app-updates) needs; the
+  daemon and engine shell out to `git`, `lsof` and `ps`. Battles need Git 2.39, and Ubuntu 22.04
+  ships 2.34: use the `ppa:git-core/ppa` PPA there (PPAs work only on Ubuntu).
+- Build the AppImage and deb with `npm run build:desktop -- --publish never --linux --x64`. The
+  packages land in `packages/desktop/release/`. Only x64 is packaged, for the same reason as on
+  Windows. Control-plane and BYOK settings are the same as for the
+  [macOS build](deployment.md#build-the-macos-desktop-application).
+- Set `PASEO_DESKTOP_SMOKE=1` to launch the unpacked app under `xvfb-run` after packing and fail
+  the build if it does not start; install `xvfb` and `xauth` first. The smoke creates a terminal
+  without signing in, so it needs `PASEO_BYOK_BUILD=1` too, as CI sets (a hosted build fails with
+  "Sign in to use Agent Duel").
+- Start a packaged Linux app through its `agent-duel` launcher, never `agent-duel.bin`. The
+  launcher picks the sandbox mode, and Ubuntu 24.04's AppArmor profile covers only the launcher:
+  `agent-duel.bin` started directly is denied the sandbox and crashes with SIGTRAP. Electron's
+  `app.relaunch()` starts `process.execPath`, which is `agent-duel.bin`, so pass the launcher as
+  `execPath` (`packages/desktop/src/features/auto-updater.ts`).
+
 ## Running the dev server
 
 ```bash
@@ -124,9 +143,12 @@ nix build .#desktop
 ```
 
 Linux produces the `paseo-desktop` launcher and desktop entry. macOS produces
-`Applications/Paseo.app` plus the `paseo-desktop` launcher. Both use the nixpkgs
+`Applications/Agent Duel.app` plus the `paseo-desktop` launcher. Both use the nixpkgs
 Electron runtime and the checkout's built daemon, client, and renderer rather
 than downloading a published desktop release.
+
+The derivation is inherited from Paseo and builds neither the Arena executable nor the deployment
+configuration, so battles do not run in it. Use `npm run build:desktop` for a working app.
 
 ### PASEO_HOME
 

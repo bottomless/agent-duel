@@ -97,7 +97,10 @@ it through the same variables.
 
 The raw token is returned once and held by the client. Electron persists the signed session through
 `safeStorage`, which uses the operating system's protected credential facility, and removes the
-legacy renderer `AsyncStorage` copy during hydration. The token exists in renderer and daemon memory
+legacy renderer `AsyncStorage` copy during hydration. Linux without a keyring (no libsecret service
+or KWallet) has no such facility, so the session and OpenRouter key files are encrypted with
+Electron's built-in key: only their 0600 mode protects them, and anyone who can read them can
+decrypt them (`packages/desktop/src/features/encrypted-storage.ts`). The token exists in renderer and daemon memory
 while the app is signed in; it is not persisted as plaintext browser storage by the desktop build.
 The browser QA surface continues to use `AsyncStorage` and is not a production session boundary.
 The control plane stores only a SHA-256 hash of each session token, and claims each magic-link token

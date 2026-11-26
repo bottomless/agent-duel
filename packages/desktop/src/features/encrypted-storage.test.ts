@@ -11,6 +11,8 @@ vi.mock("electron", () => ({
   ipcMain: { handle: vi.fn() },
   safeStorage: {
     isEncryptionAvailable: vi.fn(),
+    getSelectedStorageBackend: vi.fn(),
+    setUsePlainTextEncryption: vi.fn(),
     encryptString: vi.fn(),
     decryptString: vi.fn(),
   },
@@ -26,6 +28,7 @@ beforeEach(async () => {
   vi.mocked(BrowserWindow.fromWebContents).mockReturnValue({ isDestroyed: () => false } as never);
   vi.mocked(ipcMain.handle).mockReset();
   vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(true);
+  vi.mocked(safeStorage.getSelectedStorageBackend).mockReturnValue("gnome_libsecret");
   vi.mocked(safeStorage.encryptString).mockReturnValue(Buffer.from("ciphertext", "utf8"));
   registerEncryptedStorageHandlers();
 });
@@ -99,6 +102,25 @@ describe("OpenRouter key", () => {
     await handler("paseo:byok:key:save")(event, "sk-or-v1-secret-openrouter-key" as never);
     await handler("paseo:accounts:session:clear")(event);
 
+    await expect(readFile(path.join(directory, "byok-key.safe"), "utf8")).resolves.toBe(
+      "ciphertext",
+    );
+  });
+});
+
+describe.skipIf(process.platform !== "linux")("Linux without a keyring", () => {
+  it("falls back to Electron's built-in key once instead of losing the session", async () => {
+    vi.mocked(safeStorage.getSelectedStorageBackend).mockReturnValue("basic_text");
+    vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(false);
+    vi.mocked(safeStorage.setUsePlainTextEncryption).mockImplementation(() => {
+      vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(true);
+    });
+
+    await handler("paseo:accounts:session:save")(event, '{"token":"secret-session"}' as never);
+    await handler("paseo:byok:key:save")(event, "sk-or-v1-secret-openrouter-key" as never);
+
+    expect(safeStorage.setUsePlainTextEncryption).toHaveBeenCalledTimes(1);
+    expect(safeStorage.setUsePlainTextEncryption).toHaveBeenCalledWith(true);
     await expect(readFile(path.join(directory, "byok-key.safe"), "utf8")).resolves.toBe(
       "ciphertext",
     );

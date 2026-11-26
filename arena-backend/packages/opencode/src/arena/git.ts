@@ -458,12 +458,23 @@ function battleGitProblem(result: Git.Result, gitOnPath: boolean): string | unde
 }
 
 // Windows never reaches this: its missing-Git message names the installer and asks for a restart.
+// Linux has no Command Line Tools or Homebrew by default, and no one package manager, so its hint
+// names the two that cover most desktops. Ubuntu 22.04's own Git is older than battles need, and
+// the git-core PPA that fixes it works only on Ubuntu, so it is named for that release alone.
 function gitInstallHint() {
+  if (process.platform === "linux") {
+    return "sudo apt install git (on Ubuntu 22.04, first sudo add-apt-repository ppa:git-core/ppa) or sudo dnf install git"
+  }
   return "xcode-select --install"
 }
 
+// A Git older than 2.39 on Linux is usually Ubuntu 22.04's 2.34, which a plain apt upgrade keeps;
+// the git-core PPA carries current Git, but only for Ubuntu.
 function gitUpdateHint() {
   if (process.platform === "win32") return "git update-git-for-windows"
+  if (process.platform === "linux") {
+    return "sudo add-apt-repository ppa:git-core/ppa && sudo apt install git on Ubuntu, or sudo dnf upgrade git on Fedora"
+  }
   return "brew install git"
 }
 
@@ -4180,10 +4191,11 @@ export const applyPromotionState = Effect.fn("ArenaGit.applyPromotionState")(fun
     // replayed. Git's normal cherry-pick machinery is intentionally used so conflicts remain
     // visible in the index and worktree for the caller to resolve.
     yield* run(git, root, "reset_before_agent_replay", ["reset", "--hard", head])
+    const replayEnv = yield* replayCommitterEnv(git, root)
     for (const commit of commits) {
       const replayed = yield* git.run(
         ["cherry-pick", "--allow-empty", "--keep-redundant-commits", commit],
-        { cwd: root },
+        { cwd: root, ...(Object.keys(replayEnv).length > 0 ? { env: replayEnv } : {}) },
       )
       if (replayed.exitCode !== 0) {
         const replayConflicts = yield* conflictPaths(git, root)
@@ -4601,6 +4613,18 @@ const arenaCommitterEnv = {
 }
 
 /**
+ * Replaying the winner's commits makes the developer their committer. With no Git identity and an
+ * empty full name in passwd, common on Linux, Git refuses ("Committer identity unknown"), so the
+ * replay falls back to the identity Add Project uses for its first commit. Empty when Git has one.
+ */
+const replayCommitterEnv = Effect.fn("ArenaGit.replayCommitterEnv")(function* (git: Git.Interface, root: string) {
+  const committer = yield* git.run(["var", "GIT_COMMITTER_IDENT"], { cwd: root })
+  const env: Record<string, string> =
+    committer.exitCode === 0 ? {} : { GIT_COMMITTER_NAME: "Agent Duel", GIT_COMMITTER_EMAIL: "agent-duel@localhost" }
+  return env
+})
+
+/**
  * Wrap a tree in a commit so merge-tree and friends can name it. Wrapping both sides of a merge
  * as children of its base makes that base their only merge base, which is how the merge picks
  * its base without `merge-tree --merge-base` (see MIN_BATTLE_GIT).
@@ -4723,6 +4747,7 @@ const replayCommits = Effect.fn("ArenaGit.replayCommits")(function* (
 ) {
   let head = onto
   let lastOriginal: string | undefined
+  const committerEnv = yield* replayCommitterEnv(git, root)
   for (const commit of commits) {
     const parents = (yield* read(git, root, "read_replay_parents", ["rev-list", "--parents", "-n", "1", commit]))
       .split(/\s+/)
@@ -4748,6 +4773,7 @@ const replayCommits = Effect.fn("ArenaGit.replayCommits")(function* (
         GIT_AUTHOR_NAME: name ?? "OpenCode Arena",
         GIT_AUTHOR_EMAIL: email ?? "arena@localhost",
         GIT_AUTHOR_DATE: date ?? wrapperDate,
+        ...committerEnv,
       },
     })
     lastOriginal = commit

@@ -10,6 +10,8 @@ const { WebSocket } = require("ws");
 const assert = require("node:assert/strict");
 
 const EXECUTABLE_NAME = "Agent Duel";
+// linux.executableName in electron-builder.yml.
+const LINUX_EXECUTABLE_NAME = "agent-duel";
 const SMOKE_TIMEOUT_MS = 60_000;
 const EXIT_TIMEOUT_MS = 10_000;
 const TERMINAL_CAPTURE_ATTEMPTS = 20;
@@ -74,7 +76,7 @@ function getExecutablePath(appPath) {
     return path.join(appPath, `${EXECUTABLE_NAME}.exe`);
   }
 
-  return path.join(appPath, EXECUTABLE_NAME);
+  return path.join(appPath, LINUX_EXECUTABLE_NAME);
 }
 
 function getCliShimPath(appPath) {

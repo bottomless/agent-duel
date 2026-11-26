@@ -38,7 +38,7 @@ export function findDesktopApp(input: DesktopAppDiscoveryInput = {}): string | n
 
   if (platform === "linux") {
     const candidates = [
-      ...(input.systemCandidates ?? ["/usr/bin/Agent Duel", "/opt/Agent Duel/Agent Duel"]),
+      ...(input.systemCandidates ?? ["/usr/bin/agent-duel", "/opt/Agent Duel/agent-duel"]),
       path.join(
         homeDirectory,
         "Applications",
