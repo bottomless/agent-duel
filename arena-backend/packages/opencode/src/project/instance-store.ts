@@ -21,7 +21,14 @@ export interface Interface {
   readonly load: (input: LoadInput) => Effect.Effect<InstanceContext, Error>
   readonly reload: (input: LoadInput) => Effect.Effect<InstanceContext, Error>
   readonly dispose: (ctx: InstanceContext) => Effect.Effect<void, Error>
-  readonly disposeDirectory: (directory: string) => Effect.Effect<void, Error>
+  /**
+   * Close a directory's Location and end its shell commands. `keepShells` leaves the commands
+   * running in the process daemon, for an idle chat whose retained winner keeps its services.
+   */
+  readonly disposeDirectory: (
+    directory: string,
+    options?: { readonly keepShells?: boolean },
+  ) => Effect.Effect<void, Error>
   readonly loaded: (directory: string) => Effect.Effect<boolean>
   readonly disposeAll: () => Effect.Effect<void, Error>
   readonly provide: <A, E, R>(
@@ -73,11 +80,15 @@ export const layer: Layer.Layer<Service, never, LocationServiceMap.Service> = La
       return yield* load(input)
     })
 
+    // The map keys Locations by their canonical ref (LocationServiceMap.canonical); a ref built here
+    // compares unequal to it even when it prints the same, so look entries up the same way.
+    const isActive = (key: Location.Ref) => RcMap.has(locations.rcMap, LocationServiceMap.canonical(key))
+
     // Core runs local shell commands in the process daemon, where they outlive the Location that started them.
     // A disposed directory's work is over (a contestant's dev server, a stopped chat's command), so end them first.
     const endShells = Effect.fnUntraced(function* (key: Location.Ref) {
       // An inactive Location has no commands of this server to end; building one here would only be thrown away.
-      if (!(yield* RcMap.has(locations.rcMap, key))) return
+      if (!(yield* isActive(key))) return
       yield* Effect.gen(function* () {
         const shell = yield* Shell.Service
         // Removing a running command ends it as killed, which also settles the job waiting on it.
@@ -91,13 +102,16 @@ export const layer: Layer.Layer<Service, never, LocationServiceMap.Service> = La
 
     const invalidate = (key: Location.Ref) => endShells(key).pipe(Effect.andThen(locations.invalidate(key)))
 
-    const disposeDirectory = Effect.fn("InstanceStore.disposeDirectory")(function* (directory: string) {
+    const disposeDirectory = Effect.fn("InstanceStore.disposeDirectory")(function* (
+      directory: string,
+      options?: { readonly keepShells?: boolean },
+    ) {
       const resolved = resolve(directory)
       const key = ref(resolved)
-      const active = yield* RcMap.has(locations.rcMap, key)
+      const active = yield* isActive(key)
       if (!active) return
       const ctx = fromLocation(yield* contextFor(locations, resolved))
-      yield* invalidate(key)
+      yield* options?.keepShells ? locations.invalidate(key) : invalidate(key)
       yield* emitDisposed(resolved, ctx.project.id)
     })
 
@@ -114,7 +128,7 @@ export const layer: Layer.Layer<Service, never, LocationServiceMap.Service> = La
       })
     })
 
-    const loaded = (directory: string) => RcMap.has(locations.rcMap, ref(directory))
+    const loaded = (directory: string) => isActive(ref(directory))
 
     const provide = <A, E, R>(
       input: LoadInput,

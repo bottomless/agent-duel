@@ -2314,6 +2314,10 @@ export const layer: Layer.Layer<
               }
             }
             if (snapshot.chat.status !== "battle_active") return { key: run._id, value: {} }
+            // Before `readyAt` the side's worktree is still being made and its session has not moved
+            // there, so it has nothing live to show. Reading it would open the folder's services early,
+            // and with them the user's MCP servers, in a folder staging may still remove.
+            if (!run.readyAt) return { key: run._id, value: {} }
             const live = yield* inDirectory(
               run.worktree,
               Effect.all({
@@ -2470,7 +2474,9 @@ export const layer: Layer.Layer<
             const inputRunIDs = new Set<string>()
             if (record.chat.status === "battle_active" && !record.turn?.resolution) {
               for (const run of record.runs) {
-                if (run.runState !== "pending") continue
+                // A side that is not ready yet has asked nothing, and reading it would start its folder's
+                // services (see `projectSnapshot`).
+                if (run.runState !== "pending" || !run.readyAt) continue
                 const sessionIDs = new Set([run.rootSessionID, ...run.descendantSessionIDs])
                 const waiting = yield* inDirectory(
                   run.worktree,
@@ -3406,6 +3412,15 @@ export const layer: Layer.Layer<
     /** Put a worktree nothing vouches for in the trash with its host, without asking git about either. */
     const retireSlot = Effect.fnUntraced(function* (chat: SlotOwner, directory: string) {
       yield* forgetSlot(directory)
+      // The folder's services go first: its MCP servers run inside it, and Windows cannot remove a
+      // directory a live process works in. Best effort, so a failed close never keeps the retire from running.
+      yield* instances
+        .disposeDirectory(directory)
+        .pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("Arena could not close a retired worktree's services", { directory, cause }),
+          ),
+        )
       yield* inDirectory(chat.repository.root, worktrees.retire(directory)).pipe(Effect.mapError(error))
     })
 
@@ -6636,8 +6651,9 @@ export const layer: Layer.Layer<
           if (!reused) {
             yield* mover.moveSession({ sessionID: forkedID, directory: info.directory, moveChanges: false })
           }
-          executionGates.get(side)?.baseReady(pending.removedPaths)
+          // Before the gate opens: a side that asks for input in its first step is read by its `readyAt`.
           yield* promise(() => store.updateRun(runID, { readyAt: new Date() }))
+          executionGates.get(side)?.baseReady(pending.removedPaths)
         }
         sideTimings.set(side, { totalMs: Date.now() - sideStartedAt, prepareMs, forkMs, forkedAtWarmup, ...sync })
         return { run: { ...runtime, worktree: info } satisfies SideRuntime }
@@ -7961,7 +7977,8 @@ export const layer: Layer.Layer<
       if (worktrees.length === 0 || worktrees.some((directory) => preparations.has(directory))) return
       for (const directory of worktrees) {
         yield* stopPreparation(directory)
-        yield* instances.disposeDirectory(directory)
+        // The retained winner's commands (its dev server) run on until the next send releases it.
+        yield* instances.disposeDirectory(directory, { keepShells: true })
       }
       yield* Effect.logInfo("Arena unloaded an idle chat", { chatID, worktrees: worktrees.length })
     })

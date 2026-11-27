@@ -473,6 +473,7 @@ export class Store {
             descendantSessionIDs: 1,
             worktree: 1,
             runState: 1,
+            readyAt: 1,
             startedAt: 1,
             completedAt: 1,
             diff: 1,

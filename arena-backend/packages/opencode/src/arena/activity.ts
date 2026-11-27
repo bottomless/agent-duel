@@ -32,7 +32,7 @@ export const Session = Schema.Struct({
 })
 export type ChatRecord = Pick<ChatDocument, "_id" | "canonicalSessionID" | "activeTurnID" | "status" | "repository">
 export type TurnRecord = Pick<TurnDocument, "_id" | "chatID" | "sourceCanonicalSessionID" | "state" | "resolution" | "selectableSides" | "turnIndex" | "comparisonID" | "comparisonState">
-export type RunRecord = Pick<RunDocument, "_id" | "turnID" | "side" | "rootSessionID" | "descendantSessionIDs" | "worktree" | "runState" | "startedAt" | "completedAt" | "diff">
+export type RunRecord = Pick<RunDocument, "_id" | "turnID" | "side" | "rootSessionID" | "descendantSessionIDs" | "worktree" | "runState" | "readyAt" | "startedAt" | "completedAt" | "diff">
 export interface Record {
   sessionID: string
   chat: ChatRecord
