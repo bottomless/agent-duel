@@ -45,6 +45,8 @@ contextBridge.exposeInMainWorld("paseoDesktop", {
   },
   accounts: {
     createReturnUrl: () => ipcRenderer.invoke("paseo:accounts:createReturnUrl") as Promise<string>,
+    installOpenedBefore: () =>
+      ipcRenderer.invoke("paseo:accounts:installOpenedBefore") as Promise<boolean>,
     session: {
       load: () => ipcRenderer.invoke("paseo:accounts:session:load") as Promise<string | null>,
       save: (value: string) => ipcRenderer.invoke("paseo:accounts:session:save", value),

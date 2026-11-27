@@ -11,6 +11,12 @@ import { getIsElectron } from "@/constants/platform";
 import { useFetchQuery } from "@/data/query";
 import { CrashReportReview } from "@/feedback/crash-report-review";
 import { getHostRuntimeStore } from "@/runtime/host-runtime";
+import {
+  appOpenedSessionOf,
+  decideInstallLaunch,
+  markSessionHeld,
+  reportAppOpenedOnce,
+} from "./app-opened";
 import { fetchAuthMethods, fetchCurrentSession, type AccountsEndpoint } from "./client";
 import { useAccountsEndpoint } from "./endpoint";
 import { resolveAccountGate, type QueryPhase, type AccountGate as AccountGateState } from "./gate";
@@ -80,6 +86,17 @@ export function AccountGate({ children }: { children: ReactNode }): ReactNode {
     staleTimeMs: STALE_TIME_MS,
     queryFn: () => fetchCurrentSession(requireEndpoint(endpoint), sessionToken ?? ""),
   });
+
+  // The anonymous sign-in counts' local marks. The launch is settled when the gate mounts, so a
+  // first launch that never reaches accounts keeps its first. A held session marks the install
+  // as returning; an expired token counts, since it is present at hydration before the session
+  // check clears it.
+  useEffect(() => {
+    if (getIsElectron()) void decideInstallLaunch();
+  }, []);
+  useEffect(() => {
+    if (sessionToken) void markSessionHeld();
+  }, [sessionToken]);
 
   const resolvedSession = sessionQuery.data;
   const documents = methodsQuery.data?.legal;
@@ -162,6 +179,17 @@ export function AccountGate({ children }: { children: ReactNode }): ReactNode {
     legalDocumentsAvailable: documents != null,
     hasAcceptedLegalDocuments: accepted,
   });
+
+  // Hosted desktop builds only: a BYOK daemon reports accounts disabled, and the browser harness
+  // is not a product. Reported from the screen the person sees, once the gate has settled on it.
+  const openedSession = appOpenedSessionOf({
+    gate: gate.kind,
+    accountsEnabled: methodsQuery.data?.enabled === true,
+  });
+  useEffect(() => {
+    if (!endpoint || !openedSession || !getIsElectron()) return;
+    void reportAppOpenedOnce({ endpoint, session: openedSession });
+  }, [endpoint, openedSession]);
 
   return (
     <AccountGateContent

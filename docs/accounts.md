@@ -70,8 +70,9 @@ the session. Electron opens the system browser, and an email link may be opened 
 1. The app opens a flow through the daemon and receives a `flowId` and secret from the control plane.
 2. The browser completes OAuth or opens the email link on the public control-plane origin.
 3. The control plane mints a session and attaches it to the flow.
-4. The app polls the daemon with the flow secret. The daemon claims the token once, verifies its
-   signature, and returns it to the app.
+4. The app polls the daemon with the flow secret. The daemon claims the token, verifies its
+   signature, and returns it to the app. The control plane answers the same claim with the same
+   token for a minute after the first, so a claim whose answer was lost or given up is asked again.
 
 Desktop flows include a temporary loopback return address owned by the initiating Electron window.
 The control-plane success page links to it as **Open Agent Duel**. Use a link, never a form: Safari
@@ -95,7 +96,8 @@ needs neither, because it is a BYOK build. Hosted development has no built-in ke
 scripts generate one pair per checkout, keep it in the gitignored `.dev/session-keys.json`, and pass
 it through the same variables.
 
-The raw token is returned once and held by the client. Electron persists the signed session through
+The raw token is returned to the app's claim of its sign-in, and again to a repeat of that claim
+within a minute, and is then held by the client. Electron persists the signed session through
 `safeStorage`, which uses the operating system's protected credential facility, and removes the
 legacy renderer `AsyncStorage` copy during hydration. Linux without a keyring (no libsecret service
 or KWallet) has no such facility, so the session and OpenRouter key files are encrypted with
@@ -103,8 +105,8 @@ Electron's built-in key: only their 0600 mode protects them, and anyone who can 
 decrypt them (`packages/desktop/src/features/encrypted-storage.ts`). The token exists in renderer and daemon memory
 while the app is signed in; it is not persisted as plaintext browser storage by the desktop build.
 The browser QA surface continues to use `AsyncStorage` and is not a production session boundary.
-The control plane stores only a SHA-256 hash of each session token, and claims each magic-link token
-once.
+The control plane stores only a SHA-256 hash of each session token once the sign-in's flow has
+expired, and claims each magic-link token once.
 
 The local daemon verifies signature and expiry without contacting the control plane. This keeps
 ordinary local agents available to previously accepted accounts while the internet or control plane is unreachable. Opening a new
@@ -179,6 +181,24 @@ The daemon password and account session are separate credentials; a remote clien
   windows hear of it (`session-end`), so the app marks every marker then (`recordSessionEnding`).
   The boot-time check in `claimRunningMarker` misses it: a shut down with Fast Startup keeps the
   uptime.
+- The control plane counts each sign-in step anonymously per day, so the drop between installing and
+  signing in can be read. Each app window load reports once through `POST /api/auth/opened`, from
+  the screen it shows: `signed-in` or `signed-out`, `first` or `repeat`, and whether this install
+  has held a session (`returning`) (`packages/app/src/accounts/app-opened.ts`). Spinner, update,
+  unreachable and disabled screens report nothing. `first` goes only to an install where no earlier
+  build ran: the desktop checks at startup whether `desktop-settings.json` exists, before its own
+  first settings read creates it. `returning` starts with the build that sets the mark, so an
+  install that held a session only under an older build and was signed out when it upgraded reads
+  false. The control plane answers a first launch only once it is counted, and the daemon passes a
+  refusal on, so a first launch whose count was lost is sent again on a later window load. Any
+  other open is answered at once, counted or not. A count that lands after the daemon's 5 s
+  timeout is sent again too, so a slow control plane can count one first launch twice. A flow request names
+  the button that opened it (`method`) and whether the install has held a session. Both requests
+  carry the usual client headers (`clientHeaders` in `packages/server/src/server/accounts/config.ts`);
+  the counts keep only OS, version and build. A source build sends
+  `X-Agent-Duel-Build: development` so its counts can be left out. BYOK builds send nothing, and the
+  browser harness reports no open. Never add anything that tells installs or people apart. The private
+  repository's `docs/accounts.md` owns the steps and the report.
 - The control plane can refuse builds below a minimum version or on a blocklist. It then answers
   `/api/auth/methods` with `updateRequired: true`, and the account gate shows the update screen
   (`packages/app/src/accounts/update-required.tsx`) in place of sign-in, terms and the app. The

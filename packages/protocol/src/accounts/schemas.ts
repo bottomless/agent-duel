@@ -79,8 +79,27 @@ export const desktopSignInReturnUrlSchema = z
 export const openSignInFlowRequestSchema = z.object({
   desktopReturnUrl: desktopSignInReturnUrlSchema.optional(),
   acceptance: acceptTermsRequestSchema,
+  /** The button that opened the flow, for the control plane's anonymous sign-in counts. */
+  method: signInMethodSchema.optional(),
+  /** Whether this install has held an account session before, for the same counts. */
+  returning: z.boolean().optional(),
 });
 export type OpenSignInFlowRequest = z.infer<typeof openSignInFlowRequestSchema>;
+
+/**
+ * One app window load, for the control plane's anonymous sign-in counts: whether it shows the
+ * app or sign-in, whether this install has already reported its first open (an install an earlier
+ * build ran in never reports first), and whether this install has held an account session.
+ * Nothing that tells installs apart.
+ */
+export const appOpenedRequestSchema = z
+  .object({
+    session: z.enum(["signed-in", "signed-out"]),
+    launch: z.enum(["first", "repeat"]),
+    returning: z.boolean(),
+  })
+  .strict();
+export type AppOpenedRequest = z.infer<typeof appOpenedRequestSchema>;
 
 export const openSignInFlowResponseSchema = z.object({
   flowId: z.string(),

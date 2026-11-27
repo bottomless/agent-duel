@@ -79,6 +79,10 @@ class StubBackend {
   claim: Awaited<ReturnType<AccountsBackend["claimFlow"]>> = { status: "pending" };
 
   accepted: { token: string; input: AcceptTermsRequest } | null = null;
+  openedFlows: unknown[] = [];
+  appOpens: unknown[] = [];
+  /** Holds every app-open report until released, like a control plane that does not answer. */
+  appOpenedHang: Promise<void> | null = null;
 
   private guard() {
     if (this.unavailable) throw new AccountsBackendUnavailableError(new Error("offline"));
@@ -92,6 +96,7 @@ class StubBackend {
 
   async openFlow(input: { desktopReturnUrl?: string }) {
     this.guard();
+    this.openedFlows.push(input);
     return {
       flowId: input.desktopReturnUrl ?? "flow-1",
       secret: "secret-1",
@@ -111,6 +116,13 @@ class StubBackend {
 
   oauthStartUrl(provider: "google" | "github", flowId: string) {
     return `${config.controlPlaneUrl}/api/auth/oauth/${provider}/start?flow=${flowId}`;
+  }
+
+  appOpenedCounted = true;
+  async appOpened(input: unknown) {
+    this.appOpens.push(input);
+    await this.appOpenedHang;
+    return this.appOpenedCounted;
   }
 
   async revokeSession() {}
@@ -169,6 +181,10 @@ beforeEach(() => {
   backend.requestError = null;
   backend.sent = null;
   backend.accepted = null;
+  backend.openedFlows = [];
+  backend.appOpens = [];
+  backend.appOpenedHang = null;
+  backend.appOpenedCounted = true;
   backend.claim = { status: "pending" };
   backend.revoked.clear();
   backend.checked = [];
@@ -294,6 +310,75 @@ describe("account routes", () => {
       body: JSON.stringify({ desktopReturnUrl, acceptance }),
     });
     expect((await response.json()).flowId).toBe(desktopReturnUrl);
+  });
+
+  it("passes the button and whether the install held a session on for the sign-in counts", async () => {
+    const response = await fetch(`${baseUrl}/api/auth/flow`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ acceptance, method: "github", returning: true }),
+    });
+    expect(response.status).toBe(200);
+    expect(backend.openedFlows).toEqual([{ acceptance, method: "github", returning: true }]);
+  });
+
+  it("answers an app open once the control plane counted it", async () => {
+    let release = () => {};
+    backend.appOpenedHang = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let answered = false;
+    const response = fetch(`${baseUrl}/api/auth/opened`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session: "signed-out", launch: "first", returning: false }),
+    }).finally(() => {
+      answered = true;
+    });
+    await vi.waitFor(() => expect(backend.appOpens).toHaveLength(1));
+    expect(answered).toBe(false);
+    release();
+    expect((await response).status).toBe(204);
+    expect(backend.appOpens).toEqual([
+      { session: "signed-out", launch: "first", returning: false },
+    ]);
+  });
+
+  it("answers 502 for an app open the control plane did not count", async () => {
+    backend.appOpenedCounted = false;
+    const response = await fetch(`${baseUrl}/api/auth/opened`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session: "signed-out", launch: "first", returning: false }),
+    });
+    expect(response.status).toBe(502);
+  });
+
+  it("refuses an app open that does not say what it was", async () => {
+    const response = await fetch(`${baseUrl}/api/auth/opened`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        session: "signed-out",
+        launch: "first",
+        returning: false,
+        email: "dev@example.com",
+      }),
+    });
+    expect(response.status).toBe(400);
+    const missing = await fetch(`${baseUrl}/api/auth/opened`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session: "maybe" }),
+    });
+    expect(missing.status).toBe(400);
+    const noReturning = await fetch(`${baseUrl}/api/auth/opened`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session: "signed-out", launch: "first" }),
+    });
+    expect(noReturning.status).toBe(400);
+    expect(backend.appOpens).toEqual([]);
   });
 
   it("verifies a claimed session locally and installs the Arena credential", async () => {
