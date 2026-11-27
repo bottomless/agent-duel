@@ -59,8 +59,12 @@ interface Input {
     retry: boolean,
   ) => Effect.Effect<{ readonly retry: false } | SessionRunnerRetry.Decision>
   readonly recoverContinuation: boolean
-  /** The runner owns compaction policy; the attempt invokes it only before durable output. */
-  readonly recoverOverflow: Effect.Effect<boolean>
+  /**
+   * The runner owns compaction policy; the attempt invokes it only before durable output. Agent Duel vendor patch:
+   * it gets the failure, so a refusal marked as a requested compaction is not summarized as an overflow
+   * (`SessionCompactionRequest.overflowReason`).
+   */
+  readonly recoverOverflow: (failure: unknown) => Effect.Effect<boolean>
 }
 
 const TOOLS_INTERRUPTED = { type: "aborted", message: "Tool execution interrupted" } as const
@@ -198,7 +202,7 @@ export const make = Effect.gen(function* () {
         if (
           !publisher.record().outputStarted &&
           isContextOverflowFailure(streamFailure) &&
-          (yield* restore(input.recoverOverflow))
+          (yield* restore(input.recoverOverflow(streamFailure)))
         ) {
           yield* Effect.logWarning("provider rejected the request as too long; compacting", {
             sessionID: input.sessionID,

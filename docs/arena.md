@@ -2063,7 +2063,11 @@ the control plane's TTL index (`request-calibration.ts`).
 
 The native Arena plugin offers compaction to the control plane and translates its neutral 413 into
 Core's checkpoint-and-retry path (`arena/engine-runtime/plugin.ts`). The engine has no separate
-savings threshold or fallback for an older control plane. Sealed provider state is replay metadata,
+savings threshold or fallback for an older control plane. A savings refusal still fits the window,
+so the plugin marks it `compaction: "requested"` and Core summarizes the conversation as it is,
+keeping its prompt cache (`SessionCompactionRequest.overflowReason`). When the request does not fit
+the endpoint either, or the provider itself refused the context, the service marks its 413
+`overflow: true` and Core sends the summary as shortened text. Sealed provider state is replay metadata,
 not prompt text; counting its duplicated envelopes makes reasoning-heavy chats compact too early.
 Core still checks the contestant's context window. A first request or one still too large after a
 summary ends with the neutral request-too-large explanation instead of repeatedly paying for

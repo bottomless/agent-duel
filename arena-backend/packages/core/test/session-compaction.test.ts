@@ -22,6 +22,7 @@ import { Job } from "@opencode/core/job"
 import { SessionCompaction } from "@opencode/core/session/compaction"
 import { SessionCompactionBackground } from "@opencode/core/session/compaction-background"
 import { SessionCompactionSubagents } from "@opencode/core/session/compaction-subagents"
+import { SessionCompactionRequest } from "@opencode/core/session/compaction-request"
 import type { SessionContext } from "@opencode/core/session/context"
 import { MessageDecodeError } from "@opencode/core/session/error"
 import { SessionEvent } from "@opencode/core/session/event"
@@ -934,6 +935,95 @@ it.effect("summary updates include the retained tail in compaction hooks and the
     ])
   }),
 )
+
+for (const { reason, synthetic } of [
+  { reason: "overflow", synthetic: false },
+  { reason: "requested", synthetic: false },
+  { reason: "requested", synthetic: true },
+] as const)
+  it.effect(
+    `a session that opens with a location line summarizes its task instead of keeping it as the tail (${reason}${synthetic ? ", synthetic opener" : ""})`,
+    () =>
+      Effect.gen(function* () {
+        requests = []
+        const id = Session.ID.make(`ses_compaction_location_first_${reason}_${synthetic}`)
+        const session = yield* insertSession(id)
+        const created = DateTime.makeUnsafe(0)
+        // An Arena contestant's session moves into its worktree before the task arrives, so the conversation opens with
+        // a location line and the task is its second message.
+        const location = SessionMessage.LocationSwitched.make({
+          id: SessionMessage.ID.create(),
+          type: "location-switched",
+          location: Location.Ref.make({ directory: AbsolutePath.make("/worktree") }),
+          previous: { location: Location.Ref.make({ directory: AbsolutePath.make("/project") }) },
+          time: { created },
+        })
+        // Any other line ahead of the first prompt belongs to the first exchange too.
+        const opener = SessionMessage.Synthetic.make({
+          id: SessionMessage.ID.create(),
+          type: "synthetic",
+          text: "Setup note",
+          time: { created },
+        })
+        const task = SessionMessage.User.make({
+          id: SessionMessage.ID.create(),
+          type: "user",
+          text: "Build the first katana level",
+          time: { created },
+        })
+        // One exchange whose text fits the 15k tokens a summary keeps verbatim, as a long one does once the tail clips
+        // its tool output, so the kept tail would start at the task.
+        const work = [1, 2, 3, 4].map((step) =>
+          Schema.decodeUnknownSync(SessionMessage.Assistant)({
+            id: SessionMessage.ID.create(),
+            type: "assistant",
+            agent: Agent.defaultID,
+            model: { id: "summary-model", providerID: "test" },
+            content: [{ type: "text", text: `Step ${step} done` }],
+            time: { created: 0, completed: 0 },
+          }),
+        )
+        const messages = synthetic ? [location, opener, task, ...work] : [location, task, ...work]
+        yield* storeMessages(id, messages)
+        const compaction = yield* SessionCompaction.Service
+
+        expect(yield* compaction.compact({ reason, context: loaded(session, messages) })).toEqual({
+          status: "completed",
+        })
+        expect(requests).toHaveLength(1)
+        expect(JSON.stringify(requests[0].messages)).toContain(task.text)
+        // A requested summary reads the conversation as it is; an overflow sends it as text.
+        expect(requests[0].messages.some((message) => message.role === "assistant")).toBe(reason === "requested")
+        // The single exchange is summarized whole; nothing of it is kept beside the summary.
+        const stored = (yield* (yield* SessionStore.Service).context(id))[0]
+        expect(stored?.type === "compaction" && stored.status === "completed" ? stored.metadata?.keepID : "none").toBe(
+          undefined,
+        )
+      }),
+  )
+
+test("only an overflow marked as a requested compaction compacts as requested", () => {
+  const failure = (body: unknown, classification?: "context-overflow") =>
+    new AIError({
+      reason: new InvalidRequestError({
+        message: "too long",
+        classification,
+        body: body === undefined ? undefined : typeof body === "string" ? body : JSON.stringify({ error: body }),
+      }),
+    })
+  const requested = { code: "context_length_exceeded", compaction: "requested" }
+  expect(SessionCompactionRequest.overflowReason(failure(requested, "context-overflow"))).toBe("requested")
+  for (const body of [
+    { ...requested, compaction: "required" },
+    { code: "context_length_exceeded", type: "arena_compaction_required" },
+    "not json",
+    undefined,
+  ])
+    expect(SessionCompactionRequest.overflowReason(failure(body, "context-overflow"))).toBe("overflow")
+  // Only a context overflow can be one: other refusals never reach compaction.
+  expect(SessionCompactionRequest.overflowReason(failure(requested))).toBe("overflow")
+  expect(SessionCompactionRequest.overflowReason(new Error("too long"))).toBe("overflow")
+})
 
 it.effect("summary compaction past the ceiling keeps the conversation unchanged while the window fits", () =>
   Effect.gen(function* () {

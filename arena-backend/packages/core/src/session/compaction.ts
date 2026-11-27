@@ -61,8 +61,16 @@ export type Editor = {
 export type Estimate = { readonly measured: number; readonly estimated: number }
 
 export type Trigger =
-  /** `overflow`: the provider just rejected this context as too long. `estimate` is `estimatePrompt(context)`. */
-  | { readonly reason: "auto" | "overflow"; readonly context: SessionContext.Loaded; readonly estimate?: Estimate }
+  /**
+   * `overflow`: the provider just rejected this context as too long. `requested`: the provider asked for a summary
+   * although the context still fits, so it compacts as `auto` does without checking the ceiling (Agent Duel vendor
+   * patch, see `SessionCompactionRequest.overflowReason`). `estimate` is `estimatePrompt(context)`.
+   */
+  | {
+      readonly reason: "auto" | "overflow" | "requested"
+      readonly context: SessionContext.Loaded
+      readonly estimate?: Estimate
+    }
   /** `inputID` is the `/compact` inbox item, whose message shows the outcome. */
   | { readonly reason: "manual"; readonly context: SessionContext.Loaded; readonly inputID: SessionMessage.ID }
 
@@ -1117,15 +1125,23 @@ const recentStart = (
   keep: number,
   previous: SessionMessage.CompactionCompleted | undefined,
 ) => {
+  // Agent Duel vendor patch: a session moved before its first prompt, as every Arena contestant is, opens with a
+  // location line. Lines like it belong to the first exchange, so a tail starting at the first prompt would leave the
+  // summary only them and keep the whole conversation as truncated text beside it.
+  const opening = Math.max(
+    0,
+    entries.findIndex((entry) => entry.message.type === "user" || entry.message.type === "assistant"),
+  )
+
   // The tail is sent as text and each message carries its own tool calls and results, so it can start at any
   // message. One token more per message covers the separator between them and rounding, so the joined text stays
   // within `keep`. A newest message larger than `keep` on its own is summarized with the rest.
   const start = oldestToDrop(entries, (entry) => Token.estimate(entry.text) + 1, keep)
-  if (start > 0) return start
+  if (start > opening) return start
 
   // Everything fits. Keep only the latest exchange rather than duplicating the whole conversation beside the summary.
   const latestUser = entries.findLastIndex((entry) => entry.message.type === "user")
-  if (latestUser > 0) return latestUser
+  if (latestUser > opening) return latestUser
 
   // One exchange, nothing older. Summarize it all and keep nothing, unless a previous summary already
   // kept recent text, in which case keep everything and summarize only the summary before it.

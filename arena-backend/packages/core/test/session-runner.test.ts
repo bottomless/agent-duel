@@ -3699,6 +3699,47 @@ describe("SessionRunnerLLM", () => {
     expect(userTexts(s.requests[1])[0]).toContain("Request 3:")
   })
 
+  scenario("summarizes the unchanged conversation when the Arena control plane asks for compaction", function* (s) {
+    const filler = "context ".repeat(1_000)
+    yield* s.llm.push(...Array.from({ length: 4 }, (_, index) => TestLLM.text(`Answer ${index}`, `answer-${index}`)))
+    yield* Effect.forEach(
+      Array.from({ length: 4 }, (_, index) => index),
+      (index) => s.runPrompt(`Request ${index}: ${filler}`),
+    )
+    s.currentModel = recoveryModel
+    s.requests.length = 0
+    // The neutral 413 Arena's engine plugin sends at the control plane's savings threshold
+    // (`opencode/src/arena/engine-runtime/request.ts`). The request still fits the window.
+    const body = JSON.stringify({
+      error: {
+        message: "This request is too large to process. Reduce the message or attachments and try again.",
+        code: "context_length_exceeded",
+        type: "arena_compaction_required",
+        compaction: "requested",
+      },
+    })
+    yield* s.llm.push(
+      TestLLM.failAfter(
+        new AIError({
+          reason: new InvalidRequestError({
+            message: "Arena request needs compaction",
+            body,
+            classification: "context-overflow",
+          }),
+        }),
+      ),
+      TestLLM.text("## Objective\n- Recovered", "summary"),
+      TestLLM.text("Recovered", "recovered"),
+    )
+    yield* s.runPrompt("Continue")
+
+    // Sent as the conversation it is, not cut down as text the way a real overflow is.
+    expect(s.requests).toHaveLength(3)
+    expect(s.requests[1]?.messages.some((message) => message.role === "assistant")).toBeTrue()
+    expect(JSON.stringify(s.requests[1]?.messages)).toContain(`Request 0: ${filler}`)
+    expect(JSON.stringify(s.requests[1]?.messages)).not.toContain("characters omitted")
+  })
+
   scenario("serializes history without tools or media after a summary input overflow", function* (s) {
     const image = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
     yield* s.session.prompt({

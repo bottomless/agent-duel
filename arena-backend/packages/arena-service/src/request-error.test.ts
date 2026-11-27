@@ -5,6 +5,7 @@ import {
   classifyPaymentError,
   isContextOverflow,
   networkUnavailableError,
+  readCompactionOverflow,
   readCompactionRequired,
   readNetworkUnavailable,
   readPaymentError,
@@ -100,6 +101,17 @@ test("uses an exact neutral compaction contract", () => {
     error: { message: "Arena request needs compaction", type: "arena_compaction_required" },
   })
   expect(readCompactionRequired(JSON.stringify(compactionRequiredError()))).toBe(true)
+  // A provider's own refusal is marked so the engine does not resend the refused request unchanged.
+  expect(compactionRequiredError(true)).toEqual({
+    error: { message: "Arena request needs compaction", type: "arena_compaction_required", overflow: true },
+  })
+  expect(readCompactionRequired(JSON.stringify(compactionRequiredError(true)))).toBe(true)
+  expect(readCompactionOverflow(JSON.stringify(compactionRequiredError(true)))).toBe(true)
+  expect(readCompactionOverflow(JSON.stringify(compactionRequiredError()))).toBe(false)
+  expect(readCompactionOverflow(JSON.stringify({ error: { type: "arena_upstream_error", overflow: true } }))).toBe(
+    false,
+  )
+  expect(readCompactionOverflow("not json")).toBe(false)
   expect(readCompactionRequired(JSON.stringify({ error: { message: "Arena request needs compaction" } }))).toBe(false)
   expect(readCompactionRequired(JSON.stringify({ error: { type: "arena_compaction_required_extra" } }))).toBe(false)
 })

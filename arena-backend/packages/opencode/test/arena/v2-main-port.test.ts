@@ -37,7 +37,7 @@ function reply(text: string) {
     { headers: { "content-type": "text/event-stream" } },
   )
 }
-const refusal = () => Response.json(compactionRequiredError(), { status: 413 })
+const refusal = (overflow = false) => Response.json(compactionRequiredError(overflow), { status: 413 })
 afterEach(() => setStoreForTest(undefined))
 
 async function runner(
@@ -144,59 +144,68 @@ async function prompt(
   await Effect.runPromise(sessions.wait(id).pipe(Effect.timeout("10 seconds")))
 }
 
-test("control-plane 413 commits a Core checkpoint and retries with the latest attachment intact", async () => {
-  const calls: { kind: string | null; offer: string | null; body: unknown }[] = []
-  let refused = false
-  let summaryRefused = false
-  let generations = 0
-  await runner(
-    async (request) => {
-      const kind = request.headers.get("x-arena-generation-classification")
-      const offer = request.headers.get("x-arena-compaction")
-      calls.push({ kind, offer, body: await request.json() })
-      if (kind === "utility") return reply("Title")
-      if (kind === "compaction") {
-        // Hard-edge summary refusal must use Core's shrinking-summary recovery.
-        if (!summaryRefused) {
-          summaryRefused = true
-          return refusal()
+test.each([false, true])(
+  "control-plane 413 commits a Core checkpoint and retries with the latest attachment intact (provider overflow: %p)",
+  async (overflow) => {
+    const calls: { kind: string | null; offer: string | null; body: unknown }[] = []
+    let refused = false
+    let summaryRefused = false
+    let generations = 0
+    await runner(
+      async (request) => {
+        const kind = request.headers.get("x-arena-generation-classification")
+        const offer = request.headers.get("x-arena-compaction")
+        calls.push({ kind, offer, body: await request.json() })
+        if (kind === "utility") return reply("Title")
+        if (kind === "compaction") {
+          // Hard-edge summary refusal must use Core's shrinking-summary recovery.
+          if (!summaryRefused) {
+            summaryRefused = true
+            return refusal()
+          }
+          return reply(summary)
         }
-        return reply(summary)
-      }
-      generations++
-      if (offer === "auto" && generations === 5) {
-        refused = true
-        return refusal()
-      }
-      return reply(refused ? "Finished" : "Old result ".repeat(5000))
-    },
-    async (sessions, id) => {
-      await prompt(sessions, id, "Earlier exchange")
-      await prompt(sessions, id, "More history")
-      await prompt(sessions, id, "Third exchange")
-      await prompt(sessions, id, "Fourth exchange")
-      await prompt(sessions, id, "Inspect the latest attachment", [
-        { uri: `data:image/png;base64,${image}`, mime: "image/png", filename: "latest.png" },
-      ])
-      const messages = await Effect.runPromise(sessions.messages({ sessionID: id, order: "asc" }))
-      expect(messages.filter((message) => message.type === "compaction")).toMatchObject([
-        { status: "completed", summary },
-      ])
-      expect(messages.filter((message) => message.type === "assistant").at(-1)).toMatchObject({
-        finish: "stop",
-        content: [{ type: "text", text: "Finished" }],
-      })
-      expect(messages.some((message) => message.type === "assistant" && message.error)).toBe(false)
-    },
-  )
-  const primary = calls.filter((call) => call.kind === "generation")
-  expect(primary.map((call) => call.offer)).toEqual([null, "auto", "auto", "auto", "auto", null])
-  expect(calls.filter((call) => call.kind === "compaction").map((call) => call.offer)).toEqual([null, null])
-  for (const call of primary.slice(4)) {
-    expect(JSON.stringify(call.body)).toContain("Inspect the latest attachment")
-    expect(JSON.stringify(call.body)).toContain(`data:image/png;base64,${image}`)
-  }
-})
+        generations++
+        if (offer === "auto" && generations === 5) {
+          refused = true
+          return refusal(overflow)
+        }
+        return reply(refused ? "Finished" : "Old result ".repeat(5000))
+      },
+      async (sessions, id) => {
+        await prompt(sessions, id, "Earlier exchange")
+        await prompt(sessions, id, "More history")
+        await prompt(sessions, id, "Third exchange")
+        await prompt(sessions, id, "Fourth exchange")
+        await prompt(sessions, id, "Inspect the latest attachment", [
+          { uri: `data:image/png;base64,${image}`, mime: "image/png", filename: "latest.png" },
+        ])
+        const messages = await Effect.runPromise(sessions.messages({ sessionID: id, order: "asc" }))
+        expect(messages.filter((message) => message.type === "compaction")).toMatchObject([
+          { status: "completed", summary },
+        ])
+        expect(messages.filter((message) => message.type === "assistant").at(-1)).toMatchObject({
+          finish: "stop",
+          content: [{ type: "text", text: "Finished" }],
+        })
+        expect(messages.some((message) => message.type === "assistant" && message.error)).toBe(false)
+      },
+    )
+    const primary = calls.filter((call) => call.kind === "generation")
+    expect(primary.map((call) => call.offer)).toEqual([null, "auto", "auto", "auto", "auto", null])
+    expect(calls.filter((call) => call.kind === "compaction").map((call) => call.offer)).toEqual([null, null])
+    // A savings refusal still fits the window, so the first summary reads the conversation as it is. A provider's own
+    // refusal goes out as shortened text, without the assistant turns.
+    const [first] = calls.filter((call) => call.kind === "compaction")
+    expect(
+      (first?.body as { messages: { role: string }[] }).messages.some((message) => message.role === "assistant"),
+    ).toBe(!overflow)
+    for (const call of primary.slice(4)) {
+      expect(JSON.stringify(call.body)).toContain("Inspect the latest attachment")
+      expect(JSON.stringify(call.body)).toContain(`data:image/png;base64,${image}`)
+    }
+  },
+)
 
 test("first-request and post-summary hard refusals fail neutrally without another compaction", async () => {
   for (const afterSummary of [false, true]) {

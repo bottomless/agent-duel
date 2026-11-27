@@ -10,6 +10,7 @@ import {
   filteredStreamChunk,
   networkUnavailableError,
   paymentError,
+  readCompactionOverflow,
   readCompactionRequired,
   readContentFilter,
   readNetworkUnavailable,
@@ -1030,7 +1031,8 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
       if (response.status === 401 && readSessionRejected(body)) payload = sessionRejectedError()
       if (response.status === 402) payload = paymentError(readPaymentError(body) ?? "arena_payment_required")
       if (response.status === 503 && readNetworkUnavailable(body)) payload = networkUnavailableError()
-      if (response.status === 413 && readCompactionRequired(body)) payload = compactionRequiredError()
+      if (response.status === 413 && readCompactionRequired(body))
+        payload = compactionRequiredError(readCompactionOverflow(body))
       if (response.status === 403 && readSingleAgentAllowance(body)) payload = singleAgentAllowanceError()
       if (body === undefined) await response.body?.cancel().catch(() => undefined)
       if (filtered) await blocked()

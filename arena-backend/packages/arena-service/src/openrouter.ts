@@ -663,7 +663,9 @@ async function logKeepAlive(response: Response | undefined, startedAt: number) {
  * shrink: a chat's first message, the step right after a summary, or the summary request itself,
  * which the engine splits into smaller batches when it does not fit. Only `auto` compacts at the
  * model's level; every request still compacts when it cannot fit the endpoint at all. An engine that sends no header
- * therefore keeps its own threshold. The answer names no limit: the levels identify the model.
+ * therefore keeps its own threshold. The answer names no limit: the levels identify the model. It
+ * only says whether the request also misses the endpoint (`overflow`), which the engine then
+ * summarizes as shortened text instead of resending unchanged.
  */
 async function compactionRequired(
   request: Request,
@@ -675,9 +677,9 @@ async function compactionRequired(
   // modelLimits keeps compactAt within context − output, so it always fits.
   const level = request.headers.get(COMPACTION_HEADER) === COMPACTION_OFFER ? limits.compactAt : fits
   // Most requests are far below their level whatever the tokenizer; skip the read for those.
-  if (budget.input * MAX_CALIBRATION_RATIO < level) return false
+  if (budget.input * MAX_CALIBRATION_RATIO < level) return undefined
   const measured = calibrate(budget.input, await sample().catch(() => undefined))
-  return measured >= level
+  return measured >= level ? { overflow: measured >= fits } : undefined
 }
 
 async function sanitizeAssignedResponse(
@@ -712,7 +714,7 @@ async function sanitizeAssignedResponse(
     ])
     if (filtered) return Response.json(contentFilterError(), { status: 400, headers })
     if (isContextOverflow(response.status, upstream)) {
-      return Response.json(compactionRequiredError(), { status: 413, headers })
+      return Response.json(compactionRequiredError(true), { status: 413, headers })
     }
     if (response.status === 402) {
       let payload: unknown = null
@@ -998,9 +1000,8 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
     }
     const limits = modelLimits(routeAssignment.model)
     let budget = prepareRequest(routed, endpoint, limits)
-    if (await compactionRequired(request, budget, limits, () => readCalibration(db, calibrationKey))) {
-      return Response.json(compactionRequiredError(), { status: 413 })
-    }
+    const compaction = await compactionRequired(request, budget, limits, () => readCalibration(db, calibrationKey))
+    if (compaction) return Response.json(compactionRequiredError(compaction.overflow), { status: 413 })
     body = new TextEncoder().encode(budget.body).buffer
     // One row per call: the first outcome recorded is this call's, and a second write is ignored.
     let recorded = false
@@ -1057,9 +1058,10 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
       capture?.record(retry.refusal)
       await capture?.finish("failed", response.status)
       const retryBudget = prepareRequest(retry.request, endpoint, limits)
-      if (await compactionRequired(request, retryBudget, limits, () => readCalibration(db, calibrationKey))) {
-        return Response.json(compactionRequiredError(), { status: 413 })
-      }
+      const retryCompaction = await compactionRequired(request, retryBudget, limits, () =>
+        readCalibration(db, calibrationKey),
+      )
+      if (retryCompaction) return Response.json(compactionRequiredError(retryCompaction.overflow), { status: 413 })
       if (capture) {
         // Keep the first attempt under its own ID. The client's generation ID must still load the
         // actual final request, so captures, usage metrics and replay recovery describe the same call.

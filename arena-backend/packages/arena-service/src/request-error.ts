@@ -111,24 +111,45 @@ export function refusalUsage(value: unknown) {
 
 export const compactionRequiredType = "arena_compaction_required"
 
-export function compactionRequiredError() {
-  return { error: { message: "Arena request needs compaction", type: compactionRequiredType } }
+/**
+ * `overflow`: the provider itself refused the context, so the request does not fit as it is. Without it the request
+ * crossed the savings threshold and still fits, so the engine summarizes it unchanged. Neither carries a number.
+ */
+export function compactionRequiredError(overflow = false) {
+  return {
+    error: {
+      message: "Arena request needs compaction",
+      type: compactionRequiredType,
+      ...(overflow ? { overflow: true } : {}),
+    },
+  }
 }
 
 /** Shown before the vote too: it names no model, and only the voter can shorten the message. */
 export const requestTooLargeMessage =
   "This request is too large to process. Reduce the message or attachments and try again."
 
-/** Reads only the exact neutral type; upstream text and numeric limits are never trusted. */
-export function readCompactionRequired(body: string | undefined) {
-  if (!body) return false
+function compactionRequiredPayload(body: string | undefined) {
+  if (!body) return undefined
   let payload: unknown
   try {
     payload = JSON.parse(body)
   } catch {
-    return false
+    return undefined
   }
   return isRecord(payload) && isRecord(payload.error) && payload.error.type === compactionRequiredType
+    ? payload.error
+    : undefined
+}
+
+/** Reads only the exact neutral type; upstream text and numeric limits are never trusted. */
+export function readCompactionRequired(body: string | undefined) {
+  return compactionRequiredPayload(body) !== undefined
+}
+
+/** Whether a compaction refusal came from the provider refusing the context (see `compactionRequiredError`). */
+export function readCompactionOverflow(body: string | undefined) {
+  return compactionRequiredPayload(body)?.overflow === true
 }
 
 /**

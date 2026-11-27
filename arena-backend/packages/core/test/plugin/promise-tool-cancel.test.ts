@@ -158,7 +158,7 @@ const stop = Effect.fn(function* (
       },
       retry: () => Effect.succeed({ retry: false }),
       recoverContinuation: true,
-      recoverOverflow: Effect.succeed(false),
+      recoverOverflow: () => Effect.succeed(false),
     })
     .pipe(Effect.forkChild({ startImmediately: true }))
   const signal = yield* Deferred.await(started)
