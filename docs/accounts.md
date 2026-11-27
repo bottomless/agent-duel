@@ -96,13 +96,14 @@ needs neither, because it is a BYOK build. Hosted development has no built-in ke
 scripts generate one pair per checkout, keep it in the gitignored `.dev/session-keys.json`, and pass
 it through the same variables.
 
-The raw token is returned once and held by the client. Electron persists the signed session through
+The raw token is returned to the app's claim of its sign-in, and again to a repeat of that claim
+within a minute, and is then held by the client. Electron persists the signed session through
 `safeStorage`, which uses the operating system's protected credential facility, and removes the
 legacy renderer `AsyncStorage` copy during hydration. The token exists in renderer and daemon memory
 while the app is signed in; it is not persisted as plaintext browser storage by the desktop build.
 The browser QA surface continues to use `AsyncStorage` and is not a production session boundary.
-The control plane stores only a SHA-256 hash of each session token, and claims each magic-link token
-once.
+The control plane stores only a SHA-256 hash of each session token once the sign-in's flow has
+expired, and claims each magic-link token once.
 
 The local daemon verifies signature and expiry without contacting the control plane. This keeps
 ordinary local agents available to previously accepted accounts while the internet or control plane is unreachable. Opening a new
@@ -189,8 +190,8 @@ The daemon password and account session are separate credentials; a remote clien
   the button that opened it (`method`) and whether the install has held a session. Both requests
   carry the usual client headers (`clientHeaders` in `packages/server/src/server/accounts/config.ts`);
   the counts keep only OS, version and build. A source build sends
-  `X-Agent-Duel-Build: development` so its counts can be left out. BYOK builds and the browser
-  harness send nothing. Never add anything that tells installs or people apart. The private
+  `X-Agent-Duel-Build: development` so its counts can be left out. BYOK builds send nothing, and the
+  browser harness reports no open. Never add anything that tells installs or people apart. The private
   repository's `docs/accounts.md` owns the steps and the report.
 - The control plane can refuse builds below a minimum version or on a blocklist. It then answers
   `/api/auth/methods` with `updateRequired: true`, and the account gate shows the update screen

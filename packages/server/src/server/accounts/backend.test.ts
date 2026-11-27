@@ -1,6 +1,6 @@
 import { createServer, type IncomingHttpHeaders, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import pino from "pino";
 import { AccountsBackend, AccountsBackendUnavailableError } from "./backend.js";
 
@@ -33,6 +33,11 @@ async function controlPlane(answer: "ok" | "hang" | "fail" = "ok") {
       if (req.url === "/api/auth/flow") {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ flowId: "flow-1", secret: "secret-1", expiresAt: "later" }));
+        return;
+      }
+      if (req.url === "/api/auth/flow/claim") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ status: "pending" }));
         return;
       }
       res.writeHead(200, { "Content-Type": "application/json" });
@@ -165,6 +170,22 @@ describe("AccountsBackend", () => {
       }),
     ).rejects.toBeInstanceOf(AccountsBackendUnavailableError);
     expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  it("gives a claim 15 seconds when no other limit is set", async () => {
+    const { url } = await controlPlane();
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    try {
+      await expect(
+        new AccountsBackend(url, logger, "0.4.0-beta.27").claimFlow({
+          flowId: "flow-1",
+          secret: "secret-1",
+        }),
+      ).resolves.toEqual({ status: "pending" });
+      expect(timeout).toHaveBeenCalledWith(15_000);
+    } finally {
+      timeout.mockRestore();
+    }
   });
 
   it("ignores a failed or unreachable app open", async () => {

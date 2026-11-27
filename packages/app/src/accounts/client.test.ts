@@ -21,8 +21,9 @@ describe("claimSignInFlow", () => {
     vi.useFakeTimers();
     vi.stubGlobal("fetch", vi.fn(neverAnswers));
 
+    // No limit is passed: this is the one the app runs with.
     let outcome = "waiting";
-    void claimSignInFlow(endpoint, flow, { timeoutMs: 20_000 }).then(
+    void claimSignInFlow(endpoint, flow).then(
       () => (outcome = "answered"),
       () => (outcome = "gave up"),
     );
