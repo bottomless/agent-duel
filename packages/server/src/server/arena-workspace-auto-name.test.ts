@@ -27,7 +27,7 @@ function firstTurn(comparisonTitle?: string): ArenaSnapshot {
   } as ArenaSnapshot;
 }
 
-function workspaceNamer(title: string | null) {
+function workspaceNamer(title: string | null, suggested: string | null = null) {
   let workspace: PersistedWorkspaceRecord = {
     ...createPersistedWorkspaceRecord({
       workspaceId: "workspace-arena",
@@ -42,6 +42,7 @@ function workspaceNamer(title: string | null) {
   };
   const writes: string[] = [];
   const emitted: string[] = [];
+  const asked: string[] = [];
   const workspaceRegistry = {
     get: async () => workspace,
     update: async (_workspaceId, updater) => {
@@ -55,11 +56,21 @@ function workspaceNamer(title: string | null) {
     emitWorkspaceUpdateForWorkspaceId: async (workspaceId) => {
       emitted.push(workspaceId);
     },
+    suggestChatTitle: async (_cwd, source) => {
+      asked.push(source);
+      return suggested;
+    },
   });
-  return { workspaceAutoName, writes, emitted, title: () => workspace.title };
+  return { workspaceAutoName, writes, emitted, asked, title: () => workspace.title };
 }
 
-const agent = { workspaceId: "workspace-arena" };
+const agent = { workspaceId: "workspace-arena", cwd: "/repo" };
+
+function skippedFirstTurn(resolution?: unknown): ArenaSnapshot {
+  return {
+    turn: { index: 0, prompt, comparisonState: "skipped", ...(resolution ? { resolution } : {}) },
+  } as ArenaSnapshot;
+}
 
 describe("applyArenaFirstTurnMetadata", () => {
   test("titles the agent and an untitled workspace from the first prompt", async () => {
@@ -152,5 +163,56 @@ describe("applyArenaChatTitle", () => {
     });
 
     expect(namer.writes).toEqual([]);
+  });
+
+  test.each([
+    ["an early pick", { kind: "early", vote: "a", appliedSide: "a" }],
+    ["a stop", { kind: "stopped", resolution: "apply_b", appliedSide: "b" }],
+    ["a battle that never started", { kind: "aborted", reason: "creation_failed" }],
+  ])(
+    "names the chat from its prompt once when %s skips the first comparison",
+    async (_case, resolution) => {
+      const namer = workspaceNamer(prompt, "Arena workspace names");
+      const snapshot = skippedFirstTurn(resolution);
+
+      await applyArenaChatTitle({ agent, snapshot, workspaceAutoName: namer.workspaceAutoName });
+      await applyArenaChatTitle({ agent, snapshot, workspaceAutoName: namer.workspaceAutoName });
+
+      expect(namer.asked).toEqual([prompt]);
+      expect(namer.title()).toBe("Arena workspace names");
+    },
+  );
+
+  test("asks nothing for a skipped first turn whose chat already has a name", async () => {
+    const namer = workspaceNamer("My own name", "Arena workspace names");
+
+    await applyArenaChatTitle({
+      agent,
+      snapshot: skippedFirstTurn({ kind: "early", vote: "a", appliedSide: "a" }),
+      workspaceAutoName: namer.workspaceAutoName,
+    });
+
+    expect(namer.asked).toEqual([]);
+    expect(namer.title()).toBe("My own name");
+  });
+
+  test("leaves a skipped first turn to its own comparison until it ends without a vote", async () => {
+    const namer = workspaceNamer(prompt, "Arena workspace names");
+
+    // Stopped but not yet kept or discarded.
+    await applyArenaChatTitle({
+      agent,
+      snapshot: skippedFirstTurn(),
+      workspaceAutoName: namer.workspaceAutoName,
+    });
+    // A failed side's skipped comparison names the chat itself.
+    await applyArenaChatTitle({
+      agent,
+      snapshot: skippedFirstTurn({ kind: "vote", vote: "a", appliedSide: "a" }),
+      workspaceAutoName: namer.workspaceAutoName,
+    });
+
+    expect(namer.asked).toEqual([]);
+    expect(namer.title()).toBe(prompt);
   });
 });

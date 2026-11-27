@@ -313,10 +313,11 @@ only Changes.
 
 On the first turn the judge also returns a `Title:` line, which the engine removes from the report.
 A new chat shows its prompt's first line until that title arrives; any other workspace name stays
-(`arena-workspace-auto-name.ts`). Equal trees or a failed side request only the title. Battle off
-uses the metadata route described under [Blinding](#blinding). A failed title request leaves the
-prompt's first line. Never start a coding agent to name a chat: it uses the full agent setup for a
-metadata task.
+(`arena-workspace-auto-name.ts`). Equal trees or a failed side request only the title. An early
+pick, a stop or a battle that never started has no comparison, and later turns ask for no title, so
+the daemon names that chat from its first prompt on the metadata route, as Battle off does (see
+[Blinding](#blinding)). A failed title request leaves the prompt's first line. Never start a coding
+agent to name a chat: it uses the full agent setup for a metadata task.
 
 Git's `merge-tree --write-tree` compares A and B over the frozen base with
 `merge.conflictStyle=zdiff3` (`compare` in `arena/git.ts`). `diverging` means a real merge conflict;
@@ -1499,14 +1500,15 @@ the OpenRouter proxy.
 
 The Commit and Create PR buttons get their text from the same model through
 `POST /api/arena/metadata` (`arena-service/src/metadata.ts`), never from an agent, and so do the
-name the Create branch dialog offers and the title of a chat started with Battle off. The daemon
-sends the engine's `/arena/metadata` route the kind, the file list and patch (for a branch name, the
-chat's title and its uncommitted changes; for a chat title, the start of its first prompt), and
-the project's own instructions from Project Settings; the service builds the prompt around them, so
-the route is not a general model endpoint. It takes at most 60,000 characters of changes and 1,000
-of instructions, caps the reply, folds a branch name into the slug the desktop accepts, and allows
-each hosted account 60 requests an hour of each kind, so branch names never use up commit
-messages; a BYOK build runs it on the user's key without a limit.
+name the Create branch dialog offers and the title of a chat started with Battle off or whose first
+battle ended without a comparison. The daemon sends the engine's `/arena/metadata` route the kind,
+the file list and patch (for a branch name, the chat's title and its uncommitted changes; for a chat
+title, the start of its first prompt), and the project's own instructions from Project Settings; the
+service builds the prompt around them, so the route is not a general model endpoint. It takes at
+most 60,000 characters of changes and 1,000 of instructions, caps the reply, folds a branch name
+into the slug the desktop accepts, and allows each hosted account 60 requests an hour of each kind,
+so branch names never use up commit messages; a BYOK build runs it on the user's key
+without a limit.
 Any failure, a missing control-plane route included, gives a fixed message such as `Update 3 files`
 (`git-metadata-generator.ts`), so a commit never waits on the model; the branch dialog stays empty.
 Deploy the control plane with the route before the desktop release that calls it.
