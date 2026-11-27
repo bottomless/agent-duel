@@ -623,6 +623,12 @@ contestants still see them through the frozen base. The commit uses the user's `
 `user.email` when both are set, else `Agent Duel <agent-duel@localhost>`; a new repository takes
 `init.defaultBranch`, else `main`. It is made with plumbing and hooks pointed away, so signing,
 hooks, and the index cannot block or change it (`packages/server/src/server/project-git-service.ts`).
+A folder counts as having no Git only when Git says "not a git repository" (asked in English) and
+the folder's own `.git`, if any, is empty. A broken `.git` gets that same message and may still hold
+history, which the bootstrap's rollback would delete. A folder the daemon can't read (macOS privacy
+settings on Desktop, Documents and Downloads) fails the check with how to allow it, and any other
+Git error, such as a repository Git refuses to open (another user's, an unknown extension) or a
+folder inside one, fails it with Git's own message.
 OpenCode caches each directory's project as Git or not for the life of its server, so the daemon
 disposes that directory's OpenCode instance after the commit; without that, a folder a single-agent
 chat already opened refuses battles with `WorktreeNotGitError`.
