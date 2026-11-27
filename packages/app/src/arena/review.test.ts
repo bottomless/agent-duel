@@ -229,6 +229,41 @@ describe("review callout", () => {
       expect(copy.detail).not.toContain("Users");
     }
   });
+
+  it("asks where the winner goes when the workspace moved to another branch during the battle", () => {
+    const switched = (clash?: string[]): ArenaReviewItem => ({
+      kind: "switched",
+      key: "@switched",
+      fingerprint: "X:main:c0ffee",
+      from: "X",
+      to: "main",
+      ...(clash ? { clash } : {}),
+      agentRef: "refs/battles/x/turn-0/a",
+      start: "0123456789abcdef",
+      choices: ["move", "stay"],
+    });
+    const clean = reviewCallout([switched()]);
+    expect(clean.title).toBe("This battle ran on X, but this workspace is now on main");
+    expect(clean.detail).toBe(
+      "If you apply it to main, only this battle’s commits are added to main. X stays as it is.",
+    );
+    expect(clean.actions.map((action) => action.label)).toEqual([
+      "Let an agent resolve",
+      "Apply to main",
+      "Switch back to X",
+    ]);
+    expect(clean.files).toEqual([]);
+    expect(reviewAnswers([switched()], "winner")[0]?.choice).toBe("move");
+    expect(reviewAnswers([switched()], "resolve")[0]?.choice).toBe("move");
+    expect(reviewAnswers([switched()], "mine")[0]?.choice).toBe("stay");
+
+    const clashing = reviewCallout([switched(["notes.txt"])]);
+    expect(clashing.detail).toContain("with conflict markers in notes.txt");
+    expect(clashing.files).toEqual(["notes.txt"]);
+    const prompt = resolvePrompt([switched(["notes.txt"])]);
+    expect(prompt).toContain("not the older work on X");
+    expect(prompt).toContain("0123456789ab..refs/battles/x/turn-0/a");
+  });
 });
 
 describe("heldResolveStep", () => {

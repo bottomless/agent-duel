@@ -446,6 +446,16 @@ export const ja: TranslationResources = {
     winnerEndedElsewhere: "勝者がここで終了。{{folder}}で使用中",
     applySwitchElsewhere:
       "勝者は{{branch}}で終了しました。適用するとワークスペースは{{branch}}に切り替わり、{{folder}}はブランチを外して現在のコミットを維持します。",
+    switchedTitle:
+      "このバトルは{{from}}で実行されましたが、このワークスペースは現在{{to}}にあります",
+    switchedNote: "バトル中にこのワークスペースが{{to}}に移動しました",
+    switchedDetail:
+      "{{to}}に適用すると、このバトルのコミットだけが{{to}}に追加されます。{{from}}はそのままです。",
+    switchedClashDetail:
+      "{{to}}に適用すると、このバトルの変更は競合マーカー付きの編集として{{to}}に追加されます{{files}}。{{from}}はそのままです。",
+    switchedBack: "{{from}}に戻すと、切り替えなかった場合と同じように、勝者がそこに適用されます。",
+    applyToBranch: "{{branch}}に適用",
+    switchBackTo: "{{branch}}に戻す",
     busyTitle: "{{operation}}が進行中です",
     busyHelp:
       "このワークスペースの{{operation}}が完了または中止されると、Arenaは勝者の変更を適用します。",

@@ -439,6 +439,15 @@ export const ar: TranslationResources = {
     winnerEndedElsewhere: "انتهى الفائز عليه؛ مُفعّل في {{folder}}",
     applySwitchElsewhere:
       "انتهى الفائز على {{branch}}. إذا طبّقته، تنتقل مساحة العمل إلى {{branch}}، ويبقى {{folder}} على التزامه الحالي دون الفرع.",
+    switchedTitle: "جرت هذه المعركة على {{from}}، لكن مساحة العمل هذه الآن على {{to}}",
+    switchedNote: "انتقلت مساحة العمل هذه إلى {{to}} أثناء المعركة",
+    switchedDetail:
+      "إذا طبّقته على {{to}}، فستُضاف إلى {{to}} التزامات هذه المعركة فقط. ويبقى {{from}} كما هو.",
+    switchedClashDetail:
+      "إذا طبّقته على {{to}}، فستُضاف تغييرات هذه المعركة إلى {{to}} كتعديلات مع علامات تعارض{{files}}. ويبقى {{from}} كما هو.",
+    switchedBack: "إذا عدت إلى {{from}}، فسيُطبَّق الفائز هناك، كما لو أنك لم تبدّل.",
+    applyToBranch: "تطبيق على {{branch}}",
+    switchBackTo: "العودة إلى {{branch}}",
     busyTitle: "عملية {{operation}} قيد التنفيذ",
     busyHelp: "يطبّق Arena التغييرات الفائزة بعد إنهاء أو إلغاء {{operation}} في مساحة العمل هذه.",
     discardWinningTitle: "هل تتجاهل التغييرات الفائزة؟",
