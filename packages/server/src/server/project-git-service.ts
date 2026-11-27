@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { rm, stat } from "node:fs/promises";
+import { readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { ProjectGitState } from "@getpaseo/protocol/messages";
@@ -34,6 +34,28 @@ async function explainMissingGit(cause: unknown, directory: string): Promise<unk
 }
 
 /**
+ * Exit 128 is any fatal Git error, not only "not a git repository". A folder the daemon can't
+ * read (macOS privacy settings on Desktop, Documents and Downloads) or a repository Git refuses
+ * to open (another user's, an unknown extension) must not read as not_git: the bootstrap would
+ * offer a new repository there, and its rollback would delete the existing `.git`.
+ */
+async function notGitOrRefused(directory: string, stderr: string): Promise<"not_git"> {
+  const entries = await readdir(directory).catch((cause: NodeJS.ErrnoException) => {
+    if (cause.code !== "EPERM" && cause.code !== "EACCES") throw cause;
+    const fix =
+      process.platform === "darwin"
+        ? "If it's in Desktop, Documents, Downloads or on an external drive, allow Agent Duel in System Settings > Privacy & Security > Files and Folders (or Full Disk Access), or move the project somewhere else, then retry."
+        : "Check that your user can open it, then retry.";
+    throw new Error(`Agent Duel can't read this folder. ${fix}`);
+  });
+  if (!entries.includes(".git")) return "not_git";
+  // A broken `.git` may still hold history. An empty one holds none, and `git init` fills it.
+  const contents = await readdir(join(directory, ".git")).catch(() => null);
+  if (contents?.length === 0) return "not_git";
+  throw new Error(`This folder has a .git that Git can't open. ${stderr.trim()}`.trim());
+}
+
+/**
  * Arena needs a real HEAD to freeze a battle base and cut contestant worktrees. A folder
  * inside another repository's work tree reports that repository's state, because that
  * repository is the one Arena would battle on.
@@ -48,7 +70,8 @@ export async function inspectProjectGit(
   }).catch(async (cause: unknown) => {
     throw await explainMissingGit(cause, directory);
   });
-  if (inside.exitCode !== 0 || inside.stdout.trim() !== "true") return "not_git";
+  if (inside.exitCode !== 0) return notGitOrRefused(directory, inside.stderr);
+  if (inside.stdout.trim() !== "true") return "not_git";
   const head = await runGit(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], {
     cwd: directory,
     acceptExitCodes: [0, 1],

@@ -195,4 +195,56 @@ describe("project Git bootstrap", () => {
     await expect(access(join(folder, ".git"))).resolves.toBeUndefined();
     await expect(inspectProjectGit(folder, runGit)).resolves.toBe("no_commit");
   });
+
+  // Git refuses a repository another user owns, common on Windows and external drives.
+  // GIT_TEST_ASSUME_DIFFERENT_OWNER is Git's own switch for that check.
+  it("refuses a repository Git will not open, and keeps its history", async () => {
+    const { folder, runGit, git } = await createSandbox();
+    await git(["init", "--template="]);
+    await git([
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.test",
+      "commit",
+      "--allow-empty",
+      "-m",
+      "work",
+    ]);
+    const refusingGit: typeof runGitCommand = (args, options) =>
+      runGit(args, {
+        ...options,
+        envOverlay: { ...options.envOverlay, GIT_TEST_ASSUME_DIFFERENT_OWNER: "1" },
+      });
+
+    await expect(inspectProjectGit(folder, refusingGit)).rejects.toThrow("dubious ownership");
+    await expect(initializeProjectGit(folder, refusingGit)).rejects.toThrow("dubious ownership");
+
+    expect(await git(["log", "--format=%s"])).toBe("work");
+  });
+
+  it("gives an empty .git its first commit, as a folder without one", async () => {
+    const { folder, runGit } = await createSandbox();
+    await mkdir(join(folder, ".git"));
+
+    await expect(inspectProjectGit(folder, runGit)).resolves.toBe("not_git");
+    await expect(initializeProjectGit(folder, runGit)).resolves.toBe(true);
+    await expect(inspectProjectGit(folder, runGit)).resolves.toBe("ready");
+  });
+
+  // macOS privacy settings fail the same way for Desktop, Documents and Downloads.
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "says the folder can't be read instead of offering a new repository",
+    async () => {
+      const { folder, runGit } = await createSandbox();
+      await chmod(folder, 0o300);
+      try {
+        await expect(inspectProjectGit(folder, runGit)).rejects.toThrow(
+          "Agent Duel can't read this folder.",
+        );
+      } finally {
+        await chmod(folder, 0o755);
+      }
+    },
+  );
 });
