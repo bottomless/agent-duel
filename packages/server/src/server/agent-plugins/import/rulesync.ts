@@ -32,13 +32,26 @@ function resolveRulesyncCli(): string {
   return path.join(path.dirname(library), "cli", "index.js");
 }
 
+// The packaged daemon is the Electron binary in Node mode. rulesync parses its arguments with
+// commander, which reads them from `argv[1]` on when it sees Electron, so the CLI's own path
+// became the command ("unknown command '…/cli/index.js'"). Under `-e` commander reads from
+// `argv[1]` under Node and Electron alike, so the child loads the CLI from an eval and takes its
+// path out of argv first.
+const LOAD_CLI = [
+  "const [cli] = process.argv.splice(1, 1);",
+  'import(require("node:url").pathToFileURL(cli).href).catch((error) => {',
+  "  console.error(error);",
+  "  process.exitCode = 1;",
+  "});",
+].join("\n");
+
 /**
  * Runs the rulesync CLI in a child process. Its library API reads `process.cwd()`, which a daemon
  * serving many projects cannot change.
  */
 export function runRulesync(args: readonly string[], cwd: string): Promise<void> {
   // rulesync goes silent under `NODE_ENV=test`, and its output is the reason a plugin failed.
-  const launch = buildSelfNodeCommand([resolveRulesyncCli(), ...args], {
+  const launch = buildSelfNodeCommand(["-e", LOAD_CLI, resolveRulesyncCli(), ...args], {
     NO_COLOR: "1",
     NODE_ENV: undefined,
   });
