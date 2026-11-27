@@ -184,6 +184,7 @@ export type ArenaBranchAction = z.infer<typeof ArenaBranchActionSchema>;
 const ArenaAgentMoveSchema = z.enum(["created", "added", "rewrote", "deleted"]);
 const ArenaYourMoveSchema = z.enum(["untouched", "created", "added", "rewrote", "deleted"]);
 const ArenaOccupiedChoiceSchema = z.enum(["take", "stay"]);
+const ArenaSwitchedChoiceSchema = z.enum(["move", "stay"]);
 
 /**
  * One question the review asks before the winner is written. `key` names its subject -- a full
@@ -234,6 +235,19 @@ export const ArenaReviewItemSchema = z.discriminatedUnion("kind", [
     .passthrough(),
   z
     .object({
+      kind: z.literal("switched"),
+      key: z.literal("@switched"),
+      fingerprint: z.string(),
+      from: z.string(),
+      to: z.string(),
+      clash: z.array(z.string()).optional(),
+      agentRef: z.string().optional(),
+      start: z.string().optional(),
+      choices: z.array(ArenaSwitchedChoiceSchema),
+    })
+    .passthrough(),
+  z
+    .object({
       kind: z.literal("busy"),
       key: z.literal("@busy"),
       fingerprint: z.string(),
@@ -246,7 +260,7 @@ export type ArenaReviewItem = z.infer<typeof ArenaReviewItemSchema>;
 export const ArenaReviewAnswerSchema = z.object({
   key: z.string(),
   fingerprint: z.string(),
-  choice: z.union([ArenaBranchActionSchema, ArenaOccupiedChoiceSchema]),
+  choice: z.union([ArenaBranchActionSchema, ArenaOccupiedChoiceSchema, ArenaSwitchedChoiceSchema]),
 });
 export type ArenaReviewAnswer = z.infer<typeof ArenaReviewAnswerSchema>;
 

@@ -156,6 +156,7 @@ import {
   type PublicChoice,
   promoteWinnerState,
   refBackupName,
+  replayConflicts,
   repositoryOperation,
   holdWinnerRefs,
   editsFingerprint,
@@ -11205,9 +11206,57 @@ export const layer: Layer.Layer<
           ),
         )
       }
+      // The developer moved the trunk to another branch while the battle ran. The winner was built
+      // on the branch the battle started on, so its files measured against this one carry that
+      // branch's own history along. Ask first: replay only the battle's commits onto the branch
+      // the trunk is on now, or switch back to the branch the battle ran on and apply there.
+      const switchedFrom =
+        !winner.branchChanged &&
+        winner.branchAtRun !== undefined &&
+        !source.detached &&
+        canonical.branch !== undefined &&
+        canonical.branch !== winner.branchAtRun &&
+        canonical.head !== frozenHead
+          ? winner.branchAtRun
+          : undefined
+      const winnerCommits = rawHead !== undefined && rawHead !== frozenHead ? rawHead : undefined
+      let moveHere = false
+      let switchBack: string | undefined
+      let switchClash: readonly string[] = []
+      if (switchedFrom && canonical.branch) {
+        switchClash = winnerCommits
+          ? yield* withGit(
+              replayConflicts({ canonical: root, base: frozenHead, tip: winnerCommits, onto: canonical.head }),
+            ).pipe(Effect.mapError(error))
+          : []
+        const fingerprint = `${switchedFrom}:${canonical.branch}:${canonical.head}`
+        const answer = answerFor(answers, { key: "@switched", fingerprint })
+        if (answer?.choice === "move") moveHere = true
+        else if (answer?.choice === "stay") switchBack = switchedFrom
+        else {
+          const items: ReviewItem[] = [
+            {
+              kind: "switched",
+              key: "@switched",
+              fingerprint,
+              from: switchedFrom,
+              to: canonical.branch,
+              ...(switchClash.length > 0 ? { clash: [...switchClash] } : {}),
+              ...(winnerCommits ? { agentRef: permanentRef, start: frozenHead } : {}),
+              choices: ["move", "stay"],
+            },
+          ]
+          return {
+            kind: "review" as const,
+            items,
+            planned: [] as PlannedRef[],
+            switchTo: undefined as string | undefined,
+          }
+        }
+      }
       const items: ReviewItem[] = []
       const planned: PlannedRef[] = []
-      let targetBranch = winner.branchChanged ? winner.finalBranch : undefined
+      let targetBranch = winner.branchChanged ? winner.finalBranch : switchBack
       let checkoutAction: { action: BranchAction; start?: string; agent: string } | undefined
       let checkoutMove: CheckoutMove | undefined
       let takeTargetFrom: string[] | undefined
@@ -11270,6 +11319,16 @@ export const layer: Layer.Layer<
       const skipped = [...observed.skipped]
       let checkoutObserved = false
       for (const ref of observed.refs) {
+        // Moving the work here leaves the branch the battle ran on as the developer has it; the
+        // battle refs keep the agent's version of it.
+        if (moveHere && ref.ref === `refs/heads/${switchedFrom}`) {
+          skipped.push({
+            ref: ref.ref,
+            action: "skipped",
+            reason: `${refLabel(ref.ref)} was left as it was; the winner's work went to ${canonical.branch}.`,
+          })
+          continue
+        }
         const decision = decideRef(ref)
         const answer = answerFor(answers, { key: ref.ref, fingerprint: ref.fingerprint })
         const action = resolveRef(decision, answer?.choice as BranchAction | undefined)
@@ -11362,6 +11421,15 @@ export const layer: Layer.Layer<
         }
       }
 
+      // Moving the work here: the battle's own commits replay onto the trunk's branch when they
+      // apply cleanly. Otherwise everything the winner changed lands as edits, with conflict markers
+      // where it meets this branch; never the winner's whole copy of a file, which holds the other
+      // branch's history too.
+      if (moveHere && winnerCommits && switchClash.length === 0 && !checkoutOpen && !checkoutAction) {
+        checkoutAction = { action: "agent_on_yours", start: frozenHead, agent: winnerCommits }
+        checkoutMove = { ref: `refs/heads/${canonical.branch}`, before: canonical.head, how: "agent_on_yours" }
+      }
+
       // Measure the result against the developer's own files: their uncommitted edits, and their
       // new commits on the checkout's branch. Where the winner meets them, nothing is written
       // until the developer chooses. An open checkout question is measured as keeping theirs.
@@ -11386,7 +11454,7 @@ export const layer: Layer.Layer<
           }),
         ).pipe(Effect.mapError(error))
         // Markers the developer already chose for the checkout's branch are not asked about again.
-        const combined = checkoutAction?.action === "combine"
+        const combined = checkoutAction?.action === "combine" || moveHere
         const paths = [...new Set([...(combined ? dry.publicConflicts : dry.conflicts), ...dry.atRisk])].sort()
         if (paths.length > 0) {
           const fingerprint = yield* withGit(editsFingerprint(root, paths)).pipe(Effect.mapError(error))

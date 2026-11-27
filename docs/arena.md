@@ -1723,6 +1723,13 @@ Everything else stops the vote and parks the turn in `application_failed` with G
 - A ref both sides changed in a way that does not replay cleanly. On the branch the trunk ends on,
   Git can keep both with conflict markers (`combine`); anywhere else only an agent can combine them.
 - A branch another worktree has checked out. Taking it detaches that worktree at its commit.
+- A trunk that moved to another branch, at another commit, while the battle ran (`@switched`, asked
+  alone before anything else is planned). The winner was built on the old branch, so measuring its
+  files against the new one carries the old branch's own history along. **Apply to** the new branch
+  replays only the battle's commits onto it and leaves the old branch as it was; commits that do not
+  replay cleanly land as edits with conflict markers, never as the winner's whole copy of a file.
+  **Switch back to** the old branch applies the winner there, as if the trunk had not moved. A rename
+  or a new branch at the same commit is not a switch; the trunk follows the developer as usual.
 - A merge, rebase, cherry-pick, or revert in progress. This one is a wait, with its own callout.
 
 All other items share one callout: the files, then

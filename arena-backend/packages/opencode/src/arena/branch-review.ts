@@ -157,8 +157,14 @@ export type EditsChoice = "combine" | "agent" | "yours"
 export type OccupiedChoice = "take" | "stay"
 
 /**
+ * The trunk moved to another branch while the battle ran: replay the battle's commits onto the
+ * branch it is on now, or switch back to the branch the battle ran on and apply there.
+ */
+export type SwitchedChoice = "move" | "stay"
+
+/**
  * One question the review puts to the developer. `key` names what it is about -- the full ref
- * name, or `@edits`, `@occupied`, `@busy` -- and `fingerprint` changes whenever
+ * name, or `@edits`, `@occupied`, `@switched`, `@busy` -- and `fingerprint` changes whenever
  * the situation behind it does, so an answer given to an older situation is not reused.
  */
 export type ReviewItem =
@@ -207,6 +213,21 @@ export type ReviewItem =
       readonly choices: readonly OccupiedChoice[]
     }
   | {
+      /** The battle ran on `from`; the trunk is on `to` now, at a different commit. */
+      readonly kind: "switched"
+      readonly key: "@switched"
+      readonly fingerprint: string
+      readonly from: string
+      readonly to: string
+      /** Paths the battle's commits conflict on when replayed onto `to`; `move` leaves markers there. */
+      readonly clash?: readonly string[]
+      /** The winner's real HEAD, for an agent asked to finish the move. */
+      readonly agentRef?: string
+      /** The commit the battle started from; the winner's own commits are `start..agentRef`. */
+      readonly start?: string
+      readonly choices: readonly SwitchedChoice[]
+    }
+  | {
       readonly kind: "busy"
       readonly key: "@busy"
       readonly fingerprint: string
@@ -217,7 +238,7 @@ export type ReviewItem =
 export type ReviewAnswer = {
   readonly key: string
   readonly fingerprint: string
-  readonly choice: BranchAction | OccupiedChoice
+  readonly choice: BranchAction | OccupiedChoice | SwitchedChoice
 }
 
 /** A ref Arena writes without asking, listed with the questions so the developer sees all of it. */

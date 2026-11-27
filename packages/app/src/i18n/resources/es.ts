@@ -453,6 +453,16 @@ export const es: TranslationResources = {
     winnerEndedElsewhere: "el ganador terminó en ella; activa en {{folder}}",
     applySwitchElsewhere:
       "El ganador terminó en {{branch}}. Si lo aplicas, este espacio cambia a {{branch}} y {{folder}} queda en su commit actual sin la rama.",
+    switchedTitle:
+      "Esta batalla se ejecutó en {{from}}, pero este espacio de trabajo ahora está en {{to}}",
+    switchedNote: "este espacio de trabajo cambió a {{to}} durante la batalla",
+    switchedDetail:
+      "Si lo aplicas a {{to}}, solo se añaden a {{to}} los commits de esta batalla. {{from}} queda como está.",
+    switchedClashDetail:
+      "Si lo aplicas a {{to}}, los cambios de esta batalla se añaden a {{to}} como ediciones, con marcadores de conflicto{{files}}. {{from}} queda como está.",
+    switchedBack: "Si vuelves a {{from}}, el ganador se aplica allí, como si no hubieras cambiado.",
+    applyToBranch: "Aplicar a {{branch}}",
+    switchBackTo: "Volver a {{branch}}",
     busyTitle: "Hay un {{operation}} en curso",
     busyHelp:
       "Arena aplica los cambios ganadores cuando el {{operation}} termine o se cancele en este espacio.",

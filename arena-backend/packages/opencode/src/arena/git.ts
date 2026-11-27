@@ -1677,6 +1677,18 @@ const replayClash = Effect.fn("ArenaGit.replayClash")(function* (
   return replayed.conflict ?? []
 })
 
+/** The paths replaying the first-parent commits `base..tip` onto `onto` would conflict on. */
+export const replayConflicts = Effect.fn("ArenaGit.replayConflicts")(function* (input: {
+  readonly canonical: string
+  readonly base: string
+  readonly tip: string
+  readonly onto: string
+}) {
+  const git = yield* Git.Service
+  const root = yield* readRoot(git, input.canonical, "find_replay_root")
+  return yield* replayClash(git, root, input)
+})
+
 const mergeBase = Effect.fn("ArenaGit.mergeBase")(function* (git: Git.Interface, root: string, a: string, b: string) {
   const result = yield* git.run(["merge-base", a, b], { cwd: root })
   if (result.exitCode === 0) return output(result)

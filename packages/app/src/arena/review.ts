@@ -198,6 +198,21 @@ function story(item: Exclude<ArenaReviewItem, BusyItem>): ReviewStory {
         winner: i18n.t("arena.switchBranch", { branch: item.branch }),
       };
     }
+    case "switched":
+      return {
+        title: i18n.t("arena.switchedTitle", { from: item.from, to: item.to }),
+        note: i18n.t("arena.switchedNote", { to: item.to }),
+        detail: item.clash?.length
+          ? i18n.t("arena.switchedClashDetail", {
+              from: item.from,
+              to: item.to,
+              files: filesNote(item.clash),
+            })
+          : i18n.t("arena.switchedDetail", { from: item.from, to: item.to }),
+        asides: [i18n.t("arena.switchedBack", { from: item.from })],
+        mine: i18n.t("arena.switchBackTo", { branch: item.from }),
+        winner: i18n.t("arena.applyToBranch", { branch: item.to }),
+      };
     case "edits":
       return {
         title: i18n.t("arena.winnerEditsConflict"),
@@ -261,6 +276,7 @@ function branchRow(item: Exclude<ArenaReviewItem, BusyItem>): ReviewRow[] {
     return [{ key: item.key, name: refDisplayName(item.key), note: story(item).note }];
   if (item.kind === "occupied")
     return [{ key: item.key, name: item.branch, note: story(item).note }];
+  if (item.kind === "switched") return [{ key: item.key, name: item.to, note: story(item).note }];
   return [];
 }
 
@@ -274,7 +290,13 @@ export function reviewCallout(
     (item): item is Exclude<ArenaReviewItem, BusyItem> => item.kind !== "busy",
   );
   const files = [
-    ...new Set(questions.flatMap((item) => (item.kind === "edits" ? item.paths : []))),
+    ...new Set(
+      questions.flatMap((item) => {
+        if (item.kind === "edits") return item.paths;
+        if (item.kind === "switched") return item.clash ?? [];
+        return [];
+      }),
+    ),
   ];
   const ready = readySentence(planned, switchTo);
   const single = questions.length === 1 ? questions[0] : undefined;
@@ -339,10 +361,38 @@ export function reviewAnswers(
             choice: mode === "mine" ? "stay" : "take",
           },
         ];
+      // "Let an agent resolve" moves the work too; the agent then checks it on the new branch.
+      case "switched":
+        return [
+          {
+            key: item.key,
+            fingerprint: item.fingerprint,
+            choice: mode === "mine" ? "stay" : "move",
+          },
+        ];
       case "busy":
         return [];
     }
   });
+}
+
+type SwitchedItem = Extract<ArenaReviewItem, { kind: "switched" }>;
+
+/** The workspace moved to another branch during the battle, and the winner went there. */
+function switchedLines(item: SwitchedItem): string[] {
+  const range =
+    item.agentRef && item.start
+      ? ` The winning agent's own commits are ${item.start.slice(0, 12)}..${item.agentRef}.`
+      : "";
+  const moved = `The battle ran on ${item.from}, and this workspace is on ${item.to} now.`;
+  if (item.clash?.length) {
+    return [
+      `${moved} I applied the winning agent's changes to ${item.to} with conflict markers in ${item.clash.join(", ")}. Resolve them so that ${item.to} gets only the battle's changes, not the older work on ${item.from}.${range}`,
+    ];
+  }
+  return [
+    `${moved} I added the winning agent's commits to ${item.to}. Check that the change still works on ${item.to}.`,
+  ];
 }
 
 /**
@@ -364,6 +414,7 @@ export function resolvePrompt(items: readonly ArenaReviewItem[]): string {
           : []),
       ];
     }
+    if (item.kind === "switched") return switchedLines(item);
     if (item.kind !== "ref") return [];
     const name = refDisplayName(item.key);
     const source = item.agentRef ? ` The winning agent's version is at ${item.agentRef}.` : "";

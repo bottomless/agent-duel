@@ -147,6 +147,17 @@ const ReviewItem = Schema.Union([
     choices: Schema.Array(Schema.Literals(["take", "stay"])),
   }),
   Schema.Struct({
+    kind: Schema.Literal("switched"),
+    key: Schema.Literal("@switched"),
+    fingerprint: Schema.String,
+    from: Schema.String,
+    to: Schema.String,
+    clash: Schema.optional(Schema.Array(Schema.String)),
+    agentRef: Schema.optional(Schema.String),
+    start: Schema.optional(Schema.String),
+    choices: Schema.Array(Schema.Literals(["move", "stay"])),
+  }),
+  Schema.Struct({
     kind: Schema.Literal("busy"),
     key: Schema.Literal("@busy"),
     fingerprint: Schema.String,
@@ -157,7 +168,7 @@ const ReviewItem = Schema.Union([
 export const ReviewAnswer = Schema.Struct({
   key: Schema.String,
   fingerprint: Schema.String,
-  choice: Schema.Literals([...BranchAction, "take", "stay"]),
+  choice: Schema.Literals([...BranchAction, "take", "stay", "move"]),
 })
 
 const GitApplication = Schema.Struct({

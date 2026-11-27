@@ -441,6 +441,16 @@ export const en = {
     winnerEndedElsewhere: "the winner ended on it; checked out in {{folder}}",
     applySwitchElsewhere:
       "The winner ended on {{branch}}. If you apply it, this workspace switches to {{branch}}, and {{folder}} stays on its current commit without the branch.",
+    switchedTitle: "This battle ran on {{from}}, but this workspace is now on {{to}}",
+    switchedNote: "this workspace moved to {{to}} during the battle",
+    switchedDetail:
+      "If you apply it to {{to}}, only this battle’s commits are added to {{to}}. {{from}} stays as it is.",
+    switchedClashDetail:
+      "If you apply it to {{to}}, this battle’s changes are added to {{to}} as edits, with conflict markers{{files}}. {{from}} stays as it is.",
+    switchedBack:
+      "If you switch back to {{from}}, the winner is applied there, as if you had not switched.",
+    applyToBranch: "Apply to {{branch}}",
+    switchBackTo: "Switch back to {{branch}}",
     busyTitle: "A {{operation}} is in progress",
     busyHelp:
       "Arena applies the winning changes once the {{operation}} in this workspace is finished or aborted.",

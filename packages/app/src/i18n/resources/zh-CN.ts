@@ -429,6 +429,14 @@ export const zhCN: TranslationResources = {
     winnerEndedElsewhere: "获胜者最终位于此分支；已在 {{folder}} 中检出",
     applySwitchElsewhere:
       "获胜者最终位于 {{branch}}。应用后，此工作区将切换到 {{branch}}，{{folder}} 将脱离分支并保留当前提交。",
+    switchedTitle: "这场对战在 {{from}} 上进行，但此工作区现在位于 {{to}}",
+    switchedNote: "对战期间此工作区切换到了 {{to}}",
+    switchedDetail: "如果应用到 {{to}}，只会把这场对战的提交添加到 {{to}}。{{from}} 保持不变。",
+    switchedClashDetail:
+      "如果应用到 {{to}}，这场对战的更改会以带冲突标记的编辑形式添加到 {{to}}{{files}}。{{from}} 保持不变。",
+    switchedBack: "如果切换回 {{from}}，获胜结果会应用到那里，就像你没有切换过一样。",
+    applyToBranch: "应用到 {{branch}}",
+    switchBackTo: "切换回 {{branch}}",
     busyTitle: "{{operation}} 正在进行",
     busyHelp: "此工作区中的 {{operation}} 完成或中止后，Arena 将应用获胜更改。",
     discardWinningTitle: "放弃获胜更改？",

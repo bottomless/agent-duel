@@ -452,6 +452,17 @@ export const ptBR: TranslationResources = {
     winnerEndedElsewhere: "o vencedor terminou nela; em uso em {{folder}}",
     applySwitchElsewhere:
       "O vencedor terminou em {{branch}}. Se aplicar, este espaço mudará para {{branch}}, e {{folder}} ficará no commit atual sem a branch.",
+    switchedTitle:
+      "Esta batalha rodou em {{from}}, mas este espaço de trabalho agora está em {{to}}",
+    switchedNote: "este espaço de trabalho mudou para {{to}} durante a batalha",
+    switchedDetail:
+      "Se você aplicar em {{to}}, só os commits desta batalha são adicionados a {{to}}. {{from}} fica como está.",
+    switchedClashDetail:
+      "Se você aplicar em {{to}}, as mudanças desta batalha são adicionadas a {{to}} como edições, com marcadores de conflito{{files}}. {{from}} fica como está.",
+    switchedBack:
+      "Se você voltar para {{from}}, o vencedor é aplicado lá, como se você não tivesse trocado.",
+    applyToBranch: "Aplicar em {{branch}}",
+    switchBackTo: "Voltar para {{branch}}",
     busyTitle: "Um {{operation}} está em andamento",
     busyHelp:
       "Arena aplica as alterações vencedoras quando o {{operation}} neste espaço terminar ou for abortado.",

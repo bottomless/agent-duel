@@ -443,6 +443,15 @@ export const ko: TranslationResources = {
     winnerEndedElsewhere: "승자가 이 브랜치에서 종료함; {{folder}}에 체크아웃됨",
     applySwitchElsewhere:
       "승자가 {{branch}}에서 종료했습니다. 적용하면 작업 공간이 {{branch}}로 전환되고 {{folder}}는 브랜치 없이 현재 커밋을 유지합니다.",
+    switchedTitle: "이 배틀은 {{from}}에서 실행됐지만, 이 작업 공간은 지금 {{to}}에 있습니다",
+    switchedNote: "배틀 중에 이 작업 공간이 {{to}}로 이동했습니다",
+    switchedDetail:
+      "{{to}}에 적용하면 이 배틀의 커밋만 {{to}}에 추가됩니다. {{from}}은 그대로 유지됩니다.",
+    switchedClashDetail:
+      "{{to}}에 적용하면 이 배틀의 변경 사항이 충돌 표시와 함께 편집 내용으로 {{to}}에 추가됩니다{{files}}. {{from}}은 그대로 유지됩니다.",
+    switchedBack: "{{from}}로 다시 전환하면, 전환하지 않았을 때처럼 승자가 그곳에 적용됩니다.",
+    applyToBranch: "{{branch}}에 적용",
+    switchBackTo: "{{branch}}로 다시 전환",
     busyTitle: "{{operation}} 진행 중",
     busyHelp:
       "이 작업 공간의 {{operation}}이 완료되거나 중단되면 Arena가 승자 변경 사항을 적용합니다.",
