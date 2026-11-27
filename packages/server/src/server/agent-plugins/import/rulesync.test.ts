@@ -36,6 +36,12 @@ describe("runRulesync", () => {
     await expect(runRulesync(args, root)).resolves.toBeUndefined();
   });
 
+  it("runs a command when the inherited NODE_OPTIONS makes eval code ESM", async () => {
+    vi.stubEnv("NODE_OPTIONS", "--input-type=module");
+
+    await expect(runRulesync(args, root)).resolves.toBeUndefined();
+  });
+
   it("reports rulesync's own refusal, naming the command it was given", async () => {
     await expect(runRulesync(["no-such-command"], root)).rejects.toThrow(
       "rulesync no-such-command failed: error: unknown command 'no-such-command'",

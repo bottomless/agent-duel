@@ -36,13 +36,17 @@ function resolveRulesyncCli(): string {
 // commander, which reads them from `argv[1]` on when it sees Electron, so the CLI's own path
 // became the command ("unknown command '…/cli/index.js'"). Under `-e` commander reads from
 // `argv[1]` under Node and Electron alike, so the child loads the CLI from an eval and takes its
-// path out of argv first.
+// path out of argv first. commander calls that `-e` rule internal, so a rulesync bump needs the
+// Electron case in `rulesync.test.ts` to pass. The eval uses no `require`: `--input-type=module`
+// in an inherited NODE_OPTIONS runs it as ESM.
 const LOAD_CLI = [
   "const [cli] = process.argv.splice(1, 1);",
-  'import(require("node:url").pathToFileURL(cli).href).catch((error) => {',
-  "  console.error(error);",
-  "  process.exitCode = 1;",
-  "});",
+  'import("node:url")',
+  "  .then(({ pathToFileURL }) => import(pathToFileURL(cli).href))",
+  "  .catch((error) => {",
+  "    console.error(error);",
+  "    process.exitCode = 1;",
+  "  });",
 ].join("\n");
 
 /**
