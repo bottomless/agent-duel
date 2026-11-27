@@ -23,10 +23,10 @@ function isReplaceableTitle(
 
 /**
  * Renames a workspace once something has written a better title than its prompt's first line: a
- * battle chat's first comparison (`arena-workspace-auto-name.ts`), or for a chat started with
- * Battle off, the summary model's name for its first prompt (`nameFromPrompt`). Paseo asked an
- * agent here, which in Agent Duel meant the user's installed Claude Code or a paid battle
- * contestant, so neither runs an agent.
+ * battle chat's first comparison (`arena-workspace-auto-name.ts`), or the summary model's name for
+ * the first prompt (`nameFromPrompt`) of a chat started with Battle off or of a battle chat whose
+ * first battle ended without a comparison. Paseo asked an agent here, which in Agent Duel meant the
+ * user's installed Claude Code or a paid battle contestant, so neither runs an agent.
  */
 export class WorkspaceAutoName {
   private readonly workspaceRegistry: Pick<WorkspaceRegistry, "get" | "update">;

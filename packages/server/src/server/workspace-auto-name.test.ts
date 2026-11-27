@@ -160,7 +160,7 @@ test("a chat renamed before its title arrives keeps the user's name, and no prom
     firstAgentContext: { prompt: "Explain what retry.js does" },
   });
   await autoName.nameFromPrompt({
-    workspaceId: "workspace-without-prompt",
+    workspaceId: workspace.workspaceId,
     cwd: workspace.cwd,
     firstAgentContext: { attachments: [] },
   });

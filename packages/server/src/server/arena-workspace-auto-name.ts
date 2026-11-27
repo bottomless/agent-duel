@@ -6,7 +6,8 @@ import type { WorkspaceAutoName } from "./workspace-auto-name.js";
 
 // Arena sends every OpenCode prompt to a paid contestant from the pool, with the full agent
 // setup, so a battle chat is not named by a structured-generation agent. It shows the prompt's
-// first line until its first comparison names it (`applyArenaChatTitle`).
+// first line until its first comparison names it, or until the summary model names it from the
+// prompt when its first battle ends without a comparison (`applyArenaChatTitle`).
 export async function applyArenaFirstTurnMetadata(input: {
   agent: Pick<ManagedAgent, "workspaceId">;
   snapshot: ArenaSnapshot;
