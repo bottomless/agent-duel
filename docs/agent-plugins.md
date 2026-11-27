@@ -20,7 +20,10 @@ them.
 
 Each contestant starts its own copy of every imported MCP server and calls it on its own, so a
 server with side effects (posting to Slack, writing to a database) acts once per side, and the vote
-does not undo the losing side's calls. The builder adds an `ask` permission rule for each imported
+does not undo the losing side's calls. A local server runs in the side's worktree for as long as the
+engine keeps that folder open, and Windows cannot remove a folder a live process works in. So nothing
+may open a side's folder before its worktree is made, and a worktree's folder is closed before it is
+removed. The builder adds an `ask` permission rule for each imported
 server (`<server>_*`), so Ask before tools asks before every call, as Claude Code does. Without it,
 Ask before tools asks only for work outside the project. Auto Accept runs them, and a rule in the
 user's own config ranks above the import. Skills in `.claude/skills` and `.agents/skills` are left out because the engine reads them

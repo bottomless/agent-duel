@@ -220,6 +220,8 @@ function createFixtureLayer(root: string, canonicalID: SessionID, secondSideBeha
   const acknowledgeCancel = Deferred.makeUnsafe<void>()
   let promptOrdinal = 0
   let currentDirectory = root
+  // Every folder whose services were opened, in order.
+  const opened: string[] = []
 
   const layer = ArenaService.layer.pipe(
     Layer.provide(
@@ -230,6 +232,7 @@ function createFixtureLayer(root: string, canonicalID: SessionID, secondSideBeha
         Layer.mock(InstanceStore.Service, {
           provide: ({ directory }, effect) =>
             Effect.suspend(() => {
+              opened.push(directory)
               const previous = currentDirectory
               currentDirectory = directory
               return effect.pipe(
@@ -437,6 +440,7 @@ function createFixtureLayer(root: string, canonicalID: SessionID, secondSideBeha
   return {
     layer,
     sessions,
+    opened,
     cancelEntered: Deferred.await(cancelEntered),
     acknowledgeCancel: Deferred.succeed(acknowledgeCancel, undefined),
     settlePrompt: Deferred.succeed(settlePrompt, undefined),
@@ -544,6 +548,65 @@ describe("Arena stop recovery, watchdog, and finalization timings", () => {
         }).pipe(Effect.provide(fixture.layer)),
       )
     } finally {
+      await store.close()
+      await cleanup()
+    }
+  }, 30_000)
+
+  // Opening a side's folder starts the services configured for it, the user's MCP servers among them.
+  // A window watching the battle must not do that while the worktree is still being made: on Windows
+  // the server held the folder and staging could not replace it, so the battle never started.
+  test("reading a battle during setup does not open a side's folder before it is ready", async () => {
+    const { repo, dataDir, cleanup } = await createRepo()
+    const store = await connectLocalStore({ directory: dataDir })
+    const router = installOpenRouterStub()
+    process.env.OPENCODE_ARENA = "1"
+    setStoreForTest(store)
+
+    const canonicalID = nextSessionID()
+    const fixture = createFixtureLayer(repo, canonicalID, "cancelable")
+
+    try {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const arena = yield* ArenaService.Service
+            const resolved = yield* arena.session(canonicalID)
+            fixture.holdGit((_cwd, args) => args[0] === "worktree" && args[1] === "add")
+            const started = yield* arena.startTurn(resolved.chat.id, "Read me while I am set up.")
+            const turnID = started.turn!.id
+            const pending = yield* Effect.promise(async () => {
+              const deadline = Date.now() + 15_000
+              while (Date.now() < deadline) {
+                const runs = await store.runsForTurn(turnID)
+                if (runs.length === 2) return runs
+                await Bun.sleep(15)
+              }
+              throw new Error("Timed out waiting for both runs")
+            })
+            expect(pending.every((run) => run.readyAt === undefined)).toBe(true)
+            const worktrees = new Set(pending.map((run) => run.worktree))
+
+            const snapshot = yield* arena.snapshot(resolved.chat.id)
+            yield* arena.activity([canonicalID])
+            expect(snapshot.runs).toHaveLength(2)
+            expect(fixture.opened.filter((directory) => worktrees.has(directory))).toEqual([])
+
+            yield* fixture.releaseGit
+            const ready = yield* Effect.promise(() =>
+              waitForRun(store, turnID, (run) => run.readyAt !== undefined, "a side to become ready"),
+            )
+            // Once a side is ready, reading the battle opens its folder as before.
+            yield* arena.snapshot(resolved.chat.id)
+            expect(fixture.opened).toContain(ready.worktree)
+            // The fixture's second side runs until it is stopped.
+            yield* arena.stop(turnID)
+            yield* Effect.promise(() => waitForTurn(store, turnID, "awaiting_stop_resolution"))
+          }),
+        ).pipe(Effect.provide(fixture.layer)),
+      )
+    } finally {
+      router.restore()
       await store.close()
       await cleanup()
     }
