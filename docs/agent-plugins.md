@@ -51,7 +51,9 @@ folder itself, because the engine's watch is on the folder.
 
 ## rulesync gotchas
 
-- Run the CLI in a child process. Its library API reads `process.cwd()`.
+- Run the CLI in a child process. Its library API reads `process.cwd()`. In the packaged app that
+  child is the Electron binary in Node mode, which reads its arguments differently (`LOAD_CLI` in
+  `import/rulesync.ts`). Dev runs the daemon on Node, so only a packaged build shows a break here.
 - Project-mode `import` of `claudecode` and `codexcli` writes its MCP file into
   `<output-root>/.rulesync/`, so with the repository as output root it writes into the repository.
   The builder copies the needed files into a staging folder and imports from there.
