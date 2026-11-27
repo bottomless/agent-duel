@@ -23,16 +23,17 @@ function isReplaceableTitle(
 
 /**
  * Renames a workspace once something has written a better title than its prompt's first line: a
- * battle chat's first comparison (`arena-workspace-auto-name.ts`), or for a chat started with
- * Battle off, the summary model's name for its first prompt (`nameFromPrompt`). Paseo asked an
- * agent here, which in Agent Duel meant the user's installed Claude Code or a paid battle
- * contestant, so neither runs an agent.
+ * battle chat's first comparison (`arena-workspace-auto-name.ts`), or the summary model's name for
+ * the first prompt (`nameFromPrompt`) of a chat started with Battle off or of a battle chat whose
+ * first battle ended without a comparison. Paseo asked an agent here, which in Agent Duel meant the
+ * user's installed Claude Code or a paid battle contestant, so neither runs an agent.
  */
 export class WorkspaceAutoName {
   private readonly workspaceRegistry: Pick<WorkspaceRegistry, "get" | "update">;
   private readonly emitWorkspaceUpdateForWorkspaceId: (workspaceId: string) => Promise<void>;
   private readonly suggestChatTitle?: (cwd: string, prompt: string) => Promise<string | null>;
   private readonly logger?: Pick<pino.Logger, "warn">;
+  private readonly asked = new Set<string>();
 
   constructor(options: WorkspaceAutoNameOptions) {
     this.workspaceRegistry = options.workspaceRegistry;
@@ -43,8 +44,8 @@ export class WorkspaceAutoName {
 
   /**
    * Names a chat started with Battle off from its first prompt. The chat shows the prompt's first
-   * line until the title arrives, and keeps it when none does. A battle chat sends no prompt with
-   * its workspace, so it never reaches here; its comparison names it.
+   * line until the title arrives, and keeps it when none does. A battle chat's comparison names it,
+   * so it comes here only when its first battle ends without one (`applyArenaChatTitle`).
    */
   async nameFromPrompt(input: {
     workspaceId: string;
@@ -52,16 +53,21 @@ export class WorkspaceAutoName {
     firstAgentContext: FirstAgentContext;
   }): Promise<void> {
     const prompt = input.firstAgentContext.prompt?.trim();
-    if (!prompt || !this.suggestChatTitle) {
+    // A battle chat comes here on every update of its first turn, and again after a restart, so the
+    // model is asked once per chat and only while the chat still shows its prompt's first line.
+    if (!prompt || !this.suggestChatTitle || this.asked.has(input.workspaceId)) {
       return;
     }
+    this.asked.add(input.workspaceId);
+    const promptTitle = resolveFirstAgentPromptTitle(input.firstAgentContext);
     try {
+      const current = await this.workspaceRegistry.get(input.workspaceId);
+      if (!isReplaceableTitle(current?.title, promptTitle)) {
+        return;
+      }
       const title = await this.suggestChatTitle(input.cwd, prompt);
       if (title) {
-        await this.applyTitle(input.workspaceId, {
-          title,
-          promptTitle: resolveFirstAgentPromptTitle(input.firstAgentContext),
-        });
+        await this.applyTitle(input.workspaceId, { title, promptTitle });
       }
     } catch (error) {
       this.logger?.warn(

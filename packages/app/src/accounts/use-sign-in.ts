@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useReducer } from "react";
 import { getDesktopHost } from "@/desktop/host";
 import { openExternalUrl } from "@/utils/open-external-url";
+import { hasHeldSession } from "./app-opened";
 import { useAccountSessionStore } from "./session-store";
-import type { AcceptTermsRequest } from "@getpaseo/protocol/accounts/schemas";
+import type { AcceptTermsRequest, SignInMethod } from "@getpaseo/protocol/accounts/schemas";
 import {
   buildOAuthStartUrl,
   claimSignInFlow,
@@ -31,13 +32,21 @@ function messageFor(error: unknown, fallback: string): string {
   return error instanceof Error && error.message.trim() ? error.message : fallback;
 }
 
-async function openAppSignInFlow(endpoint: AccountsEndpoint, acceptance: AcceptTermsRequest) {
+async function openAppSignInFlow(
+  endpoint: AccountsEndpoint,
+  acceptance: AcceptTermsRequest,
+  method: SignInMethod,
+) {
   // Returning to the desktop is optional; a local listener failure must not
   // prevent signing in. Browser clients keep the manual return instruction.
-  const desktopReturnUrl = await getDesktopHost()
-    ?.accounts?.createReturnUrl?.()
-    .catch(() => undefined);
-  return openSignInFlow(endpoint, { desktopReturnUrl, acceptance });
+  // Whether the install held a session feeds the anonymous sign-in counts; it never throws.
+  const [desktopReturnUrl, returning] = await Promise.all([
+    getDesktopHost()
+      ?.accounts?.createReturnUrl?.()
+      .catch(() => undefined),
+    hasHeldSession(),
+  ]);
+  return openSignInFlow(endpoint, { desktopReturnUrl, acceptance, method, returning });
 }
 
 export function useSignIn(
@@ -53,7 +62,7 @@ export function useSignIn(
       dispatch({ type: "start", method: "email" });
       void (async () => {
         try {
-          const flow = await openAppSignInFlow(endpoint, acceptance);
+          const flow = await openAppSignInFlow(endpoint, acceptance, "email");
           await sendMagicLink(endpoint, { email, flowId: flow.flowId });
           dispatch({ type: "email-sent", email, flow });
         } catch (error) {
@@ -73,7 +82,7 @@ export function useSignIn(
       dispatch({ type: "start", method: provider });
       void (async () => {
         try {
-          const flow = await openAppSignInFlow(endpoint, acceptance);
+          const flow = await openAppSignInFlow(endpoint, acceptance, provider);
           await openExternalUrl(buildOAuthStartUrl(endpoint, { provider, flowId: flow.flowId }));
           dispatch({ type: "browser-opened", provider, flow });
         } catch (error) {
@@ -97,27 +106,32 @@ export function useSignIn(
       return;
     }
 
+    // One claim at a time, the next one 2 s after the last settles. A claim that gets no answer is
+    // given up after `CLAIM_TIMEOUT_MS` and rejects, so it cannot stop the polling. The control
+    // plane answers a repeated claim with the same session for a minute after the first, so the
+    // next poll still signs in when the answer to this one was lost or given up.
     let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const poll = async () => {
       const result = await claimSignInFlow(endpoint, flow).catch(() => null);
-      if (stopped || !result) {
+      if (stopped) {
         return;
       }
-      if (result.status === "expired") {
+      if (result?.status === "expired") {
         dispatch({ type: "flow-expired", message: "This sign-in expired. Start again." });
         return;
       }
-      if (result.status === "signed-in") {
+      if (result?.status === "signed-in") {
         setSession({ token: result.sessionToken, user: result.user, method: result.method });
+        return;
       }
+      timer = setTimeout(() => void poll(), CLAIM_POLL_INTERVAL_MS);
     };
 
-    const handle = setInterval(() => {
-      void poll();
-    }, CLAIM_POLL_INTERVAL_MS);
+    timer = setTimeout(() => void poll(), CLAIM_POLL_INTERVAL_MS);
     return () => {
       stopped = true;
-      clearInterval(handle);
+      clearTimeout(timer);
     };
   }, [endpoint, flow, setSession]);
 

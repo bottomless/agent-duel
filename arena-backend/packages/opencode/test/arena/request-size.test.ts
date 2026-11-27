@@ -107,7 +107,7 @@ describe("request size", () => {
     expect(bound([user("Check these slides"), ...messages.slice(1)], "inline").report).toBeUndefined()
   })
 
-  test("images and PDFs an upload can carry do not count against the hosted body limit", () => {
+  test("images and PDFs sent by reference do not count against the hosted body limit", () => {
     // 3.3 MB of text, a 3 MB PDF and 4.5 MB of renders: only references go to the control plane.
     const messages = [
       Message.user([Message.text("Read the spec"), Message.media(Media.base64(payload(3), "application/pdf"))]),
@@ -115,6 +115,23 @@ describe("request size", () => {
       ...renders(30, 0.15),
     ]
     expect(bound(messages).report).toBeUndefined()
+  })
+
+  test("a single file over the hosted body limit goes by reference, and inline it gets a note", () => {
+    // 6.2 MB encoded is 4.65 MB of bytes: more than a hosted function takes, in the body or as an upload.
+    // A 4.8 MB image is over that limit too, and under the provider's per-image limit.
+    const messages = [
+      Message.user([Message.text("Read the spec"), Message.media(Media.base64(payload(6.2), "application/pdf"))]),
+      answer("I read it."),
+      ...step([["poster.png", 4.8]]),
+    ]
+    expect(bound(messages).report).toBeUndefined()
+    const image = [user("Look at the poster"), ...step([["poster.png", 4.8]])]
+    expect(bound(image).report).toBeUndefined()
+    // Until the store has taken an upload the poster would travel in the body, which cannot hold it.
+    const inline = bound(image, "inline").messages
+    expect(shown(inline)).toEqual({ "poster.png": "oversized" })
+    expect(JSON.stringify(inline.at(-1))).toContain("a request has room for about 4.5 MB of images")
   })
 
   test("until the control plane has taken an upload, images count in full against its body limit", () => {
@@ -259,7 +276,15 @@ describe("request size", () => {
     })
   })
 
-  test("an image too large to upload or fit alone gets a note asking for a smaller file, and stays out", () => {
+  test("an image over the provider's per-image limit gets a note asking for a smaller file, and stays out", () => {
+    // By reference nothing else bounds one image, and Claude takes 5 MB an image through some providers.
+    for (const megabytes of [5.1, 16.2, 22]) {
+      for (const carriage of ["reference", "inline"] as const) {
+        const sent = bound([user("Look at the poster"), ...step([["poster.png", megabytes]])], carriage).messages
+        expect(shown(sent)).toEqual({ "poster.png": "oversized" })
+        expect(JSON.stringify(sent.at(-1))).toContain("a model takes at most about 5.0 MB per image")
+      }
+    }
     const messages = [user("Look at the poster"), ...step([["poster.png", 6.2]])]
     const sent = bound(messages).messages
     const note = JSON.stringify(sent.at(-1))
@@ -268,6 +293,16 @@ describe("request size", () => {
     expect(note).toContain("Crop it or export it at a lower resolution")
     // It never comes back on a later request, which would reorder the prefix.
     expect(shown(bound([...messages, answer("I could not see it.")]).messages)).toEqual({ "poster.png": "oversized" })
+    // BYOK meets only the provider's request limits, as before.
+    expect(shown(bound(messages, "local").messages)).toEqual({ "poster.png": "sent" })
+    const huge = bound([user("Look at the poster"), ...step([["poster.png", 16.2]])], "local").messages
+    expect(shown(huge)).toEqual({ "poster.png": "oversized" })
+    expect(JSON.stringify(huge.at(-1))).toContain("a request has room for about 16.0 MB of images")
+    // A pasted image has no file the agent could shrink, so the note sends it to the user.
+    const pasted = JSON.stringify(bound([user("Match this poster", [["poster.png", 6.2]])], "reference").messages)
+    expect(pasted).toContain("a model takes at most about 5.0 MB per image")
+    expect(pasted).toContain("Ask the user to attach a smaller copy")
+    expect(pasted).not.toContain("read the smaller file")
   })
 
   test("the user's pasted images are removed only after the images tools read", () => {
@@ -330,9 +365,9 @@ describe("request size", () => {
   })
 
   test("the history itself is never changed", () => {
-    const messages = [user("Review the deck"), ...step([["poster.png", 6.2]])]
+    const messages = [user("Review the deck"), ...step([["poster.png", 16.2]])]
     const before = JSON.stringify(messages)
-    bound(messages)
+    expect(bound(messages).report?.oversized).toBe(1)
     expect(JSON.stringify(messages)).toBe(before)
   })
 })

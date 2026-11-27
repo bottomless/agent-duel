@@ -4,6 +4,7 @@ import type { Caller } from "./context"
 import type { EndpointCatalog } from "./endpoint-label"
 import { loadGenerationCapture } from "./generation-capture"
 import { MEDIA_PATH, MEDIA_TYPE_HEADER, mediaReference } from "./media"
+import { memoryMediaStore } from "./memory-media-store"
 import { connectMongoDb, type MongoDb } from "./mongo"
 import { DEFAULT_MODEL_OUTPUT_LIMIT, type ModelPool } from "./pool"
 import { createArenaService, type ArenaService, type ArenaServiceOptions } from "./service"
@@ -63,7 +64,6 @@ beforeEach(async () => {
   await db.collection("arenaAssignmentGenerationMetrics").deleteMany({})
   await db.collection("arenaGenerationCaptures").deleteMany({})
   await db.collection("arenaGenerationParts").deleteMany({})
-  await db.collection("arenaMediaUploads").deleteMany({})
   await db.collection("arenaEndpointCatalog").deleteMany({})
 })
 
@@ -396,7 +396,8 @@ describe("Arena service", () => {
   })
 
   test("a battle call that names an upload keeps its own copy, apart from the expiring upload", async () => {
-    const { service, upstream } = createService({ captureGenerations: true })
+    const media = memoryMediaStore(() => fixedNow)
+    const { service, upstream } = createService({ captureGenerations: true, mediaStore: media.store })
     await send(service, assignmentsRequest({ action: "create", kind: "battle", scopeID: "turn-1" }))
     const routing = {
       Authorization: "Bearer user-1",
@@ -432,8 +433,10 @@ describe("Arena service", () => {
     expect(
       await db.collection("arenaGenerationParts").findOne({ userId: "user-1", kind: "media", sha256 }),
     ).not.toBeNull()
-    const upload = await db.collection<{ _id: string; expiresAt: Date }>("arenaMediaUploads").findOne({ sha256 })
-    expect(upload?.expiresAt).toEqual(new Date(fixedNow.getTime() + 72 * 60 * 60 * 1000))
+    // The upload itself is in the store, which deletes it; Mongo holds only the capture's copy.
+    expect(media.files.get(`arena-media/user-1/${sha256}`)?.expiresAt).toEqual(
+      new Date(fixedNow.getTime() + 3 * 24 * 60 * 60 * 1000),
+    )
   })
 
   const labelledPool = [

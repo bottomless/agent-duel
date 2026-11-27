@@ -11,6 +11,7 @@ import {
   type OpenSignInFlowRequest,
   type SignInMethod,
   type AcceptTermsRequest,
+  type AppOpenedRequest,
 } from "@getpaseo/protocol/accounts/schemas";
 
 export interface AccountsEndpoint {
@@ -55,22 +56,35 @@ function headersFor(endpoint: AccountsEndpoint, sessionToken: string | null): He
   return headers;
 }
 
-async function request(
-  endpoint: AccountsEndpoint,
-  input: { path: string; method: "GET" | "POST"; body?: unknown; sessionToken?: string | null },
-): Promise<unknown> {
-  const response = await fetch(new URL(input.path, endpoint.baseUrl).toString(), {
-    method: input.method,
-    headers: headersFor(endpoint, input.sessionToken ?? null),
-    ...(input.body === undefined ? {} : { body: JSON.stringify(input.body) }),
-  });
-  if (!response.ok) {
-    throw new AccountsRequestError(
-      response.status,
-      await readErrorMessage(response, `Request failed with ${response.status}`),
-    );
+interface RequestInput {
+  path: string;
+  method: "GET" | "POST";
+  body?: unknown;
+  sessionToken?: string | null;
+  /** Gives the request up after this long; it then rejects like any failed request. */
+  timeoutMs?: number;
+}
+
+async function request(endpoint: AccountsEndpoint, input: RequestInput): Promise<unknown> {
+  const controller = input.timeoutMs === undefined ? null : new AbortController();
+  const timer = controller ? setTimeout(() => controller.abort(), input.timeoutMs) : undefined;
+  try {
+    const response = await fetch(new URL(input.path, endpoint.baseUrl).toString(), {
+      method: input.method,
+      headers: headersFor(endpoint, input.sessionToken ?? null),
+      ...(input.body === undefined ? {} : { body: JSON.stringify(input.body) }),
+      ...(controller ? { signal: controller.signal } : {}),
+    });
+    if (!response.ok) {
+      throw new AccountsRequestError(
+        response.status,
+        await readErrorMessage(response, `Request failed with ${response.status}`),
+      );
+    }
+    return response.status === 204 ? null : await response.json();
+  } finally {
+    clearTimeout(timer);
   }
-  return response.json();
 }
 
 export async function fetchAuthMethods(endpoint: AccountsEndpoint): Promise<AuthMethodsResponse> {
@@ -105,14 +119,21 @@ export async function openSignInFlow(
   return openSignInFlowResponseSchema.parse(body);
 }
 
+// Sign-in claims one poll at a time, so a claim that never answers would stop the polling. The
+// daemon gives its own request to the control plane up after 15 s; this is the backstop for a
+// daemon that does not answer at all.
+export const CLAIM_TIMEOUT_MS = 20_000;
+
 export async function claimSignInFlow(
   endpoint: AccountsEndpoint,
   input: { flowId: string; secret: string },
+  options: { timeoutMs?: number } = {},
 ): Promise<ClaimSignInFlowResponse> {
   const body = await request(endpoint, {
     path: "/api/auth/flow/claim",
     method: "POST",
     body: input,
+    timeoutMs: options.timeoutMs ?? CLAIM_TIMEOUT_MS,
   });
   return claimSignInFlowResponseSchema.parse(body);
 }
@@ -122,6 +143,17 @@ export async function sendMagicLink(
   input: { email: string; flowId: string },
 ): Promise<void> {
   await request(endpoint, { path: "/api/auth/magic-link", method: "POST", body: input });
+}
+
+/**
+ * Resolves once the control plane took the open, and throws when it did not. It takes a first
+ * launch only once it is counted, and any other open at once.
+ */
+export async function reportAppOpened(
+  endpoint: AccountsEndpoint,
+  input: AppOpenedRequest,
+): Promise<void> {
+  await request(endpoint, { path: "/api/auth/opened", method: "POST", body: input });
 }
 
 export async function signOut(endpoint: AccountsEndpoint, sessionToken: string): Promise<void> {

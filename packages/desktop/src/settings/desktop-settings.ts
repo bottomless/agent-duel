@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -235,6 +236,15 @@ function coerceDocument(input: unknown): PersistedDesktopSettingsDocument {
     },
     migrations: { ...document.migrations, daemonStopOnQuitDefaultApplied: true },
   };
+}
+
+/**
+ * Whether an earlier desktop build ran in this userData folder: every build since April 2026
+ * creates the settings file on its first settings read. Ask before this process reads settings,
+ * or its own read creates the file and a fresh install reads as opened before.
+ */
+export function desktopSettingsFileExists(userDataPath: string): boolean {
+  return existsSync(path.join(userDataPath, DESKTOP_SETTINGS_FILENAME));
 }
 
 export function createDesktopSettingsStore({

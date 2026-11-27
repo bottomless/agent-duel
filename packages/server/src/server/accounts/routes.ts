@@ -1,5 +1,6 @@
 import express, { type Request, type RequestHandler, type Router } from "express";
 import {
+  appOpenedRequestSchema,
   claimSignInFlowRequestSchema,
   acceptTermsRequestSchema,
   openSignInFlowRequestSchema,
@@ -49,6 +50,26 @@ export function createAccountsRouter(service: AccountsService): Router {
     "/methods",
     route(async (_req, res) => {
       res.json(await service.availableMethods());
+    }),
+  );
+
+  // The app sends this in the background and nothing waits on the answer. The control plane
+  // answers a first launch only once it is counted, so one whose count was lost stays owed to the
+  // next window load instead of being marked as reported. Any other open is answered at once,
+  // counted or not.
+  router.post(
+    "/opened",
+    route(async (req, res) => {
+      const parsed = appOpenedRequestSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: "Invalid request body" });
+        return;
+      }
+      if (await service.backend.appOpened(parsed.data)) {
+        res.status(204).end();
+        return;
+      }
+      res.status(502).json({ error: "The control plane did not take the app open" });
     }),
   );
 

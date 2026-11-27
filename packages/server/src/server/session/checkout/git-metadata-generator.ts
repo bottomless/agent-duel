@@ -11,10 +11,11 @@ export interface PullRequestText {
 
 /**
  * Generates a workspace's commit message and pull-request text from its git diff, the branch name
- * the Create branch dialog offers, and the title of a chat started with Battle off. The checkout
- * subsystem asks for the first three when the user left them blank; workspace naming asks for the
- * title. A commit or PR never fails for want of text: anything that goes wrong writing it answers a
- * fixed message instead. A branch name or a title is only an offer, so it answers null instead.
+ * the Create branch dialog offers, and the title of a chat started with Battle off or whose first
+ * battle ended without a comparison. The checkout subsystem asks for the first three when the user
+ * left them blank; workspace naming asks for the title. A commit or PR never fails for want of
+ * text: anything that goes wrong writing it answers a fixed message instead. A branch name or a
+ * title is only an offer, so it answers null instead.
  */
 export interface GitMetadataGenerator {
   generateCommitMessage(cwd: string): Promise<string>;

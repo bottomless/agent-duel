@@ -313,10 +313,11 @@ only Changes.
 
 On the first turn the judge also returns a `Title:` line, which the engine removes from the report.
 A new chat shows its prompt's first line until that title arrives; any other workspace name stays
-(`arena-workspace-auto-name.ts`). Equal trees or a failed side request only the title. Battle off
-uses the metadata route described under [Blinding](#blinding). A failed title request leaves the
-prompt's first line. Never start a coding agent to name a chat: it uses the full agent setup for a
-metadata task.
+(`arena-workspace-auto-name.ts`). Equal trees or a failed side request only the title. An early
+pick, a stop or a battle that never started has no comparison, and later turns ask for no title, so
+the daemon names that chat from its first prompt on the metadata route, as Battle off does (see
+[Blinding](#blinding)). A failed title request leaves the prompt's first line. Never start a coding
+agent to name a chat: it uses the full agent setup for a metadata task.
 
 Git's `merge-tree --write-tree` compares A and B over the frozen base with
 `merge.conflictStyle=zdiff3` (`compare` in `arena/git.ts`). `diverging` means a real merge conflict;
@@ -1113,20 +1114,58 @@ reply takes the same attachments as a chat message, and both contestants get ide
 - Images a contestant reads with its tools are not resized, and they stay in history, so every
   later call sends them again. Vercel refuses a control-plane request over 4,494,157 bytes (headers
   count) before Arena's code runs, and the side fails on a bare 413. So a hosted request carries
-  its images and PDFs by reference: the engine uploads each file once
-  (`/api/openrouter/api/v1/arena/media`, `arena/media-reference.ts`), names it
+  its images and PDFs by reference (`arena/media-reference.ts`, arena-service `media.ts`). The
+  engine asks the control plane for an upload URL for each file it has not uploaded yet, in one
+  request per call (`/api/openrouter/api/v1/arena/media-upload`), and PUTs each file's bytes
+  straight to the control plane's object store. It names the file
   `arena-media:sha256:<digest>:<type>`, and the proxy puts the data back before OpenRouter sees the
-  body (arena-service `media.ts`). Uploads are stored per account for 72 hours, apart from the
-  generation-capture parts: a capture stores its own copy of what the call sent. An expired file is
-  missing, and the engine uploads it again under
-  the same reference, so the prompt and its cache do not change.
-  The route is its own Vercel function in the control-plane repository, which must ship it before a
-  desktop release relies on it; a control plane without it answers 404, and the engine sends the
-  media inline. Until an upload has succeeded in the engine process, the size check counts media in
-  full, so an inline body still fits. BYOK runs in process, sends media inline, and meets only the
-  provider's limits.
-  The provider still takes only so many images per request. Past the body limit or the provider's
-  (`engine-runtime/request-size.ts`), the engine leaves the oldest tool images out, well below the
+  body. The PUT carries the bytes and their type and nothing else: the storage host gets no account
+  session and no assignment, and the daemon does not forward it. An upload passes no hosted
+  function, so a PDF can be up to 16 MB. An image stops at 5 MB encoded, with a note asking for a
+  smaller file: Claude takes no more through Bedrock and Vertex, and the body limit used to keep
+  every hosted image under that.
+  The store sits behind the `MediaStore` interface (arena-service `media-store.ts`). The control
+  plane implements it on a private store in its own repository; this repository carries no storage
+  SDK. Files are at `arena-media/<account id>/<sha256>`: an account that names another account's
+  digest finds nothing, and a privacy request deletes an account's files by prefix. They are apart
+  from the generation-capture parts: a capture stores its own copy of what the call sent. A file
+  expires 3 days after its upload, and the store deletes it no more than a day later. A file that
+  expired, is gone, or whose bytes do not match its digest is missing: the proxy answers 409
+  `arena_media_missing`, and the engine uploads it again under the same reference, so the prompt
+  and its cache do not change.
+  The control plane ships the route and its store before a desktop release relies on them. A
+  control plane without the route or without a store answers 404; the engine then sends the media
+  inline and sizes its requests for that, and asks that control plane again after 30 minutes: a
+  deploy can lose its store and get it back. Every other hosted request is sized for references
+  from its first call, so the first request after a start leaves nothing out.
+  A file the storage host does not take goes through the control plane instead: a network can
+  block the storage host and not the control plane. That is the route released desktops use
+  (`/api/openrouter/api/v1/arena/media`), one function request per file, so it takes only a file
+  under the body limit. For the next 30 minutes files go that way first. The store is paused for 5
+  minutes when neither takes a file, the upload route answers 5xx, 429 or without a file's URL, a
+  file is still missing right after it was uploaded again, or the proxy answers 503
+  `arena_media_unavailable`. While it is paused, a request whose body fits sends its media inline
+  without asking the store, so a failing store holds such a request once. A request whose body
+  does not fit still asks, one file at most every 15 seconds, because each ask uploads again and
+  counts against the account's upload limit. When the store fails again the step is retried and
+  then fails. The engine does not leave images out to make such a request fit: that rewrites the
+  prompt prefix (below), and a store that fails for an hour would break the cache of every large
+  chat. An offline machine's answer (503 `arena_network_unavailable`) pauses nothing and is passed
+  on, so the run waits for the network. A PUT to a host that drops packets waits up to 30 seconds
+  plus the file's time at 1 Mbit/s, and the proxy gives a call's store reads 30 seconds before it
+  answers 503, so no step waits until the function's time runs out. A file another request of the
+  same process is uploading is waited for, not sent again: both sides of a battle send the user's
+  images at the same moment. Each account may upload 2 GB and 20,000 files a day (arena-service
+  `media-limit.ts`); past that both routes answer 429 until the day ends (UTC). The 429 has no
+  `Retry-After`, and the engine never passes it on: a session takes a 429 for a provider's rate
+  limit and waits on its hint, so the engine treats it like a store failure. Desktops
+  released before the upload route POST every file to the older route; the control plane keeps it
+  and writes those files to the same store. BYOK runs in process, sends media inline, and meets
+  only the provider's limits.
+  The provider still takes only so many images per request. Past the provider's limit or the body
+  limit (`engine-runtime/request-size.ts`), the engine leaves the oldest tool images out. By
+  reference an image counts about 160 bytes against the body limit, so in practice only a control
+  plane without the upload route reaches it. The engine trims well below the
   limit rather than just enough to fit, with a note in each one's place; the user's pasted images
   go only as far as it takes to fit. Each removal rewrites the prompt prefix, and Claude, cached
   from one breakpoint at the end, then writes the whole conversation again; trimming only to the
@@ -1499,14 +1538,15 @@ the OpenRouter proxy.
 
 The Commit and Create PR buttons get their text from the same model through
 `POST /api/arena/metadata` (`arena-service/src/metadata.ts`), never from an agent, and so do the
-name the Create branch dialog offers and the title of a chat started with Battle off. The daemon
-sends the engine's `/arena/metadata` route the kind, the file list and patch (for a branch name, the
-chat's title and its uncommitted changes; for a chat title, the start of its first prompt), and
-the project's own instructions from Project Settings; the service builds the prompt around them, so
-the route is not a general model endpoint. It takes at most 60,000 characters of changes and 1,000
-of instructions, caps the reply, folds a branch name into the slug the desktop accepts, and allows
-each hosted account 60 requests an hour of each kind, so branch names never use up commit
-messages; a BYOK build runs it on the user's key without a limit.
+name the Create branch dialog offers and the title of a chat started with Battle off or whose first
+battle ended without a comparison. The daemon sends the engine's `/arena/metadata` route the kind,
+the file list and patch (for a branch name, the chat's title and its uncommitted changes; for a chat
+title, the start of its first prompt), and the project's own instructions from Project Settings; the
+service builds the prompt around them, so the route is not a general model endpoint. It takes at
+most 60,000 characters of changes and 1,000 of instructions, caps the reply, folds a branch name
+into the slug the desktop accepts, and allows each hosted account 60 requests an hour of each kind,
+so branch names never use up commit messages; a BYOK build runs it on the user's key
+without a limit.
 Any failure, a missing control-plane route included, gives a fixed message such as `Update 3 files`
 (`git-metadata-generator.ts`), so a commit never waits on the model; the branch dialog stays empty.
 Deploy the control plane with the route before the desktop release that calls it.

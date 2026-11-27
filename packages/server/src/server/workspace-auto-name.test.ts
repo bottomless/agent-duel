@@ -133,7 +133,7 @@ test("a chat renamed before its title arrives keeps the user's name, and no prom
     cwd: "/workspace",
     kind: "directory",
     displayName: "workspace",
-    title: "My own name",
+    title: "Explain what retry.js does",
     createdAt: "2026-08-08T00:00:00.000Z",
     updatedAt: "2026-08-08T00:00:00.000Z",
   });
@@ -149,6 +149,7 @@ test("a chat renamed before its title arrives keeps the user's name, and no prom
     emitWorkspaceUpdateForWorkspaceId: async () => {},
     suggestChatTitle: async () => {
       asked += 1;
+      workspace = { ...workspace, title: "My own name" };
       return "Retry policy explained";
     },
   });

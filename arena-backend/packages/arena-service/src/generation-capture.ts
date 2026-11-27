@@ -1,5 +1,6 @@
 import { createHash } from "crypto"
 import { isDuplicateKeyError, type ArenaCollection, type ArenaDb } from "./collection"
+import { mediaPathname, type MediaStore, type StoredMedia } from "./media-store"
 
 // The hosted service keeps each contestant call, battle or single-agent, as OpenRouter saw it: the
 // body after routing, restored reasoning and the output cap, and the raw response before the scrub.
@@ -10,12 +11,6 @@ import { isDuplicateKeyError, type ArenaCollection, type ArenaDb } from "./colle
 
 const CAPTURES = "arenaGenerationCaptures"
 const PARTS = "arenaGenerationParts"
-// Media the engine uploads to send by reference (`media.ts`). Kept apart from the capture parts so it
-// can expire: a capture stores its own copy of what the call sent. A TTL index on `expiresAt` deletes
-// old uploads; the control plane creates it by migration. An expired file is uploaded again on the
-// next call that names it, and its reference, and so the prompt, stays the same.
-const UPLOADS = "arenaMediaUploads"
-const UPLOAD_TTL_MS = 72 * 60 * 60 * 1000
 // A MongoDB document holds at most 16 MiB; the rest is room for the fields around the data. A larger
 // part is left out and reported missing on load.
 const MAX_PART_BYTES = 15 * 1024 * 1024
@@ -95,16 +90,6 @@ type PartDocument = {
   readonly createdAt: Date
 }
 
-type UploadDocument = {
-  readonly _id: string
-  readonly userId: string
-  readonly sha256: string
-  readonly bytes: number
-  readonly data?: Uint8Array
-  readonly createdAt: Date
-  readonly expiresAt: Date
-}
-
 type SplitComponent = CaptureComponent & { readonly text: string }
 type SplitMedia = CaptureMedia & { readonly data: Buffer }
 
@@ -114,10 +99,6 @@ function captures(db: ArenaDb): ArenaCollection<CaptureDocument> {
 
 function parts(db: ArenaDb): ArenaCollection<PartDocument> {
   return db.collection<PartDocument>(PARTS)
-}
-
-function uploads(db: ArenaDb): ArenaCollection<UploadDocument> {
-  return db.collection<UploadDocument>(UPLOADS)
 }
 
 function sha256(value: string | Uint8Array) {
@@ -239,57 +220,33 @@ async function insertNewParts(db: ArenaDb, userId: string, candidates: ReadonlyA
   }
 }
 
-/** Keeps one media file the engine sends by reference until `UPLOAD_TTL_MS` passes, and returns its digest. */
-export async function storeMedia(db: ArenaDb, userId: string, data: Buffer, createdAt: Date) {
-  const digest = sha256(data)
-  if (data.byteLength > MAX_PART_BYTES) throw new Error("Arena media is too large to store")
-  const id = partID(userId, "media", digest)
-  // Both sides of a battle upload the same file at the same moment; the second finds the first.
-  const stored = await uploads(db).findOne({ _id: id, userId }, { projection: { _id: 1, expiresAt: 1 } })
-  if (stored && stored.expiresAt.getTime() > createdAt.getTime()) return digest
-  // An expired upload the TTL index has not deleted yet starts its time again.
-  await uploads(db)
-    .replaceOne(
-      { _id: id },
-      {
-        _id: id,
-        userId,
-        sha256: digest,
-        bytes: data.byteLength,
-        data,
-        createdAt,
-        expiresAt: new Date(createdAt.getTime() + UPLOAD_TTL_MS),
-      },
-      { upsert: true },
-    )
-    .catch((error: unknown) => {
-      if (!isDuplicateKeyError(error)) throw error
-    })
-  return digest
-}
+// Media the engine sends by reference (`media.ts`) is not a capture part: it sits in the control
+// plane's object store (`media-store.ts`), which deletes it 3 to 4 days after the upload. A capture
+// stores its own copy of what the call sent. An expired file is uploaded again on the next call that
+// names it, and its reference, and so the prompt, stays the same.
 
 // A chat sends the same images on every call, so a warm function keeps the last ones it loaded
-// instead of reading them from the store again each time. Keyed by part id, so by account too, and
-// dropped when the upload expires.
+// instead of reading them from the store again each time. Keyed by pathname, so by account too, and
+// dropped when the file expires.
 const MEDIA_CACHE_BYTES = 64 * 1024 * 1024
 const mediaCache = new Map<string, { readonly data: Buffer; readonly expiresAt: Date }>()
 let mediaCacheBytes = 0
 
-function cachedMedia(id: string, now: Date) {
-  const entry = mediaCache.get(id)
+function cachedMedia(pathname: string, now: Date) {
+  const entry = mediaCache.get(pathname)
   if (!entry) return undefined
-  mediaCache.delete(id)
+  mediaCache.delete(pathname)
   if (entry.expiresAt.getTime() <= now.getTime()) {
     mediaCacheBytes -= entry.data.byteLength
     return undefined
   }
-  mediaCache.set(id, entry)
+  mediaCache.set(pathname, entry)
   return entry.data
 }
 
-function cacheMedia(id: string, data: Buffer, expiresAt: Date) {
-  if (mediaCache.has(id) || data.byteLength > MEDIA_CACHE_BYTES / 4) return
-  mediaCache.set(id, { data, expiresAt })
+function cacheMedia(pathname: string, data: Buffer, expiresAt: Date) {
+  if (mediaCache.has(pathname) || data.byteLength > MEDIA_CACHE_BYTES / 4) return
+  mediaCache.set(pathname, { data, expiresAt })
   mediaCacheBytes += data.byteLength
   for (const [oldest, value] of mediaCache) {
     if (mediaCacheBytes <= MEDIA_CACHE_BYTES) break
@@ -303,8 +260,61 @@ function cacheMedia(id: string, data: Buffer, expiresAt: Date) {
 // loads: each reference expands to its whole file, so a few kilobytes could otherwise build gigabytes.
 const MAX_MEDIA_REFERENCES = 200
 const MAX_RESOLVED_MEDIA_BYTES = 32_000_000
+// Store reads run a few at a time, so a body that names many files does not open each at once on a
+// cold function. A guess.
+const PARALLEL_READS = 8
+/**
+ * The longest a call waits on the store for its media, bodies included. A guess: a request's 32 MB
+ * reads in seconds from the store's region, and a store that stops answering must not hold the call
+ * until its function's time runs out.
+ */
+export const MEDIA_LOAD_MS = 30_000
+
+/** The promise's value, or the signal's reason once it aborts; a value that comes later goes to `late`. */
+function abortable<T>(promise: Promise<T>, signal: AbortSignal | undefined, late?: (value: T) => void) {
+  if (!signal) return promise
+  return new Promise<T>((resolve, reject) => {
+    const stop = () => reject(signal.reason)
+    if (signal.aborted) stop()
+    else signal.addEventListener("abort", stop, { once: true })
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", stop)
+        if (signal.aborted) late?.(value)
+        else resolve(value)
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", stop)
+        reject(error)
+      },
+    )
+  })
+}
 
 const encodedBytes = (bytes: number) => Math.ceil(bytes / 3) * 4
+
+/** A stored file's bytes, or undefined when they are not the file the digest names. */
+async function readMedia(file: StoredMedia, digest: string, signal: AbortSignal | undefined) {
+  const chunks: Uint8Array[] = []
+  let bytes = 0
+  const reader = file.body.getReader()
+  for (;;) {
+    const { done, value } = await abortable(reader.read(), signal).catch(async (error: unknown) => {
+      await reader.cancel().catch(() => undefined)
+      throw error
+    })
+    if (done) break
+    bytes += value.byteLength
+    // The size was what counted against the limit, so a longer body stops here.
+    if (bytes > file.size) {
+      await reader.cancel().catch(() => undefined)
+      return undefined
+    }
+    chunks.push(value)
+  }
+  const data = Buffer.concat(chunks)
+  return sha256(data) === digest ? data : undefined
+}
 
 export type ResolvedMedia = {
   readonly body: unknown
@@ -314,55 +324,124 @@ export type ResolvedMedia = {
   readonly tooLarge: boolean
 }
 
-/** Puts the account's uploaded media back in place of its references. An expired upload is missing. */
-export async function resolveMedia(db: ArenaDb, userId: string, body: unknown, now: Date): Promise<ResolvedMedia> {
-  const counts = mediaReferences(body)
-  if (counts.size === 0) return { body, missing: [], tooLarge: false }
+/** Where a call's media came from, for the log line the cache hit rate is read from. */
+type MediaReads = { cached: number; stored: number; storeMs: number }
+
+type LoadedMedia =
+  | { readonly media: ReadonlyMap<string, Buffer> }
+  | { readonly missing: string[] }
+  | { readonly tooLarge: true }
+
+async function loadMedia(
+  store: MediaStore | undefined,
+  userId: string,
+  counts: ReadonlyMap<string, number>,
+  now: Date,
+  reads: MediaReads,
+  signal: AbortSignal | undefined,
+): Promise<LoadedMedia> {
   let named = 0
   for (const count of counts.values()) named += count
-  if (named > MAX_MEDIA_REFERENCES) return { body, missing: [], tooLarge: true }
+  if (named > MAX_MEDIA_REFERENCES) return { tooLarge: true }
   const media = new Map<string, Buffer>()
   const unknown: string[] = []
-  for (const digest of counts.keys()) {
-    const data = cachedMedia(partID(userId, "media", digest), now)
-    if (data) media.set(digest, data)
-    else unknown.push(digest)
-  }
-  // Sizes first, so a body that names large files never loads more than the limit.
-  const sizes =
-    unknown.length === 0
-      ? []
-      : await uploads(db)
-          .find(
-            {
-              _id: { $in: unknown.map((digest) => partID(userId, "media", digest)) },
-              userId,
-              expiresAt: { $gt: now },
-            },
-            { projection: { _id: 1, sha256: 1, bytes: 1, expiresAt: 1 } },
-          )
-          .toArray()
-  const found = new Set(sizes.map((part) => part.sha256))
-  const absent = unknown.filter((digest) => !found.has(digest))
-  if (absent.length > 0) return { body, missing: absent, tooLarge: false }
+  // What the references expand to so far. Each file counts before its body is read, so a body that
+  // names large files stops loading at the limit.
   let resolvedBytes = 0
-  for (const [digest, data] of media) resolvedBytes += encodedBytes(data.byteLength) * (counts.get(digest) ?? 0)
-  for (const part of sizes) resolvedBytes += encodedBytes(part.bytes) * (counts.get(part.sha256) ?? 0)
-  if (resolvedBytes > MAX_RESOLVED_MEDIA_BYTES) return { body, missing: [], tooLarge: true }
-  const stored =
-    sizes.length === 0
-      ? []
-      : await uploads(db)
-          .find({ _id: { $in: sizes.map((part) => part._id) }, userId })
-          .toArray()
-  for (const part of stored) {
-    const data = binary(part.data)
-    if (!data || sha256(data) !== part.sha256) continue
-    media.set(part.sha256, data)
-    cacheMedia(part._id, data, part.expiresAt)
+  for (const [digest, count] of counts) {
+    const data = cachedMedia(mediaPathname(userId, digest), now)
+    if (!data) {
+      unknown.push(digest)
+      continue
+    }
+    media.set(digest, data)
+    resolvedBytes += encodedBytes(data.byteLength) * count
   }
-  const missing = [...counts.keys()].filter((digest) => !media.has(digest))
-  if (missing.length > 0) return { body, missing, tooLarge: false }
+  reads.cached = media.size
+  if (resolvedBytes > MAX_RESOLVED_MEDIA_BYTES) return { tooLarge: true }
+  if (unknown.length === 0) return { media }
+  if (!store) return { missing: unknown }
+  const missing: string[] = []
+  let tooLarge = false
+  let failure: { readonly reason: unknown } | undefined
+  // Each reader finishes or cancels the body it opened, so a read that fails leaves none half read.
+  const next = async (): Promise<void> => {
+    const digest = unknown.shift()
+    if (digest === undefined || tooLarge || failure) return
+    if (signal?.aborted) {
+      failure = { reason: signal.reason }
+      return
+    }
+    const pathname = mediaPathname(userId, digest)
+    // A store that ignores the signal still lets the call go; a file it opens too late is let go too.
+    const file = await abortable(store.read(pathname, { signal }), signal, (late) => {
+      void late?.body.cancel().catch(() => undefined)
+    }).catch((reason: unknown) => {
+      failure ??= { reason }
+      return null
+    })
+    if (file === null) return
+    // A file past its time is missing, even while the store has not deleted it yet. The rest are
+    // still read, so the engine uploads every missing file in one go and the call after it finds the
+    // others warm.
+    if (!file || file.expiresAt.getTime() <= now.getTime()) {
+      missing.push(digest)
+      await file?.body.cancel().catch(() => undefined)
+      return next()
+    }
+    resolvedBytes += encodedBytes(file.size) * (counts.get(digest) ?? 0)
+    if (resolvedBytes > MAX_RESOLVED_MEDIA_BYTES) tooLarge = true
+    if (tooLarge || failure) {
+      await file.body.cancel().catch(() => undefined)
+      return
+    }
+    const data = await readMedia(file, digest, signal).catch((reason: unknown) => {
+      failure ??= { reason }
+      return null
+    })
+    if (data === null) return
+    // Bytes that are not the file the digest names are missing, and never kept: the engine uploads
+    // the file again over them.
+    if (!data) missing.push(digest)
+    else {
+      media.set(digest, data)
+      cacheMedia(pathname, data, file.expiresAt)
+      reads.stored++
+    }
+    return next()
+  }
+  const startedAt = Date.now()
+  try {
+    await Promise.all(Array.from({ length: Math.min(PARALLEL_READS, unknown.length) }, next))
+  } finally {
+    reads.storeMs = Date.now() - startedAt
+  }
+  if (failure) throw failure.reason
+  if (tooLarge) return { tooLarge: true }
+  return missing.length > 0 ? { missing } : { media }
+}
+
+/**
+ * Puts the account's stored media back in place of its references. An expired file is missing, and so
+ * is every file when the service has no store. Throws when the store fails, or when `signal` aborts
+ * before the media is read.
+ */
+export async function resolveMedia(
+  store: MediaStore | undefined,
+  userId: string,
+  body: unknown,
+  now: Date,
+  signal?: AbortSignal,
+): Promise<ResolvedMedia> {
+  const counts = mediaReferences(body)
+  if (counts.size === 0) return { body, missing: [], tooLarge: false }
+  const reads: MediaReads = { cached: 0, stored: 0, storeMs: 0 }
+  const loaded = await loadMedia(store, userId, counts, now, reads, signal)
+  const missing = "missing" in loaded ? loaded.missing : []
+  // Counts and a duration only: no content, digest or account.
+  console.info("[arena-service] Arena media", JSON.stringify({ files: counts.size, ...reads, missing: missing.length }))
+  if (!("media" in loaded)) return { body, missing, tooLarge: "tooLarge" in loaded }
+  const { media } = loaded
   const encoded = new Map<string, string>()
   const resolved = walkStrings(body, (text) => {
     const match = MEDIA_REFERENCE_PATTERN.exec(text)

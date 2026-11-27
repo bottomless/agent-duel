@@ -3,9 +3,11 @@ import type { ArenaContext, Caller, Fetch } from "./context"
 import { validateOpenRouter, type ModelPool } from "./pool"
 import { handleAssignmentsRequest } from "./assignments"
 import { handleComparisonRequest } from "./comparison"
+import type { MediaStore } from "./media-store"
 import { defaultMetadataRateLimit, handleMetadataRequest, type MetadataRateLimit } from "./metadata"
 import { endpointLabelReader } from "./endpoint-label"
 import { handleOpenRouterRequest } from "./openrouter"
+import { defaultMediaUploadLimit, type MediaUploadLimit } from "./media-limit"
 import { defaultWebSearchRateLimit, handleWebSearchRequest, type WebSearchRateLimit } from "./websearch"
 import { mediumModel } from "./default-pool"
 
@@ -39,6 +41,8 @@ export type ArenaServiceOptions = {
   readonly metadataRateLimit?: MetadataRateLimit | null
   /** Web searches each account may make per window. Defaults to `defaultWebSearchRateLimit`; null turns it off. */
   readonly webSearchRateLimit?: WebSearchRateLimit | null
+  /** What each account may upload per window. Defaults to `defaultMediaUploadLimit`; null turns it off. */
+  readonly mediaUploadLimit?: MediaUploadLimit | null
   /**
    * Heartbeats on contestant streams and a replay route for a response whose connection died
    * (`stream-recovery.ts`). On by default for the control plane; a service on the user's machine has
@@ -57,6 +61,11 @@ export type ArenaServiceOptions = {
    * (`endpoint-label.ts`). Off by default: only the control plane saves a catalog.
    */
   readonly recordEndpointLabels?: boolean
+  /**
+   * Keeps the images and PDFs contestant requests name by reference (`media-store.ts`). Only the
+   * control plane sets it. Without one the media routes answer 404 and the engine sends media inline.
+   */
+  readonly mediaStore?: MediaStore
 }
 
 export type ArenaService = {
@@ -97,6 +106,9 @@ export function createArenaService(options: ArenaServiceOptions): ArenaService {
     streamRecovery: options.streamRecovery ?? true,
     captureGenerations: options.captureGenerations ?? false,
     readEndpointLabel: options.recordEndpointLabels ? endpointLabelReader(now) : undefined,
+    mediaStore: options.mediaStore,
+    mediaUploadLimit:
+      options.mediaUploadLimit === null ? undefined : (options.mediaUploadLimit ?? defaultMediaUploadLimit),
   }
   const assignments = (request: Request) => handleAssignmentsRequest(request, context)
   const openrouter = (request: Request) => handleOpenRouterRequest(request, context)

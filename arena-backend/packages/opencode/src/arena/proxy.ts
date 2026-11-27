@@ -24,9 +24,17 @@ import {
 import { COMPACTION_HEADER, COMPACTION_OFFER } from "@agent-duel/arena-service/request-budget"
 import { HEARTBEAT_HEADER, REPLAY_PATH, REPLAY_UNAVAILABLE_LINE } from "@agent-duel/arena-service/stream-recovery"
 import { KEEP_ALIVE_HEADER } from "@agent-duel/arena-service/keep-alive"
-import { readMediaMissing } from "@agent-duel/arena-service/media"
+import { mediaUnavailableError, readMediaMissing, readMediaUnavailable } from "@agent-duel/arena-service/media"
 import type { KeepAlive, Ping, PingResult } from "./keep-alive"
-import { forgetUploads, referenceMedia, referencesUnsupported, uploadMedia, type Media } from "./media-reference"
+import {
+  forgetUploads,
+  pauseReferences,
+  referenceMedia,
+  referencesSupported,
+  storePaused,
+  uploadMedia,
+  type Media,
+} from "./media-reference"
 import { REQUEST_BYTES_LIMIT } from "./engine-runtime/request-size"
 
 // The control plane lost its upload route after this request was sized for references.
@@ -118,6 +126,11 @@ export type ProxyOptions = {
   readonly keepAlive?: KeepAlive
   /** Upload images and PDFs once and name them in the request (`media-reference.ts`): the hosted control plane. */
   readonly mediaByReference?: boolean
+  /**
+   * Sends an uploaded file to its storage URL. Defaults to a plain `fetch`, and is never `fetch`
+   * above: the storage host must not get the account's credential.
+   */
+  readonly mediaUpload?: (input: string, init: RequestInit) => Promise<Response>
   /**
    * Runs when a content filter refuses a session's main request, before the model call sees the
    * refusal. Core starts the steps a refused run must not take as soon as that call fails.
@@ -915,27 +928,32 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
     let inline: string | undefined
     const inlineText = () => (inline ??= JSON.stringify(rewritten))
     const fitsInline = () => Buffer.byteLength(inlineText()) <= REQUEST_BYTES_LIMIT
+    // While the store is paused, a body that fits goes inline without asking it.
     const referenced =
-      options.mediaByReference && !referencesUnsupported(upstream) ? referenceMedia(rewritten) : undefined
+      options.mediaByReference && referencesSupported(upstream) && !(storePaused(upstream) && fitsInline())
+        ? referenceMedia(rewritten)
+        : undefined
     const upload = async (media: Iterable<Media>): Promise<UploadFailure | undefined> => {
       requestState.phase = "upload"
       try {
         return await uploadMedia({
           execute,
+          put: options.mediaUpload,
           upstream,
           routing: { "X-Arena-Assignment-ID": assignment.assignmentID, "X-Arena-Scope-ID": assignment.scopeID },
           media,
           signal: dispatch.signal,
+          required: () => !fitsInline(),
         })
       } catch (error) {
         if (dispatch.signal.aborted) throw error
         return { thrown: error }
       }
     }
-    // When an upload fails, the media goes inline if the body still fits: the size check counts media
-    // in full until this process has seen an upload succeed. A body sized for references that does
-    // not fit answers the upload's own failure. After a 404 it answers a retryable failure instead,
-    // and the retry is sized inline, because the route is now known to be missing.
+    // When an upload fails, the media goes inline if the body fits. A body that does not fit answers
+    // the failure, and the engine tries the step again: its images are never left out to make it
+    // fit, which would rewrite the prompt prefix on a store's bad minute. Only after a 404 is the
+    // retry sized inline, because that control plane will never take references.
     const sendInline = async (failure: UploadFailure) => {
       if (fitsInline()) {
         if (failure instanceof Response) await failure.body?.cancel().catch(() => undefined)
@@ -960,15 +978,32 @@ export async function proxy(request: Request, registry: AssignmentRegistry, opti
           : resize
             ? Response.json(MEDIA_RESIZE_ERROR, { status: 503 })
             : await send()
-      const missing =
-        referenced && outgoing !== rewritten && response.status === 409
-          ? readMediaMissing(await response.clone().text())
-          : undefined
-      if (missing) {
+      // How the control plane answered media it could not put back, while the body names references.
+      const mediaAnswer = async () => {
+        if (!referenced || outgoing === rewritten || (response.status !== 409 && response.status !== 503)) return {}
+        const text = await response.clone().text()
+        return {
+          missing: response.status === 409 ? readMediaMissing(text) : undefined,
+          unavailable: response.status === 503 && readMediaUnavailable(text),
+        }
+      }
+      // The store cannot give media back for now: this request and the next ones go inline when
+      // they fit, and are otherwise tried again.
+      const goInline = async () => {
         await response.body?.cancel().catch(() => undefined)
-        forgetUploads(upstream, missing)
-        const again = await upload(missing.flatMap((digest) => referenced?.media.get(digest) ?? []))
+        pauseReferences(upstream)
+        return sendInline(Response.json(mediaUnavailableError(), { status: 503 }))
+      }
+      const first = await mediaAnswer()
+      if (first.unavailable) response = await goInline()
+      else if (first.missing) {
+        await response.body?.cancel().catch(() => undefined)
+        forgetUploads(upstream, first.missing)
+        const again = await upload(first.missing.flatMap((digest) => referenced?.media.get(digest) ?? []))
         response = again === undefined ? await send() : await sendInline(again)
+        // The store took the files again and still cannot read them back.
+        const second = again === undefined ? await mediaAnswer() : {}
+        if (second.missing || second.unavailable) response = await goInline()
       }
     } catch (error) {
       preHeaderTransportFailure = !request.signal.aborted && retryableTransport(error)
