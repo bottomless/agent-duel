@@ -34,25 +34,31 @@ async function explainMissingGit(cause: unknown, directory: string): Promise<unk
 }
 
 /**
- * Exit 128 is any fatal Git error, not only "not a git repository". A folder the daemon can't
- * read (macOS privacy settings on Desktop, Documents and Downloads) or a repository Git refuses
- * to open (another user's, an unknown extension) must not read as not_git: the bootstrap would
- * offer a new repository there, and its rollback would delete the existing `.git`.
+ * Exit 128 is any fatal Git error. Only "not a git repository" means no Git, and only when the
+ * folder's own `.git` is missing or empty: a broken `.git` gets the same message and may still
+ * hold history, which the bootstrap's rollback would delete. Any other error, such as a
+ * repository Git refuses to open (another user's, an unknown extension) or a folder inside one,
+ * is shown as Git's own. A folder the daemon can't read (macOS privacy settings on Desktop,
+ * Documents and Downloads) says how to allow it.
  */
 async function notGitOrRefused(directory: string, stderr: string): Promise<"not_git"> {
   const entries = await readdir(directory).catch((cause: NodeJS.ErrnoException) => {
     if (cause.code !== "EPERM" && cause.code !== "EACCES") throw cause;
     const fix =
       process.platform === "darwin"
-        ? "If it's in Desktop, Documents, Downloads or on an external drive, allow Agent Duel in System Settings > Privacy & Security > Files and Folders (or Full Disk Access), or move the project somewhere else, then retry."
+        ? "If it's in Desktop, Documents, Downloads or on an external drive, allow Agent Duel in System Settings > Privacy & Security > Files & Folders (or Full Disk Access), or move the project somewhere else, then retry."
         : "Check that your user can open it, then retry.";
     throw new Error(`Agent Duel can't read this folder. ${fix}`);
   });
+  const reason = stderr.trim();
+  if (!reason.includes("not a git repository")) {
+    throw new Error(`Git can't open this folder. ${reason}`.trim());
+  }
   if (!entries.includes(".git")) return "not_git";
-  // A broken `.git` may still hold history. An empty one holds none, and `git init` fills it.
+  // An empty `.git` holds no history, and `git init` fills it.
   const contents = await readdir(join(directory, ".git")).catch(() => null);
   if (contents?.length === 0) return "not_git";
-  throw new Error(`This folder has a .git that Git can't open. ${stderr.trim()}`.trim());
+  throw new Error(`This folder has a .git that Git can't open. ${reason}`.trim());
 }
 
 /**
@@ -67,6 +73,8 @@ export async function inspectProjectGit(
   const inside = await runGit(["rev-parse", "--is-inside-work-tree"], {
     cwd: directory,
     acceptExitCodes: [0, 128],
+    // English, so notGitOrRefused can match "not a git repository" whatever the user's locale.
+    envOverlay: { LC_ALL: "C" },
   }).catch(async (cause: unknown) => {
     throw await explainMissingGit(cause, directory);
   });
