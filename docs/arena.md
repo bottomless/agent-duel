@@ -26,9 +26,9 @@ the V2 engine plugin. The Arena `info + parts` transcript is a wire projection; 
 canonical V2 messages so attachments, compaction checkpoints, and replay state survive a vote,
 subject to the sealed-reasoning boundary under [Blinding](#blinding). The engine writes those rows
 straight into `session_message` with their content inline (`copyMessage` and `updateRow` in
-`arena/session-runtime`). Keep Core's `experimental.part_rows` off: with it on, Core stores
-assistant parts in `session_part` and history reads them before any inline content, so a row the
-engine rewrites would show its parts twice. Keep canonical history
+`arena/session-runtime`). Since OpenCode 2.4 Core stores assistant parts in `session_part` and
+history reads them before any inline content, so `updateRow` deletes a rewritten assistant's part
+rows in the same transaction; without that the reply shows twice. Keep canonical history
 independent of SDK-owned stream metadata: a provider can still extend its reasoning state after
 answer text begins.
 

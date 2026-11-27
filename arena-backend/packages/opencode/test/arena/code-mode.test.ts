@@ -38,11 +38,17 @@ const blocked = ["session_rename", "session_move", "worktree_create", "worktree_
 const codeModePath = (tool: string) =>
   tool.startsWith("session_") ? `tools.opencode.session.${tool.slice("session_".length)}` : `tools.opencode.${tool}`
 const retained = ["read", "write", "edit", "patch", "shell", "grep", "glob", "subagent"]
-// Upstream tools Arena removes by namespace and name: image and video generation (no namespace), MCP events, and every
-// `opencode.session` tool, including the flag-gated search, read and interrupt.
+// Upstream tools Arena removes by namespace and name: image and video generation and `cd` (no namespace), MCP events,
+// every `opencode.session` tool, including the flag-gated search, read and interrupt, and every `machine` tool.
 const removed = [
   { name: "generate_image", path: "tools.generate_image" },
   { name: "generate_video", path: "tools.generate_video" },
+  { name: "cd", path: "tools.cd" },
+  { name: "list", namespace: "machine", path: "tools.machine.list" },
+  { name: "copy", namespace: "machine", path: "tools.machine.copy" },
+  { name: "move", namespace: "machine", path: "tools.machine.move" },
+  { name: "forward", namespace: "machine", path: "tools.machine.forward" },
+  { name: "unforward", namespace: "machine", path: "tools.machine.unforward" },
   { name: "list_mcp_events", namespace: "opencode", path: "tools.opencode.list_mcp_events" },
   { name: "search", namespace: "opencode.session", path: "tools.opencode.session.search" },
   { name: "read", namespace: "opencode.session", path: "tools.opencode.session.read" },
@@ -164,9 +170,12 @@ const setup = Effect.gen(function* () {
 })
 
 describe("Arena Code Mode policy", () => {
-  it.live("removes image and video generation, MCP events and every opencode.session tool", () =>
+  it.live("removes image and video generation, MCP events, cd, and every opencode.session and machine tool", () =>
     Effect.gen(function* () {
       const h = yield* setup
+      const ids = (yield* h.registry.list()).map((item) => item.id)
+      for (const tool of removed)
+        expect(ids).not.toContain(tool.namespace ? `${tool.namespace.replaceAll(".", "_")}_${tool.name}` : tool.name)
       const catalog = (yield* h.registry.snapshot()).codeModeCatalog!
       const paths = codeModeListings(catalog).map((item) => item.path)
       const prompt = CodeModeInstructions.render(CodeModeCatalog.summarize(catalog))

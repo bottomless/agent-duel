@@ -222,7 +222,9 @@ function install(context: Context, options: InstalledOptions) {
       // Keyed by namespace and name. Every `opencode.session` tool goes: since OpenCode 2.4 it holds rename and move,
       // and behind flags search, read and interrupt, which could reach the other side's session. MCP events only
       // feed automations, which Agent Duel leaves off. Image and video generation run on whatever image or video
-      // model the user's own OpenCode sign-ins offer, billed to them, so neither is a contestant tool.
+      // model the user's own OpenCode sign-ins offer, billed to them, so neither is a contestant tool. `cd` and the
+      // `machine` tools come with the `machines` flag, which a user's or project's OpenCode config can turn on; they
+      // move a session's working directory or act on another computer, outside the side's worktree.
       const blocked = new Set([
         "opencode/worktree_create",
         "opencode/worktree_list",
@@ -231,10 +233,16 @@ function install(context: Context, options: InstalledOptions) {
         "opencode/list_mcp_events",
         "/generate_image",
         "/generate_video",
+        "/cd",
       ])
       for (const tool of editor.list()) {
         const namespace = tool.options?.namespace
-        if (namespace === "opencode.session" || blocked.has(`${namespace ?? ""}/${tool.name}`)) editor.remove(tool.id)
+        if (
+          namespace === "opencode.session" ||
+          namespace === "machine" ||
+          blocked.has(`${namespace ?? ""}/${tool.name}`)
+        )
+          editor.remove(tool.id)
       }
     })
     // Core's OpenCodeTools hooks run first. Remove only their worktree advice; tool removal
@@ -532,10 +540,20 @@ function install(context: Context, options: InstalledOptions) {
     yield* context.permission.hook("evaluate", (event) =>
       Effect.gen(function* () {
         yield* ensureAssignment(context, options, String(event.sessionID))
-        if (
-          options.assignments.assignments.get(String(event.sessionID))?.telemetry &&
-          ["edit", "read", "external_directory"].includes(event.action)
-        ) {
+        const contestant = options.assignments.assignments.get(String(event.sessionID))?.telemetry === true
+        // Since OpenCode 2.4 Core asks to run a command its shell scanner cannot read instead of refusing it, and
+        // gives the reason in the request. Our path checks cannot see where such a command writes. A contestant is
+        // refused, as before 2.4; with Battle off it asks under Ask before tools.
+        const unread = event.action === "shell" ? event.metadata?.reason : undefined
+        if (typeof unread === "string") {
+          if (contestant) {
+            event.effect = "deny"
+            event.message = `Arena contestants cannot run a command the shell scanner cannot analyze (${unread}). Rewrite it without eval or other dynamic execution.`
+            return
+          }
+          if (event.effect === "allow" && arenaSession(options, String(event.sessionID))) event.effect = "ask"
+        }
+        if (contestant && ["edit", "read", "external_directory"].includes(event.action)) {
           const session = yield* context.session.get({ sessionID: event.sessionID }).pipe(Effect.orDie)
           const operation = event.action === "edit" ? "write" : "read"
           const message = event.resources

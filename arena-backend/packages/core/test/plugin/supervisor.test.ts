@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Clock, Deferred, Duration, Effect, Layer, LayerMap, Stream } from "effect"
+import { Deferred, Duration, Effect, Layer, LayerMap, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import type { LanguageModelV3 } from "@ai-sdk/provider"
 import { define } from "@opencode/plugin/effect/plugin"
@@ -208,28 +208,27 @@ describe("PluginSupervisor", () => {
     }),
   )
 
-  it.effect("updates only packages that follow updates, once per check interval", () =>
+  // Agent Duel vendor patch: a plugin that follows updates is checked, never installed on its own (supervisor.ts).
+  it.effect("checks packages that follow updates every interval without installing them", () =>
     Effect.gen(function* () {
       const follows = ["latest-plugin@latest", "ranged-plugin@^1.0.0", "github:acme/branch-plugin#dev"]
       packages.stays = ["plain-plugin", "next-plugin@next", "github:acme/default-plugin"]
-      source.operations = [...follows, ...packages.stays].map((target) => ({
-        type: "add" as const,
-        target,
-        options: {},
-      }))
+      const targets = [...follows, ...packages.stays]
+      source.operations = targets.map((target) => ({ type: "add" as const, target, options: {} }))
       packages.available = true
+      packages.checks = 0
       packages.updated = []
       const directory = yield* tmpdirScoped()
       const locations = yield* LocationServiceMap.Service
       yield* Effect.gen(function* () {
-        yield* Plugin.Service
-        yield* advance(() => packages.updated.length >= follows.length)
-        // Each update reloads and checks again; the newer version is still reported but isn't installed twice.
+        const plugins = yield* Plugin.Service
+        yield* advance(() => packages.checks >= targets.length)
         yield* drain
-        expect(packages.updated.toSorted()).toEqual(follows.toSorted())
-        // The next interval's scheduled check installs again.
+        yield* plugins.awaitActivation
+        const checks = packages.checks
+        // The next interval's scheduled check looks again and still installs nothing.
         yield* TestClock.adjust(PluginUpdate.interval)
-        yield* advance(() => packages.updated.length >= follows.length * 2)
+        yield* advance(() => packages.checks > checks)
         yield* drain
       }).pipe(
         Effect.scoped,
@@ -242,56 +241,7 @@ describe("PluginSupervisor", () => {
           }),
         ),
       )
-      expect(packages.updated.toSorted()).toEqual([...follows, ...follows].toSorted())
-    }),
-  )
-
-  it.effect("checks and updates once per interval, 24 hours after a slow startup", () =>
-    Effect.gen(function* () {
-      source.operations = [{ type: "add", target: "latest-plugin@latest", options: {} }]
-      packages.available = true
-      // Checks take a while, so the first ones finish well after startup.
-      packages.delay = Duration.seconds(10)
-      packages.checks = 0
-      packages.updated = []
-      source.activations = 0
-      const sdk = yield* SdkPlugins.Service
-      const directory = yield* tmpdirScoped()
-      const locations = yield* LocationServiceMap.Service
-      const started = yield* Clock.currentTimeMillis
-      yield* Effect.gen(function* () {
-        const plugins = yield* Plugin.Service
-        yield* advance(() => packages.updated.length === 1)
-        // The update reloads and checks again; the newer version is still reported but isn't installed twice.
-        yield* drain
-        yield* plugins.awaitActivation
-        expect(packages.updated).toEqual(["latest-plugin@latest"])
-        // Other reloads in the same interval reuse the checks.
-        const checks = packages.checks
-        const activations = source.activations
-        yield* sdk.register(greeter("interval-greet", "interval"))
-        yield* advance(() => source.activations > activations)
-        yield* drain
-        yield* plugins.awaitActivation
-        expect(packages.checks).toBe(checks)
-        expect(packages.updated).toHaveLength(1)
-        // The scheduled check exactly one interval after startup checks and installs again.
-        yield* TestClock.adjust(started + PluginUpdate.interval - (yield* Clock.currentTimeMillis))
-        yield* advance(() => packages.updated.length === 2)
-        yield* drain
-        expect(packages.checks).toBeGreaterThan(checks)
-      }).pipe(
-        Effect.scoped,
-        Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(directory.path) }))),
-        Effect.ensuring(
-          Effect.sync(() => {
-            source.operations = []
-            packages.available = false
-            packages.delay = Duration.zero
-          }),
-        ),
-      )
-      expect(packages.updated).toEqual(["latest-plugin@latest", "latest-plugin@latest"])
+      expect(packages.updated).toEqual([])
     }),
   )
 
@@ -416,9 +366,7 @@ describe("PluginSupervisor", () => {
 
       expect(source.activations).toBe(2)
 
-      yield* sdk
-        .register(greeter("greet-cross-location", "cross-location"))
-        .pipe(Effect.provide(locations.get(refA)))
+      yield* sdk.register(greeter("greet-cross-location", "cross-location")).pipe(Effect.provide(locations.get(refA)))
 
       yield* advance(() => source.activations === 4)
 

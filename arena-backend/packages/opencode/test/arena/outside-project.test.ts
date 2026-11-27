@@ -749,3 +749,77 @@ describe("fb3 read-only Git outside-project checks", () => {
     expect(await outside(`git -C ${OUT} log > ${OUT}/result`)).toEqual([`${OUT}/*`])
   })
 })
+
+describe("a command Core's shell scanner cannot read", () => {
+  const sessionID = Session.ID.make("ses_unread")
+  const install = async (mode: "ask" | "auto" | "battle") => {
+    // A Battle off turn is an Arena session too, without telemetry.
+    const assignments = new AssignmentRegistry()
+    assignments.assign(String(sessionID), {
+      runID: "run",
+      rootSessionID: String(sessionID),
+      scopeID: "scope",
+      assignmentID: "assignment",
+      telemetry: mode === "battle",
+    })
+    let evaluate!: (event: PermissionEvaluation) => Effect.Effect<void>
+    const registration = Effect.succeed({ dispose: Effect.void })
+    const context = {
+      location: { directory: project, project: { directory: project } },
+      provider: { transform: () => registration },
+      agent: { transform: () => registration },
+      aisdk: { hook: () => registration },
+      session: {
+        hook: () => registration,
+        get: () =>
+          Effect.succeed({
+            id: sessionID,
+            location: { directory: project },
+            permissions: permissionRules([], sandboxForSession(String(sessionID), project, "/work/checkout")),
+          }),
+      },
+      event: { subscribe: () => Stream.empty },
+      shell: { hook: () => registration },
+      skill: { list: () => Effect.succeed({ data: [] }) },
+      permission: {
+        hook: (_name: string, callback: typeof evaluate) => {
+          evaluate = callback
+          return registration
+        },
+      },
+      tool: { hook: () => registration, transform: () => registration },
+    } as unknown as Context
+    await Effect.runPromise(
+      createArenaEnginePlugin({ enabled: true, assignments, autoAccept: mode === "auto" })
+        .effect(context)
+        .pipe(Effect.scoped),
+    )
+    return async (metadata?: Record<string, unknown>) => {
+      // The request Core's shell tool makes after its scanner gives up (`core/src/shell/permissions.ts`).
+      const event: PermissionEvaluation = {
+        sessionID,
+        action: "shell",
+        resources: ["alias p=true; p"],
+        metadata,
+        effect: "allow",
+      }
+      await Effect.runPromise(evaluate(event))
+      return { effect: event.effect, message: event.message }
+    }
+  }
+
+  it("refuses a contestant, as before OpenCode 2.4", async () => {
+    const evaluate = await install("battle")
+    const result = await evaluate({ reason: "dynamic-execution" })
+    expect(result.effect).toBe("deny")
+    expect(result.message).toContain("cannot analyze (dynamic-execution)")
+    expect((await evaluate()).effect).toBe("allow")
+  })
+
+  it("asks with Battle off under Ask before tools, and runs under auto-accept", async () => {
+    const ask = await install("ask")
+    expect((await ask({ reason: "dynamic-execution" })).effect).toBe("ask")
+    expect((await ask()).effect).toBe("allow")
+    expect((await (await install("auto"))({ reason: "dynamic-execution" })).effect).toBe("allow")
+  })
+})
