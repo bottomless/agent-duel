@@ -548,7 +548,13 @@ function install(context: Context, options: InstalledOptions) {
         if (typeof unread === "string") {
           if (contestant) {
             event.effect = "deny"
-            event.message = `Arena contestants cannot run a command the shell scanner cannot analyze (${unread}). Rewrite it without eval or other dynamic execution.`
+            event.message = `Arena contestants cannot run a command the shell scanner cannot analyze (${unread}). ${
+              unread === "dynamic-execution"
+                ? "Rewrite it without eval, aliases or other dynamic execution."
+                : unread === "compound-command"
+                  ? "Close every if, for, while or case block, or split it into simpler commands."
+                  : "Split it into simpler commands."
+            }`
             return
           }
           if (event.effect === "allow" && arenaSession(options, String(event.sessionID))) event.effect = "ask"

@@ -3,6 +3,8 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import os from "node:os"
 import path from "node:path"
 import { Permission } from "@opencode/core/permission"
+import { PermissionPolicy } from "@opencode/core/permission/policy"
+import { ShellPermissions } from "@opencode/core/shell/permissions"
 import { Agent } from "@opencode/schema/agent"
 import { Global } from "@opencode/util/global"
 import { Effect, Schema, Stream } from "effect"
@@ -794,13 +796,22 @@ describe("a command Core's shell scanner cannot read", () => {
         .effect(context)
         .pipe(Effect.scoped),
     )
-    return async (metadata?: Record<string, unknown>) => {
-      // The request Core's shell tool makes after its scanner gives up (`core/src/shell/permissions.ts`).
+    return async (command: string) => {
+      // The requests Core's shell tool makes for this command; only the shell one matters here.
+      const requests = await Effect.runPromise(
+        ShellPermissions.requests({} as never, {
+          command,
+          program: "bash",
+          target: { absolute: project } as never,
+          policy: Effect.succeed(PermissionPolicy.fromRules([])),
+        }),
+      )
+      const request = requests.find((item) => item.action === "shell")
       const event: PermissionEvaluation = {
         sessionID,
         action: "shell",
-        resources: ["alias p=true; p"],
-        metadata,
+        resources: request?.resources ?? [command],
+        metadata: request && "metadata" in request ? request.metadata : undefined,
         effect: "allow",
       }
       await Effect.runPromise(evaluate(event))
@@ -810,16 +821,17 @@ describe("a command Core's shell scanner cannot read", () => {
 
   it("refuses a contestant, as before OpenCode 2.4", async () => {
     const evaluate = await install("battle")
-    const result = await evaluate({ reason: "dynamic-execution" })
+    const result = await evaluate("alias p=true; p")
     expect(result.effect).toBe("deny")
     expect(result.message).toContain("cannot analyze (dynamic-execution)")
-    expect((await evaluate()).effect).toBe("allow")
+    expect((await evaluate("if true; then echo a")).message).toContain("Close every if")
+    expect((await evaluate("ls -la")).effect).toBe("allow")
   })
 
   it("asks with Battle off under Ask before tools, and runs under auto-accept", async () => {
     const ask = await install("ask")
-    expect((await ask({ reason: "dynamic-execution" })).effect).toBe("ask")
-    expect((await ask()).effect).toBe("allow")
-    expect((await (await install("auto"))({ reason: "dynamic-execution" })).effect).toBe("allow")
+    expect((await ask("alias p=true; p")).effect).toBe("ask")
+    expect((await ask("ls -la")).effect).toBe("allow")
+    expect((await (await install("auto"))("alias p=true; p")).effect).toBe("allow")
   })
 })
