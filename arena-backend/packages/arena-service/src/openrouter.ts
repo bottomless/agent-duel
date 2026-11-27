@@ -1,5 +1,6 @@
 import { createHash, createHmac, randomUUID } from "crypto"
 import { recordAssignmentGenerationMetrics, reserveRoutingAssignment, type SingleAgentModelSize } from "./assignments"
+import type { ArenaDb } from "./collection"
 import { authorize, type ArenaContext, type Fetch } from "./context"
 import { KEEP_ALIVE_HEADER, keepAliveAnswer, keepsCacheWarm } from "./keep-alive"
 import type { GenerationOutcome, StoredGenerationMetrics, UsageTotals } from "./metrics"
@@ -28,14 +29,27 @@ import {
 } from "./request-calibration"
 import {
   generationCapture,
+  MEDIA_LOAD_MS,
   resolveMedia,
-  storeMedia,
   type CaptureState,
   type GenerationCapture,
 } from "./generation-capture"
 import { geminiSignatureRouting } from "./gemini-signature-routing"
 import { geminiToolResultRetry } from "./gemini-tool-results"
-import { MEDIA_PATH, MEDIA_TYPE_HEADER, mediaMissingError, mediaTooLargeError, sendsByReference } from "./media"
+import {
+  isMediaType,
+  MEDIA_FILE_BYTES,
+  MEDIA_PATH,
+  MEDIA_TYPE_HEADER,
+  MEDIA_UPLOAD_PATH,
+  mediaMissingError,
+  mediaTooLargeError,
+  mediaUnavailableError,
+  mediaUploadAnswer,
+  readMediaUploadRequest,
+} from "./media"
+import { admitMediaUpload, mediaUploadLimitError } from "./media-limit"
+import { mediaPathname } from "./media-store"
 import { visibleLogprobs } from "./logprobs"
 import { createReasoningRedactor } from "./reasoning"
 import {
@@ -745,6 +759,38 @@ async function sanitizeAssignedResponse(
   return Response.json(payload, { status: response.status, headers })
 }
 
+// The engine sends the media inline when the body fits, and otherwise tries the request again.
+function mediaStoreFailed() {
+  console.error("[arena-service] Arena media store failed")
+  return Response.json({ error: { message: "Arena media store is unavailable" } }, { status: 502 })
+}
+
+/**
+ * A refusal when the upload would take the account past its limit. The engine then sends a body
+ * that fits inline, and tries a larger one again.
+ */
+async function overUploadLimit(
+  context: ArenaContext,
+  db: ArenaDb,
+  userId: string,
+  upload: { readonly bytes: number; readonly files: number },
+) {
+  const limit = context.mediaUploadLimit
+  if (!limit) return undefined
+  const now = context.now()
+  const allowed = await admitMediaUpload(db, userId, upload, limit, now).catch((error: unknown) => {
+    console.error("[arena-service] Arena media upload limit could not be read", error)
+    return undefined
+  })
+  if (allowed === undefined) {
+    return Response.json({ error: { message: "Arena media upload is unavailable" } }, { status: 503 })
+  }
+  if (allowed) return undefined
+  // No Retry-After: released desktops pass the refusal to the session, which would wait on the
+  // hint, fifteen minutes at a time, instead of trying the step again.
+  return Response.json(mediaUploadLimitError(), { status: 429 })
+}
+
 export async function handleOpenRouterRequest(request: Request, context: ArenaContext) {
   const caller = await authorize(request, context, (message, status) =>
     Response.json({ error: { message } }, { status }),
@@ -756,6 +802,12 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
   const url = new URL(request.url)
   const suffix = url.pathname.replace(/^\/api\/openrouter/, "")
   if (!suffix.startsWith("/api/v1/")) return Response.json({ error: { message: "Not found" } }, { status: 404 })
+  const mediaStore = context.mediaStore
+  // No store answers as a control plane from before the media routes does, and the engine sends its
+  // media inline.
+  if (!mediaStore && request.method === "POST" && (suffix === MEDIA_PATH || suffix === MEDIA_UPLOAD_PATH)) {
+    return Response.json({ error: { message: "Not found" } }, { status: 404 })
+  }
   const upstream = new URL(`https://openrouter.ai${suffix}`)
   const headers = new Headers()
   headers.set("Authorization", `Bearer ${apiKey}`)
@@ -799,19 +851,54 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
         request.signal,
       )
     }
-    if (request.method === "POST" && suffix === MEDIA_PATH) {
+    // Both media routes answer from the account and the files alone, so the two sides of a battle
+    // get the same answers.
+    if (mediaStore && request.method === "POST" && suffix === MEDIA_UPLOAD_PATH) {
+      const files = body && readMediaUploadRequest(new TextDecoder().decode(body))
+      if (!files) {
+        return Response.json({ error: { message: "Arena media upload request is invalid" } }, { status: 400 })
+      }
+      const db = await context.db()
+      const routeAssignment = await reserveRoutingAssignment(db, caller.id, assignment.scopeID, assignment.assignmentID)
+      if (!routeAssignment) return Response.json({ error: { message: "Arena assignment is invalid" } }, { status: 403 })
+      const bytes = files.reduce((total, file) => total + file.size, 0)
+      const limited = await overUploadLimit(context, db, caller.id, { bytes, files: files.length })
+      if (limited) return limited
+      const urls = await Promise.all(
+        files.map((file) =>
+          mediaStore.uploadUrl({
+            pathname: mediaPathname(caller.id, file.digest),
+            contentType: file.mimeType,
+            maxBytes: file.size,
+          }),
+        ),
+      ).catch(mediaStoreFailed)
+      if (urls instanceof Response) return urls
+      return Response.json(mediaUploadAnswer(files.map((file, index) => ({ digest: file.digest, url: urls[index]! }))))
+    }
+    // Desktops released before the upload route send each file's bytes here.
+    if (mediaStore && request.method === "POST" && suffix === MEDIA_PATH) {
       const mimeType = request.headers.get(MEDIA_TYPE_HEADER)?.trim().toLowerCase()
-      if (!mimeType || !sendsByReference(mimeType) || !/^[\w.+-]+\/[\w.+-]+$/.test(mimeType)) {
+      if (!isMediaType(mimeType)) {
         return Response.json({ error: { message: "Arena media type is not supported" } }, { status: 400 })
       }
       if (!body || body.byteLength === 0) {
         return Response.json({ error: { message: "Arena media body is required" } }, { status: 400 })
       }
+      if (body.byteLength > MEDIA_FILE_BYTES) {
+        return Response.json({ error: { message: "Arena media is too large" } }, { status: 400 })
+      }
       const db = await context.db()
       const routeAssignment = await reserveRoutingAssignment(db, caller.id, assignment.scopeID, assignment.assignmentID)
       if (!routeAssignment) return Response.json({ error: { message: "Arena assignment is invalid" } }, { status: 403 })
-      const digest = await storeMedia(db, caller.id, Buffer.from(body), context.now())
-      return Response.json({ sha256: digest })
+      const limited = await overUploadLimit(context, db, caller.id, { bytes: body.byteLength, files: 1 })
+      if (limited) return limited
+      const data = new Uint8Array(body)
+      const digest = createHash("sha256").update(data).digest("hex")
+      const failure = await mediaStore
+        .write({ pathname: mediaPathname(caller.id, digest), contentType: mimeType, data })
+        .catch(mediaStoreFailed)
+      return failure ?? Response.json({ sha256: digest })
     }
     if (request.method !== "POST" || !["/api/v1/chat/completions", "/api/v1/responses"].includes(suffix)) {
       return Response.json({ error: { message: "Arena assignment cannot access this route" } }, { status: 400 })
@@ -856,16 +943,27 @@ export async function handleOpenRouterRequest(request: Request, context: ArenaCo
       )
     }
     // Images and PDFs the engine uploaded come back here, before the budget counts them (`media.ts`).
-    const media = await resolveMedia(db, caller.id, replay, context.now())
+    const media = await resolveMedia(
+      mediaStore,
+      caller.id,
+      replay,
+      context.now(),
+      AbortSignal.any([request.signal, AbortSignal.timeout(MEDIA_LOAD_MS)]),
+    ).catch((error: unknown) => {
+      const timedOut = error instanceof DOMException && error.name === "TimeoutError"
+      console.error("[arena-service] Arena media store failed", JSON.stringify({ timedOut }))
+      return undefined
+    })
     // Only Claude pings get this far, so a ping with media the proxy cannot send answers like every
     // other ping, or a made-up reference would tell the sides apart.
-    if (keepAlive && (media.tooLarge || media.missing.length > 0)) {
+    if (keepAlive && (!media || media.tooLarge || media.missing.length > 0)) {
       console.warn(
         "[arena-service] Keep-alive ping skipped",
-        JSON.stringify({ media: media.tooLarge ? "too large" : "missing" }),
+        JSON.stringify({ media: !media ? "unavailable" : media.tooLarge ? "too large" : "missing" }),
       )
       return keepAliveAnswer()
     }
+    if (!media) return Response.json(mediaUnavailableError(), { status: 503 })
     if (media.tooLarge) return Response.json(mediaTooLargeError(), { status: 413 })
     if (media.missing.length > 0) return Response.json(mediaMissingError(media.missing), { status: 409 })
     const restored = media.body as Record<string, unknown>

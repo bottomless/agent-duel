@@ -7,7 +7,7 @@ import { ResearchUploader } from "./research"
 import { arenaCredentials, type ArenaCredentials } from "./credentials"
 import { createArenaBackend, type ArenaBackend } from "./backend"
 import { idleSession, KeepAlive } from "./keep-alive"
-import { referencesConfirmed } from "./media-reference"
+import { referencesSupported } from "./media-reference"
 import type { MediaCarriage } from "./engine-runtime/request-size"
 import { GlobalBus } from "@/bus/global"
 
@@ -198,13 +198,21 @@ export function backend() {
   return built.backend
 }
 
-const contestantUpstream = (target: ArenaBackend) => `${target.url}/api/openrouter`
+const contestantUpstream = (target: Pick<ArenaBackend, "url">) => `${target.url}/api/openrouter`
 
-/** How a contestant request will carry its images and PDFs, which its size check counts. */
+/**
+ * How a contestant request will carry its images and PDFs, which its size check counts. A hosted
+ * request counts references from its first call: counting media in full until an upload had
+ * succeeded left images out of the first request after every start, and the prompt prefix with them.
+ */
 export function mediaCarriage(): MediaCarriage {
-  const target = backend()
+  return carriageOf(backend())
+}
+
+/** `mediaCarriage` for one backend. */
+export function carriageOf(target: Pick<ArenaBackend, "url" | "mediaByReference"> | undefined): MediaCarriage {
   if (target && !target.mediaByReference) return "local"
-  return target && referencesConfirmed(contestantUpstream(target)) ? "reference" : "inline"
+  return target && referencesSupported(contestantUpstream(target)) ? "reference" : "inline"
 }
 
 /** End cache pings on both legacy idle events and Core's native execution lifecycle. */

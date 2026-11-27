@@ -586,7 +586,61 @@ describe("Arena runtime proxy", () => {
     expect(new Headers(init?.headers).get("authorization")).toBe("Bearer account-session-token");
   });
 
-  it("forwards an uploaded image as raw bytes with its media type", async () => {
+  it("forwards a request for media upload URLs", async () => {
+    installArenaCredentials({
+      mode: "hosted",
+      researchPartition: "test-research-partition",
+      researchAccountID: "test-account",
+      token: "account-session-token",
+      controlPlaneUrl: "https://control.agentduel.test",
+    });
+    const runtime = issueRuntimeCapability();
+    const answer = { uploads: [{ digest: "a".repeat(64), url: "https://storage.test/upload" }] };
+    upstream.mockResolvedValue(Response.json(answer));
+    const body = JSON.stringify({
+      files: [{ digest: "a".repeat(64), mimeType: "image/png", size: 6 }],
+    });
+
+    const response = await fetch(
+      `${baseUrl}/api/arena-runtime/api/openrouter/api/v1/arena/media-upload`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${runtime.token}`,
+          "Content-Type": "application/json",
+          "X-Arena-Assignment-ID": "opaque-id",
+          "X-Arena-Scope-ID": "turn-1",
+        },
+        body,
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(answer);
+    const [url, init] = upstream.mock.calls[0]!;
+    expect(url).toBe("https://control.agentduel.test/api/openrouter/api/v1/arena/media-upload");
+    const headers = new Headers(init?.headers);
+    expect(headers.get("authorization")).toBe("Bearer account-session-token");
+    expect(headers.get("x-arena-assignment-id")).toBe("opaque-id");
+    expect(new TextDecoder().decode(init?.body as ArrayBuffer)).toBe(body);
+
+    // Only the route for a file's bytes takes raw bytes.
+    const raw = await fetch(
+      `${baseUrl}/api/arena-runtime/api/openrouter/api/v1/arena/media-upload`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${runtime.token}`,
+          "Content-Type": "application/octet-stream",
+        },
+        body: new Uint8Array([137, 80, 78, 71]),
+      },
+    );
+    expect(raw.status).toBe(415);
+    expect(upstream).toHaveBeenCalledTimes(1);
+  });
+
+  it("forwards a file the storage host did not take as raw bytes with its media type", async () => {
     installArenaCredentials({
       mode: "hosted",
       researchPartition: "test-research-partition",

@@ -35,7 +35,12 @@ const allowedRoutes = new Set([
   // A contestant stream whose connection died fetches its recorded response here
   // (arena-service `stream-recovery.ts`).
   "/api/openrouter/api/v1/arena/replay",
-  // An image or PDF a contestant request then names by reference (arena-service `media.ts`).
+  // Upload URLs for the images and PDFs a contestant request then names by reference
+  // (arena-service `media.ts`). The engine sends the bytes to the storage host itself, not through
+  // here: that host must not get the account session.
+  "/api/openrouter/api/v1/arena/media-upload",
+  // A file the storage host did not take from this machine, for the control plane to write to the
+  // store itself: a network can block the storage host and not the control plane.
   mediaRoute,
 ]);
 
