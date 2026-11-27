@@ -3,6 +3,7 @@ export * as ConfigCompatibilityPlugin from "./compatibility.js"
 import { define } from "@opencode/plugin/effect/plugin"
 import { FSUtil } from "@opencode/util/fs-util"
 import path from "path"
+import { isDeepStrictEqual } from "node:util"
 import { Effect, FiberMap, PubSub, Semaphore, Stream } from "effect"
 import { Config } from "../../config.js"
 import { Watcher } from "../../filesystem/watcher.js"
@@ -20,13 +21,11 @@ export const Plugin = define({
     const changes = yield* PubSub.sliding<string>(1)
     const lock = Semaphore.makeUnsafe(1)
     const skills: Skill.Info[] = []
+    const loadedRoots: { current: unknown } = { current: undefined }
     const compatibility = () =>
       config.compatibility ? config.compatibility() : Effect.succeed({ claude: [], agents: [] })
 
-    const watch = Effect.fn("ConfigCompatibilityPlugin.watch")(function* (
-      target: string,
-      type: "file" | "directory",
-    ) {
+    const watch = Effect.fn("ConfigCompatibilityPlugin.watch")(function* (target: string, type: "file" | "directory") {
       const updates = yield* watcher.subscribe(
         type === "directory" ? { path: target, type, ignore: SkillScan.ignore } : { path: target, type },
       )
@@ -42,6 +41,7 @@ export const Plugin = define({
       function* () {
         yield* FiberMap.clear(watches)
         const roots = yield* compatibility()
+        loadedRoots.current = roots
         const directories = [...roots.claude, ...roots.agents].map((root) => path.join(root, "skills"))
         const loaded = new Map<Skill.ID, Skill.Info>()
         for (const directory of directories) {
@@ -72,6 +72,12 @@ export const Plugin = define({
         Effect.map(compatibility(), (roots) => isCompatibilitySource(roots, update.path)),
       ),
       Stream.runForEach((update) => PubSub.publish(changes, update.path).pipe(Effect.asVoid)),
+      Effect.forkScoped({ startImmediately: true }),
+    )
+    // Agent Duel's switch for the user's own skills changes the roots without touching their files.
+    yield* ctx.event.subscribe({ types: ["config.updated"] }).pipe(
+      Stream.filterEffect(() => Effect.map(compatibility(), (roots) => !isDeepStrictEqual(roots, loadedRoots.current))),
+      Stream.runForEach(() => reload),
       Effect.forkScoped({ startImmediately: true }),
     )
     yield* refresh()

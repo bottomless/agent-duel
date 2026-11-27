@@ -3,7 +3,9 @@ import { z } from "zod";
 import { writeFileAtomic } from "../atomic-file.js";
 import { readJsonObject } from "./detect/files.js";
 
-const IdsSchema = z.array(z.string()).catch([]);
+// Every `.catch` builds a fresh value: a shared default object would carry one parse's writes into
+// the next empty state.
+const IdsSchema = z.array(z.string()).catch(() => []);
 
 const StateSchema = z.object({
   global: z
@@ -12,16 +14,19 @@ const StateSchema = z.object({
       off: IdsSchema,
       /** Every global plugin the user has seen in the list, so later ones count as added. */
       announced: IdsSchema,
+      /** The user's own instruction files and skills, which load only once switched on. */
+      instructions: z.boolean().catch(false),
     })
-    .catch({ reviewed: false, off: [], announced: [] }),
-  projects: z.record(z.string(), z.object({ on: IdsSchema, off: IdsSchema })).catch({}),
+    .catch(() => ({ reviewed: false, off: [], announced: [], instructions: false })),
+  /** Includes `instructions:project`, whose files load until it is turned off. */
+  projects: z.record(z.string(), z.object({ on: IdsSchema, off: IdsSchema })).catch(() => ({})),
   /** The last import of each scope (`global` or a project key), so an unchanged one is not redone. */
   imports: z
     .record(
       z.string(),
       z.object({ fingerprint: z.string(), errors: z.record(z.string(), z.string()) }),
     )
-    .catch({}),
+    .catch(() => ({})),
 });
 
 export type AgentPluginsState = z.infer<typeof StateSchema>;

@@ -1,9 +1,28 @@
 import type { TFunction } from "i18next";
 import type { AgentPlugin } from "@getpaseo/protocol/messages";
 
+/** Instruction files are switched in the same lists but are not plugins the user installed. */
+export function isPlugin(plugin: AgentPlugin): boolean {
+  return plugin.kind !== "instructions";
+}
+
+/**
+ * Whether the engine loads it now. An undecided plugin waits for the user, but an undecided
+ * instruction file loads, so its switch shows on until the user turns it off.
+ */
+export function isLoaded(plugin: AgentPlugin): boolean {
+  if (plugin.state === "on") return true;
+  return plugin.state === "pending" && !isPlugin(plugin);
+}
+
 /** A repository's own setup has no plugin name, so it is named after where it came from. */
 export function pluginLabel(plugin: AgentPlugin, t: TFunction): string {
   if (plugin.kind === "plugin") return plugin.name;
+  if (plugin.kind === "instructions") {
+    return plugin.id === "instructions:global"
+      ? t("agentPlugins.instructions.global")
+      : t("agentPlugins.instructions.project");
+  }
   return plugin.source === "claude-code"
     ? t("agentPlugins.plugin.repositoryClaude")
     : t("agentPlugins.plugin.repositoryCodex");
@@ -22,8 +41,19 @@ export function contentsSummary(plugin: AgentPlugin, t: TFunction): string {
   return parts.filter((part): part is string => part !== null).join(" · ");
 }
 
+/** "~/.claude/CLAUDE.md · 3 skills" */
+function instructionsSummary(plugin: AgentPlugin, t: TFunction): string {
+  const { skills } = plugin.contents;
+  const parts = [
+    ...plugin.files,
+    skills > 0 ? t("agentPlugins.plugin.skills", { count: skills }) : null,
+  ];
+  return parts.filter((part): part is string => part !== null).join(" · ");
+}
+
 /** "Claude Code · 9 skills · 5 commands · MCP: slack" */
 export function pluginSummary(plugin: AgentPlugin, t: TFunction): string {
+  if (plugin.kind === "instructions") return instructionsSummary(plugin, t);
   const source =
     plugin.source === "claude-code"
       ? t("agentPlugins.plugin.fromClaude")
@@ -34,8 +64,10 @@ export function pluginSummary(plugin: AgentPlugin, t: TFunction): string {
 
 /** The banner's heading names where the project's plugins come from. */
 export function bannerTitle(plugins: readonly AgentPlugin[], t: TFunction): string {
-  const claude = plugins.some((plugin) => plugin.source === "claude-code");
-  const codex = plugins.some((plugin) => plugin.source === "codex");
+  const installed = plugins.filter(isPlugin);
+  if (installed.length === 0) return t("agentPlugins.banner.titleInstructions");
+  const claude = installed.some((plugin) => plugin.source === "claude-code");
+  const codex = installed.some((plugin) => plugin.source === "codex");
   if (claude && codex) return t("agentPlugins.banner.titleBoth");
   return codex ? t("agentPlugins.banner.titleCodex") : t("agentPlugins.banner.titleClaude");
 }
@@ -46,5 +78,6 @@ export function bannerTitle(plugins: readonly AgentPlugin[], t: TFunction): stri
  */
 export function bannerItem(plugin: AgentPlugin, t: TFunction): string {
   if (plugin.kind === "plugin") return plugin.name;
+  if (plugin.kind === "instructions") return plugin.files.join(", ");
   return contentsSummary(plugin, t) || pluginLabel(plugin, t);
 }

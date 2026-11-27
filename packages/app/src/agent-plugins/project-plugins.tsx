@@ -7,7 +7,7 @@ import type { AgentPlugin } from "@getpaseo/protocol/messages";
 import { Button } from "@/components/ui/button";
 import { openSettingsSection } from "@/navigation/settings-navigation";
 import { settingsStyles } from "@/styles/settings";
-import { bannerItem, bannerTitle } from "./describe";
+import { bannerItem, bannerTitle, isPlugin } from "./describe";
 import { AgentPluginsReviewSheet, type AgentPluginsDecision } from "./review-sheet";
 import { useAgentPlugins, type AgentPluginsController } from "./use-agent-plugins";
 
@@ -47,7 +47,9 @@ function ProjectPluginsSheet({
     onClose();
     openSettingsSection("agent-plugins");
   }, [onClose]);
-  const globalOn = status?.global.plugins.filter((plugin) => plugin.state === "on").length ?? 0;
+  const globalOn =
+    status?.global.plugins.filter((plugin) => isPlugin(plugin) && plugin.state === "on").length ??
+    0;
   const footnote = useMemo(
     () => (
       <View style={styles.footnote}>

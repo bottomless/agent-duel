@@ -1847,8 +1847,12 @@ export const AgentSkillsImportLegacySelectionRequestSchema = z
 export const AgentPluginSourceSchema = z.enum(["claude-code", "codex"]);
 export type AgentPluginSource = z.infer<typeof AgentPluginSourceSchema>;
 
-/** `plugin` is an installed plugin; `repository` is the project's own `.claude/` or `.codex/` setup. */
-export const AgentPluginKindSchema = z.enum(["plugin", "repository"]);
+/**
+ * `plugin` is an installed plugin; `repository` is the project's own `.claude/` or `.codex/` setup;
+ * `instructions` is a project's AGENTS.md or CLAUDE.md, or the user's own instruction files and
+ * skills, which the engine reads in place.
+ */
+export const AgentPluginKindSchema = z.enum(["plugin", "repository", "instructions"]);
 export type AgentPluginKind = z.infer<typeof AgentPluginKindSchema>;
 
 /** `pending` has not been decided yet, so it is not imported. */
@@ -1886,6 +1890,8 @@ export const AgentPluginSchema = z
     state: AgentPluginStateSchema,
     /** What of this plugin the last import could not convert; the rest of it is in the engine. */
     importError: z.string().nullable(),
+    /** The instruction files an `instructions` entry loads, `~/`-relative or project-relative. */
+    files: z.array(z.string()),
   })
   .strict();
 export type AgentPlugin = z.infer<typeof AgentPluginSchema>;

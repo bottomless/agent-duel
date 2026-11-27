@@ -71,6 +71,8 @@ import { isRecord } from "@/util/record"
 import { generate as generateComparison, skip as skipComparison } from "./comparison"
 import { expireCopiedReasoning } from "./reasoning"
 import { canonicalizeTranscriptPaths } from "./canonical-path"
+import { captureLoadedSetup } from "./loaded-setup"
+import { LocationServiceMap } from "@opencode/core/location-service-map"
 import {
   arenaTurnEnvironments,
   localizeArenaPreviewUrls,
@@ -1592,6 +1594,7 @@ export const layer: Layer.Layer<
   | Question
   | Worktree.Service
   | MoveSessionService
+  | LocationServiceMap.Service
 > = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -1606,6 +1609,7 @@ export const layer: Layer.Layer<
     const questions = yield* Question
     const worktrees = yield* Worktree.Service
     const mover = yield* MoveSessionService
+    const locations = yield* LocationServiceMap.Service
     const scope = yield* Scope.Scope
     const operationTrackers = new WeakMap<Store, ReturnType<typeof createArenaOperationTracker>>()
     const operationTrackerFor = (store: Store) => {
@@ -5400,6 +5404,16 @@ export const layer: Layer.Layer<
           ...(preservePromptBoundary ? {} : { promptMessageID }),
         }),
       )
+      // Beside the prompt, not before it: the record must never delay or fail a side.
+      if (prompt) {
+        yield* captureLoadedSetup(locations, run.worktree.directory).pipe(
+          Effect.flatMap((loadedSetup) => promise(() => store.updateRun(run.runID, { loadedSetup }))),
+          Effect.catchCause((cause) =>
+            Effect.logWarning("Arena could not record the side's loaded setup", { runID: run.runID, cause }),
+          ),
+          Effect.forkIn(scope),
+        )
+      }
       const beforeDispatch = yield* promise(() => store.turn(run.turnID))
       if (beforeDispatch?.state === "stopping" || beforeDispatch?.state === "early_selected") return Exit.void
       if (prompt) yield* allowReading(run.worktree.directory, run.sessionID, prompt.readable)

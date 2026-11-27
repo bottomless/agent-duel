@@ -435,4 +435,85 @@ describe("agent plugins", () => {
 
     expect(projectOf(status).projectRoot).toBe(sandbox.project);
   });
+
+  it("keeps the user's own instructions and skills off until switched on, without a review", async () => {
+    await write(path.join(sandbox.home, ".claude", "CLAUDE.md"), "Personal rules\n");
+    await write(path.join(sandbox.home, ".claude", "skills", "mine", "SKILL.md"), skill("mine"));
+    await write(path.join(sandbox.home, ".agents", "skills", "other", "SKILL.md"), skill("other"));
+
+    const before = await sandbox.plugins.getStatus(null);
+
+    expect(plugin(before.global, "instructions:global")).toMatchObject({
+      kind: "instructions",
+      state: "off",
+      files: ["~/.claude/CLAUDE.md"],
+      contents: { skills: 2 },
+    });
+    expect(await readJson(path.join(globalImport(sandbox), "agent-duel.json"))).toEqual({
+      instructions: false,
+    });
+
+    const after = await sandbox.plugins.saveSelection({
+      scope: { kind: "global" },
+      enabled: ["instructions:global"],
+      disabled: [],
+    });
+
+    expect(plugin(after.global, "instructions:global").state).toBe("on");
+    expect(after.global.reviewed).toBe(false);
+    expect(await readJson(path.join(globalImport(sandbox), "agent-duel.json"))).toEqual({
+      instructions: true,
+    });
+  });
+
+  it("names the global AGENTS.md over ~/.claude/CLAUDE.md, as the engine reads it", async () => {
+    await write(path.join(sandbox.home, ".claude", "CLAUDE.md"), "Personal rules\n");
+    await write(path.join(sandbox.home, ".config", "opencode", "AGENTS.md"), "OpenCode rules\n");
+
+    const status = await sandbox.plugins.getStatus(null);
+
+    expect(plugin(status.global, "instructions:global").files).toEqual([
+      "~/.config/opencode/AGENTS.md",
+    ]);
+  });
+
+  it("loads a project's AGENTS.md until the user turns it off", async () => {
+    await write(path.join(sandbox.project, "AGENTS.md"), "Repo rules\n");
+    await write(path.join(sandbox.project, "CLAUDE.md"), "Claude rules\n");
+    const target = projectImportDirectory(
+      resolveAgentPluginsLayout(sandbox.paseoHome),
+      sandbox.project,
+    );
+
+    const pending = projectOf(await sandbox.plugins.getStatus(sandbox.project));
+
+    expect(plugin(pending, "instructions:project")).toMatchObject({
+      kind: "instructions",
+      state: "pending",
+      files: ["AGENTS.md"],
+    });
+    expect(await readJson(path.join(target, "agent-duel.json"))).toEqual({ instructions: true });
+
+    const off = projectOf(
+      await sandbox.plugins.saveSelection({
+        scope: { kind: "project", projectRoot: sandbox.project },
+        enabled: [],
+        disabled: ["instructions:project"],
+      }),
+    );
+
+    expect(plugin(off, "instructions:project").state).toBe("off");
+    expect(await readJson(path.join(target, "agent-duel.json"))).toEqual({ instructions: false });
+  });
+
+  it("offers a project's CLAUDE.md when it has no AGENTS.md", async () => {
+    await write(path.join(sandbox.project, "CLAUDE.md"), "Claude rules\n");
+
+    const status = projectOf(await sandbox.plugins.getStatus(sandbox.project));
+
+    expect(plugin(status, "instructions:project")).toMatchObject({
+      source: "claude-code",
+      files: ["CLAUDE.md"],
+    });
+  });
 });

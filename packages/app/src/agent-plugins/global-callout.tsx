@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useSidebarCallouts } from "@/contexts/sidebar-callout-context";
 import { useToast } from "@/contexts/toast-context";
 import { useLocalDaemonServerId } from "@/hooks/use-is-local-daemon";
+import { isPlugin } from "./describe";
 import { GlobalPluginsSheet } from "./global-sheet";
 import { useAgentPlugins } from "./use-agent-plugins";
 
@@ -26,7 +27,8 @@ function LocalPluginsCallout({ serverId }: { serverId: string }) {
   const openReview = useCallback(() => setReviewing(true), []);
   const closeReview = useCallback(() => setReviewing(false), []);
 
-  const found = status?.global.plugins.length ?? 0;
+  // The user's own instruction files wait in the sheet, switched off; they alone are no reason to ask.
+  const found = status?.global.plugins.filter(isPlugin).length ?? 0;
   const needsReview = status !== null && !status.global.reviewed && found > 0;
   useEffect(() => {
     if (!needsReview) return;

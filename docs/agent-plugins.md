@@ -2,7 +2,8 @@
 
 Agent Duel loads the plugins a user installed in Claude Code and Codex into the battle engine. The
 daemon finds them, converts them with [rulesync](https://github.com/dyoshikawa/rulesync), and writes
-OpenCode config folders the engine reads. Code: `packages/server/src/server/agent-plugins/`,
+OpenCode config folders the engine reads. The same lists switch the instruction files the engine
+reads in place (see [Instruction files](#instruction-files)). Code: `packages/server/src/server/agent-plugins/`,
 `packages/app/src/agent-plugins/`, and `importedProjectDirectory` in
 `arena-backend/packages/core/src/config/discovery.ts`.
 
@@ -28,10 +29,35 @@ itself. A Codex plugin whose `.app.json` requires a ChatGPT app is left out of e
 skills drive the app's tools, which run only through OpenAI's backend, so the user has nothing to
 decide.
 
+## Instruction files
+
+Two more entries switch files the engine reads in place rather than imports, so a battle carries
+the user's own setup only when they chose it:
+
+| Entry                                                    | Files                                                                                                                    | Default |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ------- |
+| This project's instructions (`instructions:project`)     | The project's `AGENTS.md`, or its `CLAUDE.md` where it has none                                                          | On      |
+| Your own instructions and skills (`instructions:global`) | `~/.config/opencode/AGENTS.md`, or `~/.claude/CLAUDE.md` without it; skills in `~/.claude/skills` and `~/.agents/skills` | Off     |
+
+The project entry is pending like a project plugin, so the line below the composer asks once, and
+its files keep loading until the user turns them off. The global entry is never pending: it sits
+switched off in the global review and in Settings until the user turns it on, and switching it is
+not the global review. Skills in a project's `.claude/skills` and `.agents/skills` have no switch.
+
+The daemon writes each scope's switch as `agent-duel.json` (`{ "instructions": boolean }`) into the
+imported folder, also when it holds no plugins; `config/imported-setup.ts` in the engine's core
+reads it, and the instruction and skill discovery follow it without a restart. A missing file means
+the defaults above. Without `AGENT_DUEL_IMPORTED_CONFIG`, upstream discovery applies, except that
+`CLAUDE.md` never loads (`routeOptions` in `arena-backend/packages/opencode/src/server/server.ts`).
+
+Each side's run records what its prompt loaded (`loadedSetup`, `arena/loaded-setup.ts`): the
+instruction files by scope and project- or `~/`-relative path with a hash of their text, and the
+skill names by scope. It carries no file text or absolute path, since runs mirror to research.
+
 ## Decisions
 
 Global plugins wait for one review (the sidebar callout); after it, new global plugins import on
-their own and the app shows a toast; Settings → Plugins switches them later. Project plugins wait
+their own and the app shows a toast; Settings → Instructions, skills and MCP switches them later. Project plugins wait
 for a decision in that project (the line below the composer), and the project's settings page
 switches them later. Every undecided plugin starts checked. Decisions live in
 `$PASEO_HOME/agent-plugins/state.json`, never in the user's repository or OpenCode config.

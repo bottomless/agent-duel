@@ -111,7 +111,10 @@ describe("Config", () => {
             await fs.mkdir(importedGlobal, { recursive: true })
             await fs.mkdir(importedProject, { recursive: true })
             await fs.writeFile(path.join(importedGlobal, "opencode.json"), JSON.stringify({ shell: "imported-global" }))
-            await fs.writeFile(path.join(importedProject, "opencode.json"), JSON.stringify({ shell: "imported-project" }))
+            await fs.writeFile(
+              path.join(importedProject, "opencode.json"),
+              JSON.stringify({ shell: "imported-project" }),
+            )
           })
 
           const entries = yield* Effect.gen(function* () {
@@ -142,6 +145,60 @@ describe("Config", () => {
             AbsolutePath.make(path.join(project, ".opencode")),
           ])
           expect(Config.latest(entries, "shell")).toBe("imported-project")
+        }),
+      ),
+    ),
+  )
+
+  it.live("reads Agent Duel's switches from the imported dirs and drops the user's own skill roots", () =>
+    Effect.acquireDisposable(Effect.promise(() => tmpdir())).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const root = yield* Effect.promise(() => fs.realpath(tmp.path))
+          const globalDirectory = path.join(root, "global")
+          const home = path.join(globalDirectory, "home")
+          const project = path.join(root, "repo")
+          const imported = path.join(root, "agent-plugins")
+          const importedProject = ConfigDiscovery.importedProjectDirectory(imported, project)
+          const choose = (directory: string, instructions: boolean) =>
+            Effect.promise(async () => {
+              await fs.mkdir(directory, { recursive: true })
+              await fs.writeFile(path.join(directory, "agent-duel.json"), JSON.stringify({ instructions }))
+            })
+          yield* Effect.promise(async () => {
+            await fs.mkdir(path.join(home, ".claude"), { recursive: true })
+            await fs.mkdir(path.join(home, ".agents"), { recursive: true })
+            await fs.mkdir(path.join(project, ".claude"), { recursive: true })
+          })
+          const read = Effect.gen(function* () {
+            const config = yield* Config.Service
+            const roots = yield* config.compatibility!()
+            return {
+              setup: yield* config.setup!(),
+              roots: [...roots.claude, ...roots.agents].filter((item) => inFixture(root, item)),
+            }
+          }).pipe(
+            Effect.provide(
+              testLayer(project, globalDirectory, project, undefined, undefined, undefined, undefined, { imported }),
+            ),
+          )
+
+          // Without a decision the project's files load and the user's own wait to be switched on.
+          expect(yield* read).toEqual({
+            setup: { project: true, global: false },
+            roots: [AbsolutePath.make(path.join(project, ".claude"))],
+          })
+
+          yield* choose(path.join(imported, "global"), true)
+          yield* choose(importedProject, false)
+          expect(yield* read).toEqual({
+            setup: { project: false, global: true },
+            roots: [
+              AbsolutePath.make(path.join(home, ".claude")),
+              AbsolutePath.make(path.join(project, ".claude")),
+              AbsolutePath.make(path.join(home, ".agents")),
+            ],
+          })
         }),
       ),
     ),

@@ -8,6 +8,7 @@ import path, { dirname, join } from "path"
 import { Effect, FiberMap, PubSub, Semaphore, Stream } from "effect"
 import { HttpClient, HttpClientRequest } from "effect/http"
 import { Config } from "../../config.js"
+import { ConfigImportedSetup } from "../imported-setup.js"
 import { Watcher } from "../../filesystem/watcher.js"
 import { InstructionDiscovery } from "../../instruction-discovery.js"
 import { Instructions } from "../../instructions/index.js"
@@ -37,17 +38,28 @@ export const Plugin = define({
       const root = yield* fs.resolve(location.project.directory)
       const home = yield* fs.resolve(global.home)
       const project = discovery.project && FSUtil.contains(root, start)
-      const stop = FSUtil.contains(home, start) ? home : root
+      // Agent Duel's project switch covers the project's own files, so its walk ends at the project
+      // root; upstream walks on to the home folder, which would load every ancestor's files with it.
+      const imported = config.setup ? (yield* config.setup()) !== undefined : false
+      const stop = !imported && FSUtil.contains(home, start) ? home : root
       const globalFile = yield* fs.resolve(join(global.config, "AGENTS.md"))
       // ~/.claude/CLAUDE.md stands in for the global AGENTS.md when it is missing.
       const claudeGlobalFile = yield* fs.resolve(join(home, ".claude", "CLAUDE.md"))
       const names = InstructionDiscovery.filenames(discovery)
       const globalFiles = discovery.claude ? [globalFile, claudeGlobalFile] : [globalFile]
       const loaded: { current: Loaded } = { current: { type: "available", files: [] } }
-      const configured: { sources: string[]; remote: Map<string, InstructionDiscovery.File> } = {
+      const configured: {
+        sources: string[]
+        remote: Map<string, InstructionDiscovery.File>
+        setup: ConfigImportedSetup.Setup | undefined
+      } = {
         sources: [],
         remote: new Map(),
+        setup: undefined,
       }
+      // Agent Duel's switches narrow discovery further; without imports both scopes keep their options.
+      const projectOn = () => project && (configured.setup?.project ?? true)
+      const globalOn = () => discovery.global && (configured.setup?.global ?? true)
 
       const publish = (update: Watcher.Update) => PubSub.publish(changes, update.path).pipe(Effect.asVoid)
       // The ancestor walk can reach the global file when the location sits
@@ -80,7 +92,7 @@ export const Plugin = define({
       })
 
       const globalSource = Effect.fn("ConfigInstructionPlugin.globalSource")(function* () {
-        if (!discovery.global) return []
+        if (!globalOn()) return []
         for (const candidate of globalFiles) {
           if (!(yield* fs.isFile(candidate))) continue
           const file = yield* read(candidate)
@@ -90,10 +102,10 @@ export const Plugin = define({
       })
 
       const projectSource = Effect.fn("ConfigInstructionPlugin.projectSource")(function* () {
-        if (!project) return []
+        if (!projectOn()) return []
         const found = yield* fs.up({ targets: names, start, stop, type: "file" })
         const walked = yield* Effect.forEach(InstructionDiscovery.preferAgents(found), fs.resolve)
-        const discovered = new Set(walked.filter((file) => discovery.global || !globalFiles.includes(file)))
+        const discovered = new Set(walked.filter((file) => globalOn() || !globalFiles.includes(file)))
         const files = yield* Effect.forEach(discovered, read, { concurrency: "unbounded" })
         if (files.some((file) => file === undefined)) return Instructions.unavailable
         return files.filter((file) => file instanceof InstructionDiscovery.File)
@@ -177,6 +189,7 @@ export const Plugin = define({
             { concurrency: 4 },
           )
           configured.sources = sources
+          configured.setup = config.setup ? yield* config.setup() : undefined
           configured.remote = new Map(
             fetched.filter((file) => file !== undefined).map((file) => [file.path, file] as const),
           )
