@@ -7977,7 +7977,8 @@ export const layer: Layer.Layer<
       if (worktrees.length === 0 || worktrees.some((directory) => preparations.has(directory))) return
       for (const directory of worktrees) {
         yield* stopPreparation(directory)
-        yield* instances.disposeDirectory(directory)
+        // The retained winner's commands (its dev server) run on until the next send releases it.
+        yield* instances.disposeDirectory(directory, { keepShells: true })
       }
       yield* Effect.logInfo("Arena unloaded an idle chat", { chatID, worktrees: worktrees.length })
     })

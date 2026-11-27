@@ -130,7 +130,8 @@ interface Fixture {
   readonly jobs: Job.Interface
   readonly directory: string
   readonly timeouts: number[]
-  readonly dispose: () => Promise<void>
+  readonly loaded: () => Promise<boolean>
+  readonly dispose: (options?: { readonly keepShells?: boolean }) => Promise<void>
 }
 
 // Native tools, jobs, processes and an in-memory database. No HTTP listener, daemon or model calls.
@@ -241,12 +242,24 @@ async function fixture(body: (input: Fixture) => Promise<void>) {
       jobs,
       directory,
       timeouts,
-      // The Arena's real disposal path: InstanceStore ends the Location's shells, which the process daemon keeps.
-      dispose: () =>
+      // Whether InstanceStore sees the directory's Location as open, as Arena's disposal checks first.
+      loaded: () =>
         Effect.runPromise(
           Effect.gen(function* () {
             const store = yield* InstanceStore.Service
-            yield* store.disposeDirectory(directory)
+            return yield* store.loaded(directory)
+          }).pipe(
+            Effect.provide(InstanceStore.layer),
+            Effect.provideService(LocationServiceMap.Service, locations),
+            Effect.scoped,
+          ),
+        ),
+      // The Arena's real disposal path: InstanceStore ends the Location's shells, which the process daemon keeps.
+      dispose: (options?: { readonly keepShells?: boolean }) =>
+        Effect.runPromise(
+          Effect.gen(function* () {
+            const store = yield* InstanceStore.Service
+            yield* store.disposeDirectory(directory, options)
           }).pipe(
             Effect.provide(InstanceStore.layer),
             Effect.provideService(LocationServiceMap.Service, locations),
@@ -548,6 +561,32 @@ test("Stop/release cancels root and child shell jobs without killing another ses
       ),
     )
     expect(await Effect.runPromise(shell.list())).toEqual([])
+  })
+}, 30_000)
+
+// The Location map keys entries by their canonical ref, which a ref built from a path never equals.
+// Looking an open Location up by the raw ref found nothing, so disposal closed nothing: a retired
+// worktree kept its MCP servers, and Windows could not remove the folder.
+test("disposing a directory finds and closes its open Location", async () => {
+  await fixture(async ({ execute, root, loaded, dispose }) => {
+    await execute(root.id, { command: "echo ready" })
+    expect(await loaded()).toBe(true)
+    await dispose()
+    expect(await loaded()).toBe(false)
+  })
+}, 30_000)
+
+// An idle chat unloads its Locations, but its retained winner's commands (a dev server behind Preview)
+// keep running until the next send releases the winner.
+test("disposing a directory while keeping its shells leaves a background command running", async () => {
+  await fixture(async ({ execute, root, shell, loaded, dispose }) => {
+    await execute(root.id, { command: "sleep 60", background: true })
+    const [running] = await Effect.runPromise(shell.list())
+    await Effect.runPromise(closeShellTurn(root.id, Effect.succeed(false)))
+    await dispose({ keepShells: true })
+    expect(await loaded()).toBe(false)
+    expect(() => process.kill(-running.pid!, 0)).not.toThrow()
+    process.kill(-running.pid!, "SIGKILL")
   })
 }, 30_000)
 

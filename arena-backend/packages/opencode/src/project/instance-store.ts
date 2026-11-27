@@ -21,7 +21,14 @@ export interface Interface {
   readonly load: (input: LoadInput) => Effect.Effect<InstanceContext, Error>
   readonly reload: (input: LoadInput) => Effect.Effect<InstanceContext, Error>
   readonly dispose: (ctx: InstanceContext) => Effect.Effect<void, Error>
-  readonly disposeDirectory: (directory: string) => Effect.Effect<void, Error>
+  /**
+   * Close a directory's Location and end its shell commands. `keepShells` leaves the commands
+   * running in the process daemon, for an idle chat whose retained winner keeps its services.
+   */
+  readonly disposeDirectory: (
+    directory: string,
+    options?: { readonly keepShells?: boolean },
+  ) => Effect.Effect<void, Error>
   readonly loaded: (directory: string) => Effect.Effect<boolean>
   readonly disposeAll: () => Effect.Effect<void, Error>
   readonly provide: <A, E, R>(
@@ -95,13 +102,16 @@ export const layer: Layer.Layer<Service, never, LocationServiceMap.Service> = La
 
     const invalidate = (key: Location.Ref) => endShells(key).pipe(Effect.andThen(locations.invalidate(key)))
 
-    const disposeDirectory = Effect.fn("InstanceStore.disposeDirectory")(function* (directory: string) {
+    const disposeDirectory = Effect.fn("InstanceStore.disposeDirectory")(function* (
+      directory: string,
+      options?: { readonly keepShells?: boolean },
+    ) {
       const resolved = resolve(directory)
       const key = ref(resolved)
       const active = yield* isActive(key)
       if (!active) return
       const ctx = fromLocation(yield* contextFor(locations, resolved))
-      yield* invalidate(key)
+      yield* options?.keepShells ? locations.invalidate(key) : invalidate(key)
       yield* emitDisposed(resolved, ctx.project.id)
     })
 
