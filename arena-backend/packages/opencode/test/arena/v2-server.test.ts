@@ -220,6 +220,8 @@ describe("Arena OpenCode v2 native boundary", () => {
     expect((await get("/api/info")).status).toBe(404)
 
     const info = await get("/api/info", { headers: { "x-paseo-control-token": controlToken } })
+    // The engine's runtime pins every experimental flag off, whatever a project's opencode.json says.
+    expect(process.env.OPENCODE_FLAGS).toBe(Server.engineFlags)
     expect(info.status).toBe(200)
     expect(await info.json()).toMatchObject({ id: "contestant", providerID: "arena" })
 

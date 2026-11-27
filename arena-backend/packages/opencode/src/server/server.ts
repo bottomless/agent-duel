@@ -4,6 +4,7 @@ import { HttpEffect, HttpRouter, HttpServer } from "effect/http"
 import { OpenApi } from "effect/http-api"
 import { Session as CoreSession } from "@opencode/core/session"
 import { Model as CoreModel } from "@opencode/schema/model"
+import { ConfigFlag } from "@opencode/schema/config/flag"
 import { Provider } from "@opencode/schema/provider"
 import { createRoutes } from "@opencode/server/routes"
 import type { ServerOptions } from "@opencode/server/options"
@@ -431,6 +432,16 @@ async function boundary(
   return response
 }
 
+/**
+ * Every experimental flag turned off, in `OPENCODE_FLAGS` form. The engine has no release channel, so flags start off,
+ * but `experimental.<flag>` or `experimental.all_flags` in a user's or project's opencode.json would turn them on, and
+ * a contestant's winning edit can put that file in the project. Full Code Mode, machines, artifacts and the rest change
+ * what contestants can do. `OPENCODE_FLAGS` outranks config.
+ */
+export const engineFlags = Object.keys(ConfigFlag.registry)
+  .map((key) => `-${key}`)
+  .join(",")
+
 /** The options the engine's route graph runs with. */
 export function routeOptions(options: ServerOptions): ServerOptions {
   return {
@@ -455,6 +466,8 @@ export function routeOptions(options: ServerOptions): ServerOptions {
 }
 
 async function buildRuntime(options: ServerOptions): Promise<Runtime> {
+  // Read when each Location's flags are built, so set it before the route graph exists.
+  process.env.OPENCODE_FLAGS = engineFlags
   const scope = Scope.makeUnsafe()
   try {
     const routes = createRoutes(

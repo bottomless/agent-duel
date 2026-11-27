@@ -39,7 +39,8 @@ const codeModePath = (tool: string) =>
   tool.startsWith("session_") ? `tools.opencode.session.${tool.slice("session_".length)}` : `tools.opencode.${tool}`
 const retained = ["read", "write", "edit", "patch", "shell", "grep", "glob", "subagent"]
 // Upstream tools Arena removes by namespace and name: image and video generation and `cd` (no namespace), MCP events,
-// every `opencode.session` tool, including the flag-gated search, read and interrupt, and every `machine` tool.
+// every `opencode.session` tool, including the flag-gated search, read and interrupt, and every `machine` and
+// `automation` tool.
 const removed = [
   { name: "generate_image", path: "tools.generate_image" },
   { name: "generate_video", path: "tools.generate_video" },
@@ -49,6 +50,11 @@ const removed = [
   { name: "move", namespace: "machine", path: "tools.machine.move" },
   { name: "forward", namespace: "machine", path: "tools.machine.forward" },
   { name: "unforward", namespace: "machine", path: "tools.machine.unforward" },
+  { name: "create", namespace: "automation", path: "tools.automation.create" },
+  { name: "list", namespace: "automation", path: "tools.automation.list" },
+  { name: "pause", namespace: "automation", path: "tools.automation.pause" },
+  { name: "resume", namespace: "automation", path: "tools.automation.resume" },
+  { name: "delete", namespace: "automation", path: "tools.automation.delete" },
   { name: "list_mcp_events", namespace: "opencode", path: "tools.opencode.list_mcp_events" },
   { name: "search", namespace: "opencode.session", path: "tools.opencode.session.search" },
   { name: "read", namespace: "opencode.session", path: "tools.opencode.session.read" },
@@ -170,22 +176,24 @@ const setup = Effect.gen(function* () {
 })
 
 describe("Arena Code Mode policy", () => {
-  it.live("removes image and video generation, MCP events, cd, and every opencode.session and machine tool", () =>
-    Effect.gen(function* () {
-      const h = yield* setup
-      const ids = (yield* h.registry.list()).map((item) => item.id)
-      for (const tool of removed)
-        expect(ids).not.toContain(tool.namespace ? `${tool.namespace.replaceAll(".", "_")}_${tool.name}` : tool.name)
-      const catalog = (yield* h.registry.snapshot()).codeModeCatalog!
-      const paths = codeModeListings(catalog).map((item) => item.path)
-      const prompt = CodeModeInstructions.render(CodeModeCatalog.summarize(catalog))
-      for (const tool of removed) {
-        expect(paths).not.toContain(tool.path)
-        expect(prompt).not.toContain(tool.path)
-        const result = yield* h.run("a", `return await ${tool.path}({})`)
-        expect(result.output).toMatchObject({ error: true, toolCalls: [] })
-      }
-    }),
+  it.live(
+    "removes image and video generation, MCP events, cd, and the opencode.session, machine and automation tools",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* setup
+        const ids = (yield* h.registry.list()).map((item) => item.id)
+        for (const tool of removed)
+          expect(ids).not.toContain(tool.namespace ? `${tool.namespace.replaceAll(".", "_")}_${tool.name}` : tool.name)
+        const catalog = (yield* h.registry.snapshot()).codeModeCatalog!
+        const paths = codeModeListings(catalog).map((item) => item.path)
+        const prompt = CodeModeInstructions.render(CodeModeCatalog.summarize(catalog))
+        for (const tool of removed) {
+          expect(paths).not.toContain(tool.path)
+          expect(prompt).not.toContain(tool.path)
+          const result = yield* h.run("a", `return await ${tool.path}({})`)
+          expect(result.output).toMatchObject({ error: true, toolCalls: [] })
+        }
+      }),
   )
 
   for (const tool of blocked) {

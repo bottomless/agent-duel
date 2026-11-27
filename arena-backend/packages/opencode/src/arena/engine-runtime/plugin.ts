@@ -224,7 +224,8 @@ function install(context: Context, options: InstalledOptions) {
       // feed automations, which Agent Duel leaves off. Image and video generation run on whatever image or video
       // model the user's own OpenCode sign-ins offer, billed to them, so neither is a contestant tool. `cd` and the
       // `machine` tools come with the `machines` flag, which a user's or project's OpenCode config can turn on; they
-      // move a session's working directory or act on another computer, outside the side's worktree.
+      // move a session's working directory or act on another computer, outside the side's worktree. The
+      // `automation` tools come back when a config sets `automations: true`; a scheduled job runs outside the turn.
       const blocked = new Set([
         "opencode/worktree_create",
         "opencode/worktree_list",
@@ -240,6 +241,7 @@ function install(context: Context, options: InstalledOptions) {
         if (
           namespace === "opencode.session" ||
           namespace === "machine" ||
+          namespace === "automation" ||
           blocked.has(`${namespace ?? ""}/${tool.name}`)
         )
           editor.remove(tool.id)
