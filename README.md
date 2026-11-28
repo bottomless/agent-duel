@@ -9,12 +9,13 @@
 <p align="center">
   <a href="https://agentduel.com/download/mac?from=readme"><img src="docs/images/download-macos.svg" width="268" height="84" alt="Download for macOS · Apple silicon"></a>
   <a href="https://agentduel.com/download/windows?from=readme"><img src="docs/images/download-windows.svg" width="268" height="84" alt="Download for Windows · 64-bit"></a>
+  <a href="https://agentduel.com/download/linux?from=readme"><img src="docs/images/download-linux.svg" width="268" height="84" alt="Download for Linux · x64 AppImage"></a>
 </p>
 
 <p align="center">
   Free to use. Inference included.
   <br>
-  <sub>v0.4.0-beta.26 · <a href="https://github.com/bottomless/agent-duel/releases/tag/v0.4.0-beta.26">Release notes</a></sub>
+  <sub>v0.4.0-beta.27 · <a href="https://github.com/bottomless/agent-duel/releases/tag/v0.4.0-beta.27">Release notes</a></sub>
 </p>
 
 ## How a battle works
